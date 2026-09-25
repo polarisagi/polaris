@@ -116,8 +116,15 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 	if lv := sCtx.RawIntentTS.Source.OriginTaintLevel; lv != 0 {
 		originTaint = lv
 	}
+	thinking := metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current())
+	if sCtx.PlanAttempts > 0 {
+		// 空输出重试关闭思考：空输出的触发条件正是"思考模式 + 挂工具"（决策七实证），
+		// 原样重试只是再掷一次同一枚骰子。用户输入恒为 TaintHigh，SelectThinkingMode
+		// 对首轮规划恒返回 ThinkingMax，不在重试时换掉它，重试等于没有。
+		thinking = types.ThinkingDisabled
+	}
 	return protocol.LLMFillEffect{
-		ThinkingMode: metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current()),
+		ThinkingMode: thinking,
 		SchemaRef:    "plan_dag",
 		PromptFn: func(pCtx protocol.StateContext) []types.Message {
 			return sm.promptPlan(sCtx, pCtx)
