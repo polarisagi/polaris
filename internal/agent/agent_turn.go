@@ -30,6 +30,18 @@ func turnPhaseOf(s types.AgentState) types.TurnPhase {
 	}
 }
 
+// llmPurposeOf 把发起 LLM 调用时的 FSM 状态映射为 llm_calls.purpose（ADR-0101 决策六）。
+// S_VALIDATE 的 L3 看门狗不是回合阶段，单独命名。
+func llmPurposeOf(s types.AgentState) string {
+	if s == types.AgentStateValidate {
+		return "validate_watchdog"
+	}
+	if phase := turnPhaseOf(s); phase != "" {
+		return string(phase)
+	}
+	return "kernel"
+}
+
 // publishTurnPhase 内部阶段不再推 token 后，用户在首个回复 token 前只能靠阶段
 // 事件感知进度；否则一次"规划 + 执行"的回合在界面上是长时间的空白。
 func (a *Agent) publishTurnPhase(s types.AgentState) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -152,8 +153,9 @@ func (a *Agent) runL3Watchdog(ctx context.Context, vCtx *protocol.DAGValidationC
 			a.asyncIntent(types.TriggerValidateOk)
 			return "S_VALIDATE_OK", nil
 		},
-		MaxRetry:  0, // 看门狗不重试
-		ModelPool: "reasoning",
+		MaxRetry: 0, // 看门狗不重试
+		// 看门狗是补充信号层（fail-open），走 model_pool.validate（默认便宜档，ADR-0101 决策七）。
+		ModelPool: config.CurrentThresholds().M4Kernel.ModelPoolValidate,
 	}
 
 	// 递归执行该 Effect，利用标准流程调用 LLM 并计费

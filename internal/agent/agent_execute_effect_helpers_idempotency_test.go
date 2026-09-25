@@ -10,12 +10,48 @@ import (
 
 // fakeOutboxWriter 记录每次 Write 调用的 IdempotencyKey，供幂等键唯一性断言。
 type fakeOutboxWriter struct {
-	keys []string
+	keys   []string
+	topics []string
 }
 
 func (w *fakeOutboxWriter) Write(_ context.Context, entry protocol.OutboxEntry) error {
 	w.keys = append(w.keys, entry.IdempotencyKey)
+	w.topics = append(w.topics, entry.TargetEngine)
 	return nil
+}
+
+func (w *fakeOutboxWriter) count(topic string) int {
+	n := 0
+	for _, t := range w.topics {
+		if t == topic {
+			n++
+		}
+	}
+	return n
+}
+
+// 记忆蒸馏每回合终态触发一次：多轮观察—再规划回合里每次反思都触发会让管线把整场会话
+// 反复抽取/摘要/合成画像（ADR-0101 决策二）。
+func TestConsolidateTriggeredOncePerTurnNotPerReflect(t *testing.T) {
+	protocol.SetReplayMode(false)
+	a := NewAgentWithDefaults("sess-consolidate-once")
+	a.InjectMemory(&mockMemoryForIntegration{
+		episodic: &mockEpisodicMemForIntegration{},
+		working:  &mockWorkingMemForIntegration{immutable: &mockImmutableCoreForIntegration{}},
+	})
+	ow := &fakeOutboxWriter{}
+	a.InjectOutboxWriter(ow)
+
+	resp := &types.ProviderResponse{Content: "mock reflection"}
+	a.recordLLMFillEffectMemory(context.Background(), "S_REFLECT_DONE", resp)
+	a.recordLLMFillEffectMemory(context.Background(), "S_REFLECT_DONE", resp)
+	if n := ow.count(protocol.TopicMemoryConsolidate); n != 0 {
+		t.Fatalf("reflect must not trigger consolidation, got %d", n)
+	}
+	a.emitConsolidateOnce(context.Background())
+	if n := ow.count(protocol.TopicMemoryConsolidate); n != 1 {
+		t.Fatalf("turn end must trigger consolidation exactly once, got %d", n)
+	}
 }
 
 // TestRecordLLMFillEffectMemory_OutboxIdempotencyKeyUniqueAcrossTurns 验证
@@ -82,8 +118,8 @@ func TestRecordLLMFillEffectMemory_OutboxIdempotencyKeyUniqueAcrossTurns(t *test
 
 // TestRecordLLMFillEffectMemory_ReflectAndConsolidateIdempotencyKeysUniqueAcrossTurns
 // 同上，针对 S_REFLECT_DONE 触发的反思投影（TopicEpisodicProject）+ 语义抽取
-// （TopicEpisodicExtract）+ 记忆蒸馏触发（TopicMemoryConsolidate）三条 outbox
-// 写入路径。
+// （TopicEpisodicExtract）两条 outbox 写入路径（记忆蒸馏已移到回合终态，见
+// TestConsolidateTriggeredOncePerTurnNotPerReflect）。
 func TestRecordLLMFillEffectMemory_ReflectAndConsolidateIdempotencyKeysUniqueAcrossTurns(t *testing.T) {
 	protocol.SetReplayMode(false)
 

@@ -743,7 +743,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	idleDetector := curriculum.NewIdleDetector()
 	curriculumGen := curriculum.NewAutoCurriculumGenerator(idleDetector, mb.FallacyPool, mb.Heuristics)
 	curriculumGen.WithFitnessEval(curriculum.NewSQLFitnessEvaluator(sb.Store.DB()))
-	curriculumBridge := reflexion.NewCurriculumBridge(curriculumGen, blackboard)
+	// 课程生成受 self_improve.auto_curriculum 门控（默认关闭）。此前该配置项无人读取：
+	// 空闲时每 2 分钟（M9 中环与 bgTaskScheduler 两个入口各一次）向黑板投递最多 10 个
+	// 模板任务，DefaultTaskWorker 逐个认领并跑完整无头 Agent 回合（2026-09-25 实测
+	// 重启 4 分钟内投递 12 个），是后台 token 消耗大头（ADR-0101 决策一）。
+	var curriculumForEngine learning.CurriculumGenerator
+	if sb.Cfg.SelfImprove.AutoCurriculum {
+		curriculumForEngine = reflexion.NewCurriculumBridge(curriculumGen, blackboard)
+	}
 	// 2026-07-10 审计补齐：此前 rollout 是纯内存 optimizer.NewProgressiveRollout()（无 DB
 	// 持久化），promptOptimizer 以 (nil, nil, 0) 构造（无 provider/无 versionStore），
 	// Engine.stagingPipeline/versionStore 也从未被 Set 过——M9 GEPA 候选评分、激活、
@@ -773,7 +780,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	if pm, ok := sb.PromptMgr.(*prompt.Manager); ok {
 		pm.SetOptimizer(promptOptimizer)
 	}
-	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
+	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumForEngine, rolloutBridge, taskEventCh, versionEventCh)
 	// 2026-07-04 审计补齐（任务5）：SetDB 此前从未在生产启动代码中被调用，
 	// 导致 learning_cursors 持久化/幂等去重整套机制在 e.db==nil 短路下形同虚设
 	// （loadCursors 直接返回空 map，saveCursorAsync 第一行判空直接 return）。
@@ -970,7 +977,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Info("polaris: IdleEvolutionScheduler started (Tier0 background tasks)")
 	}
 
-	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)
+	var bgCurriculumGen *curriculum.AutoCurriculumGenerator // nil：调度器只跑红队探测
+	if sb.Cfg.SelfImprove.AutoCurriculum {
+		bgCurriculumGen = curriculumGen
+	}
+	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(bgCurriculumGen, blackboard)
 	// InjectAuditLogger：sb.AuditTrail 实现的是 dispatch.AuditLogger
 	// （RecordAudit(ctx, toolName, payload)），不满足 protocol.AuditLogger
 	// （Log(ctx, action, meta)）；用 auditTrailLogAdapter 桥接（boot_agent.go 同文件
@@ -987,7 +998,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	bgTaskScheduler.InjectRedTeamProtocol(rtp)
 
 	bgTaskScheduler.Start(ctx)
-	slog.Info("polaris: AutoCurriculumGenerator background scheduler started")
+	slog.Info("polaris: background task scheduler started", "auto_curriculum", sb.Cfg.SelfImprove.AutoCurriculum)
 
 	// ─── M09 §4 条件梯度训练：样本采集 + 批次触发（2026-07-21 deadcode 审查
 	// 补齐）。sb.QLoRA/sb.PRM 为 nil 时（对应 FeatureGate 未启用）跳过构造，

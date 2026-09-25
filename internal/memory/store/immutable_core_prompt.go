@@ -38,7 +38,7 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		return ic.renderSystemPromptFromTemplate()
 	}
 
-	// 三层组装：stable → model guidance → platform hint → volatile
+	// 三层组装：stable → model guidance → platform hint（volatile 由 PrependToMessages 另起一条消息）
 	var parts []string
 
 	// 1. stable — 身份（SoulMDContent 已由 server 按三层优先级填充）
@@ -86,10 +86,7 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		parts = append(parts, prefsBlock)
 	}
 
-	// 6. volatile — 时间戳 / 会话信息（精确到天，不破坏 prefix cache）
-	if ic.VolatileBlock != "" {
-		parts = append(parts, ic.VolatileBlock)
-	}
+	// 6. volatile（VolatileBlock/AmbientContext）不在此渲染，见 PrependToMessages。
 
 	return strings.Join(parts, "\n\n")
 }
@@ -149,8 +146,17 @@ func (ic *ImmutableCore) renderUserPreferencesBlock() string {
 // ambient skill 全文注入有独立的 maxFullTextChars 预算，两者各自独立保护。
 const maxSystemPromptBytes = 32_000
 
+// PrependToMessages 在 msgs 前插入系统提示词：第一条 system 消息只含稳定层，易变层
+// （日期 VolatileBlock、按本轮问题挑选的 AmbientContext）单独作为紧随其后的第二条。
+//
+// DeepSeek 前缀缓存以消息为单元整块匹配（api-docs guides/kv_cache："只有完整匹配一个
+// 缓存前缀单元才会命中"）：易变内容与稳定层同处一条消息时，问题一变整条系统提示词
+// 就不命中，Perceive/Plan/Reflect/Respond 每次调用都按未命中价重算（ADR-0101 决策四）。
 func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message {
-	content := ic.renderSystemPrompt()
+	stable := *ic
+	stable.VolatileBlock = ""
+	stable.AmbientContext = ""
+	content := stable.renderSystemPrompt()
 
 	// 去除多余的尾部换行
 	content = strings.TrimRight(content, "\n")
@@ -173,12 +179,23 @@ func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message
 			"original_bytes", originalBytes, "cap_bytes", maxSystemPromptBytes)
 	}
 
-	// AmbientContext 在模板渲染完成后追加，不经过 Go template 解析器。
-	// 这样 skill instructions 含 {{ }} 时不会破坏模板解析（Bug-fix: template injection）。
-	// AmbientContext 有独立的 maxFullTextChars(128K) 预算，不纳入上方截断逻辑。
-	if ic.AmbientContext != "" {
-		content += ic.AmbientContext
+	head := []types.Message{{Role: "system", Content: content}}
+	if v := ic.volatileSystemContent(); v != "" {
+		head = append(head, types.Message{Role: "system", Content: v})
 	}
+	return append(head, msgs...)
+}
 
-	return append([]types.Message{{Role: "system", Content: content}}, msgs...)
+// volatileSystemContent 渲染易变层。AmbientContext 不经过 Go template 解析器——skill
+// instructions 含 {{ }} 时不会破坏模板解析（Bug-fix: template injection）；它有独立的
+// maxFullTextChars 预算，不纳入稳定层截断。
+func (ic *ImmutableCore) volatileSystemContent() string {
+	var parts []string
+	if ic.VolatileBlock != "" {
+		parts = append(parts, "# VOLATILE CONTEXT\n"+ic.VolatileBlock)
+	}
+	if a := strings.TrimSpace(ic.AmbientContext); a != "" {
+		parts = append(parts, a)
+	}
+	return strings.Join(parts, "\n\n")
 }

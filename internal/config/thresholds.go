@@ -1,5 +1,10 @@
 package config
 
+import (
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
 // Thresholds 汇总全模块硬编码阈值的参数化配置。
 // 架构文档: ROADMAP.md §3 (P2-06 待对齐工程边界)
 // SSoT: docs/arch/spec/state.yaml §thresholds
@@ -109,6 +114,48 @@ type M4KernelThresholds struct {
 	// 对话历史进入内核的上限（ADR-0098 决策四），自尾部截取；Perceive 与 Respond 各渲染一次。
 	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
 	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
+
+	// 各阶段思考档位（ADR-0101 决策三）："" = 沿用 Provider 默认（DeepSeek 省略即 high），
+	// 其余取 disabled/low/high/max。推理 token 按输出价计费：结构化分类阶段无需深度思考；
+	// 首轮规划不再因用户输入恒为 TaintHigh 而恒为 max，重规划仍按 SelectThinkingMode 升档。
+	ThinkingPerceive    string `toml:"thinking.perceive"`     // "low"
+	ThinkingPlanInitial string `toml:"thinking.plan_initial"` // "high"
+	ThinkingReflect     string `toml:"thinking.reflect"`      // "low"
+	ThinkingRespond     string `toml:"thinking.respond"`      // ""
+
+	// 各阶段模型池（ADR-0101 决策七）：default=便宜档（flash/mini/haiku）、general=中档、
+	// reasoning=贵档（pro/opus/o3）。日常回合全部走便宜档，只有首轮规划失败后的重规划升档；
+	// 设 model_pool.plan_replan="default" 即完全不用贵档。
+	ModelPoolPerceive    string `toml:"model_pool.perceive"`     // "default"
+	ModelPoolPlanInitial string `toml:"model_pool.plan_initial"` // "default"
+	ModelPoolPlanReplan  string `toml:"model_pool.plan_replan"`  // "reasoning"
+	ModelPoolReflect     string `toml:"model_pool.reflect"`      // "default"
+	ModelPoolRespond     string `toml:"model_pool.respond"`      // "default"
+	ModelPoolValidate    string `toml:"model_pool.validate"`     // "default"
+}
+
+// Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
+func (t M4KernelThresholds) Validate() error {
+	for key, v := range map[string]string{
+		"thinking.perceive": t.ThinkingPerceive, "thinking.plan_initial": t.ThinkingPlanInitial,
+		"thinking.reflect": t.ThinkingReflect, "thinking.respond": t.ThinkingRespond,
+	} {
+		if _, ok := types.ParseThinkingMode(v); !ok {
+			return apperr.New(apperr.CodeInvalidInput, "m4_kernel."+key+": invalid thinking mode "+v+" (want disabled|low|high|max or empty)")
+		}
+	}
+	for key, v := range map[string]string{
+		"model_pool.perceive": t.ModelPoolPerceive, "model_pool.plan_initial": t.ModelPoolPlanInitial,
+		"model_pool.plan_replan": t.ModelPoolPlanReplan, "model_pool.reflect": t.ModelPoolReflect,
+		"model_pool.respond": t.ModelPoolRespond, "model_pool.validate": t.ModelPoolValidate,
+	} {
+		switch types.ModelPool(v) {
+		case types.ModelPoolDefault, types.ModelPoolGeneral, types.ModelPoolReasoning, types.ModelPoolBudget:
+		default:
+			return apperr.New(apperr.CodeInvalidInput, "m4_kernel."+key+": invalid model pool "+v+" (want default|general|reasoning|budget)")
+		}
+	}
+	return nil
 }
 
 type M5MemoryThresholds struct {
@@ -364,6 +411,15 @@ func DefaultThresholds() Thresholds {
 			PRMScorerModel:                 "",
 			ConversationHistoryMaxMessages: 20,
 			ConversationHistoryMaxBytes:    24576,
+			ThinkingPerceive:               "low",
+			ThinkingPlanInitial:            "high",
+			ThinkingReflect:                "low",
+			ModelPoolPerceive:              "default",
+			ModelPoolPlanInitial:           "default",
+			ModelPoolPlanReplan:            "reasoning",
+			ModelPoolReflect:               "default",
+			ModelPoolRespond:               "default",
+			ModelPoolValidate:              "default",
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

@@ -2,7 +2,6 @@ package agentctx
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -52,16 +51,13 @@ func BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, ty
 			maxTaint = t
 		}
 	}
+	// 只列名称与描述：同一批工具的完整参数 schema 已随 S_PLAN 请求经 function-calling
+	// 参数下发（agent_execute_effect.go WithTools），文本里再嵌一遍 JSON schema 等于每次
+	// 规划把全部工具定义付两次费（内置 56 个工具 schema 约 15KB，ADR-0101 决策五）。
 	var sb strings.Builder
-	sb.WriteString("Available Tools List (The 'action' field of DAG nodes MUST be one of the following names):\n")
+	sb.WriteString("Available Tools List (The 'action' field of DAG nodes MUST be one of the following names; argument schemas are provided via the function-calling API):\n")
 	for _, t := range schemas {
-		fmt.Fprintf(&sb, "- %s: %s", t.Name, t.Description)
-		if t.Parameters != nil {
-			if schemaBytes, err := json.Marshal(t.Parameters); err == nil {
-				fmt.Fprintf(&sb, " (Parameters schema: %s)", string(schemaBytes))
-			}
-		}
-		sb.WriteByte('\n')
+		fmt.Fprintf(&sb, "- %s: %s\n", t.Name, t.Description)
 	}
 	sb.WriteByte('\n')
 	return sb.String(), maxTaint

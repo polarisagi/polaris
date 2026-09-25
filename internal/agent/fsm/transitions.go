@@ -1,6 +1,7 @@
 package fsm
 
 import (
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"context"
@@ -125,8 +126,9 @@ func (sm *StateMachine) registerTransitions() {
 					},
 					OnFailure:      sm.onPerceiveFailure,
 					MaxRetry:       1,
-					ModelPool:      string(types.ModelPoolGeneral),
+					ModelPool:      config.CurrentThresholds().M4Kernel.ModelPoolPerceive,
 					ResponseFormat: &types.ResponseFormat{Type: "json_object"},
+					ThinkingMode:   phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingPerceive),
 				},
 			}, nil
 		},
@@ -252,8 +254,9 @@ func (sm *StateMachine) registerTransitions() {
 					},
 					OnFailure:      sm.onReflectFailure,
 					MaxRetry:       0,
-					ModelPool:      string(types.ModelPoolGeneral),
+					ModelPool:      config.CurrentThresholds().M4Kernel.ModelPoolReflect,
 					ResponseFormat: &types.ResponseFormat{Type: "json_object"},
+					ThinkingMode:   phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingReflect),
 				},
 			}, nil
 		},
