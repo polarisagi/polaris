@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest manifest-check build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
+.PHONY: build run test test-ci lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest manifest-check build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
 
 GO := go
 CARGO := cargo
@@ -59,8 +59,21 @@ dev-ui:
 run:
 	$(GO) run ./cmd/polaris
 
+# 本地与 CI 同一套包范围与参数，消除"本地过、CI 挂"的条件差：
+# -race 暴露调度竞态（历史上 CI 专属失败多数属此类），-count=1 禁用结果缓存
+# （缓存命中时"通过"只是复读上次结果），-shuffle=on 打乱用例顺序暴露跨用例共享的
+# 进程级状态（失败时输出 -test.shuffle 种子，按种子可稳定复现）。范围此前三处各异：
+# make test 只跑 internal，ci.yml 漏 pkg/cmd，ci_test.sh 漏 cmd。
+GO_TEST_PKGS  := ./internal/... ./cmd/... ./pkg/...
+GO_TEST_FLAGS := -race -count=1 -shuffle=on -timeout=900s
+
 test:
-	$(GO) test ./internal/...
+	$(GO) test $(GO_TEST_FLAGS) $(GO_TEST_PKGS)
+
+# test-ci: CI 与 scripts/ci_test.sh 共用入口。-v 供 ci_test.sh 按用例归属提取失败输出。
+test-ci:
+	$(GO) test $(GO_TEST_FLAGS) -v -coverprofile=coverage.out $(GO_TEST_PKGS)
+	$(GO) tool cover -func=coverage.out
 
 lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check chan-send-guard-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check memory-isolation-check
 	golangci-lint run ./...
@@ -349,8 +362,9 @@ deadcode:
 #
 # "race detector 慢 5-10x 所以不跑全量"这个理由实测不成立：包之间并行，
 # 全仓 106 包墙钟 164s，只比原清单多约 100s。删掉清单 = 删掉漂移源。
-test-race:
-	$(GO) test -race -count=1 -timeout=900s ./internal/... ./cmd/... ./pkg/...
+#
+# 2026-09-25：make test 默认即带 -race 全仓，本目标保留为别名（specs 09 检查清单引用）。
+test-race: test
 
 # rust-lint: Cargo clippy 静态分析（以 warning 为 error）
 # 覆盖: 所有 target（lib + test + bench），FFI unsafe 代码
@@ -383,7 +397,7 @@ rust-deny:
 	$(CARGO) deny --manifest-path rust/substrate/Cargo.toml check
 
 # check-all: 完整质量门禁（CI 用）
-# 顺序: fmt → lint → test → test-race → rust-lint → rust-test → rust-deny → deadcode
+# 顺序: fmt → lint → test（含 -race）→ rust-lint → rust-test → rust-deny → deadcode
 #      → docs-check（§跳读行号）→ docs-lint（代码块禁令）→ docs-refs（失效路径引用）
 #      → release-signing-status（发布签名开通状态，只报不拦）
 #      → docs-gen-check（生成块与源一致性，2026-08-09 并入）
@@ -394,4 +408,4 @@ rust-deny:
 # Skill 校验管线——正是最不该只靠人工偶尔想起来跑一次的两处。
 #      → manifest-check（内核完整性清单与源一致性，2026-08-17 并入；此前无人校验，
 #        实测清单已停在四天前的提交上，源码模式启动被 §0.5 拒绝）
-check-all: fmt lint lint-selftest test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check manifest-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill
+check-all: fmt lint lint-selftest test rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check manifest-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill

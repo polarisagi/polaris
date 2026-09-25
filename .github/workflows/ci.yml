@@ -136,8 +136,8 @@ jobs:
         env:
           # 告知 Go 链接器 Rust .so 位置
           LD_LIBRARY_PATH: ${{ github.workspace }}/rust/substrate/target/release
-        run: go test ./internal/... -v -race -coverprofile=coverage.out
-      - run: go tool cover -func=coverage.out
+        # 与本地 make test / scripts/ci_test.sh 同一入口，范围与参数见 Makefile GO_TEST_*
+        run: make test-ci
 
   build:
     needs: [rust-build]
