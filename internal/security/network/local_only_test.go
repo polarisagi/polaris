@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -98,8 +100,28 @@ func TestStartupCheck_SkipsLocalModelBudgetWhenProviderUnset(t *testing.T) {
 	}
 }
 
+// Enable 改写进程级全局（http.DefaultTransport.DialContext / net.DefaultResolver），
+// 并可能对整个进程施加 landlock。在测试进程内直接调用会与同包其他用例遗留的
+// stdlib DNS goroutine 读 net.DefaultResolver 构成数据竞态（CI -race -shuffle 实测），
+// 且断网状态会污染后续用例。故在重新 exec 的子进程里执行，父进程只看退出码。
+const enableBlocksOutboundChildEnv = "POLARIS_TEST_ENABLE_BLOCKS_OUTBOUND_CHILD"
+
 func TestNetworkSandbox_Enable_BlocksOutbound(t *testing.T) {
-	// Enable local_only network sandbox
+	if os.Getenv(enableBlocksOutboundChildEnv) == "1" {
+		runEnableBlocksOutboundChild(t)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNetworkSandbox_Enable_BlocksOutbound$", "-test.v")
+	cmd.Env = append(os.Environ(), enableBlocksOutboundChildEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child process failed: %v\n%s", err, out)
+	}
+	t.Logf("child output:\n%s", out)
+}
+
+func runEnableBlocksOutboundChild(t *testing.T) {
 	ns := NewNetworkSandbox(10)
 
 	err := ns.Enable()
