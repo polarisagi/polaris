@@ -79,16 +79,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 
 		func() {
 			defer func() {
-				chosen.recordOutcome(err == nil, func() {
-					ir.registry.mu.RLock()
-					fn := ir.registry.onRecovery
-					name := chosen.name
-					ir.registry.mu.RUnlock()
-					if fn != nil {
-						fn(name)
-					}
-				})
-				ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
+				ir.recordAttempt(ctx, chosen, err)
 			}()
 			resp, err = chosen.provider.Infer(ctx, msgs, opts...)
 		}()
@@ -96,6 +87,9 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 		if err == nil && resp != nil {
 			ir.recordFailoverMetrics(ctx, chosen, resp, start)
 			return resp, nil
+		}
+		if isRequestFault(err, chosen.name) {
+			return ir.overflowFailover(ctx, msgs, opts, req, chosen, err)
 		}
 		ce := ClassifyWithProvider(err, chosen.name)
 		if !ce.Retryable && !ce.ShouldFallback && !ce.ShouldRotateCredential {
@@ -153,16 +147,7 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 
 		func() {
 			defer func() {
-				entry.recordOutcome(err == nil, func() {
-					ir.registry.mu.RLock()
-					fn := ir.registry.onRecovery
-					name := entry.name
-					ir.registry.mu.RUnlock()
-					if fn != nil {
-						fn(name)
-					}
-				})
-				ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+				ir.recordAttempt(ctx, entry, err)
 			}()
 			resp, err = entry.provider.Infer(ctx, msgs, opts...)
 		}()
@@ -174,6 +159,9 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 			slog.Info("llm_router: cross-pool degraded inference succeeded",
 				"original_pool", originalPool, "actual_pool", fallbackPool)
 			return resp, nil
+		}
+		if isRequestFault(err, entry.name) {
+			return ir.overflowFailover(ctx, msgs, opts, req, entry, err)
 		}
 		slog.Warn("llm_router: fallback pool also failed, trying next",
 			"fallback_pool", fallbackPool, "err", err)

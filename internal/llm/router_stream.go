@@ -185,20 +185,14 @@ func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.
 		var err error
 		func() {
 			defer func() {
-				entry.recordOutcome(err == nil, func() {
-					ir.registry.mu.RLock()
-					fn := ir.registry.onRecovery
-					name := entry.name
-					ir.registry.mu.RUnlock()
-					if fn != nil {
-						fn(name)
-					}
-				})
-				ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+				ir.recordAttempt(ctx, entry, err)
 			}()
 			ch, err = entry.provider.StreamInfer(ctx, msgs, opts...)
 		}()
 
+		if isRequestFault(err, entry.name) {
+			return ir.streamOverflowFailover(ctx, msgs, opts, req, entry, err)
+		}
 		if err != nil {
 			slog.Warn("llm_router: stream fallback pool also failed, trying next",
 				"fallback_pool", fallbackPool, "err", err)
@@ -266,16 +260,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 
 		func() {
 			defer func() {
-				chosen.recordOutcome(err == nil, func() {
-					ir.registry.mu.RLock()
-					fn := ir.registry.onRecovery
-					name := chosen.name
-					ir.registry.mu.RUnlock()
-					if fn != nil {
-						fn(name)
-					}
-				})
-				ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
+				ir.recordAttempt(ctx, chosen, err)
 			}()
 			ch, err = chosen.provider.StreamInfer(ctx, msgs, opts...)
 		}()
@@ -284,6 +269,9 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 			return ir.wrapStreamChannel(ctx, ch, req, chosen.name), nil
 		}
 
+		if isRequestFault(err, chosen.name) {
+			return ir.streamOverflowFailover(ctx, msgs, opts, req, chosen, err)
+		}
 		ce := ClassifyWithProvider(err, chosen.name)
 		if !ce.Retryable && !ce.ShouldFallback && !ce.ShouldRotateCredential {
 			slog.Warn("inference_router: non-retryable stream error during failover, aborting remaining attempts",
