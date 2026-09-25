@@ -209,7 +209,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		// 而不是在这里直接拒绝——否则只要目标 Pool 一个 Provider 都没注册，
 		// 降级机制就完全不会被触发（这正是本特性此前在生产中不可达的原因之一）。
 		if req.ModelPool != "" {
-			return ir.tryPoolFallback(ctx, msgs, opts, req)
+			return ir.tryPoolFallback(ctx, msgs, opts, req, nil)
 		}
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}
@@ -409,7 +409,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 		// 与 Infer 同构：目标 Pool 内无可用 Provider 时不直接拒绝，先走
 		// 流式跨 Pool 降级链（GD-13-005）。
 		if req.ModelPool != "" {
-			fch, ferr := ir.streamPoolFallback(ctx, msgs, opts, req)
+			fch, ferr := ir.streamPoolFallback(ctx, msgs, opts, req, nil)
 			released = ferr == nil
 			return fch, ferr
 		}

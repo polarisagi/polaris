@@ -70,7 +70,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 
 		if chosen == nil {
 			// 当前 Pool 所有 Provider 耗尽，尝试跨 Pool 降级（GD-13-005）
-			return ir.tryPoolFallback(ctx, msgs, opts, req)
+			return ir.tryPoolFallback(ctx, msgs, opts, req, skipped)
 		}
 		start := time.Now()
 
@@ -112,7 +112,9 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 
 // tryPoolFallback 当目标 Pool 所有 Provider 耗尽时，按 poolFallbackChain 尝试降级（GD-13-005）。
 // 降级成功时在 resp.DegradedFromPool 中记录原始 Pool 名，供上层感知并通知用户。
-func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Message, opts []types.InferOption, req *types.InferRequest) (*types.ProviderResponse, error) {
+// skipped 为本次请求已失败的 Provider 注册名（可为 nil）：降级各档沿用并累加，避免同一模型
+// 在下一档被原样重试——通用池含对话模型（poolRoles），推理→通用→对话链上同一条目会反复入选。
+func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Message, opts []types.InferOption, req *types.InferRequest, skipped map[string]struct{}) (*types.ProviderResponse, error) {
 	originalPool := req.ModelPool
 	if originalPool == "" {
 		// 未指定 Pool 时全局耗尽，直接返回错误
@@ -125,6 +127,9 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 	// 当硬约束，指定 "reasoning" 会在健康 Provider 就在眼前时直接拒绝服务，
 	// 比 GD-13-005 原本要修的"单池耗尽即断链"更糟。
 	fallbacks := append(append([]string{}, ir.poolFallbackChain[originalPool]...), "")
+	if skipped == nil {
+		skipped = make(map[string]struct{})
+	}
 	for _, fallbackPool := range fallbacks {
 		slog.Warn("llm_router: target pool exhausted, attempting cross-pool fallback",
 			"original_pool", originalPool, "fallback_pool", fallbackPool)
@@ -133,7 +138,7 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 		degradedReq.ModelPool = fallbackPool
 
 		ir.registry.mu.RLock()
-		entry := ir.findBestProviderLockedMultiSkip(&degradedReq, nil)
+		entry := ir.findBestProviderLockedMultiSkip(&degradedReq, skipped)
 		ir.registry.mu.RUnlock()
 		if entry == nil {
 			slog.Warn("llm_router: no available provider in fallback pool, trying next",
@@ -165,6 +170,7 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 		if isRequestFault(err, entry.name) {
 			return ir.overflowFailover(ctx, msgs, opts, req, entry, err)
 		}
+		skipped[entry.name] = struct{}{}
 		slog.Warn("llm_router: fallback pool also failed, trying next",
 			"fallback_pool", fallbackPool, "err", err)
 	}
@@ -177,24 +183,31 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 // 与 provider_registry 其余择优同走 selectBest：双熔断（cb + winBreaker）一致生效（GR-2.2-002，
 // 此前漏检 winBreaker），且候选过滤不再占用 HalfOpen 探测权。
 func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferRequest, skipped map[string]struct{}) *providerEntry {
-	chosen := selectBest(ir.registry.entries, func(name string, e *providerEntry) bool {
-		if _, skip := skipped[name]; skip {
-			return false
-		}
-		if req != nil {
-			caps := e.provider.Capabilities()
-			if (req.HasImageParts() && !caps.SupportsVision) || (req.HasVideoParts() && !caps.SupportsVideo) {
+	accept := func(role string) func(name string, e *providerEntry) bool {
+		return func(name string, e *providerEntry) bool {
+			if _, skip := skipped[name]; skip {
 				return false
 			}
-			// ModelPool 非空时严格按 role 过滤：只考虑 role 与 ModelPool 完全匹配的 Provider。
-			// "general" 不会自动透传到其他 Pool 的搜索结果；跨 Pool 降级由 tryPoolFallback 显式处理（GD-13-005）。
-			if req.ModelPool != "" && e.role != req.ModelPool {
-				return false
+			if req != nil {
+				caps := e.provider.Capabilities()
+				if (req.HasImageParts() && !caps.SupportsVision) || (req.HasVideoParts() && !caps.SupportsVideo) {
+					return false
+				}
 			}
+			return role == "" || e.role == role
 		}
-		return true
-	}, true)
-	return chosen
+	}
+	if req == nil || req.ModelPool == "" {
+		return selectBest(ir.registry.entries, accept(""), true)
+	}
+	// ModelPool 非空时严格按 poolRoles 过滤并按其顺序逐档择优；跨 Pool 降级由 tryPoolFallback
+	// 显式处理（GD-13-005）。
+	for _, role := range poolRoles(req.ModelPool) {
+		if chosen := selectBest(ir.registry.entries, accept(role), true); chosen != nil {
+			return chosen
+		}
+	}
+	return nil
 }
 
 func (ir *InferenceRouter) recordFailoverMetrics(ctx context.Context, chosen *providerEntry, resp *types.ProviderResponse, start time.Time) {

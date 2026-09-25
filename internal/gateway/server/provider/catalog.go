@@ -10,7 +10,6 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -33,7 +32,7 @@ type CatalogModel struct {
 	ID              string `json:"id"`
 	ModelID         string `json:"model_id"`
 	DisplayName     string `json:"display_name"`
-	RecommendedRole string `json:"recommended_role"` // default | reasoning | general
+	RecommendedRole string `json:"recommended_role"` // default | reasoning（通用由路由层派生，不入字典）
 	DisplayOrder    int    `json:"display_order"`
 }
 
@@ -113,27 +112,14 @@ type catalogModelRow struct {
 	recommendedRole string
 }
 
-func getFallbackGeneralModel(models []catalogModelRow) catalogModelRow {
-	for _, cm := range models {
-		if cm.recommendedRole == "reasoning" {
-			return cm
-		}
-	}
-	for _, cm := range models {
-		if cm.recommendedRole == "default" {
-			return cm
-		}
-	}
-	return models[0]
-}
-
 // HandleCreateProviderFromCatalog POST /v1/providers/from-catalog
 // 用户只需提供 catalog_id + api_key，系统自动：
 //  1. 查厂商字典填充 type / base_url
-//  2. 从模型字典生成 provider_models，自动分配 default/reasoning/general 角色
-//     default   → capability_tier='smart' AND is_reasoning=0，display_order 最小
-//     reasoning → is_reasoning=1，display_order 最小
-//     general   → 其余全部
+//  2. 从模型字典生成 provider_models：对话(default) / 推理(reasoning) 按 recommended_role；
+//     通用不落行，由路由层派生为对话模型（internal/llm poolRoles）
+//  3. 只补空缺：全局已有启用的 default/reasoning 时，新模型写为 general（备用），不抢占
+//
+// 厂商与模型同事务写入，任一步失败整体回滚。
 func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter, r *http.Request) {
 	var req fromCatalogRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -174,59 +160,48 @@ func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter,
 		baseURL = cat.DefaultBaseURL
 	}
 
-	// 生成 provider ID
-	buf := make([]byte, 8)
-	rand.Read(buf) //nolint:errcheck
-	provID := "prov_" + hex.EncodeToString(buf)
-	now := time.Now().UTC().Format(time.RFC3339)
+	catalogModels, err := h.fetchCatalogModels(r.Context(), req.CatalogID)
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+	held, err := h.ProviderRepo.ActiveModelRoles(r.Context())
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
 
-	// 写入 providers
-	err = h.ProviderRepo.CreateProvider(r.Context(), types.ProviderRow{
+	provID := newRecordID("prov_")
+	now := time.Now().UTC().Format(time.RFC3339)
+	modelRows := assignCatalogRoles(catalogModels, held, provID, now)
+
+	err = h.ProviderRepo.CreateProviderWithModels(r.Context(), types.ProviderRow{
 		ID:        provID,
 		Name:      name,
 		Type:      cat.ProviderType,
 		BaseURL:   baseURL,
 		APIKey:    req.APIKey,
-		ProjectID: "",
-		Location:  "",
-		SAKeyJSON: "",
 		Enabled:   true,
 		CatalogID: req.CatalogID,
 		CreatedAt: now,
 		UpdatedAt: now,
-	})
+	}, modelRows)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
-	}
-
-	// 查模型字典（recommended_role 直接映射到 provider_models.role，零翻译）
-	catalogModels, hasGeneral, err := h.fetchCatalogModels(r.Context(), req.CatalogID)
-	if err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
-		return
-	}
-
-	// 补充 general 模型：如果内置字典中没有 general，用户又需要一个 general 进行日常 Agent 任务
-	// 根据用户要求，优先使用 reasoning 模型复制为 general，其次 default 模型
-	if !hasGeneral && len(catalogModels) > 0 {
-		fallback := getFallbackGeneralModel(catalogModels)
-		catalogModels = append(catalogModels, catalogModelRow{
-			modelID:         fallback.modelID,
-			displayName:     fallback.displayName,
-			recommendedRole: "general",
-		})
-	}
-
-	createdModels := h.createModelsForProvider(r.Context(), provID, catalogModels, now)
-
-	// 若目录无模型（如 Ollama），不报错，返回空模型列表
-	if createdModels == nil {
-		createdModels = []ProviderModel{}
 	}
 
 	h.reloadProviders()
 
+	// 若目录无模型（如 Ollama），返回空模型列表
+	createdModels := make([]ProviderModel, 0, len(modelRows))
+	for _, m := range modelRows {
+		createdModels = append(createdModels, ProviderModel{
+			ID: m.ID, ProviderID: provID, ModelID: m.ModelID,
+			Name: m.Name, Role: m.Role, Enabled: m.Enabled,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
 	out := ProviderConfig{
 		ID: provID, Name: name, Type: cat.ProviderType,
 		BaseURL: baseURL, APIKey: req.APIKey,
@@ -236,25 +211,22 @@ func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter,
 	httputil.WriteJSONStatus(w, http.StatusCreated, out)
 }
 
-func (h *ProviderHandler) createModelsForProvider(ctx context.Context, provID string, catalogModels []catalogModelRow, now string) []ProviderModel {
-	createdModels := make([]ProviderModel, 0, len(catalogModels))
-
+// assignCatalogRoles 把字典推荐角色落为 provider_models 行：default/reasoning 全局独占，
+// 已被启用模型持有则新模型降为 general（备用），避免新增厂商静默替换用户在用的对话/推理模型。
+func assignCatalogRoles(catalogModels []catalogModelRow, held map[string]bool, provID, now string) []types.ProviderModelRow {
+	taken := make(map[string]bool, len(held))
+	for role, ok := range held {
+		taken[role] = ok
+	}
+	rows := make([]types.ProviderModelRow, 0, len(catalogModels))
 	for _, cm := range catalogModels {
 		role := cm.recommendedRole
-		if role == "" {
+		if (role != "default" && role != "reasoning") || taken[role] {
 			role = "general"
 		}
-		// default/reasoning 为全局独占角色：写入前清除其他 provider_models 中同角色
-		if role == "default" || role == "reasoning" {
-			h.ProviderRepo.ClearModelRoles(ctx, []string{role}, "") //nolint:errcheck
-		}
-
-		mbuf := make([]byte, 8)
-		rand.Read(mbuf) //nolint:errcheck
-		mID := "mdl_" + hex.EncodeToString(mbuf)
-
-		err := h.ProviderRepo.UpsertModel(ctx, types.ProviderModelRow{
-			ID:         mID,
+		taken[role] = true
+		rows = append(rows, types.ProviderModelRow{
+			ID:         newRecordID("mdl_"),
 			ProviderID: provID,
 			ModelID:    cm.modelID,
 			Name:       cm.displayName,
@@ -263,44 +235,37 @@ func (h *ProviderHandler) createModelsForProvider(ctx context.Context, provID st
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		})
-		if err != nil {
-			continue
-		}
-		createdModels = append(createdModels, ProviderModel{
-			ID: mID, ProviderID: provID, ModelID: cm.modelID,
-			Name: cm.displayName, Role: role, Enabled: true,
-			CreatedAt: now, UpdatedAt: now,
-		})
 	}
-	return createdModels
+	return rows
 }
 
-func (h *ProviderHandler) fetchCatalogModels(ctx context.Context, catalogID string) ([]catalogModelRow, bool, error) {
+func newRecordID(prefix string) string {
+	buf := make([]byte, 8)
+	rand.Read(buf) //nolint:errcheck // crypto/rand.Read 自 Go 1.24 起恒返回 nil 错误
+	return prefix + hex.EncodeToString(buf)
+}
+
+func (h *ProviderHandler) fetchCatalogModels(ctx context.Context, catalogID string) ([]catalogModelRow, error) {
 	mrows, err := h.DB.QueryContext(ctx,
 		`SELECT model_id, display_name, recommended_role
 		   FROM sys_provider_models
 		  WHERE catalog_provider_id=?
 		  ORDER BY display_order`, catalogID)
 	if err != nil {
-		return nil, false, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels", err)
 	}
 	defer mrows.Close()
 
 	var catalogModels []catalogModelRow
-	hasGeneral := false
 	for mrows.Next() {
 		var cm catalogModelRow
 		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.recommendedRole); err != nil {
-			slog.WarnContext(ctx, "provider catalog: scan model row failed", "err", err)
-			continue
-		}
-		if cm.recommendedRole == "general" {
-			hasGeneral = true
+			return nil, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels scan", err)
 		}
 		catalogModels = append(catalogModels, cm)
 	}
 	if err := mrows.Err(); err != nil {
-		return nil, false, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels rows error", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels rows error", err)
 	}
-	return catalogModels, hasGeneral, nil
+	return catalogModels, nil
 }

@@ -135,6 +135,11 @@ ProviderRepository interface {
 
 	ClearModelRoles(ctx context.Context, targetRoles []string, exceptID string) error
 	SetModelRole(ctx context.Context, id string, role string) error
+	// ActiveModelRoles 返回当前由"启用模型 + 启用厂商"持有的角色集合。
+	ActiveModelRoles(ctx context.Context) (map[string]bool, error)
+	// CreateProviderWithModels 单事务写入 provider 及其模型；models 中的 default/reasoning 为独占角色，
+	// 写入前把其他模型的同角色降为 general。任一步失败整体回滚。
+	CreateProviderWithModels(ctx context.Context, p types.ProviderRow, models []types.ProviderModelRow) error
 	// SeedIfEmpty 仅在 providers 表为空时插入默认配置；幂等。
 	SeedIfEmpty(ctx context.Context, rows []types.ProviderRow, models []types.ProviderModelRow) error
 	// SeedFromEnv 启动时根据环境变量插入或更新凭据。返回 (inserted_bool, error)

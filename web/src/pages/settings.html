@@ -47,6 +47,13 @@
                   <span class="font-mono text-xs" x-text="$store.modelRoles.reasoningModelName"></span>
                 </span>
               </template>
+              <!-- 通用不单独分配：路由层恒取对话模型（internal/llm poolRoles） -->
+              <template x-if="$store.modelRoles.defaultModelName">
+                <span class="badge badge-ghost badge-outline gap-1">
+                  <span class="text-xs" x-text="$store.i18n.t('roles_general_label')"></span>
+                  <span class="font-mono text-xs" x-text="$store.modelRoles.defaultModelName"></span>
+                </span>
+              </template>
             </div>
             <button class="btn btn-xs btn-ghost shrink-0" @click="rolesExpanded = true" x-text="$store.i18n.t('roles_edit')"></button>
           </div>

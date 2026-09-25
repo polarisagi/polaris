@@ -153,4 +153,38 @@ func TestCatalogHandlers_CreateFromCatalog(t *testing.T) {
 	if w.Result().StatusCode != http.StatusCreated {
 		t.Errorf("expected 201, got %d: %s", w.Result().StatusCode, w.Body.String())
 	}
+
+	// 3. 第二次添加：reasoning 已被启用模型持有，新模型不抢占，降为 general
+	req = httptest.NewRequest("POST", "/api/v1/providers/from-catalog", bytes.NewBufferString(body))
+	w = httptest.NewRecorder()
+	h.HandleCreateProviderFromCatalog(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Result().StatusCode, w.Body.String())
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM provider_models WHERE role='reasoning'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("reasoning must stay exclusive to first provider, count=%d err=%v", n, err)
+	}
+
+	// 4. 模型写入失败整体回滚：不留"厂商已建、模型缺失"的半套配置
+	if _, err := db.Exec(`DROP TABLE provider_models`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE provider_models (id TEXT PRIMARY KEY, provider_id TEXT, model_id TEXT,
+		name TEXT, role TEXT CHECK(role='nope'), enabled INTEGER, created_at TEXT, updated_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	var before int
+	db.QueryRow(`SELECT COUNT(*) FROM providers`).Scan(&before) //nolint:errcheck
+	req = httptest.NewRequest("POST", "/api/v1/providers/from-catalog", bytes.NewBufferString(body))
+	w = httptest.NewRecorder()
+	h.HandleCreateProviderFromCatalog(w, req)
+	if w.Result().StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on model insert failure, got %d", w.Result().StatusCode)
+	}
+	var after int
+	db.QueryRow(`SELECT COUNT(*) FROM providers`).Scan(&after) //nolint:errcheck
+	if after != before {
+		t.Fatalf("provider row must be rolled back, before=%d after=%d", before, after)
+	}
 }
