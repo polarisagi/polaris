@@ -205,7 +205,7 @@ func TestTurnContractEval_DirectReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
-// 场景 A'：寒暄零 LLM 感知（ADR-0101 决策一）——只调一次 Respond，Perceive/Plan 零调用。
+// 场景 A-1：寒暄零 LLM 感知（ADR-0101 决策一）——只调一次 Respond，Perceive/Plan 零调用。
 func TestTurnContractEval_PhaticSkipsPerceive(t *testing.T) {
 	p := newScriptedTurnProvider(map[string][]scriptedReply{
 		"respond": {{content: "你好！有什么可以帮你？"}},
@@ -223,6 +223,25 @@ func TestTurnContractEval_PhaticSkipsPerceive(t *testing.T) {
 	}
 	if n := len(p.promptsOf("respond")); n != 1 {
 		t.Errorf("寒暄应恰好一次 Respond，实际 %d 次", n)
+	}
+	assertNoInternalArtifacts(t, out.reply)
+}
+
+// 场景 A-2：直答合并（ADR-0101 决策四 4b′）——Perceive 同次产出回复，整回合只调 1 次 LLM。
+func TestTurnContractEval_DirectReplyMergedIntoPerceive(t *testing.T) {
+	p := newScriptedTurnProvider(map[string][]scriptedReply{
+		"perceive": {{content: `{"Goal":"询问身份","NeedsTools":false,"Reply":"我是 Polaris，你的 AI 助手。"}`}},
+	})
+	out := runScriptedTurn(t, p, &allowPolicyGate{}, &mockToolExecutor{}, "你是谁？")
+
+	if out.final != types.AgentStateComplete || out.reply != "我是 Polaris，你的 AI 助手。" {
+		t.Fatalf("final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
+	}
+	if n := len(p.promptsOf("respond")); n != 0 {
+		t.Errorf("Perceive 已产出回复时不应再调 Respond LLM，实际 %d 次", n)
+	}
+	if strings.Join(out.phases, ",") != "perceive,respond" {
+		t.Errorf("phases = %v, want perceive,respond", out.phases)
 	}
 	assertNoInternalArtifacts(t, out.reply)
 }
@@ -271,7 +290,7 @@ func TestTurnContractEval_ToolPathGroundedReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
-// 场景 C'：简单工具任务首轮全部成功 → 跳过 Reflect LLM（ADR-0101 决策四），
+// 场景 C-1：简单工具任务首轮全部成功 → 跳过 Reflect LLM（ADR-0101 决策四），
 // 回复仍基于执行结果。
 func TestTurnContractEval_SimpleToolTaskSkipsReflect(t *testing.T) {
 	exec := &mockToolExecutor{}

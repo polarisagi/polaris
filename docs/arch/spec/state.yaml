@@ -154,6 +154,7 @@ par:
         audience: internal
 
     # ADR-0098：直答路由。perceive 解析出 NeedsTools=false，由 Go 判定转入（非 LLM 驱动跳转）。
+    # ADR-0101 决策四 4b′：perceive 同次产出且通过 publishableReply 的 Reply → s_respond 为 deterministic 发布，不调 LLM。
     - from: s_perceive
       event: respond_ready
       to: s_respond

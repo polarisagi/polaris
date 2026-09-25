@@ -15,12 +15,13 @@ import (
 // S_REFLECT → S_RESPOND 仍在 registerTransitions 里（原 S_REFLECT → S_COMPLETE 改指向），
 // 这里只放 S_RESPOND 新增的入边与出边；拆文件是因为 transitions.go 已超 R7 行数上限。
 func (sm *StateMachine) registerRespondTransitions() {
-	// 直答：Perceive 判定 NeedsTools=false（S_PERCEIVE_DIRECT）。
+	// 直答：Perceive 判定 NeedsTools=false（S_PERCEIVE_DIRECT）。Perceive 已同次产出回复
+	// 时不再调 LLM（ADR-0101 决策四 4b′）；只有这条入边消费 PreparedReply。
 	sm.add(Transition{
 		From:    types.AgentStatePerceive,
 		Trigger: types.TriggerRespondReady,
 		To:      types.AgentStateRespond,
-		Effects: sm.respondEffects,
+		Effects: sm.directRespondEffects,
 	})
 	// 直答：Plan 解析成功但 DAG 为空（S_PLAN_EMPTY），含 FastPath 无缓存 DAG。
 	sm.add(Transition{
@@ -74,6 +75,23 @@ func (sm *StateMachine) registerRespondTransitions() {
 			return nil, nil
 		},
 	})
+}
+
+// directRespondEffects Perceive→Respond 入边。PreparedReply 非空时返回确定性 Effect：
+// 回复正文由 Agent 在执行该 Effect 时以 AudienceUser 发布（agent 层 publishPreparedReply），
+// S_RESPOND 仍是唯一向用户发布正文的状态（par_inv_06 不变），只是这一次不需要 LLM。
+func (sm *StateMachine) directRespondEffects(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+	sCtx.Mu.RLock()
+	prepared := sCtx.PreparedReply
+	sCtx.Mu.RUnlock()
+	if prepared == "" {
+		return sm.respondEffects(ctx, sCtx)
+	}
+	return []protocol.Effect{protocol.DeterministicEffect{
+		Fn: func(context.Context, protocol.StateContext) (types.State, error) {
+			return "S_RESPOND_DONE", nil
+		},
+	}}, nil
 }
 
 func (sm *StateMachine) respondEffects(_ context.Context, sCtx *StateContext) ([]protocol.Effect, error) {

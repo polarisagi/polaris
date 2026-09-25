@@ -25,6 +25,7 @@ const (
 	routeReplanExhausted  = "replan_exhausted_reply"
 	routePhatic           = "phatic_bypass"   // ADR-0101 决策一：寒暄零 LLM 直答
 	routeReflectSkipped   = "reflect_skipped" // ADR-0101 决策四：简单任务成功跳过反思 LLM
+	routeDirectMerged     = "direct_merged"   // ADR-0101 决策四 4b′：Perceive 同次调用产出回复
 )
 
 // applyPerceiveResult 把 Perceive 输出解析进 TaskModel 并决定路由（ADR-0098 决策三）。
@@ -58,10 +59,31 @@ func (sm *StateMachine) applyPerceiveResult(sCtx *StateContext, fill []byte) (ty
 
 	if tm.NeedsTools != nil && !*tm.NeedsTools {
 		metrics.RecordTurnRoute(context.Background(), routeDirect)
+		if reply := strings.TrimSpace(tm.Reply); publishableReply(reply) {
+			sCtx.Mu.Lock()
+			sCtx.PreparedReply = reply
+			sCtx.Mu.Unlock()
+			metrics.RecordTurnRoute(context.Background(), routeDirectMerged)
+		}
 		return "S_PERCEIVE_DIRECT", nil
 	}
 	metrics.RecordTurnRoute(context.Background(), routePlan)
 	return "S_PERCEIVE_DONE", nil
+}
+
+// publishableReply 直答合并的最后一道闸（4b′）：Reply 将不经 LLM 直接展示给用户，
+// 出现内部产物特征即放弃，退回 Respond LLM 重写——多一次调用，好过把结构化填空
+// 推给用户（2026-09-24 回复夹带 DAG JSON 缺陷的同类风险）。代码块等正常 Markdown 不拦。
+func publishableReply(reply string) bool {
+	if reply == "" {
+		return false
+	}
+	for _, marker := range []string{`"NeedsTools"`, `"Goal"`, `"nodes"`, "<tool_calls", "<invoke", "TaskModel"} {
+		if strings.Contains(reply, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 // applyReflectResult 在既有 onReflectSuccess（learning 落盘）之外，把反思结论留给
