@@ -50,16 +50,30 @@ func TestImmutableCore(t *testing.T) {
 	res = ic.renderSystemPrompt()
 	// UserPreferences["theme"]="dark" 由本函数开头设置（用于 Load() 断言），
 	// §5.7 补齐渲染后必然出现在 stable 层组装结果中，一并断言。
-	want := "soul\n\nguide\n\ncustom\n\nhint\n\n## User Preferences\n- theme: dark\n\nvolatile"
+	// 易变层不在稳定层渲染：它单独成为第二条 system 消息（ADR-0101 决策四）。
+	want := "soul\n\nguide\n\ncustom\n\nhint\n\n## User Preferences\n- theme: dark"
 	if res != want {
 		t.Fatalf("parts assembly failed: %s", res)
 	}
 
+	ic.AmbientContext = "\n\n## skill-a\ndo a"
 	msgs := []types.Message{{Role: "user", Content: "hi"}}
 	msgs = ic.PrependToMessages(msgs)
-	if len(msgs) != 2 || msgs[0].Role != "system" {
-		t.Fatal("PrependToMessages failed")
+	if len(msgs) != 3 || msgs[0].Role != "system" || msgs[1].Role != "system" {
+		t.Fatalf("PrependToMessages should emit stable + volatile system messages, got %d", len(msgs))
 	}
+	if msgs[0].Content != want {
+		t.Fatalf("stable system message must exclude volatile content: %q", msgs[0].Content)
+	}
+	if msgs[1].Content != "# VOLATILE CONTEXT\nvolatile\n\n## skill-a\ndo a" {
+		t.Fatalf("volatile system message mismatch: %q", msgs[1].Content)
+	}
+	// 问题变化只改变易变层：第一条消息字节不变，才能命中 Provider 前缀缓存。
+	ic.AmbientContext = "## skill-b\ndo b"
+	if again := ic.PrependToMessages(nil); again[0].Content != msgs[0].Content {
+		t.Fatal("stable system message must be byte-identical across queries")
+	}
+	ic.AmbientContext = ""
 
 	// Default fallback
 	ic.SoulMDContent = ""

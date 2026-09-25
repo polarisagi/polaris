@@ -5,6 +5,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/config"
+
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -98,10 +100,11 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 			return state, err
 		},
 		// 推理错误不重试：Router 已全量 failover（P-7），且流可能已推出部分 token。
-		OnFailure: onRespondFailure,
-		MaxRetry:  maxRetry,
-		ModelPool: string(types.ModelPoolGeneral),
-		Audience:  protocol.AudienceUser,
+		OnFailure:    onRespondFailure,
+		MaxRetry:     maxRetry,
+		ModelPool:    config.CurrentThresholds().M4Kernel.ModelPoolRespond,
+		Audience:     protocol.AudienceUser,
+		ThinkingMode: phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingRespond),
 	}
 }
 
@@ -117,6 +120,13 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 		originTaint = lv
 	}
 	thinking := metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current())
+	if sm.replanCount == 0 {
+		// 用户输入恒为 TaintHigh，SelectThinkingMode 对首轮规划恒返回 max；首轮改用配置档位
+		// （默认 high，即 DeepSeek 默认），重规划仍按 SelectThinkingMode 升到 max（ADR-0101 决策三）。
+		if m := phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingPlanInitial); m != "" {
+			thinking = m
+		}
+	}
 	if sCtx.PlanAttempts > 0 {
 		// 空输出重试关闭思考：空输出的触发条件正是"思考模式 + 挂工具"（决策七实证），
 		// 原样重试只是再掷一次同一枚骰子。用户输入恒为 TaintHigh，SelectThinkingMode
@@ -139,6 +149,25 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 		},
 		OnFailure: sm.onPlanFailure,
 		MaxRetry:  maxRetry,
-		ModelPool: "reasoning",
+		ModelPool: planModelPool(sm.replanCount),
 	}
+}
+
+// phaseThinking 把阶段思考档位配置转为 ThinkingMode；取值已在阈值加载时校验
+// （M4KernelThresholds.Validate），空串表示不下发、沿用 Provider 默认。
+func phaseThinking(v string) types.ThinkingMode {
+	m, _ := types.ParseThinkingMode(v)
+	return m
+}
+
+// planModelPool 首轮规划走便宜档，只有重规划（首轮计划被拒或未达成目标）才升到
+// model_pool.plan_replan（默认 reasoning）。此前规划恒走 reasoning 池：S_PLAN 携带全部
+// 工具 schema 且思考档位最高，是单次最贵的调用，日常对话的费用几乎都落在贵档模型上
+// （ADR-0101 决策七）。
+func planModelPool(replanCount int) string {
+	th := config.CurrentThresholds().M4Kernel
+	if replanCount > 0 {
+		return th.ModelPoolPlanReplan
+	}
+	return th.ModelPoolPlanInitial
 }

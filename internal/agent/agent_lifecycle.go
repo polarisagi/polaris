@@ -274,6 +274,20 @@ func (a *Agent) refinePersonaAsync(ctx context.Context, current types.AgentState
 	})
 }
 
+// emitConsolidateOnce 回合终态触发一次 Episodic → Semantic 记忆蒸馏（ConsolidationPipeline，
+// M5 §4）。此前在每次 S_REFLECT 完成时触发：观察—再规划回合里每轮反思都让管线把整场
+// 会话（最多 200 条事件）重新抽取、摘要、合成画像一遍；回合内的中间反思不产生新的
+// 可蒸馏结论，终态一次即可覆盖本回合全部事件（ADR-0101 决策二）。
+func (a *Agent) emitConsolidateOnce(ctx context.Context) {
+	if a.sCtx == nil || a.sCtx.SessionID == "" || protocol.IsReplaying() {
+		return
+	}
+	a.emitOutbox(ctx, protocol.TopicMemoryConsolidate, "memory_consolidate",
+		map[string]string{"session_id": a.sCtx.SessionID},
+		a.outboxIdemKey(protocol.TopicMemoryConsolidate, "agent_session", a.sCtx.SessionID, "consolidate"),
+		"memory_consolidate")
+}
+
 // archiveEpisodicAsync 是 ConsolidationPipeline 文档顶部注释描述的
 // "sessionClosed → 强制触发" 会话关闭钩子（2026-07-21 deadcode 审查补齐）：
 // protocol.MemoryFacade.ArchiveEpisodic 此前在接口和实现（facade.go）里都完整
@@ -343,6 +357,7 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 
 	a.refinePersonaAsync(ctx, current)
 	a.archiveEpisodicAsync(ctx)
+	a.emitConsolidateOnce(ctx)
 
 	// 触发 Terminal Callback (P1-2 Learning 闭环)。
 	// 传 SessionID 而非 TaskID：ReflectionWorker 以此为键检索 episodic 事件

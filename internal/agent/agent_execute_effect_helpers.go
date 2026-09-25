@@ -256,13 +256,6 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "reflect"),
 			"reflection_completed")
 
-		// 触发 Episodic → Semantic 4 阶段记忆蒸馏（ConsolidationPipeline，M5 §4）
-		if a.sCtx.SessionID != "" {
-			a.emitOutbox(ctx, protocol.TopicMemoryConsolidate, "memory_consolidate",
-				map[string]string{"session_id": a.sCtx.SessionID},
-				a.outboxIdemKey(protocol.TopicMemoryConsolidate, "agent_session", a.sCtx.SessionID, "consolidate"),
-				"memory_consolidate")
-		}
 	}
 }
 

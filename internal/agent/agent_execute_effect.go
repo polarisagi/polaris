@@ -274,6 +274,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 							types.WithModelPool(llmEff.ModelPool),
 							types.WithThinkingMode(llmEff.ThinkingMode),
 							types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}),
+							types.WithPurpose("plan_prm_candidate"),
 						)
 						if cErr != nil {
 							candidateCh <- candidateResult{}
@@ -350,6 +351,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			inferOpts := []types.InferOption{
 				types.WithModelPool(llmEff.ModelPool),
 				types.WithThinkingMode(llmEff.ThinkingMode),
+				types.WithPurpose(llmPurposeOf(a.sm.Current())),
 			}
 			if llmEff.ResponseFormat != nil {
 				inferOpts = append(inferOpts, types.WithResponseFormat(llmEff.ResponseFormat))

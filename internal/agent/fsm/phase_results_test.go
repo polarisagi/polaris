@@ -195,16 +195,35 @@ func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
 }
 
 // TestPlanEffect_RetryDisablesThinking 空输出重试须关闭思考：触发条件即"思考模式 +
-// 挂工具"，用户输入恒 TaintHigh 使首轮规划恒为 ThinkingMax，原样重试等于没有重试。
+// 挂工具"，原样重试等于没有重试。首轮规划取 m4_kernel.thinking.plan_initial（默认
+// high），不再因用户输入恒为 TaintHigh 而恒为 max（ADR-0101 决策三）；重规划仍升到 max。
 func TestPlanEffect_RetryDisablesThinking(t *testing.T) {
 	sm := NewStateMachine(&dummyContextBuilder{})
 	sCtx := &StateContext{}
 	sCtx.RawIntentTS = taint.NewTaintedString("写个文件", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
-	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingMax {
-		t.Fatalf("首轮规划（TaintHigh）应为 ThinkingMax，got %q", m)
+	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingHigh {
+		t.Fatalf("首轮规划应取配置档位 high，got %q", m)
 	}
+	sm.replanCount = 1
+	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingMax {
+		t.Fatalf("重规划应升到 ThinkingMax，got %q", m)
+	}
+	sm.replanCount = 0
 	sCtx.PlanAttempts = 1
 	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingDisabled {
 		t.Fatalf("空输出重试应关闭思考，got %q", m)
+	}
+}
+
+// 日常回合规划走便宜档，只有重规划升到贵档（ADR-0101 决策七）。
+func TestPlanEffect_ModelPoolEscalatesOnlyOnReplan(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	if p := sm.planEffect(sCtx).ModelPool; p != string(types.ModelPoolDefault) {
+		t.Fatalf("首轮规划应走 default 池，got %q", p)
+	}
+	sm.replanCount = 1
+	if p := sm.planEffect(sCtx).ModelPool; p != string(types.ModelPoolReasoning) {
+		t.Fatalf("重规划应升到 reasoning 池，got %q", p)
 	}
 }
