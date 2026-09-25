@@ -169,6 +169,8 @@ Poison Pill 毒丸驱逐: Worker 执行 FFI 前原子递增 crash_recovery_count
 
 监控: outbox.pending.count | outbox.lag.seconds | outbox.dead.count (>0 告警)
 
+资源压力推迟（2026-09-25）: Worker 以 `protocol.WithDeferrableBackgroundWork` 运行，handler 内的 LLM 调用按后台优先级准入；被内存/CPU 水位线拒绝时路由立即返回 `protocol.ErrBackgroundDeferred`（不挂起，免得阻塞同批其后的 Agent 中断 / 消息持久化记录）。handler 须沿错误链上抛该哨兵；Worker 据此置 `failed` + `next_retry_at = now+30s`，**不累加** `attempts` / `crash_recovery_count`——推迟不是失败，不得把投影推进死信（inv_M2_05）。指标 `polaris.outbox.deferred_total{engine}`。
+
 Embedding 维度运行时获取: 所有向量维度由 M1 `Embedder.Dimension()` 运行时返回，禁止编译期硬编码。维度变更触发 OnlineReindexer。维度不匹配返回 ErrDimensionMismatch，调用方降级 BM25/FTS5。
 
 ---

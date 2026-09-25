@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -143,5 +144,28 @@ func TestAcquireLLMCapacity_BackgroundUsesDegradablePriority(t *testing.T) {
 	if all := gov.snapshot(); all[len(all)-1] != 0 {
 		last := all[len(all)-1]
 		t.Fatalf("未标记后台的请求应以 priority=0 申请，got %d", last)
+	}
+}
+
+// TestAcquireLLMCapacity_DeferrableReturnsImmediately 可推迟的后台工作（outbox）被水位线
+// 拒绝时不挂起，立即以 ErrBackgroundDeferred 返回——串行队列里挂起一条会阻塞其后记录。
+func TestAcquireLLMCapacity_DeferrableReturnsImmediately(t *testing.T) {
+	gov := &pressureGovernor{}
+	router := NewInferenceRouter(NewProviderRegistry(config.M1RouterThresholds{}), nil, WithGovernor(gov))
+
+	ctx, cancel := context.WithCancel(protocol.WithDeferrableBackgroundWork(context.Background()))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- router.acquireLLMCapacity(ctx) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, protocol.ErrBackgroundDeferred) {
+			t.Fatalf("应返回 ErrBackgroundDeferred，got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("可推迟工作被水位线拒绝后在挂起，未立即返回")
+	}
+	if p := gov.snapshot(); len(p) == 0 || p[0] != 1 {
+		t.Fatalf("可推迟工作仍按后台优先级申请，got %v", p)
 	}
 }

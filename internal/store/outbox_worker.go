@@ -17,6 +17,9 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// outboxDeferDelay 记录因资源水位线推迟时的下次重试间隔。
+const outboxDeferDelay = 30 * time.Second
+
 // 哨兵错误 ErrVersionStale / ErrUnknownTargetEngine / ErrPoisonPill 见 outbox_errors.go。
 
 // OutboxWorker — 跨引擎投递 Worker。
@@ -182,6 +185,9 @@ func scanOutboxRows(rows *sql.Rows) ([]*OutboxRecord, error) {
 //   - 毒丸记录（crash_recovery_count ≥ 3）直接标记 dead，不再重试。
 //   - 处于 ReplayMode 时跳过所有副作用（只消费，不触发 handler）。
 func (w *OutboxWorker) Run(ctx context.Context) error {
+	// 投影（情景抽取、图谱构建、摘要…）的推理属于可推迟后台工作：水位线下让位于用户
+	// 对话，且单条推迟不阻塞其后的 Agent 中断 / 消息持久化等记录（processAndMark）。
+	ctx = protocol.WithDeferrableBackgroundWork(ctx)
 	// 从 DB 恢复 cursor（崩溃重启场景）。cursorReady=false 表示尚未获得可信 cursor，
 	// 此时绝不能带着 0 值跑 processBatch（会从头重复处理全部 outbox，见 L3 定级）。
 	cursor, cursorReady := w.loadCursorSafe(ctx)
@@ -266,34 +272,8 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		return nil
 	}
 
-	if errors.Is(err, ErrVersionStale) {
-		_, execErr := w.db.ExecContext(ctx,
-			"UPDATE outbox SET status='skipped', processed_at=? WHERE id=?",
-			now, record.ID)
-		if execErr != nil {
-			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark skipped failed", execErr)
-		}
-		return nil
-	}
-
-	if errors.Is(err, ErrUnknownTargetEngine) {
-		_, execErr := w.db.ExecContext(ctx,
-			"UPDATE outbox SET status='dead', processed_at=?, last_error=? WHERE id=?",
-			now, err.Error(), record.ID)
-		if execErr != nil {
-			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr)
-		}
-		return nil
-	}
-
-	if errors.Is(err, ErrPoisonPill) {
-		_, execErr := w.db.ExecContext(ctx,
-			"UPDATE outbox SET status='dead', processed_at=?, last_error=? WHERE id=?",
-			now, err.Error(), record.ID)
-		if execErr != nil {
-			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr)
-		}
-		return nil
+	if handled, markErr := w.markNonFailure(ctx, record, now, err); handled {
+		return markErr
 	}
 
 	newAttempts := record.Attempts + 1
@@ -321,6 +301,34 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		}
 	}
 	return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
+}
+
+// markNonFailure 处理不计入重试次数的结局：资源压力推迟（稍后重做）、版本过期（跳过）、
+// 未知引擎与毒丸（直接 dead）。handled=false 表示 err 是普通失败，交由调用方退避重试。
+func (w *OutboxWorker) markNonFailure(ctx context.Context, record *OutboxRecord, now int64, err error) (handled bool, markErr error) {
+	var q, what string
+	var args []any
+	switch {
+	case errors.Is(err, protocol.ErrBackgroundDeferred):
+		// 资源压力下推迟不是失败：不累加 attempts / crash_recovery_count，否则压力持续几轮
+		// 记录就会进死信、投影永久丢失（inv_M2_05）。置 failed 以便补充查询在游标之后仍能捡回。
+		q, what = "UPDATE outbox SET status='failed', next_retry_at=?, updated_at=? WHERE id=?", "deferred"
+		args = []any{now + outboxDeferDelay.Milliseconds(), now, record.ID}
+		metrics.RecordOutboxDeferred(ctx, record.TargetEngine)
+		slog.DebugContext(ctx, "store/outbox: 资源压力下推迟处理", "outbox_id", record.ID, "target_engine", record.TargetEngine)
+	case errors.Is(err, ErrVersionStale):
+		q, what = "UPDATE outbox SET status='skipped', processed_at=? WHERE id=?", "skipped"
+		args = []any{now, record.ID}
+	case errors.Is(err, ErrUnknownTargetEngine), errors.Is(err, ErrPoisonPill):
+		q, what = "UPDATE outbox SET status='dead', processed_at=?, last_error=? WHERE id=?", "dead"
+		args = []any{now, err.Error(), record.ID}
+	default:
+		return false, nil
+	}
+	if _, execErr := w.db.ExecContext(ctx, q, args...); execErr != nil {
+		return true, apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark "+what+" failed", execErr)
+	}
+	return true, nil
 }
 
 // loadCursorSafe 从 sys_config 读取持久化的消费游标。

@@ -9,6 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -497,5 +498,64 @@ func TestSaveCursor_CrossesDigitBoundary(t *testing.T) {
 	got, ok := w.loadCursorSafe(ctx)
 	if !ok || got != 100 {
 		t.Fatalf("cursor = %d ok=%v, want 100 (monotonic across digit boundaries)", got, ok)
+	}
+}
+
+// TestProcessAndMark_BackgroundDeferred_NotCountedAsFailure 资源压力推迟不是失败：
+// 连续推迟不得累加 attempts / crash_recovery_count（否则压力持续几轮即进死信、投影永久
+// 丢失），且推迟一条不阻塞同批其后的记录（Agent 中断、消息持久化重试等）。
+func TestProcessAndMark_BackgroundDeferred_NotCountedAsFailure(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+
+	w := NewOutboxWorker(db, 5, 3, 100, 500)
+	w.RegisterHandler("projection", func(ctx context.Context, rec *OutboxRecord) error {
+		return apperr.Wrap(apperr.CodeInternal, "projection llm",
+			apperr.Wrap(apperr.CodeResourceExhausted, "router deferred", protocol.ErrBackgroundDeferred))
+	})
+	handled := 0
+	w.RegisterHandler("interrupt", func(ctx context.Context, rec *OutboxRecord) error {
+		handled++
+		return nil
+	})
+
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status)
+		VALUES (1, ?, 'projection', 'p', 'system', X'00', 'k1', 'pending'), (2, ?, 'interrupt', 'i', 'system', X'00', 'k2', 'pending')`, now, now); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	ctx := context.Background()
+	rec := &OutboxRecord{ID: 1, TargetEngine: "projection"}
+	for range 5 { // 超过 maxRetries=3，失败语义下早已进死信
+		if _, err := db.Exec(`UPDATE outbox SET status='pending' WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.processAndMark(ctx, rec); err != nil {
+			t.Fatalf("推迟不应作为错误上报: %v", err)
+		}
+	}
+	var status string
+	var attempts, crash int
+	var nextRetry int64
+	if err := db.QueryRow(`SELECT status, attempts, crash_recovery_count, next_retry_at FROM outbox WHERE id=1`).
+		Scan(&status, &attempts, &crash, &nextRetry); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || attempts != 0 || crash != 0 {
+		t.Fatalf("推迟后应为 failed 且不计次数，got status=%s attempts=%d crash=%d", status, attempts, crash)
+	}
+	if nextRetry < now+outboxDeferDelay.Milliseconds()-1000 {
+		t.Fatalf("推迟应设置约 %v 后重试，got next_retry_at=%d now=%d", outboxDeferDelay, nextRetry, now)
+	}
+
+	if _, err := db.Exec(`UPDATE outbox SET status='pending', next_retry_at=NULL WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.processBatch(ctx, 0, 10); err != nil {
+		t.Fatal(err)
+	}
+	if handled != 1 {
+		t.Fatalf("推迟一条不得阻塞同批其后的记录，interrupt handled=%d", handled)
 	}
 }

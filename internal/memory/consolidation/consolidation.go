@@ -169,7 +169,9 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 	err = p.executeStages(ctx, sessionID, events)
 	if err != nil {
 		var aerr *apperr.Error
-		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted && p.outbox != nil {
+		// 资源压力推迟（ErrBackgroundDeferred）由 outbox 自身择机重做本条，不再另投重试消息。
+		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted && p.outbox != nil &&
+			!errors.Is(err, protocol.ErrBackgroundDeferred) {
 			if scheduleErr := p.scheduleOOMRetry(ctx, sessionID, events, err); scheduleErr != nil {
 				return scheduleErr
 			}
@@ -218,6 +220,10 @@ func (p *ConsolidationPipeline) executeStages(ctx context.Context, sessionID str
 	if err != nil {
 		var aerr *apperr.Error
 		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
+			return err
+		}
+		// 推迟信号被 InferRaw 等外层以其它错误码包裹，须按链判别，否则会被当作非阻断吞掉。
+		if errors.Is(err, protocol.ErrBackgroundDeferred) {
 			return err
 		}
 		// 非阻断：Stage 1 失败不中止后续阶段

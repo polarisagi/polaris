@@ -247,6 +247,11 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("outbox 游标加载/持久化失败次数 (label: kind: load/save)"),
 	)
 	ie.capture("polaris.outbox.cursor_errors_total", err)
+	InstrOutboxDeferredTotal, err = meter.Int64Counter(
+		"polaris.outbox.deferred_total",
+		metric.WithDescription("outbox 记录因资源水位线推迟处理次数，不计入失败 (label: engine)"),
+	)
+	ie.capture("polaris.outbox.deferred_total", err)
 	InstrMemoryJSONDecodeFailuresTotal, err = meter.Int64Counter(
 		"polaris.memory.json_decode_failures_total",
 		metric.WithDescription("记忆子系统 JSON/Scan 反序列化失败次数 (label: table)"),

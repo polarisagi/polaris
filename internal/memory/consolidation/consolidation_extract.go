@@ -3,6 +3,7 @@ package consolidation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/prompt/templates"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -51,24 +54,37 @@ func (p *ConsolidationPipeline) extractEntitiesAndRelations(
 	// 本包历史上自带的 llmExtract 路径，再退化到 ruleExtract，三级降级链保持
 	// 向后兼容，不引入硬依赖。
 	if p.entityExtractor != nil {
-		if p.writeFilter != nil {
-			eval := p.writeFilter.Evaluate(ctx, text, 0, 0)
-			if eval.ShouldSkip {
-				slog.Debug("consolidation: retrieval.WriteFilter skipped content", "reason", eval.Reason, "score", eval.Value)
-				return nil, nil, nil
-			}
-		}
-		entities, relations, err := p.entityExtractor.ExtractEntitiesAndRelations(ctx, sessionID, text)
-		if err != nil {
-			slog.Warn("consolidation: SharedEntityExtractor failed, fallback to rule extract", "err", err)
-			return p.ruleExtract(sessionID, text)
-		}
-		return entities, relations, nil
+		return p.sharedExtract(ctx, sessionID, text)
 	}
 	if p.summarizer != nil {
 		return p.llmExtract(ctx, sessionID, text)
 	}
 	return p.ruleExtract(sessionID, text)
+}
+
+// sharedExtract 经 SharedEntityExtractor 抽取；失败退回规则抽取，资源压力推迟除外。
+func (p *ConsolidationPipeline) sharedExtract(
+	ctx context.Context,
+	sessionID string,
+	text string,
+) ([]*types.Entity, []*types.Relation, error) {
+	if p.writeFilter != nil {
+		eval := p.writeFilter.Evaluate(ctx, text, 0, 0)
+		if eval.ShouldSkip {
+			slog.Debug("consolidation: retrieval.WriteFilter skipped content", "reason", eval.Reason, "score", eval.Value)
+			return nil, nil, nil
+		}
+	}
+	entities, relations, err := p.entityExtractor.ExtractEntitiesAndRelations(ctx, sessionID, text)
+	if errors.Is(err, protocol.ErrBackgroundDeferred) {
+		// 资源压力下推迟，不降级为规则抽取（见 llmExtract）。
+		return nil, nil, apperr.Wrap(apperr.CodeResourceExhausted, "consolidation: shared extraction deferred", err)
+	}
+	if err != nil {
+		slog.Warn("consolidation: SharedEntityExtractor failed, fallback to rule extract", "err", err)
+		return p.ruleExtract(sessionID, text)
+	}
+	return entities, relations, nil
 }
 
 // llmExtract 调用 LLM 提取实体/关系，返回 JSON 解析结果。
@@ -97,6 +113,10 @@ func (p *ConsolidationPipeline) llmExtract(
 		return p.ruleExtract(sessionID, text)
 	}
 	respContent, err := p.summarizer.InferRaw(ctx, promptText, 1024)
+	if errors.Is(err, protocol.ErrBackgroundDeferred) {
+		// 资源压力下被推迟：上抛由 outbox 择机重做，而不是以规则抽取的降质结果落库。
+		return nil, nil, apperr.Wrap(apperr.CodeResourceExhausted, "consolidation: llm extraction deferred", err)
+	}
 	if err != nil {
 		return p.ruleExtract(sessionID, text)
 	}

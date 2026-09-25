@@ -18,6 +18,7 @@ import (
 type mockSummarizer struct {
 	resp string
 	fail bool
+	err  error // 非 nil 时原样返回（优先于 fail）
 }
 
 func (m *mockSummarizer) Summarize(ctx context.Context, text string, maxTokens int) (string, error) {
@@ -25,6 +26,9 @@ func (m *mockSummarizer) Summarize(ctx context.Context, text string, maxTokens i
 }
 
 func (m *mockSummarizer) InferRaw(ctx context.Context, prompt string, maxTokens int) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
 	if m.fail {
 		return "", apperr.New(apperr.CodeInternal, "mock summarizer failure")
 	}

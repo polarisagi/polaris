@@ -135,6 +135,13 @@ func RecordOutboxProcessFailure(ctx context.Context, engine string) {
 	}
 }
 
+// RecordOutboxDeferred 记录 outbox 记录因资源水位线推迟（不计入失败与重试次数）。
+func RecordOutboxDeferred(ctx context.Context, engine string) {
+	if InstrOutboxDeferredTotal != nil {
+		InstrOutboxDeferredTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("engine", engine)))
+	}
+}
+
 // RecordOutboxCursorError 记录 outbox 游标加载/持久化失败，kind ∈ {load, save}。
 func RecordOutboxCursorError(ctx context.Context, kind string) {
 	if InstrOutboxCursorErrorsTotal != nil {

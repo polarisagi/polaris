@@ -6,6 +6,10 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（outbox 投影资源压力推迟 — 含**契约变更**）
+
+- **[契约] `protocol.WithDeferrableBackgroundWork` / `ErrBackgroundDeferred`**：串行消费队列（当前为 OutboxWorker）的后台 LLM 调用被水位线拒绝时，路由立即返回推迟哨兵而不挂起。outbox handler 及其下游**须沿错误链上抛**该哨兵（`apperr.Wrap` / `%w`），不得降级落库或吞成 nil；Worker 据此推迟 30s 且不计入 attempts / crash_recovery_count（M02 §2.5）。整合管线已接：抽取不再因推迟退回规则抽取，`Run` 不因推迟另投 OOM 重试。
+
 ## 2026-09-25（审查修复：LLM 额度 / 能力令牌绑定 / 后台推理优先级 — 含**契约变更**）
 
 - **[契约] `protocol.WithBackgroundWork` / `IsBackgroundWork`**：可降级后台工作标记。空闲自进化任务 ctx 与 `AcquireHeadless` 获取的 Agent 的 effect ctx 自动带标记；InferenceRouter 据此以 priority=1 调 `AdmitLLM`（受水位线约束，被拒时 2s 间隔挂起至 ctx 到期），且不刷新用户活跃时间。新增后台 LLM 调用方须标记，否则按用户可见推理对待。
@@ -269,23 +273,4 @@
 
 - `M06/M09/M13-bis` | 技能执行从 TinyGo/impl.wasm/wazero 迁移至 TypeScript/Python 脚本（npx tsx），沙箱从 Go wazero 迁移至 Rust wasmtime（FFI）；内置工具直接信任不走沙箱；官方技能/插件移至独立仓库 polaris-plugins-official
 
-## 2026-06-11（docs/arch/decisions + AGENTS.md + 02-Rust-FFI 全量修订）
-
-**ADR 过时内容修正（4 个 ADR）**：
-
-- `ADR-0005 §决策` | surreal_store.go cgo 状态描述由"历史遗留 P3 待处置"改为"cgo→purego 迁移已由 ADR-0011（2026-05-16）执行完毕"
-- `ADR-0010 §关联ADR` | 补入 ADR-0011 引用，删除"cgo 偏离待 P3 处置"过时注释
-- `ADR-0014 §决策` | 模型版本 "Opus 4.7"（不存在）→ "`claude-opus-4-8`"（Anthropic 当前最新旗舰）
-- `ADR-0015 §状态/§2.1/§2.3/§4/§5` | 标注 §2.1 Plugin 层定位已被 ADR-0016 取代；SignatureValid 方案标注已被 TrustTier 替代；§4 "Plugin 放 M13"条目标注已被 ADR-0016 推翻；§5 补 ADR-0016 引用
-
-**AGENTS.md（= CLAUDE.md）更新（6 处）**：
-
-- Header `6 pkg` → `8 pkg`；ADR 清单补 `0020 DeepSeek V4 · 0021 核心机制实现`；DDL 清单末尾补 `029_workflows`，计数 25→26 张表
-
-**docs/specs/ 规范修订**：
-
-- `02-Rust-FFI.md RUST-1` | 删除过时"单文件结构可维持"描述（已拆分为 4 文件）
-- `02-Rust-FFI.md RUST-3` | 更新文件组织为实际结构：`lib.rs`+`surreal_store.rs`+`wasmtime_engine.rs`+`check_wasi.rs`（旧描述为未落地的 cedar.rs/vector.rs 拆分方案）
-- `02-Rust-FFI.md RUST-4` | 依赖白名单补充 `wasmtime`+`wasmtime-wasi`+`tokio`+`serde`+`serde_json`+`anyhow`+`bytes`+`lazy_static`（已在 Cargo.toml 实际使用，旧白名单漏列）
-
-> 更早的历史条目（2026-06-09 Gemini gap 报告核查 及更早，共 9 条）已归档至 [`CHANGELOG-archive.md`](./CHANGELOG-archive.md)。
+> 更早的历史条目（2026-06-11 docs/arch/decisions + AGENTS.md + 02-Rust-FFI 全量修订 及更早，共 10 条）已归档至 [`CHANGELOG-archive.md`](./CHANGELOG-archive.md)。
