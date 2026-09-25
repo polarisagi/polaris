@@ -979,8 +979,20 @@ thresholds:
     prm_min_threshold: 0.4 # toml:"prm.min_threshold"
     conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
     conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
+    thinking_perceive: low # toml:"thinking.perceive"，ADR-0101 决策三；"" = Provider 默认（DeepSeek 省略即 high）
+    thinking_plan_initial: high # toml:"thinking.plan_initial"，首轮规划；重规划仍按 SelectThinkingMode 升到 max
+    thinking_reflect: low # toml:"thinking.reflect"
+    thinking_respond: "" # toml:"thinking.respond"，面向用户回复沿用 Provider 默认
+    model_pool_perceive: default # toml:"model_pool.perceive"，ADR-0101 决策七；default=便宜档（flash/mini/haiku）
+    model_pool_plan_initial: default # toml:"model_pool.plan_initial"
+    model_pool_plan_replan: reasoning # toml:"model_pool.plan_replan"，仅重规划升贵档；设 default 即不用贵档
+    model_pool_reflect: default # toml:"model_pool.reflect"
+    model_pool_respond: default # toml:"model_pool.respond"
+    model_pool_validate: default # toml:"model_pool.validate"，L3 看门狗 fail-open
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
+      - thinking_*: ["perceive_route_accuracy_drop", "reflect_goal_achieved_false_positive", "plan_schema_fail_rate>0.05"]
+      - model_pool_*: ["turn_success_rate_drop", "replan_rate_rise"]
       - context_window_compress_pct: ["compress_recall_drop"]
       - step_default_timeout_seconds: ["tool_long_tail>60s"]
       - plan_dag_max_nodes: ["complex_pipeline_appears"]

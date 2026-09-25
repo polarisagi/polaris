@@ -6,6 +6,16 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（ADR-0101 Token 消耗治理 — 含**契约变更**）
+
+- **[契约] 新增后台 LLM 调用须显式指定思考档位**：DeepSeek 省略 thinking 即按 effort=high 计推理 token；机械性任务（摘要/抽取/过滤/画像）用 `types.ThinkingDisabled`。新增 `types.ThinkingLow`。
+- **[契约] `ImmutableCore.PrependToMessages` 输出稳定层 + 易变层两条 system 消息**：按请求变化的内容不得拼入第一条 system 消息（前缀缓存按消息整块匹配）。
+- **[阈值] `m4_kernel.thinking.{perceive,plan_initial,reflect,respond}`** = low/high/low/""（state.yaml），加载时校验。
+- **[契约] `llm_calls` 表（039）+ `types.WithPurpose`**：每次 Provider 调用由注册表记录包装落库；新增 LLM 调用点须标注用途。`ProviderRegistry.Get` 返回原始实例（类型断言用），路由使用的是记录包装。
+- **[阈值] `m4_kernel.model_pool.*`**：日常阶段默认 `default`（便宜档），仅 `plan_replan=reasoning`；未指定池的请求按成本档位由低到高择优。新增调用点不得固定走 `reasoning` 池。
+- **行为变更**：`self_improve.auto_curriculum` 开始生效（默认关）；`memory_consolidate` 改为回合终态触发一次；S_PLAN 文本工具目录不再嵌参数 schema。
+- 新增后台自动任务须有配置开关；新增会随请求变化的提示词片段须放在稳定前缀之后。
+
 ## 2026-09-25（ADR-0100 DeepSeek Harness 评审：上下文溢出与执行结果 spill — 含**契约变更**）
 
 - **[契约] `protocol.ErrContextOverflow`**：上下文超限 / payload 过大是请求侧故障。InferenceRouter 不计入熔断与成功率，只 failover 到窗口更大的 Provider，否则返回包装该哨兵的错误；调用方须缩减请求后再试，不得当作 Provider 耗尽处理。新增 Provider 调用点记录健康度一律经 `recordAttempt`。
