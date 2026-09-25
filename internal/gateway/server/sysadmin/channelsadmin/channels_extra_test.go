@@ -121,3 +121,15 @@ func TestDispatchChannelMessage(t *testing.T) {
 
 	fromConfig.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, protocol.ChannelMessage{})
 }
+
+type stubProvider struct{ protocol.Provider }
+
+type stubRegistry struct{ protocol.LLMRegistry }
+
+func (stubRegistry) PickProvider(string) protocol.Provider { return stubProvider{} }
+
+// 有可用 provider 但 SessionOrch 未注入：须在 RunTurn 前返回，不得 nil panic。
+func TestDispatchChannelMessage_NilSessionOrch(t *testing.T) {
+	h := &ChannelsAdmin{Registry: stubRegistry{}}
+	h.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, protocol.ChannelMessage{Text: "hi"})
+}

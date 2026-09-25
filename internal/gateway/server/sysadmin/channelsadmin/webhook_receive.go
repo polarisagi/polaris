@@ -130,6 +130,13 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		return
 	}
 
+	// 本函数跑在 SafeGo 后台 goroutine 里，nil 依赖 panic 只会被静默吞掉；
+	// 与上方 provider 缺失同样按"记日志 + 丢弃本条"处理。
+	if h.SessionOrch == nil {
+		slog.Warn("channel dispatch: session orchestrator not configured", "channel", channelID)
+		return
+	}
+
 	sessionKey := fmt.Sprintf("ch_%s_%s", channelID, msg.ChatID)
 
 	// [A-03 Step5] 原内联 EnsureSession/FireBefore("message.before")/

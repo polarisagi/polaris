@@ -102,3 +102,10 @@ func TestWorkflowInternal(t *testing.T) {
 	// executeWorkflow
 	h.executeWorkflow(context.Background(), &workflow{ID: "wf-1", CronSchedule: ""}, "test")
 }
+
+func TestRunWorkflowStep_NilSessionOrchReturnsError(t *testing.T) {
+	h := &WorkflowAdmin{}
+	if _, err := h.runWorkflowStep(context.Background(), "s1", "p", "", "", "n"); err == nil {
+		t.Fatal("expected error when SessionOrch is nil")
+	}
+}
