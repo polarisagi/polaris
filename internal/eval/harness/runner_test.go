@@ -3,7 +3,6 @@ package harness
 import (
 	"context"
 	"crypto/ed25519"
-	"fmt"
 	"testing"
 	"time"
 
@@ -35,10 +34,11 @@ func (m *mockProvider) Infer(ctx context.Context, msgs []types.Message, opts ...
 	return m.resp, m.err
 }
 
-func testSignRunner(role, partition string) (ed25519.PublicKey, []byte) {
+// 返回私钥交给 InjectEvalPrivKey 现签：VerifyRequest 用校验瞬间的 Unix 秒重建
+// 签名消息，预签名一旦跨秒即失配（-race/-shuffle 下实测偶发）。
+func testSignRunner() (ed25519.PublicKey, ed25519.PrivateKey) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	msg := []byte(fmt.Sprintf("%s:%s:%d", role, partition, time.Now().Unix()))
-	return pub, ed25519.Sign(priv, msg)
+	return pub, priv
 }
 
 func TestRunner(t *testing.T) {
@@ -48,11 +48,11 @@ func TestRunner(t *testing.T) {
 
 	ms := &mockSQLiteStore{vals: [][]byte{[]byte(c1), []byte(c2), []byte(c3)}}
 
-	pub, sig := testSignRunner(control.RoleM9Optimizer, control.PartitionTraining)
+	pub, priv := testSignRunner()
 	evalStore := NewSQLiteEvalStore(ms, control.NewEngine(map[string]ed25519.PublicKey{control.RoleM9Optimizer: pub}))
 
 	runner := NewRunner(ms, evalStore, config.DefaultThresholds(), config.EvalConfig{})
-	runner.SetEvalSignature(sig)
+	runner.InjectEvalPrivKey(priv)
 
 	ch := make(chan types.EvalCompletedPayload, 1)
 	runner.SetEvalChannel(ch)

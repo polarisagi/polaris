@@ -105,6 +105,17 @@ func (p *scriptedTurnProvider) promptsOf(phase string) []string {
 	return append([]string(nil), p.prompts[phase]...)
 }
 
+// pinSystem2Routing 把进程级 GlobalSurpriseIndex 固定在 System-2 区间，测试结束恢复原值。
+// fsm S_PERCEIVE→S_PLAN 读该全局值决定是否走 System-1 旁路（复用已有 DAGModel、跳过 LLM
+// 规划）；同包其它测试（SetTaskIntent 等）会把它改低，依赖完整规划链路的用例在
+// -shuffle 下随执行顺序时过时挂。
+func pinSystem2Routing(t *testing.T) {
+	t.Helper()
+	prev := metrics.GlobalSurpriseIndex().Current()
+	metrics.GlobalSurpriseIndex().SetLastValue(0.7)
+	t.Cleanup(func() { metrics.GlobalSurpriseIndex().SetLastValue(prev) })
+}
+
 type fixedSurprise float64
 
 func (f fixedSurprise) SubmitToolSeq(string, []string) {}
@@ -121,10 +132,8 @@ type turnOutcome struct {
 func runScriptedTurn(t *testing.T, p *scriptedTurnProvider, gate protocol.PolicyGate, exec *mockToolExecutor, input string) turnOutcome {
 	t.Helper()
 	a := NewAgentWithDefaults("eval-" + t.Name())
-	// 固定 System-2 路由：评测验证的是完整规划链路；SurpriseIndex 默认取全局值，
-	// 会被同包其它测试改低而误入 System-1 快速路径（旁路规划）。结束后恢复全局值。
-	prevSurprise := metrics.GlobalSurpriseIndex().Current()
-	t.Cleanup(func() { metrics.GlobalSurpriseIndex().SetLastValue(prevSurprise) })
+	// 固定 System-2 路由：评测验证的是完整规划链路。
+	pinSystem2Routing(t)
 	a.surpriseCalc = fixedSurprise(0.7)
 	a.InjectProvider(p)
 	a.InjectPolicyGate(gate)

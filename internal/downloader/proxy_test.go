@@ -94,10 +94,7 @@ func TestHeadOK_ConnectionRefused(t *testing.T) {
 }
 
 func TestCandidateURLs_GitHubURL(t *testing.T) {
-	s := getProxy()
-	old := s.resolved
-	s.resolved = "https://myproxy.com"
-	defer func() { s.resolved = old }()
+	pinResolvedProxy(t, "https://myproxy.com")
 
 	candidates := CandidateURLs(context.Background(), http.DefaultClient, "github.com/foo/bar")
 	if len(candidates) < 2 {
@@ -109,15 +106,24 @@ func TestCandidateURLs_GitHubURL(t *testing.T) {
 }
 
 func TestCandidateURLs_NonGitHub(t *testing.T) {
-	s := getProxy()
-	old := s.resolved
-	s.resolved = "https://myproxy.com"
-	defer func() { s.resolved = old }()
+	pinResolvedProxy(t, "https://myproxy.com")
 
 	candidates := CandidateURLs(context.Background(), http.DefaultClient, "example.com/foo")
 	if candidates[0] != "https://myproxy.com/example.com/foo" {
 		t.Errorf("expected https://myproxy.com/example.com/foo, got %s", candidates[0])
 	}
+}
+
+// pinResolvedProxy 固定代理探测结果，测试结束恢复。必须先消耗 probeOnce：只改 resolved
+// 而探测尚未执行时，CandidateURLs 首次调用会跑真实网络探测并覆盖 resolved，
+// 结果随用例执行顺序变化（-shuffle 下复现）。
+func pinResolvedProxy(t *testing.T, v string) {
+	t.Helper()
+	s := getProxy()
+	s.probeOnce.Do(func() {})
+	old := s.resolved
+	s.resolved = v
+	t.Cleanup(func() { s.resolved = old })
 }
 
 // erroringRoundTripper 模拟网络不可达：所有请求立即返回 error，不发起真实连接。
