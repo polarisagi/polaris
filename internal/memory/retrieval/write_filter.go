@@ -101,6 +101,7 @@ func (f *WriteFilter) llmEvaluate(
 	resp, err := safecall.Infer(ctx, f.provider,
 		[]types.Message{{Role: "user", Content: prompt}},
 		types.WithMaxTokens(64),
+		types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("memory_write_filter"),
 	)
 	if err != nil {
 		return EvalResult{}, apperr.Wrap(apperr.CodeInternal, "write_filter: provider infer", err)

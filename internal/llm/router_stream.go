@@ -202,6 +202,9 @@ func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.
 		slog.Info("llm_router: stream cross-pool degraded inference succeeded",
 			"original_pool", originalPool, "actual_pool", fallbackPool)
 		wrapped := ir.wrapStreamChannel(ctx, ch, &degradedReq, entry.name)
+		if !isCapabilityDowngrade(originalPool) {
+			return wrapped, nil
+		}
 		return prependDegradeNotice(ctx, wrapped, originalPool), nil
 	}
 	return nil, apperr.Wrap(apperr.CodeResourceExhausted,

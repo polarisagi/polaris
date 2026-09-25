@@ -224,7 +224,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 		}
 	}
 
-	resp, err := safecall.Infer(ctx, dm.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
+	resp, err := safecall.Infer(ctx, dm.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("durative_memory"))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "DurativeMemoryManager.processCluster", err)
 	}

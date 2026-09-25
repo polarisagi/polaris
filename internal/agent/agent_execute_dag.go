@@ -450,7 +450,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	// 当前任务的符号化画布，供 gateway GET /v1/agent/mmd-canvas 只读展示。
 	// 独立包装而非侵入 toolExecFnInner 内部多处 return，避免遗漏分支。
 	// nodeFailures 统计工具软失败（Success=false 但无 Go 错误），DAG 引擎不把它当节点失败，
-	// Reflect 跳过判据需要它（ADR-0101 决策四）。并行节点并发调用，故用原子量。
+	// Reflect 跳过判据需要它（ADR-0102 决策四）。并行节点并发调用，故用原子量。
 	var nodeFailures atomic.Int32
 	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 		toolUseID := uuid.New().String()

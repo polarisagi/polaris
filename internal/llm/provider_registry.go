@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -13,7 +14,10 @@ import (
 
 // providerEntry 封装单个 Provider 的运行时状态。
 type providerEntry struct {
-	provider    protocol.Provider
+	// provider 是经 usageRecordingProvider 包装的实例：路由经它发起的每次调用都写 llm_calls。
+	provider protocol.Provider
+	// raw 是注册时传入的原始实例，供 Get 按名取用后做类型断言（如 protocol.LocalProvider）。
+	raw         protocol.Provider
 	name        string
 	role        string // general | default | reasoning
 	displayName string // 用于 WebUI 展示的友好名称
@@ -78,6 +82,7 @@ type ProviderRegistry struct {
 	entries    map[string]*providerEntry
 	onRecovery func(providerName string) // 可选：Provider 熔断恢复时的回调
 	cfg        config.M1RouterThresholds // 熔断器配置（来自 M1RouterThresholds TOML）
+	usage      atomic.Pointer[usageSink] // llm_calls 记账队列；nil 时只跳过记账（见 InjectUsageRecorder）
 }
 
 func NewProviderRegistry(cfg config.M1RouterThresholds) *ProviderRegistry {
@@ -98,7 +103,15 @@ func (r *ProviderRegistry) InjectRecoveryHandler(fn func(providerName string)) {
 func (r *ProviderRegistry) Register(name, displayName string, p protocol.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.entries[name] = newProviderEntry(name, displayName, p, r.cfg)
+	r.entries[name] = r.newEntry(name, displayName, "", p)
+}
+
+// newEntry 构造条目并套上 llm_calls 记账包装。记账队列经原子指针读取，注入顺序无关。
+func (r *ProviderRegistry) newEntry(name, displayName, role string, p protocol.Provider) *providerEntry {
+	e := newProviderEntry(name, displayName, &usageRecordingProvider{Provider: p, name: name, sink: &r.usage}, r.cfg)
+	e.raw = p
+	e.role = role
+	return e
 }
 
 func (r *ProviderRegistry) Unregister(name string) {
@@ -118,7 +131,7 @@ func (r *ProviderRegistry) Get(name string) (protocol.Provider, bool) {
 	if !ok {
 		return nil, false
 	}
-	return e.provider, true
+	return e.raw, true
 }
 
 // UnregisterAll 清空所有注册项，用于热重载前的清理。
@@ -134,9 +147,7 @@ func (r *ProviderRegistry) UnregisterAll() {
 func (r *ProviderRegistry) ReplaceAll(build func(register func(name, displayName, role string, p protocol.Provider))) {
 	next := make(map[string]*providerEntry)
 	build(func(name, displayName, role string, p protocol.Provider) {
-		e := newProviderEntry(name, displayName, p, r.cfg)
-		e.role = role
-		next[name] = e
+		next[name] = r.newEntry(name, displayName, role, p)
 	})
 	r.mu.Lock()
 	r.entries = next
@@ -148,9 +159,7 @@ func (r *ProviderRegistry) ReplaceAll(build func(register func(name, displayName
 func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p protocol.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e := newProviderEntry(name, displayName, p, r.cfg)
-	e.role = role
-	r.entries[name] = e
+	r.entries[name] = r.newEntry(name, displayName, role, p)
 }
 
 // BestForRole 返回指定角色下 healthScore 最高的可用 entry。
@@ -269,10 +278,34 @@ func (r *ProviderRegistry) bestWith(req *types.InferRequest, acquire bool) *prov
 
 	needsVision := req != nil && req.HasImageParts()
 	needsVideo := req != nil && req.HasVideoParts()
-	return selectBest(r.entries, func(_ string, e *providerEntry) bool {
-		caps := e.provider.Capabilities()
-		return (!needsVision || caps.SupportsVision) && (!needsVideo || caps.SupportsVideo)
-	}, acquire)
+	// 未指定池的请求按成本档位由低到高择优：同档内再比 healthScore。此前只比 healthScore
+	// （成本权重 0.2，且各适配器费率常为占位值），flash 与 pro 之间近乎随机，后台调用
+	// 大量落到贵档模型（ADR-0101 决策七）。
+	for tier := 0; tier <= maxCostTier; tier++ {
+		if e := selectBest(r.entries, func(_ string, e *providerEntry) bool {
+			caps := e.provider.Capabilities()
+			return costTier(e.role) == tier &&
+				(!needsVision || caps.SupportsVision) && (!needsVideo || caps.SupportsVideo)
+		}, acquire); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+const maxCostTier = 2
+
+// costTier 按角色给出成本档位：0=便宜档（budget/default，以及未标角色的单 Provider 部署），
+// 1=中档（general），2=贵档（reasoning）。角色语义见 022_provider_catalog.sql 模型种子。
+func costTier(role string) int {
+	switch types.ModelPool(role) {
+	case types.ModelPoolGeneral:
+		return 1
+	case types.ModelPoolReasoning:
+		return 2
+	default:
+		return 0
+	}
 }
 
 type trackedProvider struct {

@@ -102,7 +102,7 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 		payload["tools"] = anthropicTools
 	}
 
-	// Anthropic Prompt Caching（ADR-0101 决策三），最多 4 个断点。缓存前缀顺序为
+	// Anthropic Prompt Caching（ADR-0102 决策三），最多 4 个断点。缓存前缀顺序为
 	// tools → system → messages，断点缓存其之前的全部内容：
 	// 断点 1: 第一个 system block——ImmutableCore（人格/工具摘要/偏好，跨会话、跨阶段
 	//         稳定）连同其前的 tools 一并缓存。此前 system 整段拼接只在末尾打点，

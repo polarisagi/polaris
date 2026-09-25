@@ -17,12 +17,25 @@ const (
 	// ThinkingDisabled 关闭思考，适用于日常简单请求。
 	ThinkingDisabled ThinkingMode = "disabled"
 
+	// ThinkingLow 低档思考，适用于结构化分类/判定（意图结构化、反思判定）：保留少量推理，
+	// 推理 token 远少于 high（DeepSeek reasoning_effort=low）。
+	ThinkingLow ThinkingMode = "low"
+
 	// ThinkingHigh 高档思考（~100K token 预算），适用于常规规划。
 	ThinkingHigh ThinkingMode = "high"
 
 	// ThinkingMax 最大思考（~384K token 预算），适用于失败重规划、高风险任务。
 	ThinkingMax ThinkingMode = "max"
 )
+
+// ParseThinkingMode 解析配置中的思考档位；空串表示沿用 Provider 默认（不下发该参数）。
+func ParseThinkingMode(s string) (ThinkingMode, bool) {
+	switch m := ThinkingMode(s); m {
+	case "", ThinkingDisabled, ThinkingLow, ThinkingHigh, ThinkingMax:
+		return m, true
+	}
+	return "", false
+}
 
 // StreamEventType 定义 LLM 流式输出的事件类型。
 type StreamEventType int

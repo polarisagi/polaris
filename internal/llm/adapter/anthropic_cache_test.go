@@ -7,7 +7,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// ADR-0101 决策三：多 system 消息保留边界，首块（ImmutableCore 稳定前缀）与末块各一个断点；
+// ADR-0102 决策三：多 system 消息保留边界，首块（ImmutableCore 稳定前缀）与末块各一个断点；
 // 断点总数不超过 Anthropic 上限 4。
 func TestBuildAnthropicRequest_StablePrefixBreakpoint(t *testing.T) {
 	a := &AnthropicAdapter{model: "claude-sonnet-5"}

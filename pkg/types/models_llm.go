@@ -146,6 +146,9 @@ InferOptions struct {
 	ThinkingBudget int
 	CacheHints     *SemanticCacheHints
 	ModelPool      string // 目标 Model Pool（Provider 角色/role），空串表示不限定（GD-13-005）
+	// Purpose 调用用途（perceive/plan/consolidate_summary/...），只用于 llm_calls 记账归因，
+	// 不参与路由与请求构造。空串记为 "unspecified"。
+	Purpose string
 }
 
 type

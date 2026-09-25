@@ -38,15 +38,11 @@ thinking 启用时 temperature 强制为 0；`reasoning_content` 须随 assistan
 > Tier-3 高级特权场景，重议其角色，但当前"非省钱降级方案"的定位不因单纯价格
 > 波动而改变。
 
-> 2026-09-25 追记（决策二触发条件修订，ADR-0101 决策二）：新事实——用户输入恒为 TaintHigh
-> （ADR-0098 决策七追记），"TaintLevel≥3 → ThinkingMax"令每个首轮规划恒为满档思考，
-> 且 `planEffect` 硬编码 reasoning 池，三档路由退化为常量。修订为
-> `SelectThinkingMode(replanCount, complexity, SI)`：replan>0 或 SI≥high → Max；
-> complexity≥`m4_kernel.plan.reasoning_complexity`(0.7) 或 SI≥low → High；否则 Disabled。
-> 污点不再是输入（安全由五防线承担）。规划池同源由 `SelectPlanModelPool` 选择。
-> 门控 `TestPlanEffect_CheapFirstCascade`。上表保留作历史。
-
-> 2026-09-25 二次追记（ADR-0101 决策六）：上条追记中的 `SelectThinkingMode`/`SelectPlanModelPool`
-> 已合并为 `SelectPlanTier(escalation, complexity, SI)` 四级阶梯（general/无 → general/High →
-> reasoning/High → reasoning/Max）；"replanCount>0 → Max"改为只由能力类失败（L0 结构错误、
-> 计划不可解析、重复工具报错、规划模型自评超纲）累计升级，安全拒绝/瞬时故障/观察—再规划不升级。
+> 2026-09-25 追记（决策二触发条件修订，ADR-0101 决策三/七 + ADR-0102 决策六）：新事实——用户输入恒为
+> TaintHigh（ADR-0098 决策七追记），"TaintLevel≥3 → ThinkingMax"令每个首轮规划恒为满档思考，且
+> `planEffect` 硬编码 reasoning 池，三档路由退化为常量。ADR-0101 先把首轮规划改为配置档位与便宜池；
+> ADR-0102 再以 `SelectPlanTier(escalation, complexity, SI)` 四级阶梯取代 `SelectThinkingMode`：
+> level 0 = `model_pool.plan_initial` + `thinking.plan_initial`，1 = 同池上调一档，2 = `model_pool.plan_replan`
+> + high，3 = 同池 + max。起点由 LLM 判定的 Complexity 与 SI 决定；"replanCount>0 → Max"改为只由能力类
+> 失败（L0 结构错误、计划不可解析、重复工具报错、规划模型自评超纲）累计升级，安全拒绝/瞬时故障/
+> 观察—再规划不升级。污点不再是输入（安全由五防线承担）。门控 `TestPlanEffect_CheapFirstCascade`。上表保留作历史。

@@ -64,7 +64,7 @@ func TestTryPhaticBypass(t *testing.T) {
 	require.Nil(t, tryPhaticBypass(&StateContext{}))
 }
 
-// ADR-0101 决策四：仅"首轮 + 全部成功 + 0<Complexity<阈值"跳过 Reflect LLM；
+// ADR-0102 决策四：仅"首轮 + 全部成功 + 0<Complexity<阈值"跳过 Reflect LLM；
 // 任一条件不满足必须保留反思，跳过判据不得放过失败或复杂任务。
 func TestTrySkipReflect(t *testing.T) {
 	sm := NewStateMachine(&dummyContextBuilder{})
@@ -92,7 +92,7 @@ func TestTrySkipReflect(t *testing.T) {
 	require.Nil(t, sm.trySkipReflect(mk(true, 0.2)), "重规划轮次必须反思（观察—再规划）")
 }
 
-// ADR-0101 决策四 4b′：Perceive 直答合并只在 NeedsTools=false 且 Reply 可发布时生效；
+// ADR-0102 决策四 4b′：Perceive 直答合并只在 NeedsTools=false 且 Reply 可发布时生效；
 // 只有 Perceive→Respond 入边消费 PreparedReply，其余入边照常调 Respond LLM。
 func TestPerceiveDirectReplyMerge(t *testing.T) {
 	sm := NewStateMachine(&dummyContextBuilder{})

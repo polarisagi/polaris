@@ -100,7 +100,7 @@ internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
   # sysinfo/ downloader/ 2026-07-07 自 sysmgr/ 迁入 L0：被 L0/L1/L2 广泛引用，不含 L3 治理语义
 
   # --- 通用契约（所有层均可引用）---
-  protocol/      跨模块共享类型 + 接口契约：repo/ 接口定义、pb/ Protobuf 生成物、schema/ DDL SQL（35 个，SSoT）
+  protocol/      跨模块共享类型 + 接口契约：repo/ 接口定义、pb/ Protobuf 生成物、schema/ DDL SQL（36 个，SSoT）
   config/        配置加载 + 编译期不变量
   lint/          CI 静态扫描规则
   bootstrap/     模块生命周期编排（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）
@@ -152,11 +152,11 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
 8. `docs/specs/09-LLM-Agent-Production.md` → **写任何 Agent/LLM/Tool/RAG/Memory 相关代码前必读**（A-01~A-14 陷阱 + P-1~P-9 生产原则 + RAG/并发安全检查清单）
 9. `internal/protocol/` → 跨模块共享类型与接口契约
-10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~038，共 35 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
+10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~039，共 36 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
 **docs/arch/decisions/ 索引**：编号 SSoT = [`decisions/README.md`](docs/arch/decisions/README.md)（权威索引表 + 「已删除」编号对照表 + 编号不重排的理由）。本文件不维护副本（含份数——`make docs-refs` 的 adr-index 项每次运行都会打印实时份数），避免双份索引漂移——按主题词 grep `docs/arch/decisions/` 即可。
 
-**internal/protocol/schema/ DDL 清单**：`ls internal/protocol/schema/*.sql` 即得（35 个）。025~027 编号段**刻意预留**——对应表已重构合并至其他表，编号不复用防历史混淆，不得报为"缺失文件"；`embed.go` 用 `//go:embed *.sql` 自动包含，跳号不影响编译。修改 Schema 前必读目标表文件。
+**internal/protocol/schema/ DDL 清单**：`ls internal/protocol/schema/*.sql` 即得（36 个）。025~027 编号段**刻意预留**——对应表已重构合并至其他表，编号不复用防历史混淆，不得报为"缺失文件"；`embed.go` 用 `//go:embed *.sql` 自动包含，跳号不影响编译。修改 Schema 前必读目标表文件。
 
 **禁止**：
 - 未读 INDEX 直接加载多个 M_X

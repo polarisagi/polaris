@@ -127,6 +127,7 @@ func (s *CommunityGenerativeSummarizer) summarizeOne(ctx context.Context, cid in
 	resp, err := safecall.Infer(ctx, s.provider,
 		[]types.Message{{Role: "user", Content: promptText}},
 		types.WithMaxTokens(512),
+		types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("graphrag_community"),
 	)
 	if err != nil {
 		// 单社区失败：跳过，不中断其他社区
