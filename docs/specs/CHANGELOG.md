@@ -6,6 +6,11 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-27（ADR-0103：Codex 应用绑定 — 含 **DDL 变更**）
+
+- **[DDL] `021_plugins.sql` 新增 `plugin_app_bindings`**：开发库需删除重建。
+- **[契约] `ExtensionRepository.ListPluginAppBindings/ReplacePluginAppBindings`**；`lifecycle.ResolveAppBindings/BindApp`；API `GET /v1/plugins/{id}/apps`、`PUT /v1/plugins/{id}/apps/{alias}`。
+
 ## 2026-09-27（ADR-0103：Claude 插件 channels — 含**契约变更**与 **DDL 变更**）
 
 - **[DDL] `021_plugins.sql` 新增 `plugin_channels`**：开发库需删除重建。

@@ -224,3 +224,12 @@ type PluginChannelState struct {
 	Enabled         bool
 	PermissionRelay bool
 }
+
+// PluginAppBinding 对应 plugin_app_bindings 表一行（021）：Codex 应用绑定。
+type PluginAppBinding struct {
+	PluginID      string `json:"plugin_id"`
+	Alias         string `json:"alias"`
+	ConnectorRef  string `json:"connector_ref"`
+	BoundServerID string `json:"bound_server_id"`
+	Status        string `json:"status"` // bound / unbound
+}

@@ -92,3 +92,19 @@ CREATE TABLE IF NOT EXISTS plugin_channels (
     updated_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     PRIMARY KEY (plugin_id, server)
 );
+
+-- ============================================================================
+-- plugin_app_bindings: Codex .app.json 应用绑定（ADR-0103 决策四：app 是对连接器的引用，不是 MCP 定义）
+-- ============================================================================
+-- connector_ref: .app.json apps.<alias>.id 原文（ChatGPT 平台连接器 ID 或本地连接器标识）。
+-- bound_server_id: 解析/用户绑定到的本地 mcp_servers.id；空 = 未绑定（status='unbound'）。
+-- 安装时按 id / 名称 / catalog_id 自动解析；用户手动绑定在 connector_ref 不变且服务器仍存在时跨升级保留。
+CREATE TABLE IF NOT EXISTS plugin_app_bindings (
+    plugin_id        TEXT    NOT NULL,
+    alias            TEXT    NOT NULL,
+    connector_ref    TEXT    NOT NULL,
+    bound_server_id  TEXT    NOT NULL DEFAULT '',
+    status           TEXT    NOT NULL DEFAULT 'unbound' CHECK (status IN ('bound','unbound')),
+    updated_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (plugin_id, alias)
+);

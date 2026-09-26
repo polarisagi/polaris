@@ -83,6 +83,10 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (InstallR
 	if err := p.savePlugin(ctx, req, pluginID, plug); err != nil {
 		return InstallResult{}, err
 	}
+	// 应用绑定解析失败不阻断安装：绑定是引用元数据，可在 UI 中重新绑定（ADR-0103 决策四）。
+	if err := ResolveAppBindings(ctx, p.extRepo, pluginID, plug.Apps); err != nil {
+		slog.Warn("plugin_installer: resolve app bindings failed", "plugin", plug.Name, "err", err)
+	}
 	if plug.DefaultEnabled {
 		p.startServers(serverIDs)
 	}

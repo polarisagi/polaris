@@ -215,6 +215,9 @@ ExtensionRepository interface {
 	// ListPluginChannelStates / SavePluginChannelState 插件 channel 的用户启用状态（定义在 manifest 快照）。
 	ListPluginChannelStates(ctx context.Context) ([]types.PluginChannelState, error)
 	SavePluginChannelState(ctx context.Context, s types.PluginChannelState) error
+	// ListPluginAppBindings / ReplacePluginAppBindings Codex 应用绑定（ADR-0103 决策四）。
+	ListPluginAppBindings(ctx context.Context, pluginID string) ([]types.PluginAppBinding, error)
+	ReplacePluginAppBindings(ctx context.Context, pluginID string, bindings []types.PluginAppBinding) error
 	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
 	SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error
 	UpdatePluginMCPServerEnabled(ctx context.Context, pluginID, serverID string, enabled int, now string) error

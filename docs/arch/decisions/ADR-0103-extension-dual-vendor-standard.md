@@ -74,6 +74,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - 格式按 Codex：`.app.json` = `{"apps":{"<alias>":{"id":"<connector_id>"}}}`；由 `extensions.com.openai.apps` 或 `.codex-plugin/plugin.json` 的 `apps` 指向，默认 `./.app.json`。
 - 安装时逐个 alias 在本地连接器目录（`mcp_servers` / `extension_catalog` 的 MCP 条目）按 `id` 解析：命中 → `status=bound`；未命中（例如 ChatGPT 平台专有的 `plugin_asdk_app_*` / `connector_*` id）→ `status=unbound`，UI 引导用户绑定到一个本地连接器。
 - 落库 `plugin_app_bindings(plugin_id, alias, connector_ref, bound_server_id, status)`；**不**把 app 转换成 `ext_type=mcp` 条目，也不生成新的 MCP 进程。
+- 实现（2026-09-27）：`lifecycle.ResolveAppBindings` 在安装/升级时按 `mcp_servers` 的 id / 名称 / catalog_id 解析；用户手动绑定（`lifecycle.BindApp`，API `GET /v1/plugins/{id}/apps`、`PUT /v1/plugins/{id}/apps/{alias}`）在 `connector_ref` 未变且服务器仍存在时跨升级保留；解析失败不阻断安装。
 
 ## 决策五：技能遵循 agentskills.io 规范 + 两家扩展字段
 
@@ -156,3 +157,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-26 | 决策三补充：子 Agent 定义与委派落地（双格式解析、工具名映射、只读/步数/禁委派硬拦截、YAML 私有格式删除、`transfer_to_agent` 注册）。 |
 | 2026-09-26 | 决策五/六补充：`context: fork` 技能、两家内置 agent 类型、SubagentStart/SubagentStop、`agent` 类型 hook（只读子 Agent + hook 抑制）。 |
 | 2026-09-27 | 决策三补充：Claude 插件 channels（事件入会话、`plugin_channels` 显式启用、审批转发）。 |
+| 2026-09-27 | 决策四：应用绑定落地（解析、手动绑定、升级保留）。 |

@@ -268,3 +268,46 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+func (r *SQLiteExtensionRepository) ListPluginAppBindings(ctx context.Context, pluginID string) ([]types.PluginAppBinding, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT plugin_id, alias, connector_ref, bound_server_id, status
+		FROM plugin_app_bindings WHERE plugin_id=? ORDER BY alias`, pluginID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginAppBindings", err)
+	}
+	defer rows.Close()
+	var out []types.PluginAppBinding
+	for rows.Next() {
+		var b types.PluginAppBinding
+		if err := rows.Scan(&b.PluginID, &b.Alias, &b.ConnectorRef, &b.BoundServerID, &b.Status); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginAppBindings scan", err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginAppBindings: rows", err)
+	}
+	return out, nil
+}
+
+// ReplacePluginAppBindings 以给定集合整体替换该插件的应用绑定（清单删除的 alias 不残留）。
+func (r *SQLiteExtensionRepository) ReplacePluginAppBindings(ctx context.Context, pluginID string, bindings []types.PluginAppBinding) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ReplacePluginAppBindings begin", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, "DELETE FROM plugin_app_bindings WHERE plugin_id=?", pluginID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ReplacePluginAppBindings delete", err)
+	}
+	for _, b := range bindings {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_app_bindings(plugin_id, alias, connector_ref, bound_server_id, status)
+			VALUES(?,?,?,?,?)`, pluginID, b.Alias, b.ConnectorRef, b.BoundServerID, b.Status); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ReplacePluginAppBindings insert", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ReplacePluginAppBindings commit", err)
+	}
+	return nil
+}
