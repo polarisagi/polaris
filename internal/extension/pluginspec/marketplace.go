@@ -91,12 +91,12 @@ type PluginSource struct {
 // ErrNotAMarketplace 目录下没有任何市场文件。
 var ErrNotAMarketplace = apperr.New(apperr.CodeInvalidInput, "pluginspec: directory is not a marketplace")
 
-// LoadMarketplace 读取市场根目录（含 .claude-plugin/ 或 .agents/plugins/ 的目录）。
+// GetMarketplace 读取市场根目录（含 .claude-plugin/ 或 .agents/plugins/ 的目录）。
 // 条目逐个校验，单个条目无效不影响整个市场（两家一致）。
-func LoadMarketplace(root string) (*Marketplace, error) {
+func GetMarketplace(root string) (*Marketplace, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInvalidInput, "pluginspec.LoadMarketplace", err)
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "pluginspec.GetMarketplace", err)
 	}
 	var ds diagnostics
 	m := &Marketplace{Root: abs}
@@ -110,7 +110,7 @@ func LoadMarketplace(root string) (*Marketplace, error) {
 		mergeMarketplace(m, parseMarketplaceFile(abs, path, raw, &ds))
 	}
 	if len(m.Files) == 0 {
-		return nil, apperr.Wrap(apperr.CodeInvalidInput, "pluginspec.LoadMarketplace: "+abs, ErrNotAMarketplace)
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "pluginspec.GetMarketplace: "+abs, ErrNotAMarketplace)
 	}
 	if !validMarketplaceName(m.Name) {
 		ds.errorf("marketplace", m.Files[0], RuleMarketplaceName, "marketplace name %q is invalid", m.Name)

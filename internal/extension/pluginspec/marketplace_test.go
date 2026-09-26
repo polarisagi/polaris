@@ -9,7 +9,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-func TestLoadMarketplace_ClaudeAndCodexMerged(t *testing.T) {
+func TestGetMarketplace_ClaudeAndCodexMerged(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, ".claude-plugin", "marketplace.json"), `{
 	  "name": "team", "owner": {"name": "Team"}, "metadata": {"pluginRoot": "./plugins", "description": "d"},
@@ -32,7 +32,7 @@ func TestLoadMarketplace_ClaudeAndCodexMerged(t *testing.T) {
 	    {"name": "fmt", "source": {"source": "local", "path": "./plugins/fmt"}, "policy": {"installation": "INSTALLED_BY_DEFAULT", "authentication": "ON_USE"}, "category": "Dev"},
 	    {"name": "codex-only", "source": "./plugins/codex-only", "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}}
 	  ]}`)
-	m, err := LoadMarketplace(root)
+	m, err := GetMarketplace(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +64,8 @@ func TestLoadMarketplace_ClaudeAndCodexMerged(t *testing.T) {
 	}
 }
 
-func TestLoadMarketplace_Missing(t *testing.T) {
-	if _, err := LoadMarketplace(t.TempDir()); !errors.Is(err, ErrNotAMarketplace) {
+func TestGetMarketplace_Missing(t *testing.T) {
+	if _, err := GetMarketplace(t.TempDir()); !errors.Is(err, ErrNotAMarketplace) {
 		t.Fatalf("got %v", err)
 	}
 }
