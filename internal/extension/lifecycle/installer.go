@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -24,6 +25,8 @@ type InstallReq struct {
 	Target    any
 	LocalPath string
 	Config    string
+	// MarketplaceEntry 市场条目（pluginspec.MarketplaceEntry JSON）；仅插件安装使用。
+	MarketplaceEntry json.RawMessage
 }
 
 // InstallResult 运行时绑定结果。RuntimeID 为运行时表主键（plugins.id / skills.name / mcp_servers.id）。

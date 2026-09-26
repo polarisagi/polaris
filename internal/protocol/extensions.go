@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 )
@@ -76,6 +77,16 @@ type RegistryEntry struct {
 	InstalledVersion string `json:"installed_version,omitempty" yaml:"-"`
 	// 运行时叠加：所属市场的排序权重（用于列表展示）
 	MarketplaceSortOrder int `json:"marketplace_sort_order,omitempty" yaml:"-"`
+
+	// ── 市场标准格式（ADR-0103 决策七）────────────────────────────────────────
+	// MarketplaceName 市场清单 name（插件依赖按"同市场"解析）。
+	MarketplaceName string `json:"marketplace_name,omitempty" yaml:"-"`
+	// Entry 插件条目（pluginspec.MarketplaceEntry JSON）：来源与 strict 组合的唯一依据。
+	Entry json.RawMessage `json:"entry,omitempty" yaml:"-"`
+	// AllowCrossDeps 所属市场的 allowCrossMarketplaceDependenciesOn。
+	AllowCrossDeps []string `json:"allow_cross_deps,omitempty" yaml:"-"`
+	// SourceDir 技能条目在市场缓存中的目录（绝对路径）。
+	SourceDir string `json:"source_dir,omitempty" yaml:"-"`
 }
 
 // Marketplace 市场配置。
@@ -91,88 +102,6 @@ type Marketplace struct {
 	Enabled     int    `json:"enabled" yaml:"enabled"`
 	SortOrder   int    `json:"sort_order" yaml:"sort_order"` // 展示排序权重，值越小越靠前
 	CreatedAt   string `json:"created_at" yaml:"created_at"`
-}
-
-// PluginInterface 对应 plugin.json 的 interface 块（UI 展示元数据）。
-// 兼容 Polaris .polaris-plugin/plugin.json 和 OpenAI agents/openai.yaml 的 interface 节。
-type PluginInterface struct {
-	DisplayName      string   `json:"displayName,omitempty" yaml:"display_name,omitempty"`
-	ShortDescription string   `json:"shortDescription,omitempty" yaml:"short_description,omitempty"`
-	LongDescription  string   `json:"longDescription,omitempty" yaml:"long_description,omitempty"`
-	DeveloperName    string   `json:"developerName,omitempty" yaml:"developer_name,omitempty"`
-	Category         string   `json:"category,omitempty" yaml:"category,omitempty"`
-	Capabilities     []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
-	IconSmall        string   `json:"icon_small,omitempty" yaml:"icon_small,omitempty"` // agents/openai.yaml 用下划线
-	WebsiteURL       string   `json:"websiteURL,omitempty" yaml:"website_url,omitempty"`
-	PrivacyPolicyURL string   `json:"privacyPolicyURL,omitempty" yaml:"privacy_policy_url,omitempty"`
-	TermsURL         string   `json:"termsOfServiceURL,omitempty" yaml:"terms_url,omitempty"`
-	DefaultPrompt    []string `json:"defaultPrompt,omitempty" yaml:"default_prompt,omitempty"`
-}
-
-// PluginJSON 表示 .polaris-plugin/plugin.json 或 .claude-plugin/plugin.json 的完整清单格式。
-// 字段集覆盖 OpenAI Codex / Anthropic Claude Code 两家标准 plugin.json。
-type PluginJSON struct {
-	Name        string           `json:"name"`
-	Version     string           `json:"version"`
-	Description string           `json:"description"`
-	Author      any              `json:"author,omitempty"` // Change to any to support both string and object
-	Homepage    string           `json:"homepage,omitempty"`
-	Repository  string           `json:"repository,omitempty"`
-	License     string           `json:"license,omitempty"`
-	Keywords    []string         `json:"keywords,omitempty"`
-	MCPServers  string           `json:"mcpServers,omitempty"` // 指向 .mcp.json 的相对路径
-	Interface   *PluginInterface `json:"interface,omitempty"`  // UI 展示元数据
-}
-
-// MCPServerDef 定义单个 MCP Server 配置。
-// 字段兼容：Claude Code .mcp.json / OpenAI Codex .mcp.json / Anthropic Messages API。
-//   - "stdio"（默认）: 本地进程，使用 Command/Args/Env
-//   - "http" / "streamable-http": 远端 HTTP，使用 URL/Headers
-//   - "sse": 已废弃（Anthropic 2026-04-01 停止接受），仍保留兼容
-type MCPServerDef struct {
-	Type               string            `json:"type,omitempty"`    // "stdio"|"http"|"streamable-http"|"sse"
-	Command            string            `json:"command,omitempty"` // stdio 专用
-	Args               []string          `json:"args,omitempty"`
-	Env                map[string]string `json:"env,omitempty"`
-	URL                string            `json:"url,omitempty"`                 // http/sse 专用
-	Headers            map[string]string `json:"headers,omitempty"`             // http/sse 专用，Bearer 等
-	AuthorizationToken string            `json:"authorization_token,omitempty"` // Anthropic Messages API 远程 MCP 鉴权
-}
-
-// MCPConfig 表示 .mcp.json 的结构（三家标准统一使用 mcpServers camelCase）。
-type MCPConfig struct {
-	MCPServers      map[string]MCPServerDef `json:"mcpServers"`
-	MCPServersSnake map[string]MCPServerDef `json:"mcp_servers"` // 兼容历史格式
-}
-
-// AnthropicPluginTOML 是 Anthropic .claude-plugin/plugin.toml 格式。
-// struct tag `toml:` 由 go-toml/v2 反射读取，无需在 protocol 包导入 toml 库。
-type AnthropicPluginTOML struct {
-	Plugin struct {
-		Name        string `toml:"name"`
-		Description string `toml:"description"`
-		Version     string `toml:"version"`
-	} `toml:"plugin"`
-	MCP struct {
-		Command string            `toml:"command"`
-		Args    []string          `toml:"args"`
-		Env     map[string]string `toml:"env"`
-	} `toml:"mcp"`
-}
-
-// GoogleSkillsYAML 是 Google Agent Skills manifest 格式（skills.yaml / agent-manifest.yaml）。
-type GoogleSkillsYAML struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Version     string   `yaml:"version"`
-	Command     string   `yaml:"command,omitempty"`
-	Args        []string `yaml:"args,omitempty"`
-	Skills      []struct {
-		Name        string   `yaml:"name"`
-		Description string   `yaml:"description"`
-		Command     string   `yaml:"command,omitempty"`
-		Args        []string `yaml:"args,omitempty"`
-	} `yaml:"skills,omitempty"`
 }
 
 // PluginInstallRequest 一键安装请求体。
@@ -202,4 +131,6 @@ type ExtensionInstallRequest struct {
 	BypassAuth  bool
 	RuntimeID   string
 	LocalPath   string
+	// MarketplaceEntry 从市场安装插件时的条目（pluginspec.MarketplaceEntry JSON），按 strict 规则与插件清单组合。
+	MarketplaceEntry json.RawMessage
 }

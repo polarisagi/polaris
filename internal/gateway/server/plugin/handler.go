@@ -32,6 +32,10 @@ type PluginHandler struct {
 	// Dependencies 插件依赖加载期检查（启用阻断 / 级联停用）。
 	Dependencies PluginDependencyManager
 
+	// CatalogSync / Catalog 市场目录同步与目录安装（标准市场格式，ADR-0103 决策七）。
+	CatalogSync CatalogSyncer
+	Catalog     CatalogInstaller
+
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
 }

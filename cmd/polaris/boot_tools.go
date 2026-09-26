@@ -67,6 +67,8 @@ type ToolBundle struct {
 	AgentDefs             *lifecycle.AgentDefinitionProvider // 子 Agent 定义（委派解析 / 列表 API）
 	PluginChannels        *lifecycle.ChannelService          // Claude 插件 channels（入站事件 / 审批转发）
 	PluginDeps            *lifecycle.PluginDependencies      // 插件依赖加载期检查
+	CatalogSync           *marketplace.CatalogSync
+	CatalogInstaller      *marketplace.CatalogInstaller
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
 	HookRunner            *hook.Runner
@@ -318,6 +320,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
 	// 从未调用而永久跳过（ADR-0062）；mktClient.Install 是完整实现，直接注入。
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
+	// 市场目录同步与目录安装（标准市场格式 + 来源取回 + 依赖先装，ADR-0103 决策七）。
+	catalogSync := marketplace.NewCatalogSync(extRepo, mktClient, sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp", "marketplaces"))
+	catalogInstaller := marketplace.NewCatalogInstaller(installMgr, extRepo,
+		marketplace.NewSourceFetcher(sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp")), catalogSync, filepath.Join(sb.DataDir, "extensions"))
 	installMgr.WithOutbox(sb.Outbox)
 
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
@@ -682,6 +688,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		AgentDefs:             agentDefs,
 		PluginChannels:        pluginChannels,
 		PluginDeps:            pluginDeps,
+		CatalogSync:           catalogSync,
+		CatalogInstaller:      catalogInstaller,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
 		HookRunner:            hookRunner,

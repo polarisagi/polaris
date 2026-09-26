@@ -244,6 +244,8 @@ func (m *Manager) CompleteInstall(ctx context.Context, req protocol.ExtensionIns
 		Target:    req.Target,
 		LocalPath: dir,
 		Config:    req.Config,
+
+		MarketplaceEntry: req.MarketplaceEntry,
 	}
 	// GR-8-007：FSM 失败（实例已被置 failed）必须向上返回。
 	if _, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType)); err != nil {

@@ -2,13 +2,12 @@ package plugin
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -18,11 +17,9 @@ import (
 // install_path 下的文件——对 ext_type='skill'/'plugin'（唯一真正落盘文件的两种
 // 类型，见 020_extension_instances.sql "MCP/App 为空字符串" 注释）而言，这会让
 // DB 记录的版本号与磁盘实际内容永久失真，且后续升级请求会因版本号"已匹配"而
-// 被误判为无需处理，掩盖问题而非解决。现改为对 skill/plugin 复用安装期已验证
-// 的 downloadAndInstallExtension（与 catalog_download.go 的全新安装路径同一份
-// 实现，destDir 按 extID 确定性推导，天然幂等覆盖同一 install_path，不新建实例
-// 行），同步执行以便在返回响应前拿到成功/失败结果；mcp/app 无落盘文件，版本号
-// 同步即完整，维持原地更新。
+// 被误判为无需处理，掩盖问题而非解决。现对 skill/plugin 经 CatalogInstaller.Upgrade
+// 同步取回新版本（暂存后替换，含新增依赖），在返回响应前拿到成功/失败结果；mcp 无落盘
+// 文件，版本号同步即完整，维持原地更新。
 //
 // 拆分说明：本函数原与 manage.go 中其余 handler 同文件，因加入本实现后
 // manage.go 超过 R7 400 行上限，按职责（升级流程自成一段）拆出独立文件，
@@ -68,36 +65,16 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 	newVersion := catalogVersion
 
 	if extType == "skill" || extType == "plugin" {
-		// 落盘类型：必须真正同步文件，否则不得推进 installed_version。
-		var payload string
-		if scanErr := h.DB.QueryRowContext(ctx, `SELECT payload FROM extension_catalog WHERE id=?`, catalogID).Scan(&payload); scanErr != nil {
-			httputil.RespondError(w, "catalog entry not found", apperr.Wrap(apperr.CodeInternal, "HandleUpgradePlugin", scanErr), http.StatusInternalServerError)
+		// 落盘类型：必须真正同步文件，否则不得推进 installed_version。先取回到暂存目录再替换，
+		// 失败时 install_path 保持原样（CatalogInstaller.Upgrade）。
+		if h.Catalog == nil {
+			http.Error(w, "catalog installer not configured", http.StatusServiceUnavailable)
 			return
 		}
-		var entry protocol.RegistryEntry
-		if unmarshalErr := json.Unmarshal([]byte(payload), &entry); unmarshalErr != nil {
-			httputil.RespondError(w, "malformed catalog entry", apperr.Wrap(apperr.CodeInvalidInput, "HandleUpgradePlugin", unmarshalErr), http.StatusInternalServerError)
-			return
-		}
-		installReq := protocol.ExtensionInstallRequest{
-			ExtensionID: pluginID, CatalogID: catalogID, Name: name, ExtType: extType,
-			TrustTier: entry.TrustTier, Publisher: entry.Publisher,
-		}
-
-		// 同步执行（而非 SafeGo 异步）：升级请求需要在响应前确认文件是否真正同步成功，
-		// install_path 由 destDir 确定性推导（filepath.Join(DataDir,"extensions",extID)），
-		// 与安装期完全一致，原地覆盖，不清空/不新建。
-		h.downloadAndInstallExtension(ctx, pluginID, catalogID, installReq)
-
-		var status, errMsg string
-		if statusErr := h.DB.QueryRowContext(ctx, `SELECT status, error_msg FROM extension_instances WHERE id=?`, pluginID).Scan(&status, &errMsg); statusErr != nil {
-			httputil.RespondError(w, "failed to verify upgrade result", apperr.Wrap(apperr.CodeInternal, "HandleUpgradePlugin", statusErr), http.StatusInternalServerError)
-			return
-		}
-		if status == "error" || status == "failed" {
-			// downloadAndInstallExtension 内部已写入 error_msg，install_path 未被触碰
-			// （updateExtensionInstanceError 只更新 status/error_msg 两列）。
-			http.Error(w, "文件同步失败，install_path 保持原样: "+errMsg, http.StatusInternalServerError)
+		if upErr := h.Catalog.Upgrade(ctx, marketplace.CatalogInstallRequest{CatalogID: catalogID, ExtensionID: pluginID,
+			Principal: "user"}); upErr != nil {
+			h.updateExtensionInstanceError(ctx, pluginID, upErr.Error())
+			http.Error(w, "文件同步失败，install_path 保持原样: "+upErr.Error(), apperr.HTTPStatus(apperr.CodeOf(upErr)))
 			return
 		}
 	}

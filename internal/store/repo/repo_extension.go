@@ -56,13 +56,11 @@ func (r *SQLiteExtensionRepository) GetInstance(ctx context.Context, id string) 
 }
 
 func (r *SQLiteExtensionRepository) UpdateInstanceStatus(ctx context.Context, id, status, errorMsg string) error {
-	var errSql sql.NullString
-	if errorMsg != "" {
-		errSql = sql.NullString{String: errorMsg, Valid: true}
-	}
+	// error_msg 为 NOT NULL（020 DDL）：成功态写空串而非 NULL——此前写 NULL 使真实库上
+	// 每次安装成功回写 installed 都违反约束，实例永远卡在 installing。
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE extension_instances SET status=?, error_msg=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
-		status, errSql, id)
+		status, errorMsg, id)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpdateInstanceStatus", err)
 	}
@@ -332,3 +330,35 @@ func (r *SQLiteExtensionRepository) SeedCatalogEntry(ctx context.Context, row ty
 
 // mcp_servers 表操作 + 卸载清理见 repo_extension_mcp.go（R7 拆分）。
 // plugins 表操作见 repo_extension_plugins.go（R7 拆分）。
+
+// FindCatalogPluginByMarketplace 按市场清单 name + 插件名定位目录条目（依赖解析用；不存在返回 nil）。
+func (r *SQLiteExtensionRepository) FindCatalogPluginByMarketplace(ctx context.Context, marketplaceName, pluginName string) (*types.ExtCatalogRow, error) {
+	var row types.ExtCatalogRow
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, version, payload, updated_at
+		FROM extension_catalog WHERE type='plugin' AND name=? AND json_extract(payload, '$.marketplace_name')=? LIMIT 1`,
+		pluginName, marketplaceName).Scan(
+		&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Version, &row.Payload, &row.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.FindCatalogPluginByMarketplace", err)
+	}
+	return &row, nil
+}
+
+// GetMarketplace 按 ID 读取市场配置（不存在返回 nil）。
+func (r *SQLiteExtensionRepository) GetMarketplace(ctx context.Context, id string) (*protocol.Marketplace, error) {
+	var m protocol.Marketplace
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, type, publisher, repo_url, description, is_builtin, trust_tier, enabled, sort_order, created_at
+		FROM plugin_marketplaces WHERE id=?`, id).Scan(&m.ID, &m.Name, &m.Type, &m.Publisher, &m.RepoURL, &m.Description,
+		&m.IsBuiltin, &m.TrustTier, &m.Enabled, &m.SortOrder, &m.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.GetMarketplace", err)
+	}
+	return &m, nil
+}

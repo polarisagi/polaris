@@ -183,6 +183,10 @@ ExtensionRepository interface {
 
 	// extension_catalog
 	GetCatalogEntry(ctx context.Context, id string) (*types.ExtCatalogRow, error)
+	// FindCatalogPluginByMarketplace 按市场清单 name + 插件名定位目录条目（依赖解析）；不存在返回 nil。
+	FindCatalogPluginByMarketplace(ctx context.Context, marketplaceName, pluginName string) (*types.ExtCatalogRow, error)
+	// GetMarketplace 按 ID 读取市场配置；不存在返回 nil。
+	GetMarketplace(ctx context.Context, id string) (*Marketplace, error)
 	SearchCatalog(ctx context.Context, query string, limit int) ([]types.ExtCatalogRow, error)
 	ListCatalogByIDs(ctx context.Context, ids []string) ([]types.ExtCatalogRow, error)
 	ReplaceMarketplaceCatalog(ctx context.Context, marketplaceID string, entries []types.ExtCatalogRow) (int, error)

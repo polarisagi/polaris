@@ -27,11 +27,9 @@
   + 两家扩展）、MCP 配置的唯一解析实现（ADR-0103 决策二）；安装器与 gateway 不得另写清单解析。
 - [**安装器**] `lifecycle/{plugin,skill,mcp}_installer.go`: 经 `Manager.CompleteInstall` → `InstallFSM` 分发；
   MCP 连接一律 `MCPManager.StartFromDB`（行是配置权威源）。
-- [待改造] `marketplace/adapter.go`: 市场同步爬虫的旧清单解析（随 ADR-0103 决策七改造移除）；
-  mcp.json 解析 (loadMCPConfig/parseFlatMCPConfig) 亦收敛于此（2026-07-13 deadcode 复核：
-  原 `marketplace/loader.go` 的 SKILL.md 解析/Registry 内存注册表/GetPlugin Codex 插件树
-  确认零生产调用点已删除——native 格式 Skill 由 `skill/skill_creator.go` 直接构造
-  types.SkillMeta，不经该解析器回读；安装状态 SSoT 见下方 manager.go，不依赖内存 Registry）
+- [**市场**] `marketplace/catalog_{sync,install,versions}.go` + `sources.go` + `source_npm.go` + `mcp_registry.go`:
+  标准市场目录同步、来源取回（https/SafeDialer，禁 command 来源）与依赖先装（ADR-0103 决策七）；
+  旧 `adapter*.go` 启发式爬虫与 `catalog.json` 私有格式已删除（2026-09-27）。
 - [参照] `marketplace/manager.go`: 市场同步 + 安装协调
 - [参照] `mcp/mcp_manager.go`: MCP 进程连接管理
 - [参照] `mcp/env.go`: sanitizeParentEnv (MCP 子进程环境净化)

@@ -6,6 +6,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-27（ADR-0103：标准市场同步 / 来源取回 / 依赖自动安装 — 含**契约变更**）
+
+- **[删除]** `marketplace/adapter*.go`、`gateway/server/plugin/sync_parsers*.go`、`catalog.json` 私有格式、`protocol.{PluginJSON,PluginInterface,MCPConfig,MCPServerDef,AnthropicPluginTOML,GoogleSkillsYAML}`、`downloadAndInstallExtension`。
+- **[契约]** `pluginspec.GetMarketplace` / `LoadOptions.Entry`；`marketplace.{CatalogSync,CatalogInstaller,SourceFetcher}`；`protocol.RegistryEntry.{MarketplaceName,Entry,AllowCrossDeps,SourceDir}`、`ExtensionInstallRequest.MarketplaceEntry`；`downloader.GitFetchRevision/GitListTags`；`ExtensionRepository.FindCatalogPluginByMarketplace/GetMarketplace`。
+- **[修复]** `UpdateInstanceStatus` 成功态写 NULL 违反 `error_msg NOT NULL`，真实库上安装成功回写必然失败。
+- 内置 MCP 市场 `modelcontextprotocol/servers` → `modelcontextprotocol/registry`（开发库需删除重建以更新种子）。
+
 ## 2026-09-27（ADR-0103：插件依赖加载期检查）
 
 - 新增 `lifecycle.PluginDependencies`（`Check/EnableBlocker/EnforceAll`）与 API `GET /v1/plugins/{id}/dependencies`；启用依赖不满足的插件返回 409；新增依赖 `github.com/Masterminds/semver/v3`。

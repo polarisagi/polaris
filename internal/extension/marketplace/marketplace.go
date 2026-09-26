@@ -56,11 +56,12 @@ type mcpRegistryServer struct {
 }
 
 type mcpServerDef struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Version     string         `json:"version"`
-	Repository  mcpRepository  `json:"repository"`
-	Remotes     []mcpRemoteDef `json:"remotes"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Version     string          `json:"version"`
+	Repository  mcpRepository   `json:"repository"`
+	Remotes     []mcpRemoteDef  `json:"remotes"`
+	Packages    []mcpPackageDef `json:"packages"`
 }
 
 type mcpRepository struct {
@@ -104,31 +105,11 @@ func (c *MCPMarketplaceClient) Search(ctx context.Context, query string) ([]prot
 
 	results := make([]protocol.RegistryEntry, 0, len(raw.Servers))
 	for _, s := range raw.Servers {
-		entry := mapMCPServer(s.Server)
-		results = append(results, entry)
+		if entry, ok := registryEntry(s.Server); ok {
+			results = append(results, entry)
+		}
 	}
 	return results, nil
-}
-
-// mapMCPServer 将注册表原始服务器定义映射为 RegistryEntry。
-func mapMCPServer(s mcpServerDef) protocol.RegistryEntry {
-	entry := protocol.RegistryEntry{
-		ID:          s.Name,
-		Publisher:   publisherFromName(s.Name),
-		Type:        "mcp",
-		TrustTier:   int(types.TrustCommunity),
-		Name:        s.Name,
-		Description: s.Description,
-		Homepage:    s.Repository.URL,
-		Timeout:     60,
-	}
-	// 优先取第一个 remote 作为连接方式
-	if len(s.Remotes) > 0 {
-		r := s.Remotes[0]
-		entry.Transport = r.Type
-		entry.URL = r.URL
-	}
-	return entry
 }
 
 // publisherFromName 从 "publisher/name" 格式提取 publisher 部分。

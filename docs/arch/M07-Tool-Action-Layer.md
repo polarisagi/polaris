@@ -730,7 +730,7 @@ POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.
 - Plugin Bundle MCP 默认 Taint=High（M7 inv_M7_02）
 - Script Skills trust_tier 继承 extension_catalog
 
-**代码位置**: `internal/gateway/server/plugin/catalog.go`（安装）、`internal/extension/marketplace/adapter.go`（`ParseManifestDir` 统一解析多厂商格式：OpenAI ai-plugin.json / Claude `.claude-plugin` / Codex `.codex-plugin` / Polaris 原生 `.polaris-plugin` 均优先原生格式）
+**代码位置**: `internal/gateway/server/plugin/catalog*.go`（HTTP 入口）、`internal/extension/marketplace/catalog_{sync,install,versions}.go` + `sources.go`（同步 / 来源取回 / 依赖安装）、`internal/extension/pluginspec`（唯一解析器；2026-09-27 删除 `marketplace/adapter.go` 多厂商启发式解析，ADR-0103 决策七）
 
 ---
 

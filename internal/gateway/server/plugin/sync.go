@@ -3,144 +3,35 @@ package plugin
 import (
 	"context"
 
-	"encoding/json"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
-	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// SkillFrontmatter 是 SKILL.md frontmatter 的完整解析结果（agentskills.io 开放标准字段）。
-type SkillFrontmatter struct {
-	Name            string   `yaml:"name"`
-	Description     string   `yaml:"description"`
-	Version         string   `yaml:"version"`
-	Tags            []string `yaml:"tags"`
-	ExecMode        string   `yaml:"exec_mode"`        // "tool"（默认）| "ambient"
-	AmbientPriority string   `yaml:"ambient_priority"` // "always" | "auto"（默认）| "index_only"
-	RiskLevel       string   `yaml:"risk_level"`       // "low" | "medium" | "high"
-	Sandbox         string   `yaml:"sandbox"`          // "L1" | "L2" | "L3"
-	Capability      string   `yaml:"capability"`       // e.g. "read-write"
+// CatalogSyncer 市场目录同步（marketplace.CatalogSync 实现；只经两家与 MCP Registry 的标准目录格式）。
+type CatalogSyncer interface {
+	Sync(ctx context.Context, mp protocol.Marketplace, localOnly bool) ([]types.ExtCatalogRow, error)
 }
 
-// pullOrClone 通过 downloader.GitCloneOrPull 同步单个市场仓库。
-// 在中国大陆网络下自动走 ghproxy 加速。
-func pullOrClone(ctx context.Context, repoURL, mpDir string) (available bool, updated bool) {
-	return downloader.GitCloneOrPull(ctx, nil, func(url string) error {
-		return network.ValidateGitURL(ctx, url)
-	}, repoURL, mpDir)
-}
-
-// syncMarketplace 同步单个市场
-func (h *PluginHandler) syncMarketplace(ctx context.Context, mp protocol.Marketplace, tmpDir string, localOnly bool) int {
-	if mp.RepoURL == "" {
-		return 0
+// indexCatalogRows 异步触发 FTS + 向量预计算（不阻塞同步主流程）。
+func (h *PluginHandler) indexCatalogRows(rows []types.ExtCatalogRow) {
+	if h.EmbeddingIndexer == nil || len(rows) == 0 {
+		return
 	}
-
-	safeID := strings.ReplaceAll(mp.ID, "/", "_")
-	mpDir := filepath.Join(tmpDir, safeID)
-
-	var available, updated bool
-	if localOnly {
-		if _, err := os.Stat(mpDir); err == nil {
-			available = true
-			updated = true
-		}
-	} else {
-		available, updated = pullOrClone(ctx, mp.RepoURL, mpDir)
+	entries := make([]CatalogEntry, 0, len(rows))
+	for _, r := range rows {
+		entries = append(entries, CatalogEntry{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
-
-	if !available {
-		return 0
-	}
-	if !updated {
-		// 仓库无新变化；若 catalog 已有条目（正常情况）则跳过，节省解析开销。
-		// 若 catalog 为空（如 DB 重建），仍需重新写库，否则插件列表永久为空。
-		var count int
-		if err := h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM extension_catalog WHERE marketplace_id=?", mp.ID).Scan(&count); err != nil {
-			// 查询失败时 count 保持零值，退化为"当作 catalog 为空"继续走下方重新写库
-			// 路径（安全默认），但底层查询错误（如 schema 不一致）本身需要留痕。
-			slog.Warn("plugin_sync: count existing catalog entries failed", "marketplace", mp.ID, "err", err)
-		}
-		if count > 0 {
-			return 0
-		}
-	}
-
-	b, err := os.ReadFile(filepath.Join(mpDir, "catalog.json"))
-	if err != nil {
-		entries, scanErr := discoverMarketplaceEntries(mpDir, mp)
-		if scanErr == nil && len(entries) > 0 {
-			b, _ = json.Marshal(entries)
-		} else {
-			return 0
-		}
-	}
-
-	var entries []protocol.RegistryEntry
-	if err := json.Unmarshal(b, &entries); err != nil {
-		return 0
-	}
-
-	return h.insertMarketplaceEntries(ctx, mp, mpDir, entries)
-}
-
-// insertMarketplaceEntries 将 entries 插入数据库，减少外层函数的圈复杂度。
-func (h *PluginHandler) insertMarketplaceEntries(ctx context.Context, mp protocol.Marketplace, mpDir string, entries []protocol.RegistryEntry) int {
-	defaultVersion := downloader.GitShortHash(mpDir)
-	rows := make([]types.ExtCatalogRow, 0, len(entries))
-
-	for i := range entries {
-		e := &entries[i]
-		e.Publisher = mp.Publisher
-		e.TrustTier = mp.TrustTier
-		if e.Version == "" && defaultVersion != "" {
-			e.Version = defaultVersion
-		}
-		payload, _ := json.Marshal(e)
-
-		rows = append(rows, types.ExtCatalogRow{
-			ID:            e.ID,
-			MarketplaceID: mp.ID,
-			Type:          e.Type,
-			Name:          e.Name,
-			Description:   e.Description,
-			Publisher:     mp.Publisher,
-			TrustTier:     mp.TrustTier,
-			URL:           e.URL,
-			Payload:       string(payload),
-		})
-	}
-
-	syncedCount, _ := h.ExtRepo.ReplaceMarketplaceCatalog(ctx, mp.ID, rows)
-
-	// 异步触发 FTS + 向量预计算（不阻塞同步主流程）
-	if h.EmbeddingIndexer != nil && syncedCount > 0 {
-		catalogEntries := make([]CatalogEntry, 0, len(rows))
-		for _, r := range rows {
-			catalogEntries = append(catalogEntries, CatalogEntry{
-				ID:          r.ID,
-				Name:        r.Name,
-				Description: r.Description,
-			})
-		}
-		// 使用后台 context（同步 ctx 可能已取消）
-		concurrent.SafeGo(context.Background(), "gateway.plugin.index_catalog_entries", func(ctx context.Context) {
-			h.EmbeddingIndexer.IndexEntries(ctx, catalogEntries)
-		})
-	}
-
-	return syncedCount
+	// 使用后台 context（同步 ctx 可能已取消）
+	concurrent.SafeGo(context.Background(), "gateway.plugin.index_catalog_entries", func(ctx context.Context) {
+		h.EmbeddingIndexer.IndexEntries(ctx, entries)
+	})
 }
 
 // SyncAllMarketplaces 后台静默同步所有可用市场并更新缓存
@@ -156,14 +47,10 @@ func (h *PluginHandler) SyncAllMarketplaces(ctx context.Context, localOnly bool)
 			mps = append(mps, m)
 		}
 	}
+	iterErr := rows.Err()
 	rows.Close()
-
-	tmpDir := filepath.Join(h.DataDir, "tmp", "marketplaces")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		// 失败会导致下面每个 marketplace 的 pullOrClone/os.Stat 逐个静默返回
-		// available=false，表现为"全部市场同步 0 条"且无任何根因线索，故此处
-		// 必须留痕（HE-1）。
-		slog.Warn("plugin_sync: create marketplaces tmp dir failed", "dir", tmpDir, "err", err)
+	if iterErr != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "Server.SyncAllMarketplaces: rows", iterErr)
 	}
 
 	// 首先清理已经从活跃列表中移除的孤儿市场缓存
@@ -175,11 +62,20 @@ func (h *PluginHandler) SyncAllMarketplaces(ctx context.Context, localOnly bool)
 		slog.Warn("plugin_sync: delete orphan catalog entries failed", "err", err)
 	}
 
+	if h.CatalogSync == nil {
+		return 0, apperr.New(apperr.CodeInternal, "Server.SyncAllMarketplaces: catalog sync not configured")
+	}
 	syncedCount := 0
 	for _, mp := range mps {
-		syncedCount += h.syncMarketplace(ctx, mp, tmpDir, localOnly)
+		rows, err := h.CatalogSync.Sync(ctx, mp, localOnly)
+		if err != nil {
+			// 单个市场失败不影响其余市场；原因留痕（HE-1）。
+			slog.Warn("plugin_sync: marketplace sync failed", "marketplace", mp.ID, "err", err)
+			continue
+		}
+		syncedCount += len(rows)
+		h.indexCatalogRows(rows)
 	}
-
 	return syncedCount, nil
 }
 
@@ -195,12 +91,4 @@ func (h *PluginHandler) HandleSyncMarketplaces(w http.ResponseWriter, r *http.Re
 	}
 	slog.Info("polaris-server: manual sync marketplaces finished", "synced_count", syncedCount)
 	httputil.WriteJSON(w, map[string]any{"status": "synced", "synced_count": syncedCount})
-}
-
-type PackageJSON struct {
-	Name         string            `json:"name"`
-	Description  string            `json:"description"`
-	Version      string            `json:"version"`
-	Homepage     string            `json:"homepage"`
-	Dependencies map[string]string `json:"dependencies"`
 }

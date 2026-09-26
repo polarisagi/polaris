@@ -164,7 +164,7 @@ func TestHandleUpgradePlugin_AlreadyUpToDate(t *testing.T) {
 
 // TestHandleUpgradePlugin_Success 验证升级成功后版本更新且 install_path 保留。
 // ext_type='mcp'：MCP 无落盘文件（020_extension_instances.sql 注释："MCP/App 为空
-// 字符串"），版本号同步即为完整升级，不触发 downloadAndInstallExtension 文件同步路径。
+// 字符串"），版本号同步即为完整升级，不触发 CatalogInstaller.Upgrade 文件同步路径。
 func TestHandleUpgradePlugin_Success(t *testing.T) {
 	db := setupUpgradeDB(t)
 	defer db.Close()
@@ -212,8 +212,8 @@ func TestHandleUpgradePlugin_Success(t *testing.T) {
 }
 
 // TestHandleUpgradePlugin_SkillPlugin_FileSyncFailure_PreservesInstallPath 验证：
-// ext_type='plugin'/'skill' 真正落盘文件的类型，若 downloadAndInstallExtension
-// 文件同步失败（本测试未准备任何 tmp/marketplaces 源目录，copyDir 必然失败），
+// ext_type='plugin'/'skill' 真正落盘文件的类型，若 CatalogInstaller.Upgrade
+// 文件同步失败（本测试未注入目录安装器，升级必然失败），
 // 升级请求必须返回 5xx 且 install_path/installed_version 保持不变（不得假装成功）。
 // 这是本轮审查修复的核心验收点：初版实现会在此场景下错误地把 installed_version
 // 更新为 3.0，即使文件从未真正同步。

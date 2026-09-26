@@ -74,6 +74,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - 加载期语义按 Claude plugin dependencies：依赖须已安装、已启用，且版本满足 npm semver 范围（`^ ~ >= = ||`、连字符；范围不匹配预发布版本，除非范围自带预发布后缀；实现 Masterminds/semver v3）。不满足 → 依赖方不加载：安装完成但置停用并写诊断；启用请求 409；停用/卸载某插件后 `EnforceAll` 迭代到不动点级联停用依赖方（断开其子 MCP）；启动时在恢复 MCP 连接前执行同一检查。
 - `defaultEnabled`：安装后初始启用状态 = `defaultEnabled` ∧ 依赖满足；用户后续显式启停不被升级覆盖（Claude：`enabledPlugins` 写入后跨更新保留）。
 - 依赖的自动安装、按 git tag 解析版本、跨市场白名单 `allowCrossMarketplaceDependenciesOn` 与 prune 依赖市场来源，随决策七实现；在此之前依赖须由用户先行安装（诊断指明缺失项）。
+  - 2026-09-27 追记：自动安装已落地（`marketplace.CatalogInstaller`）：取回插件后读取其依赖，先装缺失依赖（同市场按名；跨市场仅根市场白名单内，或用户已装且启用）；版本范围按 `<name>--v<version>` 标签取最高（自有仓库无标签即失败；相对路径无标签用当前副本）；循环依赖失败；已装版本不满足新范围时报冲突要求用户先处理。prune 尚未实现。
 
 ## 决策四：Codex「应用」= 插件内的连接器绑定，不是扩展类型
 
@@ -118,6 +119,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - 来源类型：相对路径（含 `metadata.pluginRoot` 裸名）、`local`、`github`、`url`、`git-subdir`、`npm`（禁用安装脚本）、`archive`（HTTPS + `sha256`）。`ref`/`sha` 固定版本。全部出站经 SafeDialer（XR-06）。
 - **不支持 `command` 来源**：在服务端宿主上执行市场声明的任意命令越过安装安全门（HE-2/HE-7），解析后标记为不可安装并展示原因。
 - Claude 条目的 `strict` 合并语义、Codex 条目的 `policy.installation`（`AVAILABLE`/`INSTALLED_BY_DEFAULT`/`NOT_AVAILABLE`）与 `policy.authentication` 按原语义实现；`INSTALLED_BY_DEFAULT` 仍须过 `Manager.InstallExtension`，不得静默安装（M13-bis §5.6）。
+- 实现（2026-09-27）：解析 `pluginspec.GetMarketplace`（两文件合并，同名条目以 Claude 为主、补入 Codex policy/category；条目逐个校验；保留名/冒充名判定）；`headersHelper` 与 `command` 一样属于在宿主执行命令，拒绝。strict 组合在 `pluginspec.Load(LoadOptions.Entry)`：无清单时条目即清单；strict 时追加六类组件、hooks 按事件替换、条目 mcpServers/lspServers/userConfig/channels 不生效；`strict:false` 且条目带组件即冲突。git 来源只接受 https 并禁 file 协议（来源由第三方市场声明，file/ssh 可读宿主文件或绕过 SafeDialer 预检）。`skill` 市场按 agentskills 仓库逐技能列出；`mcp` 市场改为 MCP Registry（`server.json`）——`modelcontextprotocol/servers` 仓库无标准目录元数据，内置种子替换为 `modelcontextprotocol/registry`。`INSTALLED_BY_DEFAULT` 只作推荐标记，安装仍由用户触发经安装网关。依赖自动安装见决策三补充：dependencies。
 
 ## 决策八：MCP 客户端对齐 2026-07-28（末阶段）
 
@@ -165,3 +167,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-27 | 决策三补充：Claude 插件 channels（事件入会话、`plugin_channels` 显式启用、审批转发）。 |
 | 2026-09-27 | 决策四：应用绑定落地（解析、手动绑定、升级保留）。 |
 | 2026-09-27 | 决策三补充：dependencies 加载期检查（安装停用、启用阻断、级联停用、启动检查）。 |
+| 2026-09-27 | 决策七：标准市场同步与来源取回落地（删除启发式爬虫与 catalog.json；MCP 市场改为 MCP Registry）；决策三补充 dependencies：自动安装落地。 |

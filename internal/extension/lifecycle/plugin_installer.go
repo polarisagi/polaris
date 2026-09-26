@@ -64,7 +64,15 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (InstallR
 	if req.LocalPath == "" {
 		return InstallResult{}, apperr.New(apperr.CodeInvalidInput, "plugin_installer: LocalPath required")
 	}
-	plug, err := pluginspec.Load(req.LocalPath, pluginspec.LoadOptions{FallbackName: req.Name})
+	opts := pluginspec.LoadOptions{FallbackName: req.Name}
+	if len(req.MarketplaceEntry) > 0 {
+		var entry pluginspec.MarketplaceEntry
+		if err := json.Unmarshal(req.MarketplaceEntry, &entry); err != nil {
+			return InstallResult{}, apperr.Wrap(apperr.CodeInvalidInput, "plugin_installer: marketplace entry", err)
+		}
+		opts.Entry, opts.FallbackName = &entry, entry.Name
+	}
+	plug, err := pluginspec.Load(req.LocalPath, opts)
 	if err != nil {
 		return InstallResult{}, apperr.Wrap(apperr.CodeOf(err), "plugin_installer: load", err)
 	}

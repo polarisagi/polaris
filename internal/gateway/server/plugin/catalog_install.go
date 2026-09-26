@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
@@ -132,7 +133,7 @@ func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Reque
 }
 
 // internalInstallGeneric 安装 skill / plugin：写 extension_instances。
-// skill/plugin 通过 downloadAndInstallExtension 异步下载并写运行时表。
+// skill/plugin 经 CatalogInstaller 异步取回来源（含依赖）并写运行时表。
 func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string, bypassAuth bool) (any, error) {
 	name := cond(req.Name != "", req.Name, entry.Name)
 	url := cond(req.URL != "", req.URL, entry.URL)
@@ -172,8 +173,16 @@ func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string
 	}
 
 	if entry.Type == "skill" || entry.Type == "plugin" {
-		concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.download_and_install_extension", func(ctx context.Context) {
-			h.downloadAndInstallExtension(ctx, extID, req.CatalogID, installReq)
+		if h.Catalog == nil {
+			h.updateExtensionInstanceError(ctx, extID, "catalog installer not configured")
+			return nil, apperr.New(apperr.CodeInternal, "Server.internalInstallGeneric: catalog installer not configured")
+		}
+		principal := installReq.Principal
+		concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.catalog_install", func(ctx context.Context) {
+			if _, err := h.Catalog.Install(ctx, marketplace.CatalogInstallRequest{CatalogID: req.CatalogID, ExtensionID: extID,
+				Principal: principal, BypassAuth: bypassAuth}); err != nil {
+				h.updateExtensionInstanceError(ctx, extID, err.Error())
+			}
 		})
 	}
 
@@ -200,6 +209,3 @@ func (h *PluginHandler) installGenericExtension(w http.ResponseWriter, r *http.R
 	}
 	httputil.WriteJSONStatus(w, http.StatusCreated, resp)
 }
-
-// downloadAndInstallExtension（skill/plugin 异步拷贝后交 CompleteInstall）、
-// updateExtensionInstanceError、copyDir/copyFile 见 catalog_download.go（R7 拆分）。

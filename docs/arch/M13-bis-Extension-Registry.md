@@ -202,7 +202,12 @@ DELETE /v1/mcp-servers/{plugin_xxx}    返回 405——插件 MCP 须通过插�
 
 启动时 `bootMarketplaceInit` 后台拉取 `is_builtin=1` 市场源至 `extension_catalog`，仅作前端展示缓存。**不静默安装任何外部扩展**。
 
-**边界探测 (Bundle Root Detection)**：同步爬虫（`discoverMarketplaceEntries`）在扫描市场仓库时，一旦探测到合法的插件清单文件（如 `plugin.json`、`plugin.toml`、`mcp.json`、`skills.yaml` 等），即判定该目录为一个**原子级插件包（Plugin Bundle）**，将其整体作为单个条目录入，并强制停止向下钻取其子目录。这避免了内部依附的零碎动作（如 `SKILL.md`）被摊平暴露到全局市场，彻底杜绝列表污染与大模型工具的全局同名冲突。
+> 2026-09-27 订正（ADR-0103 决策七）：原「边界探测」启发式爬虫（`discoverMarketplaceEntries`、`catalog.json` 私有格式）已删除。同步只经标准目录：
+
+- `plugin` 市场：`pluginspec.GetMarketplace` 读 `.claude-plugin/marketplace.json` / `.agents/plugins/marketplace.json`，每个条目一行（`RegistryEntry.Entry` 为条目原文，`MarketplaceName`/`AllowCrossDeps` 供依赖解析）；Codex `NOT_AVAILABLE` 不列出；保留名市场拒绝；直链 JSON 市场跳过相对路径条目。
+- `skill` 市场：agentskills 仓库每个 `SKILL.md` 目录一行（`pluginspec.ParseSkillDir`）。
+- `mcp` 市场：MCP Registry（`server.json`）分页全量，远程端点优先，其次 npm→npx / pypi→uvx / oci→docker。
+- 目录安装 `marketplace.CatalogInstaller`：`SourceFetcher` 取回来源（相对路径拷贝跳过符号链接；github/url/git-subdir 只接受 https、禁 file 协议；npm 校验 sha512 integrity、不跑脚本；archive 校验 sha256）→ 依赖先装（同市场按名；跨市场须根市场白名单；版本范围按 `<name>--v<ver>` 标签；循环依赖失败）→ `CompleteInstall`（条目经 `LoadOptions.Entry` 按 strict 与插件清单组合）。升级先取回到暂存目录再替换。
 
 ### 5.7 彻底卸载
 

@@ -388,6 +388,13 @@ func (s *Server) SetSubagentRunner(r chat.SubagentRunner) {
 	}
 }
 
+// SetCatalogServices 注入市场目录同步与目录安装（ADR-0103 决策七）。
+func (s *Server) SetCatalogServices(sync plugin.CatalogSyncer, installer plugin.CatalogInstaller) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.CatalogSync, s.pluginHandler.Catalog = sync, installer
+	}
+}
+
 // SetPluginDependencies 注入插件依赖检查（启用阻断、级联停用、GET /v1/plugins/{id}/dependencies）。
 func (s *Server) SetPluginDependencies(d plugin.PluginDependencyManager) {
 	if s.pluginHandler != nil {

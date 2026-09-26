@@ -309,8 +309,9 @@ func TestManager_UpdateInstance(t *testing.T) {
 	if status != "installed" {
 		t.Errorf("expected status 'installed', got '%s'", status)
 	}
-	if errMsg.Valid {
-		t.Errorf("expected error_msg to be NULL, got '%s'", errMsg.String)
+	// error_msg 在真实 DDL 中 NOT NULL：成功态为空串。
+	if errMsg.String != "" {
+		t.Errorf("expected empty error_msg, got '%s'", errMsg.String)
 	}
 }
 
