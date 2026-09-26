@@ -15,11 +15,11 @@ import (
 
 // ─── MCP 协议方法 ─────────────────────────────────────────────────────────────
 
-// mcpProtocolVersion 当前实现支持的 MCP 协议版本（2025-11-25 为当前稳定版本）。
+// mcpProtocolVersion 旧纪元回退时使用的版本（2025-11-25；新纪元见 mcp_client_era.go）。
 const mcpProtocolVersion = "2025-11-25"
 
-// Initialize 执行 MCP 初始化握手，校验服务器返回的协议版本。
-func (c *MCPClient) Initialize(ctx context.Context) error {
+// initializeLegacy 旧纪元（2025-11-25 及更早）initialize 握手，校验服务器返回的协议版本。
+func (c *MCPClient) initializeLegacy(ctx context.Context) error {
 	caps := map[string]any{}
 	if c.serverReqHandler != nil {
 		caps["roots"] = map[string]any{"listChanged": false}
@@ -52,6 +52,7 @@ func (c *MCPClient) Initialize(ctx context.Context) error {
 			// 仅警告不中断：允许向下兼容旧版服务器（2024-11-05）
 		}
 	}
+	c.era.Store(int32(eraLegacy))
 	return c.notify(ctx, "notifications/initialized", nil)
 }
 
@@ -128,7 +129,7 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]MCPTool, error) {
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: tools/list parse: %v", err), err)
 	}
-	return resp.Tools, nil
+	return c.filterHeaderAnnotatedTools(resp.Tools), nil
 }
 
 // MCPResource 表示 MCP resources/list 返回的一条资源引用（MCP 2025-11-25 规范

@@ -15,12 +15,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-func (c *MCPClient) httpPostOnly(ctx context.Context, url string, body []byte) error {
+func (c *MCPClient) httpPostOnly(ctx context.Context, url string, body []byte, rpc mcpRPCRequest) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostOnly", err)
 	}
-	c.setMCPHeaders(req)
+	c.setRequestHeaders(req, rpc)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostOnly", err)
@@ -35,12 +35,12 @@ func (c *MCPClient) httpPostOnly(ctx context.Context, url string, body []byte) e
 
 // httpPostReceive 向 Streamable HTTP endpoint POST，读取 JSON 或 SSE 响应。
 // SSE 模式：扫描流中所有事件，返回首个 id 匹配的 RPC 响应（通知事件异步 dispatch）。
-func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte) (*mcpRPCResponse, error) {
+func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte, rpc mcpRPCRequest) (*mcpRPCResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
-	c.setMCPHeaders(req)
+	c.setRequestHeaders(req, rpc)
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -48,6 +48,10 @@ func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte
 		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
 	defer resp.Body.Close()
+	// 旧纪元（2025-11-25）Streamable HTTP：initialize 响应可分配会话，之后每个请求回传。
+	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" && rpc.Method == "initialize" {
+		c.legacySession.Store(&sid)
+	}
 
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return c.readSSESingleResponse(resp.Body)

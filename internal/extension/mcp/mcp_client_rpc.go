@@ -15,6 +15,9 @@ import (
 // call 发送 JSON-RPC 请求并等待响应。
 func (c *MCPClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
+	if c.protocolEra() == eraModern {
+		params = c.withMeta(params, modernProtocolVersion)
+	}
 	req := mcpRPCRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: params}
 
 	ch := make(chan *mcpRPCResponse, 1)
@@ -32,7 +35,7 @@ func (c *MCPClient) call(ctx context.Context, method string, params any) (json.R
 	select {
 	case resp := <-ch:
 		if resp.Error != nil {
-			return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("mcp rpc error %d: %s", resp.Error.Code, resp.Error.Message))
+			return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.call "+method, resp.Error)
 		}
 		return resp.Result, nil
 	case <-time.After(c.cfg.Timeout):
@@ -71,9 +74,9 @@ func (c *MCPClient) send(ctx context.Context, req mcpRPCRequest) error {
 		}
 		return nil
 	case MCPSSE:
-		return c.httpPostOnly(ctx, c.postURL, b)
+		return c.httpPostOnly(ctx, c.postURL, b, req)
 	case MCPStreamableHTTP:
-		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b)
+		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b, req)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "MCPClient.send", err)
 		}
@@ -83,15 +86,6 @@ func (c *MCPClient) send(ctx context.Context, req mcpRPCRequest) error {
 		return nil
 	}
 	return apperr.New(apperr.CodeInternal, "mcp: unknown transport")
-}
-
-// setMCPHeaders 在 HTTP 请求上设置 MCP 规范要求的请求头。
-// MCP 2025-11-25 §Transports：HTTP 模式下所有请求必须携带 MCP-Protocol-Version。
-// 配置头先写、协议头后写：配置不能改写协议必需头。
-func (c *MCPClient) setMCPHeaders(req *http.Request) {
-	c.setConfiguredHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
 }
 
 func (c *MCPClient) setConfiguredHeaders(req *http.Request) {

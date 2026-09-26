@@ -90,9 +90,9 @@ func (c *MCPClient) postRaw(ctx context.Context, b []byte) error {
 		}
 		return nil
 	case MCPSSE:
-		return c.httpPostOnly(ctx, c.postURL, b)
+		return c.httpPostOnly(ctx, c.postURL, b, mcpRPCRequest{})
 	case MCPStreamableHTTP:
-		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b)
+		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b, mcpRPCRequest{})
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "MCPClient.postRaw", err)
 		}

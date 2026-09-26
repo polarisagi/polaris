@@ -1,5 +1,5 @@
 internal/action/hook/runner.go:48:NewRunner
-internal/extension/mcp/mcp_client.go:126:NewMCPClient
+internal/extension/mcp/mcp_client.go:130:NewMCPClient
 internal/extension/mcp/mcp_manager.go:107:NewMCPManagerWithContext
 internal/extension/mcp/mcp_manager.go:110:NewMCPManagerWithContext
 internal/ffi/dylib.go:127:verifyABI

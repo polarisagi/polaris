@@ -37,10 +37,8 @@ type mcpRPCResponse struct {
 
 type ServerRequestHandler func(ctx context.Context, method string, id int64, params json.RawMessage) (json.RawMessage, error)
 
-type mcpRPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
+// mcpRPCError 线上错误对象（与 RPCError 同形）。
+type mcpRPCError = RPCError
 
 // MCPTool protocol.MCPTool 本地别名，使包内调用无需显式引用 protocol 包。
 type MCPTool = protocol.MCPTool
@@ -74,12 +72,18 @@ type MCPClient struct {
 	serverMeta atomic.Pointer[ServerMeta]
 	// notificationHandler 服务端通知（无 id 的请求）回调；nil 时只记日志。
 	notificationHandler atomic.Pointer[NotificationHandler]
+	// era 协议纪元（protocolEra）；legacySession 旧纪元 Streamable HTTP 的 Mcp-Session-Id。
+	era           atomic.Int32
+	legacySession atomic.Pointer[string]
+	// toolHeaders 工具名 → x-mcp-header 标注（Streamable HTTP 新纪元 tools/call 镜像到 Mcp-Param-*）。
+	toolHeaders sync.Map
 }
 
 // ServerMeta MCP 服务器在 initialize 中声明的元数据。
 type ServerMeta struct {
 	Instructions string
 	Experimental map[string]json.RawMessage
+	Extensions   map[string]json.RawMessage // 新纪元 capabilities.extensions
 }
 
 // DeclaresExperimental 能力值为对象即声明；缺省或 false 为未声明（Claude channel 规则）。
