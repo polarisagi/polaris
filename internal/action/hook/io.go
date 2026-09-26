@@ -5,6 +5,17 @@ import (
 	"strings"
 )
 
+// isValidElicitAction 三态答复的合法取值（elicitation §Response Actions）；不用包级
+// map 是为了不引入可变全局变量（CLAUDE.md §不变量 HE-6 相邻约束：internal/ 禁全局可变变量）。
+func isValidElicitAction(a string) bool {
+	switch a {
+	case "accept", "decline", "cancel":
+		return true
+	default:
+		return false
+	}
+}
+
 // Input 标准 hook 输入（stdin JSON / http 请求体）。字段名与两家一致；事件特有字段按需填充。
 type Input struct {
 	SessionID      string `json:"session_id"`
@@ -38,8 +49,16 @@ type Input struct {
 	Message          string `json:"message,omitempty"`
 	NotificationType string `json:"notification_type,omitempty"`
 	// Elicitation*
-	MCPServerName string         `json:"mcp_server_name,omitempty"`
-	Elicitation   map[string]any `json:"elicitation,omitempty"`
+	MCPServerName   string          `json:"mcp_server_name,omitempty"`
+	Elicitation     map[string]any  `json:"elicitation,omitempty"`
+	Mode            string          `json:"mode,omitempty"`
+	URL             string          `json:"url,omitempty"`
+	ElicitationID   string          `json:"elicitation_id,omitempty"`
+	RequestedSchema json.RawMessage `json:"requested_schema,omitempty"`
+	// Action / Content：Elicitation 事件为空（尚无答复）；ElicitationResult 事件为
+	// 用户（或上游 Elicitor）已作出的答复，供 hook 观察/覆盖。
+	Action  string         `json:"action,omitempty"`
+	Content map[string]any `json:"content,omitempty"`
 }
 
 // MatchSubject 事件的 matcher 比对对象（两家约定）。
@@ -89,6 +108,10 @@ type Outcome struct {
 	StopReason     string
 	SystemMessages []string
 	Errors         []string
+	// ElicitAction / ElicitContent：Elicitation / ElicitationResult hook 的程序化答复
+	// （accept/decline/cancel + 表单内容）。多个处理器命中时后到的覆盖先到的（两家一致）。
+	ElicitAction  string
+	ElicitContent map[string]any
 }
 
 // output 标准 JSON 输出（两家字段并集）。
@@ -111,6 +134,10 @@ type specificOutput struct {
 	Continue                 *bool           `json:"continue"`
 	StopReason               string          `json:"stopReason"`
 	SystemMessage            string          `json:"systemMessage"`
+	// Action / Content：Elicitation hook 的程序化答复，ElicitationResult hook 对
+	// 用户答复的覆盖（claude_hooks_elicitation.md §Elicitation output / ElicitationResult output）。
+	Action  string         `json:"action"`
+	Content map[string]any `json:"content"`
 }
 
 // handlerResult 单个处理器的原始结果（与传输方式无关）。
@@ -170,6 +197,22 @@ func (o *Outcome) mergeStdout(event Event, stdout []byte) {
 		if s.AdditionalContext != "" {
 			o.AdditionalContext = append(o.AdditionalContext, s.AdditionalContext)
 		}
+		if event == EventElicitation || event == EventElicitationResult {
+			o.applyElicitOutput(s)
+		}
+	}
+}
+
+// applyElicitOutput 合并 Elicitation / ElicitationResult hook 的 hookSpecificOutput。
+// 非 accept/decline/cancel 的 action 值忽略（不覆盖已有决定）；content 独立覆盖，
+// 使"只改 content 不改 action"这种覆盖也能表达。多个处理器命中时后到的覆盖先到的——
+// mergeStdout 按 handlers 声明顺序被依次调用，这里的无条件赋值天然满足该顺序语义。
+func (o *Outcome) applyElicitOutput(s *specificOutput) {
+	if isValidElicitAction(s.Action) {
+		o.ElicitAction = s.Action
+	}
+	if s.Content != nil {
+		o.ElicitContent = s.Content
 	}
 }
 

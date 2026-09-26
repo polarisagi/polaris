@@ -126,13 +126,18 @@ func (c *MCPClient) withMeta(params any, protoVersion string) map[string]any {
 }
 
 // clientCapabilities 客户端能力：只声明实际能处理的输入请求类型（MRTR：服务器不得请求未声明的能力）。
+// 新旧两个纪元的 initialize/_meta 共用本函数（initializeLegacy 见 mcp_client_protocol.go）。
 func (c *MCPClient) clientCapabilities() map[string]any {
 	caps := map[string]any{}
 	c.mu.Lock()
-	hasSampling := c.serverReqHandler != nil
+	hasSampling, hasElicitation := c.hasSampling, c.hasElicitation
 	c.mu.Unlock()
 	if hasSampling {
 		caps["sampling"] = map[string]any{}
+	}
+	if hasElicitation {
+		// form/url 两种模式均支持时需分别声明为空对象（elicitation §Capabilities）。
+		caps["elicitation"] = map[string]any{"form": map[string]any{}, "url": map[string]any{}}
 	}
 	return caps
 }

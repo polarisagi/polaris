@@ -68,6 +68,7 @@ type MCPManager struct {
 	rowRepo          protocol.ExtensionRepository // StartFromDB 读取 mcp_servers 行
 	dataDir          string                       // {DATA_DIR} 旧占位的展开值
 	varsResolver     PluginVarsResolver           // 插件 MCP 的 ${PLUGIN_ROOT} / ${user_config.*} 等
+	elicitor         atomic.Pointer[Elicitor]     // 宿主 elicitation 实现；nil 时不声明 elicitation 能力
 
 	// starting 是阶段03 R-03 新增的 per-serverID 互斥占位集合：Add() 的
 	// Connect/Initialize/ListTools 三步长时 IO 移出 m.mu 写锁后，用它防止
@@ -206,6 +207,7 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	old := m.entries[serverID] // 取旧实例引用，锁外关闭
 	httpClient := m.httpClient
 	samplingProv := m.samplingProvider
+	elicitor := m.getElicitor()
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -245,9 +247,10 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: connect %q", serverID), err)
 		return storeFailed(wrapped)
 	}
-	if samplingProv != nil {
-		client.SetServerRequestHandler(m.makeSamplingHandler(name, cfg.TrustTier))
-	}
+	// 统一输入处理器（sampling/elicitation/roots 合一）：能力声明位如实反映本次连接时
+	// 实际配置的 Provider/Elicitor，而非"handler 是否存在"（handler 始终装配，好让
+	// roots/list 与未声明能力的防御性拒绝都能被同一套逻辑处理，见 elicitation.go）。
+	client.SetInputHandler(m.makeInputHandler(serverID, name, cfg.TrustTier), samplingProv != nil, elicitor != nil)
 	m.attachNotificationSink(serverID, client)
 	if err := client.Initialize(ctx); err != nil {
 		client.Close()

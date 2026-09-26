@@ -19,15 +19,12 @@ import (
 const mcpProtocolVersion = "2025-11-25"
 
 // initializeLegacy 旧纪元（2025-11-25 及更早）initialize 握手，校验服务器返回的协议版本。
+// 能力声明与新纪元共用 clientCapabilities（不再硬编码 roots——Polaris 不暴露文件系统
+// roots，且 Roots 已弃用；roots/list 仍原地应答空列表，只是不作为声明式能力）。
 func (c *MCPClient) initializeLegacy(ctx context.Context) error {
-	caps := map[string]any{}
-	if c.serverReqHandler != nil {
-		caps["roots"] = map[string]any{"listChanged": false}
-		caps["sampling"] = map[string]any{}
-	}
 	result, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
-		"capabilities":    caps,
+		"capabilities":    c.clientCapabilities(),
 		"clientInfo":      map[string]any{"name": "polaris", "version": "1.0"},
 	})
 	if err != nil {
@@ -159,8 +156,9 @@ func (c *MCPClient) ResourcesList(ctx context.Context) ([]MCPResource, error) {
 type MCPResourceContent = protocol.MCPResourceContent
 
 // ResourcesRead 读取指定 URI 的资源内容（MCP resources/read）。
+// resources/read 是 MRTR §Supported Requests 之一，经 c.request 处理可能的 InputRequiredResult。
 func (c *MCPClient) ResourcesRead(ctx context.Context, uri string) ([]MCPResourceContent, error) {
-	result, err := c.call(ctx, "resources/read", map[string]any{"uri": uri})
+	result, err := c.request(ctx, "resources/read", map[string]any{"uri": uri})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: resources/read %q", uri), err)
 	}
@@ -174,8 +172,10 @@ func (c *MCPClient) ResourcesRead(ctx context.Context, uri string) ([]MCPResourc
 }
 
 // CallTool 调用指定工具并返回文本和图片结果。
+// tools/call 是 MRTR §Supported Requests 之一，经 c.request 处理可能的 InputRequiredResult
+// （elicitation/sampling 多轮往返）与 HeaderMismatch 重试；resultType 字段不影响下方解析。
 func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, error) {
-	result, err := c.call(ctx, "tools/call", map[string]any{
+	result, err := c.request(ctx, "tools/call", map[string]any{
 		"name":      name,
 		"arguments": arguments,
 	})
@@ -200,8 +200,10 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 //
 // 依赖 TaintPreservingDecoder 对所有 string 叶子打标（M07 §1 安全要求）。
 // trusted 由 MCPClientConfig.Trusted 决定：白名单 → TaintMedium；其余 → TaintHigh。
+// 污点解码作用在 c.request 完成全部 MRTR 轮次后的最终结果上，中间轮次的
+// inputRequests/inputResponses 不参与污点计算。
 func (c *MCPClient) CallToolTainted(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, types.TaintLevel, error) {
-	result, err := c.call(ctx, "tools/call", map[string]any{
+	result, err := c.request(ctx, "tools/call", map[string]any{
 		"name":      name,
 		"arguments": arguments,
 	})

@@ -67,6 +67,10 @@ type MCPClient struct {
 	once sync.Once
 
 	serverReqHandler ServerRequestHandler
+	// hasSampling / hasElicitation 客户端实际能处理的服务端反向请求类型（MRTR：
+	// clientCapabilities 只能声明真正能处理的能力，见 SetInputHandler）。
+	hasSampling    bool
+	hasElicitation bool
 
 	// serverMeta initialize 结果中的 instructions 与 experimental 能力（channel 声明等）。
 	serverMeta atomic.Pointer[ServerMeta]
@@ -111,11 +115,41 @@ func (c *MCPClient) Notify(ctx context.Context, method string, params any) error
 	return c.notify(ctx, method, params)
 }
 
-// SetServerRequestHandler 注册服务端主动请求处理器。
+// SetServerRequestHandler 注册服务端主动请求处理器，不改变已声明的能力位。
+// 兼容旧调用点（测试、legacy 场景）；生产装配统一走 SetInputHandler，使
+// clientCapabilities 如实反映 handler 实际能处理的方法。
 func (c *MCPClient) SetServerRequestHandler(h ServerRequestHandler) {
 	c.mu.Lock()
 	c.serverReqHandler = h
 	c.mu.Unlock()
+}
+
+// SetInputHandler 注册统一的服务端反向请求处理器（sampling/elicitation/roots 合一），
+// 并显式声明客户端实际支持的能力——MRTR 要求 clientCapabilities 只声明真正能处理的
+// 输入请求类型，服务器不得请求未声明的能力（mrtr §Server Requirements 7）。
+func (c *MCPClient) SetInputHandler(h ServerRequestHandler, sampling, elicitation bool) {
+	c.mu.Lock()
+	c.serverReqHandler = h
+	c.hasSampling = sampling
+	c.hasElicitation = elicitation
+	c.mu.Unlock()
+}
+
+// declaresCapability 判断客户端是否声明了给定服务端反向请求方法的处理能力。
+// roots/list 始终应答（Roots 已弃用、返回空列表无风险），不占用能力声明位。
+func (c *MCPClient) declaresCapability(method string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch method {
+	case "sampling/createMessage":
+		return c.hasSampling
+	case "elicitation/create":
+		return c.hasElicitation
+	case "roots/list":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewMCPClient 构造 MCP 客户端。
