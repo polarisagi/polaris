@@ -41,4 +41,15 @@ type SkillMeta struct {
 	PluginID string
 	// NeedsCompatCheck indicates reverse dependencies need compatibility testing
 	NeedsCompatCheck bool
+
+	// 以下为标准技能元数据（ADR-0103 决策五）。
+	Description string
+	DisplayName string // 对外名：插件技能 "plugin:skill"
+	Kind        string // "skill" | "command"
+	// DisableModelInvocation / DisableUserInvocation 取反存储：零值即两端均可调用，
+	// 学习技能等未设置这两个字段的写入方保持原语义。
+	DisableModelInvocation bool
+	DisableUserInvocation  bool
+	SkillDir               string
+	Spec                   string // 归一化元数据 JSON（pluginspec.Skill，不含正文）
 }

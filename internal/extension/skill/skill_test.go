@@ -143,28 +143,22 @@ func TestScriptSkillExecutor_ExecuteSkill_FailClosedWithoutPolicy(t *testing.T) 
 	reg := newTestSQLiteRegistry(t)
 	ctx := context.Background()
 
+	// script_path 列持久化脚本入口（Logic Collapse / Polaris 脚本技能），使下方
+	// 真正触达待测的 fail-closed 分支。
 	meta := types.SkillMeta{
-		Name:    "skill:noPolicy",
-		Version: "1.0",
-		Trust:   types.TrustLocal,
+		Name:       "skill:noPolicy",
+		Version:    "1.0",
+		Trust:      types.TrustLocal,
+		ScriptPath: "/path/to/src/skill.py",
 	}
-	_ = reg.Register(ctx, meta)
-
-	// SQLiteRegistryImpl.Get 只从 extension_instances.install_path 派生
-	// ScriptPath（Register 不落盘裸 meta.ScriptPath 字段，ADR-0062），本用例
-	// 直接写入 extension_instances 模拟 marketplace 安装路径，使 scriptPath
-	// 非空从而真正触达下方待测的 fail-closed 分支。
-	_, err := reg.db.ExecContext(ctx,
-		"INSERT INTO extension_instances (runtime_id, ext_type, install_path) VALUES (?, 'skill', ?)",
-		"skill:noPolicy", "/path/to")
-	if err != nil {
-		t.Fatalf("seed extension_instances: %v", err)
+	if err := reg.Register(ctx, meta); err != nil {
+		t.Fatalf("register: %v", err)
 	}
 
 	runner := &mockScriptRunner{response: []byte("should-not-run")}
 	exec := NewScriptSkillExecutor(reg, runner, nil) // 未调用 WithPolicy
 
-	_, err = exec.ExecuteSkill(ctx, "skill:noPolicy", []byte("input"))
+	_, err := exec.ExecuteSkill(ctx, "skill:noPolicy", []byte("input"))
 	if err == nil {
 		t.Fatalf("expected fail-closed error when policy gate not configured")
 	}

@@ -161,7 +161,7 @@ func (p *PluginInstaller) registerSkills(ctx context.Context, req InstallReq, pl
 		return
 	}
 	for _, s := range plug.Skills {
-		meta := skillMetaFromSpec(s, PluginSkillName(plug.Name, s.Name), plug.Version, pluginID, types.TrustTier(req.TrustTier))
+		meta := skillMetaFromSpec(s, PluginSkillName(plug.Name, s.Name), pluginspec.QualifiedName(plug.Name, s.Name), plug.Version, pluginID, types.TrustTier(req.TrustTier))
 		if !plug.DefaultEnabled {
 			meta.Deprecated = true // 与插件停用级联语义一致：停用插件的技能不对模型可见
 		}

@@ -80,7 +80,7 @@ func (s *SkillInstaller) Install(ctx context.Context, req InstallReq) (InstallRe
 	if err := s.ensureNameAvailable(ctx, req.InstID, name); err != nil {
 		return InstallResult{}, err
 	}
-	meta := skillMetaFromSpec(spec, name, "", "", trustOrCommunity(req.TrustTier))
+	meta := skillMetaFromSpec(spec, name, spec.Name, "", "", trustOrCommunity(req.TrustTier))
 	if err := s.applyScriptEntry(installDir, req.InstID, &meta); err != nil {
 		return InstallResult{}, err
 	}

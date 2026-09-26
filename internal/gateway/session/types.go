@@ -143,6 +143,9 @@ type CommandResult struct {
 	Response string
 	// UpdatedHistory 是命令执行后的消息历史（/compact 和 /clear 会修改）。
 	UpdatedHistory []types.Message
+	// RewrittenInput 非空且 Handled=false：输入是用户调用技能（/plugin:skill、$skill），
+	// 调用方以渲染后的技能内容作为本轮任务意图继续推理（Claude：技能内容作为消息进入对话）。
+	RewrittenInput string
 }
 
 // ── 消费端窄接口（HE-3：接口在调用方定义，不直接 import chat 包具体类型）──

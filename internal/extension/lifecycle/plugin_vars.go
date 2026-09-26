@@ -57,3 +57,34 @@ func (r *PluginVarsResolver) ResolvePluginVars(ctx context.Context, pluginID, se
 	vars.UserConfig = values
 	return vars, nil
 }
+
+// ResolveSkillRenderContext 插件技能渲染上下文（实现 skill.PluginRenderContextResolver）：
+// 只提供非敏感 userConfig，敏感键列入 SensitiveKeys 由渲染器输出占位符（Claude 规则）；
+// 技能渲染不要求必填项齐备（缺失项保留占位原文，由技能自身提示用户配置）。
+func (r *PluginVarsResolver) ResolveSkillRenderContext(ctx context.Context, pluginID string) (pluginspec.RenderInput, error) {
+	root, err := r.extRepo.GetPluginInstallPath(ctx, pluginID)
+	if err != nil {
+		return pluginspec.RenderInput{}, apperr.Wrap(apperr.CodeOf(err), "PluginVarsResolver.ResolveSkillRenderContext", err)
+	}
+	in := pluginspec.RenderInput{PluginRoot: root, PluginData: PluginDataDir(r.dataDir, pluginID)}
+	if r.config == nil {
+		return in, nil
+	}
+	values, _, err := r.config.ResolveStrings(ctx, pluginID, "", false)
+	if err != nil {
+		return pluginspec.RenderInput{}, err
+	}
+	schema, err := r.config.GetSchema(ctx, pluginID)
+	if err != nil {
+		return pluginspec.RenderInput{}, err
+	}
+	in.UserConfig, in.SensitiveKeys = values, map[string]bool{}
+	for _, sc := range schema {
+		for _, o := range sc.Options {
+			if o.Sensitive {
+				in.SensitiveKeys[o.Key] = true
+			}
+		}
+	}
+	return in, nil
+}

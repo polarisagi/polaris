@@ -50,6 +50,10 @@ type SlashCommandRouter struct {
 	// 在 boot_server.go 中注入（与 Embedder/PersonaRefiner 同一注入风格）。
 	steering *llmadapter.SteeringAdapter
 	cvStore  *llmadapter.ControlVectorStore
+
+	// skillReg/skillExec 用户调用技能（/plugin:skill、$skill）；见 slash_skills.go。
+	skillReg  protocol.SkillRegistry
+	skillExec protocol.SkillExecutor
 }
 
 func NewSlashCommandRouter(compressor SessionCompressor, chatRepo protocol.ChatRepository) *SlashCommandRouter {
@@ -75,8 +79,14 @@ func (r *SlashCommandRouter) Dispatch(
 	mem session.MemoryFacade,
 ) session.CommandResult {
 	cmd, args, ok := parseSlashCommand(input)
-	if !ok {
-		return session.CommandResult{Handled: false, UpdatedHistory: history}
+	if !ok || !isBuiltinSlash(cmd) {
+		// 非内置命令：尝试按用户可调用技能展开（技能名可与内置命令外的任意 /xxx、$xxx 匹配）。
+		if expanded, hit := r.expandUserSkill(ctx, input); hit {
+			return session.CommandResult{Handled: false, RewrittenInput: expanded, UpdatedHistory: history}
+		}
+		if !ok {
+			return session.CommandResult{Handled: false, UpdatedHistory: history}
+		}
 	}
 
 	switch cmd {
@@ -210,6 +220,16 @@ func (r *SlashCommandRouter) handleHelp(sink session.Sink) string {
 	resp := strings.TrimRight(sb.String(), "\n")
 	r.WriteSSEText(sink, resp)
 	return resp
+}
+
+// isBuiltinSlash 内置命令优先于同名用户技能（技能不能遮蔽 /clear 等系统命令）。
+func isBuiltinSlash(cmd string) bool {
+	for _, c := range builtinSlashCommands() {
+		if c.Name == cmd {
+			return true
+		}
+	}
+	return false
 }
 
 // parseSlashCommand 解析输入是否为斜线命令，返回 (cmd, args, ok)。

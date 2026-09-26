@@ -125,8 +125,12 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 			slashMem = mf
 		}
 	}
-	if res, handled := o.tryDispatchSlash(ctx, sink, sessionID, finalInput, history, p, slashMem); handled {
+	res, handled, taskInput := o.tryDispatchSlash(ctx, sink, sessionID, finalInput, history, p, slashMem)
+	if handled {
 		return res, nil
+	}
+	if taskInput == "" {
+		taskInput = req.Input
 	}
 
 	// ── 上下文使用率评估（警告 + 防抖动告警 + 自动压缩）────────────────────────
@@ -178,7 +182,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// 内核按回合新建 Agent，对上文一无所知；历史须随每轮显式注入（ADR-0098 决策四）。
 	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
 	agentCtrl.SetConversationHistory(history[:len(history)-1])
-	reply, inferErr, aborted = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, req.Input)
+	reply, inferErr, aborted = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput)
 	if aborted {
 		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。
 		if reply != "" {
@@ -257,9 +261,9 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	return &Result{SessionID: sessionID, Reply: reply, LatencyMs: inferLatencyMs}, nil
 }
 
-// tryDispatchSlash 斜线命令短路子步骤（从 runInteractive 拆出，nestif 治理，
-// 行为不变）。handled=true 时调用方应直接 return res, nil；o.slash 为 nil
-// （未注入路由器）或命令未被处理时 handled=false，res 为 nil。
+// tryDispatchSlash 斜线命令短路子步骤（从 runInteractive 拆出，nestif 治理）。
+// handled=true 时调用方应直接 return res, nil；o.slash 为 nil（未注入路由器）或命令
+// 未被处理时 handled=false。用户调用技能时 handled=false 且 taskInput 为渲染后的技能内容。
 func (o *orchestrator) tryDispatchSlash(
 	ctx context.Context,
 	sink Sink,
@@ -267,13 +271,13 @@ func (o *orchestrator) tryDispatchSlash(
 	history []types.Message,
 	p protocol.Provider,
 	slashMem MemoryFacade,
-) (res *Result, handled bool) {
+) (res *Result, handled bool, taskInput string) {
 	if o.slash == nil {
-		return nil, false
+		return nil, false, ""
 	}
 	cmdResult := o.slash.Dispatch(ctx, finalInput, sessionID, history, p, sink, slashMem)
 	if !cmdResult.Handled {
-		return nil, false
+		return nil, false, cmdResult.RewrittenInput
 	}
 	if cmdResult.Response != "" {
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -286,7 +290,7 @@ func (o *orchestrator) tryDispatchSlash(
 		slog.Warn("session: touch session failed (slash command path)", "session", sessionID, "err", err)
 	}
 	_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{"session_id": sessionID, "session_title": ""}})
-	return &Result{SessionID: sessionID, SlashHandled: true}, true
+	return &Result{SessionID: sessionID, SlashHandled: true}, true, ""
 }
 
 // acquireInteractiveAgent 从 AgentPool 获取本次流式对话的 AgentController，

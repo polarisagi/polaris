@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -40,6 +42,8 @@ type ScriptSkillExecutor struct {
 	// 该名字从未注册进 InProcessSandbox，必然 "unknown tool" 出错——两次执行、两条判定逻辑，
 	// 正是本次重构要消除的重复实现。
 	policy protocol.PolicyGate
+	// pluginCtx 插件技能渲染上下文（插件根 / 数据目录 / 非敏感 userConfig）。
+	pluginCtx PluginRenderContextResolver
 
 	// P1-8：幂等缓存与限流，与 InMemoryToolRegistry 保持能力对等。
 	// PII 令牌还原：Skill 脚本的输入来自 Agent planning 层，不经过 LLM 对话的
@@ -60,6 +64,18 @@ func NewScriptSkillExecutor(reg protocol.SkillRegistry, runner ScriptRunner, loa
 		idempotencyCache: newSkillLRUCache(200, 5*time.Minute),
 		skillLimiter:     newSkillRateLimiter(20),
 	}
+}
+
+// PluginRenderContextResolver 插件技能渲染所需的插件根 / 数据目录 / 非敏感 userConfig
+// （consumer-side；实现为 extension/lifecycle.PluginVarsResolver）。
+type PluginRenderContextResolver interface {
+	ResolveSkillRenderContext(ctx context.Context, pluginID string) (pluginspec.RenderInput, error)
+}
+
+// WithPluginContext 注入插件渲染上下文解析器；未注入时插件技能中的插件变量原样保留。
+func (e *ScriptSkillExecutor) WithPluginContext(r PluginRenderContextResolver) *ScriptSkillExecutor {
+	e.pluginCtx = r
+	return e
 }
 
 // WithPolicy 注入 Cedar PolicyGate（M11），脚本执行前的唯一权限判定入口。
@@ -102,9 +118,9 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 		}
 	}
 
-	// 无编译脚本或 runner 未注入 → tool-mode 指令技能：返回 instructions，不执行任何代码。
+	// 无编译脚本或 runner 未注入 → 指令技能：返回渲染后的正文，不执行任何代码。
 	if scriptPath == "" || e.runner == nil {
-		return renderInstructions(meta.Instructions, input), nil
+		return e.renderInstructions(ctx, meta, input)
 	}
 
 	if err := e.ValidateSkill([]byte(scriptPath)); err != nil {
@@ -172,18 +188,42 @@ func (e *ScriptSkillExecutor) authorizeScriptExecution(ctx context.Context, meta
 	return nil
 }
 
-// renderInstructions 将 tool-mode 指令技能的 SKILL.md 正文与调用方输入拼接返回。
+// renderInstructions 指令技能激活：按 Claude 技能替换规则渲染正文（参数、技能目录、插件变量、
+// 非敏感 userConfig），并在首行给出技能目录，供模型定位 scripts/ references/ assets/。
 // 唯一实现：cmd/polaris/skill_loader.go 的 InProcessSandbox 注册闭包委托至此，禁止重复实现。
-func renderInstructions(instructions string, input []byte) []byte {
+func (e *ScriptSkillExecutor) renderInstructions(ctx context.Context, meta *types.SkillMeta, input []byte) ([]byte, error) {
 	var req struct {
-		Input string `json:"input"`
+		Arguments string `json:"arguments"`
+		Input     string `json:"input"` // 旧调用方字段，与 arguments 等价
 	}
-	_ = json.Unmarshal(input, &req) //nolint:errcheck // 非法/空 input 时按无附加输入处理
-	out := instructions
-	if req.Input != "" {
-		out += "\n\n---\n\n输入：" + req.Input
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInvalidInput, "skill_executor: arguments must be a JSON object", err)
+		}
 	}
-	return []byte(out)
+	in := pluginspec.RenderInput{RawArgs: firstNonEmptyStr(req.Arguments, req.Input), SkillDir: meta.SkillDir}
+	var spec pluginspec.Skill
+	if meta.Spec != "" && meta.Spec != "{}" {
+		if err := json.Unmarshal([]byte(meta.Spec), &spec); err != nil {
+			slog.Warn("skill_executor: corrupt skill spec, rendering without named arguments", "skill", meta.Name, "err", err)
+		}
+		in.ArgNames = spec.Arguments
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok {
+		in.SessionID = sid
+	}
+	if meta.PluginID != "" && e.pluginCtx != nil {
+		pc, err := e.pluginCtx.ResolveSkillRenderContext(ctx, meta.PluginID)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeOf(err), "skill_executor: plugin context", err)
+		}
+		in.PluginRoot, in.PluginData, in.UserConfig, in.SensitiveKeys = pc.PluginRoot, pc.PluginData, pc.UserConfig, pc.SensitiveKeys
+	}
+	out := pluginspec.RenderSkill(meta.Instructions, in)
+	if meta.SkillDir != "" {
+		out = "Base directory for this skill: " + meta.SkillDir + "\n\n" + out
+	}
+	return []byte(out), nil
 }
 
 // ValidateSkill 校验脚本路径合规性。

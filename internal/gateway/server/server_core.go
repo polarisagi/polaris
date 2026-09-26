@@ -364,6 +364,13 @@ func (s *Server) SetPluginConfig(svc plugin.PluginConfigManager) {
 	}
 }
 
+// SetUserSkills 注入技能注册表与执行器，启用 /plugin:skill、$skill 用户技能调用（ADR-0103 决策五）。
+func (s *Server) SetUserSkills(reg protocol.SkillRegistry, exec protocol.SkillExecutor) {
+	if s.chatHandler != nil && s.chatHandler.SlashRouter != nil {
+		s.chatHandler.SlashRouter.SetSkills(reg, exec)
+	}
+}
+
 // SetSkillRegistry 注入 SkillRegistry（NewServer 之后、Start 之前调用）。
 func (s *Server) SetSkillRegistry(r protocol.SkillRegistry) {
 	s.skillReg = r

@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -26,23 +27,35 @@ func skillSlug(name string) string {
 
 // skillMetaFromSpec 归一化技能 → skills 表元数据。Polaris 私有参数只取 metadata 的
 // "polaris-" 前缀键（ADR-0103 决策五）；Instructions 为正文（frontmatter 是元数据，不进上下文）。
-func skillMetaFromSpec(s *pluginspec.Skill, name, version, pluginID string, trust types.TrustTier) types.SkillMeta {
+// displayName 为对外名（插件技能 "plugin:skill"）。
+func skillMetaFromSpec(s *pluginspec.Skill, name, displayName, version, pluginID string, trust types.TrustTier) types.SkillMeta {
 	caps := []string{"description:" + s.Description}
 	if c := s.PolarisParam("capability"); c != "" {
 		caps = append(caps, "capability:"+c)
 	}
+	spec, err := json.Marshal(s)
+	if err != nil {
+		spec = []byte("{}")
+	}
 	return types.SkillMeta{
-		Name:            name,
-		Version:         firstNonEmpty(s.PolarisParam("version"), s.Metadata["version"], version, "1.0.0"),
-		Runtime:         "script",
-		RiskLevel:       firstNonEmpty(s.PolarisParam("risk-level"), "medium"),
-		Sandbox:         sandboxLevel(s.PolarisParam("sandbox")),
-		Capabilities:    caps,
-		ExecMode:        firstNonEmpty(s.PolarisParam("exec-mode"), "tool"),
-		AmbientPriority: firstNonEmpty(s.PolarisParam("ambient-priority"), "auto"),
-		Trust:           trust,
-		Instructions:    s.Body,
-		PluginID:        pluginID,
+		Name:                   name,
+		Version:                firstNonEmpty(s.PolarisParam("version"), s.Metadata["version"], version, "1.0.0"),
+		Runtime:                "script",
+		RiskLevel:              firstNonEmpty(s.PolarisParam("risk-level"), "medium"),
+		Sandbox:                sandboxLevel(s.PolarisParam("sandbox")),
+		Capabilities:           caps,
+		ExecMode:               firstNonEmpty(s.PolarisParam("exec-mode"), "tool"),
+		AmbientPriority:        firstNonEmpty(s.PolarisParam("ambient-priority"), "auto"),
+		Trust:                  trust,
+		Instructions:           s.Body,
+		PluginID:               pluginID,
+		Description:            s.Description,
+		DisplayName:            displayName,
+		Kind:                   string(s.Kind),
+		DisableModelInvocation: !s.ModelInvocable(),
+		DisableUserInvocation:  !s.UserInvocable,
+		SkillDir:               s.Dir,
+		Spec:                   string(spec),
 	}
 }
 

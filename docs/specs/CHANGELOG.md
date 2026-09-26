@@ -6,6 +6,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103：标准技能运行时 — 含**契约变更**与 **DDL 变更**）
+
+- **[DDL] `008_skills.sql` 新增** `description` / `display_name` / `kind` / `model_invocable` / `user_invocable` / `skill_dir` / `script_path` / `spec`；开发库需删除重建。`ScriptPath` 改由 `script_path` 列持久化（不再按 install_path 拼接 `/src/skill.py`）。
+- **[契约] `types.SkillMeta` 新增** `Description` / `DisplayName` / `Kind` / `DisableModelInvocation` / `DisableUserInvocation` / `SkillDir` / `Spec`；模型可见性只经 `catalog.ModelToolView` 判定。
+- **[契约] 技能工具入参改为 `{"arguments": "..."}`**（`input` 仍兼容）；指令技能输出经 `pluginspec.RenderSkill` 渲染。
+- **[契约] `session.CommandResult.RewrittenInput`**：用户调用技能时不短路，以渲染内容作为本轮任务意图；新增 `GET /v1/skills/commands`。
+
 ## 2026-09-26（ADR-0103：插件 userConfig — 含 **DDL 变更**）
 
 - **[DDL] `021_plugins.sql` 新增 `plugin_user_config`**：开发库需删除重建。敏感值只以 Vault 密文落库。

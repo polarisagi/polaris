@@ -286,6 +286,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	})
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
+	httpServer.SetUserSkills(tb.SkillRegistry, tb.SkillExecutor)
 	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
 	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
 	httpServer.SetToolExecutor(tb.Dispatcher.Execute)

@@ -100,6 +100,13 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 
 ---
 
+### 3.1 标准技能的调用与渲染（ADR-0103 决策五）
+
+- **模型侧**：`catalog.ModelToolView` 是技能以工具形态暴露的唯一视图（启动期 `skill_loader.go` 与动态 `SkillCatalog` 共用）。`model_invocable=0`（`disable-model-invocation` / Codex `allow_implicit_invocation: false`）或已废弃的技能不进入模型可见列表；描述 = `description` + `when_to_use`（前缀对外名，截断 1536 字符），参数 schema 为 `{"arguments": string}`（附 `argument-hint`）。
+- **用户侧**：`/插件:技能 参数`、`/技能 参数`（裸名唯一时）或 Codex `$技能 参数` 由 `SlashCommandRouter` 展开为渲染后的技能内容，作为本轮任务意图继续推理（`CommandResult.RewrittenInput`）；`user_invocable=0` 的技能不可由用户触发。`GET /v1/skills/commands` 供前端补全。
+- **渲染**：`pluginspec.RenderSkill` 单遍替换 `$ARGUMENTS` / `$ARGUMENTS[N]` / `$N` / 具名参数 / `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` / `${CLAUDE_SESSION_ID}` / 非敏感 `${user_config.*}`（敏感键输出 `<sensitive:KEY>` 占位）；未消费参数占位时追加 `ARGUMENTS:`；结果首行给出技能目录。
+- **脚本**：`script_path` 列持久化 Polaris 脚本技能入口（空=纯指令技能，不执行代码）；标准技能 `scripts/` 由模型经受控工具执行。
+
 ## 4. 工具发现与懒加载
 
 当已安装工具总数超过 `spec/state.yaml §thresholds.m13_interface.lazy_load_tool_threshold`（默认 40），切换到懒加载模式，避免 context 爆炸。

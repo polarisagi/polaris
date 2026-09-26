@@ -21,7 +21,16 @@ CREATE TABLE IF NOT EXISTS skills (
     trust_tier  INTEGER NOT NULL DEFAULT 0,      -- 0-4，见上方说明
     idempotent  INTEGER NOT NULL DEFAULT 0,      -- 1=幂等，允许缓存结果
     benchmarks  TEXT    NOT NULL DEFAULT '{}',   -- JSON: PassRate/AvgLatency 等
-    instructions TEXT   NOT NULL DEFAULT '',
+    instructions TEXT   NOT NULL DEFAULT '',    -- SKILL.md 正文（frontmatter 之后），激活时渲染后交给模型
+    -- 以下为 agentskills.io / Claude / Codex 技能元数据（ADR-0103 决策五）
+    description  TEXT   NOT NULL DEFAULT '',    -- 模型据此决定是否调用（Claude：与 when_to_use 合计上限 1536 字符）
+    display_name TEXT   NOT NULL DEFAULT '',    -- 对外名：插件技能 "plugin:skill"，独立技能即技能名
+    kind         TEXT   NOT NULL DEFAULT 'skill', -- 'skill' | 'command'（Claude commands/*.md 旧形态）
+    model_invocable INTEGER NOT NULL DEFAULT 1, -- 0：disable-model-invocation / allow_implicit_invocation=false
+    user_invocable  INTEGER NOT NULL DEFAULT 1, -- 0：user-invocable=false（仅模型可调用）
+    skill_dir    TEXT   NOT NULL DEFAULT '',    -- ${CLAUDE_SKILL_DIR}；scripts/ references/ assets/ 相对此目录
+    script_path  TEXT   NOT NULL DEFAULT '',    -- Polaris 脚本技能入口（空=纯指令技能，不执行任何代码）
+    spec         TEXT   NOT NULL DEFAULT '{}',  -- 归一化技能元数据 JSON（arguments / allowed-tools / context / agent / openai.yaml 等）
     deprecated  INTEGER NOT NULL DEFAULT 0,
     -- 来自插件 bundle 的技能标注其所属插件 ID（plugins.id = "pl_xxx"），
     -- 便于插件卸载时级联废弃；独立安装的技能留空。

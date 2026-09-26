@@ -58,8 +58,9 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 	query := `
 		INSERT INTO skills (
 			name, version, runtime, risk_level, sandbox, capabilities, exec_mode,
-			ambient_priority, trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, needs_compat_check, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			ambient_priority, trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, needs_compat_check,
+			description, display_name, kind, model_invocable, user_invocable, skill_dir, script_path, spec, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(name) DO UPDATE SET
 			version=excluded.version,
 			runtime=excluded.runtime,
@@ -77,12 +78,22 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 			composes_of=excluded.composes_of,
 			plugin_id=excluded.plugin_id,
 			needs_compat_check=excluded.needs_compat_check,
+			description=excluded.description,
+			display_name=excluded.display_name,
+			kind=excluded.kind,
+			model_invocable=excluded.model_invocable,
+			user_invocable=excluded.user_invocable,
+			skill_dir=excluded.skill_dir,
+			script_path=excluded.script_path,
+			spec=excluded.spec,
 			updated_at=CURRENT_TIMESTAMP
 	`
 	_, err = r.db.ExecContext(ctx, query,
 		meta.Name, meta.Version, meta.Runtime, meta.RiskLevel, meta.Sandbox,
 		string(capsBytes), meta.ExecMode, meta.AmbientPriority, int(meta.Trust), meta.Idempotent, string(benchBytes), meta.Instructions, meta.Deprecated,
 		string(dependsJSON), string(composesJSON), meta.PluginID, meta.NeedsCompatCheck,
+		meta.Description, meta.DisplayName, firstNonEmptyStr(meta.Kind, "skill"), !meta.DisableModelInvocation, !meta.DisableUserInvocation,
+		meta.SkillDir, meta.ScriptPath, firstNonEmptyStr(meta.Spec, "{}"),
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "sqlite_registry: insert failed", err)
@@ -177,57 +188,24 @@ func scanDependentSkills(ctx context.Context, rows *sql.Rows, cur string) ([]str
 
 func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*types.SkillMeta, error) {
 	// LEFT JOIN extension_instances 获取 marketplace 安装路径；builtin/user 技能 install_path 为空
-	query := `
-		SELECT s.name, s.version, s.runtime, s.risk_level, s.sandbox, s.capabilities, s.exec_mode, s.ambient_priority,
-		       s.trust_tier, s.idempotent, s.benchmarks, s.instructions, s.deprecated,
-		       s.depends_on, s.composes_of, s.plugin_id, s.needs_compat_check, COALESCE(ei.install_path, '')
-		FROM skills s
-		LEFT JOIN extension_instances ei ON ei.runtime_id = s.name AND ei.ext_type = 'skill'
-		WHERE s.name = ?
-	`
+	query := `SELECT ` + skillColumns + ` FROM skills WHERE name = ?`
 	args := []any{name}
 	if version != "" {
-		query += " AND s.version = ?"
+		query += " AND version = ?"
 		args = append(args, version)
 	}
-
-	row := r.db.QueryRowContext(ctx, query, args...)
-
-	var meta types.SkillMeta
-	var capsRaw, benchRaw, dependsJSON, composesJSON, installPath string
-	var trustInt int
-	var needsCompatCheck int
-	err := row.Scan(
-		&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
-		&capsRaw, &meta.ExecMode, &meta.AmbientPriority, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
-		&dependsJSON, &composesJSON, &meta.PluginID, &needsCompatCheck, &installPath,
-	)
+	meta, err := scanSkill(r.db.QueryRowContext(ctx, query, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errSkillNotFound
 		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "sqlite_registry: get failed", err)
 	}
-	meta.Trust = types.TrustTier(trustInt)
-	if installPath != "" {
-		meta.ScriptPath = installPath + "/src/skill.py"
-	}
-	meta.NeedsCompatCheck = (needsCompatCheck == 1)
-
-	json.Unmarshal([]byte(capsRaw), &meta.Capabilities)    //nolint:errcheck
-	json.Unmarshal([]byte(benchRaw), &meta.Benchmarks)     //nolint:errcheck
-	json.Unmarshal([]byte(dependsJSON), &meta.DependsOn)   //nolint:errcheck
-	json.Unmarshal([]byte(composesJSON), &meta.ComposesOf) //nolint:errcheck
-
-	return &meta, nil
+	return meta, nil
 }
 
 func (r *SQLiteRegistryImpl) List(ctx context.Context, filter types.SkillFilter) ([]types.SkillMeta, error) {
-	query := `
-		SELECT name, version, runtime, risk_level, sandbox, capabilities, exec_mode, ambient_priority,
-		       trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, needs_compat_check
-		FROM skills WHERE 1=1
-	`
+	query := `SELECT ` + skillColumns + ` FROM skills WHERE 1=1`
 	var args []any
 
 	if !filter.IncludeDeprecated {
@@ -242,23 +220,10 @@ func (r *SQLiteRegistryImpl) List(ctx context.Context, filter types.SkillFilter)
 
 	var result []types.SkillMeta
 	for rows.Next() {
-		var meta types.SkillMeta
-		var capsRaw, benchRaw, dependsJSON, composesJSON string
-		var trustInt int
-		var needsCompatCheck int
-		if err := rows.Scan(
-			&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
-			&capsRaw, &meta.ExecMode, &meta.AmbientPriority, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
-			&dependsJSON, &composesJSON, &meta.PluginID, &needsCompatCheck,
-		); err != nil {
+		meta, err := scanSkill(rows)
+		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRegistryImpl.List", err)
 		}
-		meta.Trust = types.TrustTier(trustInt)
-		meta.NeedsCompatCheck = (needsCompatCheck == 1)
-		json.Unmarshal([]byte(capsRaw), &meta.Capabilities)    //nolint:errcheck
-		json.Unmarshal([]byte(benchRaw), &meta.Benchmarks)     //nolint:errcheck
-		json.Unmarshal([]byte(dependsJSON), &meta.DependsOn)   //nolint:errcheck
-		json.Unmarshal([]byte(composesJSON), &meta.ComposesOf) //nolint:errcheck
 
 		// 内存级二次过滤
 		if filter.RiskLevelMax != "" && riskGT(meta.RiskLevel, filter.RiskLevelMax) {
@@ -268,7 +233,10 @@ func (r *SQLiteRegistryImpl) List(ctx context.Context, filter types.SkillFilter)
 			continue
 		}
 
-		result = append(result, meta)
+		result = append(result, *meta)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRegistryImpl.List: rows", err)
 	}
 	return result, nil
 }
@@ -324,4 +292,49 @@ func (r *SQLiteRegistryImpl) detectSkillCycle(ctx context.Context, skillName str
 		queue = append(queue, curCompose...)
 	}
 	return nil
+}
+
+const skillColumns = `name, version, runtime, risk_level, sandbox, capabilities, exec_mode, ambient_priority,
+	trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, needs_compat_check,
+	description, display_name, kind, model_invocable, user_invocable, skill_dir, script_path, spec`
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanSkill 行 → SkillMeta。ScriptPath 取自 script_path 列：此前按 extension_instances.install_path
+// 拼接 "/src/skill.py"，runtime_id 正确回写后会把纯指令技能误当脚本技能执行不存在的文件。
+func scanSkill(row rowScanner) (*types.SkillMeta, error) {
+	var meta types.SkillMeta
+	var capsRaw, benchRaw, dependsJSON, composesJSON string
+	var trustInt, needsCompatCheck, modelInvocable, userInvocable int
+	if err := row.Scan(
+		&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
+		&capsRaw, &meta.ExecMode, &meta.AmbientPriority, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
+		&dependsJSON, &composesJSON, &meta.PluginID, &needsCompatCheck,
+		&meta.Description, &meta.DisplayName, &meta.Kind, &modelInvocable, &userInvocable, &meta.SkillDir, &meta.ScriptPath, &meta.Spec,
+	); err != nil {
+		return nil, err //nolint:wrapcheck // 调用方按 sql.ErrNoRows 判定后再包装
+	}
+	meta.Trust = types.TrustTier(trustInt)
+	meta.NeedsCompatCheck = needsCompatCheck == 1
+	meta.DisableModelInvocation = modelInvocable == 0
+	meta.DisableUserInvocation = userInvocable == 0
+	for _, f := range []struct {
+		raw string
+		dst any
+	}{{capsRaw, &meta.Capabilities}, {benchRaw, &meta.Benchmarks}, {dependsJSON, &meta.DependsOn}, {composesJSON, &meta.ComposesOf}} {
+		if err := json.Unmarshal([]byte(f.raw), f.dst); err != nil {
+			// L3：单个元数据字段损坏不影响技能主体可用性，留痕。
+			slog.Warn("sqlite_registry: corrupt skill metadata column", "skill", meta.Name, "err", err)
+		}
+	}
+	return &meta, nil
+}
+
+func firstNonEmptyStr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }

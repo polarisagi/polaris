@@ -44,7 +44,15 @@ func newTestSQLiteRegistry(t *testing.T) *SQLiteRegistryImpl {
 			composes_of TEXT,
 			plugin_id TEXT,
 			needs_compat_check INTEGER,
-			updated_at DATETIME
+			updated_at DATETIME,
+			description TEXT NOT NULL DEFAULT '',
+			display_name TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'skill',
+			model_invocable INTEGER NOT NULL DEFAULT 1,
+			user_invocable INTEGER NOT NULL DEFAULT 1,
+			skill_dir TEXT NOT NULL DEFAULT '',
+			script_path TEXT NOT NULL DEFAULT '',
+			spec TEXT NOT NULL DEFAULT '{}'
 		);
 		CREATE TABLE IF NOT EXISTS extension_instances (
 			runtime_id TEXT,

@@ -29,17 +29,21 @@ func (s *SkillCatalog) List(ctx context.Context, minTrust types.TrustTier) []pro
 
 	var result []protocol.CatalogEntry
 	for _, sk := range skills {
-		if sk.Trust >= minTrust {
-			name := strings.TrimPrefix(sk.Name, "skill:")
-			result = append(result, protocol.CatalogEntry{
-				Name:        name,
-				Description: "Auto-generated skill wrapper",
-				Parameters:  nil, // Typically scripts might have dynamic schemas or none
-				Source:      types.ToolSkill,
-				TrustTier:   sk.Trust,
-				SkillName:   sk.Name,
-			})
+		if sk.Trust < minTrust {
+			continue
 		}
+		view, ok := ModelToolView(sk)
+		if !ok {
+			continue
+		}
+		result = append(result, protocol.CatalogEntry{
+			Name:        strings.TrimPrefix(view.Name, "skill__"),
+			Description: view.Description,
+			Parameters:  view.InputSchema,
+			Source:      types.ToolSkill,
+			TrustTier:   sk.Trust,
+			SkillName:   sk.Name,
+		})
 	}
 	return result
 }

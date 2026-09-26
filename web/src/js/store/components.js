@@ -9,11 +9,34 @@ Alpine.data('chatInput', () => ({
   slashItems: [],
   rows: 1,
 
+  // 已安装的用户可调用技能（/plugin:skill；Codex 风格 $skill 同样可用）
+  skillCommands: [],
+
+  async loadSkillCommands() {
+    try {
+      const res = await fetch('/v1/skills/commands', { headers: authHeaders() })
+      if (!res.ok) return
+      const data = await res.json()
+      this.skillCommands = (data.commands || []).map(c => ({
+        cmd: c.command,
+        desc: (c.argument_hint ? c.argument_hint + ' · ' : '') + (c.description || ''),
+        skill: true,
+      }))
+    } catch (_) { /* 补全列表缺失不影响手动输入调用 */ }
+  },
+
   init() {
+    this.loadSkillCommands()
     this.$watch('input', v => {
       this.rows = Math.min(8, (v.match(/\n/g) || []).length + 1)
-      if (v.startsWith('/')) {
-        this.slashItems = SLASH_COMMANDS.filter(c => c.cmd.startsWith(v.split(' ')[0]))
+      const head = v.split(' ')[0]
+      if (v.startsWith('/') && !v.includes(' ')) {
+        this.slashItems = [...SLASH_COMMANDS, ...this.skillCommands].filter(c => c.cmd.startsWith(head))
+        this.showSlash = this.slashItems.length > 0
+        this.slashFocus = 0
+      } else if (v.startsWith('$') && !v.includes(' ')) {
+        const q = '/' + head.slice(1)
+        this.slashItems = this.skillCommands.filter(c => c.cmd.startsWith(q))
         this.showSlash = this.slashItems.length > 0
         this.slashFocus = 0
       } else {
@@ -123,6 +146,12 @@ Alpine.data('chatInput', () => ({
   },
 
   selectSlash(item) {
+    // 技能命令：填入输入框等待补充参数，而不是立即提交
+    if (item.skill) {
+      this.input = item.cmd + ' '
+      this.showSlash = false
+      return
+    }
     const nav = Alpine.store('nav')
     switch (item.cmd) {
       case '/sessions': nav.navigate('sessions'); Alpine.store('sessions').load(); break
