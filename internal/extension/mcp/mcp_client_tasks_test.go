@@ -214,6 +214,9 @@ func TestTasks_CtxCancelSendsCancel(t *testing.T) {
 		errCh <- err
 	}()
 	<-created
+	// created 在服务端收到调用时就关闭，此刻客户端可能还没读到任务创建响应——立即取消会让
+	// 调用本身失败（尚无任务，自然不发取消）。等客户端进入首次轮询等待（间隔 5s）后再取消。
+	time.Sleep(200 * time.Millisecond)
 	cancel()
 
 	err := <-errCh

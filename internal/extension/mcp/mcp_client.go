@@ -81,6 +81,18 @@ type MCPClient struct {
 	legacySession atomic.Pointer[string]
 	// toolHeaders 工具名 → x-mcp-header 标注（Streamable HTTP 新纪元 methodToolsCall 镜像到 Mcp-Param-*）。
 	toolHeaders sync.Map
+
+	// activeSubscriptionID 当前活跃的 subscriptions/listen 请求 id（0=无活跃订阅）。
+	// stdio 传输下，订阅的 ack/通知与其它服务端消息共用同一 dispatch 管道，需要这个
+	// 字段核对 _meta 里的 subscriptionId 是否属于本次订阅（见
+	// shouldConsumeToolsListChanged）；Close() 时也用它决定是否要发送
+	// notifications/cancelled。
+	activeSubscriptionID atomic.Int64
+	// subscriptionBackoffInitial / subscriptionBackoffMax 新纪元 Streamable HTTP 订阅
+	// 异常断线后的指数退避区间。取包级默认值；测试与本包同源，可直接改写这两个未导出
+	// 字段来缩短等待，不需要新增全局可变变量。
+	subscriptionBackoffInitial time.Duration
+	subscriptionBackoffMax     time.Duration
 }
 
 // ServerMeta MCP 服务器在 initialize 中声明的元数据。
@@ -88,6 +100,10 @@ type ServerMeta struct {
 	Instructions string
 	Experimental map[string]json.RawMessage
 	Extensions   map[string]json.RawMessage // 新纪元 capabilities.extensions
+	// ToolsListChanged 服务器在 capabilities.tools.listChanged 中声明的工具列表变更
+	// 通知支持（spec_subscriptions.md）。仅新纪元 server/discover 会填充；旧纪元
+	// initialize 没有这个能力位，零值 false——旧纪元靠服务器自发通知，不走订阅。
+	ToolsListChanged bool
 }
 
 // DeclaresExperimental 能力值为对象即声明；缺省或 false 为未声明（Claude channel 规则）。
@@ -167,10 +183,12 @@ func NewMCPClient(cfg MCPClientConfig, httpClient network.SafeHTTPClient) *MCPCl
 		cfg.Timeout = 30 * time.Second
 	}
 	return &MCPClient{
-		cfg:        cfg,
-		httpClient: httpClient,
-		pending:    make(map[int64]chan *mcpRPCResponse),
-		done:       make(chan struct{}),
+		cfg:                        cfg,
+		httpClient:                 httpClient,
+		pending:                    make(map[int64]chan *mcpRPCResponse),
+		done:                       make(chan struct{}),
+		subscriptionBackoffInitial: subscriptionBackoffDefaultInitial,
+		subscriptionBackoffMax:     subscriptionBackoffDefaultMax,
 	}
 }
 

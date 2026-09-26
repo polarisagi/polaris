@@ -60,6 +60,11 @@ type discoverResult struct {
 	Capabilities      struct {
 		Experimental map[string]json.RawMessage `json:"experimental"`
 		Extensions   map[string]json.RawMessage `json:"extensions"`
+		// Tools.ListChanged 声明服务器是否支持工具列表变更通知（订阅前置条件，
+		// 见 mcp_client_subscribe.go）。
+		Tools struct {
+			ListChanged bool `json:"listChanged"`
+		} `json:"tools"`
 	} `json:"capabilities"`
 	Instructions string `json:"instructions"`
 }
@@ -86,7 +91,7 @@ func (c *MCPClient) discover(ctx context.Context) error {
 	}
 	c.era.Store(int32(eraModern))
 	c.serverMeta.Store(&ServerMeta{Instructions: d.Instructions, Experimental: d.Capabilities.Experimental,
-		Extensions: d.Capabilities.Extensions})
+		Extensions: d.Capabilities.Extensions, ToolsListChanged: d.Capabilities.Tools.ListChanged})
 	return nil
 }
 

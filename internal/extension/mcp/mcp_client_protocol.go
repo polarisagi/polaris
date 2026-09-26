@@ -237,6 +237,19 @@ func (c *MCPClient) CallToolTainted(ctx context.Context, name string, arguments 
 // Close 关闭连接并释放资源。
 func (c *MCPClient) Close() {
 	c.once.Do(func() {
+		// stdio 传输下，subscriptions/listen 的响应只在服务器优雅关闭订阅时才会到来
+		// （spec_subscriptions.md §Cancellation）；客户端主动关闭必须显式发送
+		// notifications/cancelled 告知服务器，否则服务器会一直以为订阅还活着。必须
+		// 在 close(c.done)/stdin.Close() 之前发送——两者任一发生后 c.notify 都发不出去了。
+		if c.cfg.Transport == MCPStdio {
+			if id := c.activeSubscriptionID.Load(); id != 0 {
+				cancelCtx, cancel := context.WithTimeout(context.Background(), subscriptionCancelNotifyTimeout)
+				if err := c.notify(cancelCtx, notificationCancelled, map[string]any{"requestId": id}); err != nil {
+					slog.Warn("mcp: send notifications/cancelled failed", "server", c.cfg.ServerName, "err", err)
+				}
+				cancel()
+			}
+		}
 		close(c.done)
 		if c.stdin != nil {
 			c.stdin.Close()

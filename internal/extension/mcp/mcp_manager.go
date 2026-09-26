@@ -79,6 +79,11 @@ type MCPManager struct {
 
 	// notificationSink 服务端通知出口（Claude channel 事件等）；nil 时通知只记日志。
 	notificationSink atomic.Pointer[NotificationSink]
+
+	// refreshing per-server 的 refreshTools 合并态（serverID -> *refreshState），
+	// 见 mcp_manager_refresh.go。生命周期独立于 entries，用 sync.Map 而非受 m.mu
+	// 保护的 map。
+	refreshing sync.Map
 }
 
 // IsPluginConnected 判断给定 plugin_id 是否有至少一个已连接的 MCP Server。
@@ -281,6 +286,18 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	// 锁外触发回调，避免回调内反向加锁导致死锁
 	if notify != nil {
 		notify()
+	}
+	// 新纪元且服务器声明了 capabilities.tools.listChanged 时才发起订阅（spec_subscriptions.md）；
+	// 旧纪元没有订阅机制，继续依赖服务器自发的 notifications/tools/list_changed（见
+	// mcp_manager_notify.go attachNotificationSink）。异步启动，不拖慢 Add() 返回。
+	if client.ServerMeta().ToolsListChanged {
+		client.StartToolsListChangedSubscription(func() {
+			if err := m.refreshTools(context.Background(), serverID); err != nil {
+				// 失败已在 refreshTools 内部记录 Warn；这里用 Debug 标注触发源，便于按
+				// 订阅通知 vs 旧纪元自发通知区分排查（HE-1：禁止 `_ = ` 丢弃错误）。
+				slog.Debug("mcp: subscription-triggered refresh failed", "server", serverID, "err", err)
+			}
+		})
 	}
 	return nil
 }
