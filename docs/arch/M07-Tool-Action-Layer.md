@@ -151,7 +151,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 
 **入口 4 — 惰性目录（`boot_tools.go:457`，`CompositeCatalog`）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold`＝40 时用于按需检索工具定义，避免全量 schema 撑爆 prompt）。
 
-**入口 5 — `builtin.RegisterA2ATools`（1 个，`internal/tool/builtin/a2a_tools.go`，ADR-0084）**：`list_a2a_agents`（列出可委派的 MCP A2A 远端 Agent；`transfer_to_agent` 由 DAG 执行路径另行注册）。
+**入口 5 — `builtin.RegisterDelegationTools`（2 个，`internal/tool/builtin/delegation_tools.go`，ADR-0084 + ADR-0103 决策三）**：`list_agents`（本地子 Agent + MCP A2A 目标 + `general-purpose`）、`transfer_to_agent`（注册使其进入目录并经 S_VALIDATE/PolicyGate；执行由 Agent 内核特判，直接经 Dispatcher 调用返回错误）。装配在 `cmd/polaris/boot_delegation.go`。
 
 **入口 6 — `native.RegisterExtensionTools`（2 个，`internal/extension/native/extension_tools.go`）**：`search_extension`、`install_extension`（按需检索/安装扩展，安装走 InstallManager + HITL）；第三参 `knowledgeSearcher` 非 nil 时额外注册 `knowledge_search`，生产装配当前传 nil 不注册。
 

@@ -381,6 +381,13 @@ func (s *Server) SetHookRunner(r *hook.Runner) {
 	}
 }
 
+// SetAgentDefinitions 注入子 Agent 定义来源，启用 GET /v1/agents（ADR-0103 决策三）。
+func (s *Server) SetAgentDefinitions(defs plugin.AgentDefinitionLister) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.AgentDefs = defs
+	}
+}
+
 // SetSkillRegistry 注入 SkillRegistry（NewServer 之后、Start 之前调用）。
 func (s *Server) SetSkillRegistry(r protocol.SkillRegistry) {
 	s.skillReg = r

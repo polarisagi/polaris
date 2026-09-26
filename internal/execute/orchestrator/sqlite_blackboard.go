@@ -385,11 +385,13 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// 失败原因写入 result：委派方（transfer_to_agent 恢复分支）据此把原因回传给模型，
+	// 此前只随广播发送，恢复/重启后读到的失败任务没有任何原因。
 	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET status=?, version=version+1, updated_at=datetime('now')
+		SET status=?, result=?, version=version+1, updated_at=datetime('now')
 		WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,
-		statusFailed, taskID, agentID, statusClaimed, statusRunning,
+		statusFailed, errBytes, taskID, agentID, statusClaimed, statusRunning,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.FailTask", err)

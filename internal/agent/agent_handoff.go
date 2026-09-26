@@ -93,7 +93,7 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 			a.sCtx.HandoffTaskID = "" // 清理恢复状态
 			return &types.ToolResult{ //nolint:nilerr
 				Success: false,
-				Output:  []byte(fmt.Sprintf("handoff task %s failed", snap.ID)),
+				Output:  []byte(fmt.Sprintf("handoff task %s failed: %s", snap.ID, snap.Result)),
 			}, nil
 		}
 		// 如果还没完成，或者查不到（异常），继续往下或者直接再次挂起

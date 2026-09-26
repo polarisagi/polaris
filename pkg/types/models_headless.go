@@ -42,6 +42,8 @@ type HeadlessOptions struct {
 	// 空串 = 退回原自生成行为（如 Blackboard DAG 一次性任务执行，本就没有
 	// 会话/多轮语义，见 execute/orchestrator/default_worker.go 调用点注释）。
 	SessionID string
+	// Profile 子 Agent 角色规格（ADR-0103 决策三）；nil = 通用 Agent。
+	Profile *AgentProfileSpec
 }
 
 // WithSpawnDepth 设置本次 headless 执行继承的委派链深度（ADR-0084）。
@@ -66,4 +68,9 @@ func WithEventCallback(fn func(AgentStreamEvent)) HeadlessOption {
 // 复用/新建对应的 per-session Agent 内核实例，而非每次调用都自生成一次性 ID。
 func WithSessionID(id string) HeadlessOption {
 	return func(o *HeadlessOptions) { o.SessionID = id }
+}
+
+// WithAgentProfile 以指定角色规格运行本次 headless 执行（插件/项目/用户定义的子 Agent）。
+func WithAgentProfile(p *AgentProfileSpec) HeadlessOption {
+	return func(o *HeadlessOptions) { o.Profile = p }
 }

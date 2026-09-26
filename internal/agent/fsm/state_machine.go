@@ -93,8 +93,10 @@ type StateContext struct {
 	NamespaceID string
 	// ProjectID 当前会话所属项目（ADR-0097 决策三修订）：感知/规划阶段的情景记忆
 	// 检索按它过滤。由 Agent.refreshWorkspaceContext 在 Mu 下写入；无项目 = 默认项目。
-	ProjectID   string
-	RawIntentTS taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
+	ProjectID string
+	// AgentProfile 子 Agent 角色规格（ADR-0103 决策三），nil = 通用 Agent；由 Agent.SetAgentProfile 写入。
+	AgentProfile *types.AgentProfileSpec
+	RawIntentTS  taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
 	// ConversationHistory 本轮之前的对话（ADR-0098 决策四），已剔除 system 角色；
 	// 仅 Perceive/Respond 渲染进 prompt，按 TaintHigh 围栏。
 	ConversationHistory []types.Message

@@ -139,12 +139,13 @@ func (a *Agent) sendInterruptReceived(action string) {
 
 // refreshInstalledExtensions 从 extension_instances 表动态查询已安装扩展并存入 fsm.StateContext。
 func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
-	if a.catalog == nil {
+	cata := a.visibleCatalog()
+	if cata == nil {
 		a.sCtx.InstalledExtensionsInfo = ""
 		return
 	}
 
-	entries := a.catalog.List(ctx, types.TrustUntrusted)
+	entries := cata.List(ctx, types.TrustUntrusted)
 	var exts []string
 	for _, e := range entries {
 		switch e.Source {
@@ -181,8 +182,9 @@ func (a *Agent) InjectToolHintProvider(p fsm.ToolHintProvider) {
 	a.sm.WithToolHintProvider(p)
 }
 
+// agentContextBuilder cata 每次取当前可见目录：子 Agent 角色在 Pool 复用实例时逐次变化。
 type agentContextBuilder struct {
-	cata catalog.Catalog
+	cata func() catalog.Catalog
 }
 
 func (b *agentContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
@@ -195,8 +197,8 @@ func (b *agentContextBuilder) BuildPerceiveContext(ctx context.Context, memory p
 
 func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	useCata := cata
-	if useCata == nil {
-		useCata = b.cata
+	if useCata == nil && b.cata != nil {
+		useCata = b.cata()
 	}
 	msgs, err := agentctx.BuildPlanContext(ctx, memory, sCtx, useCata, cognitive)
 	if err != nil {
@@ -223,8 +225,8 @@ func (b *agentContextBuilder) BuildRespondContext(ctx context.Context, memory pr
 
 func (b *agentContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel) {
 	useCata := cata
-	if useCata == nil {
-		useCata = b.cata
+	if useCata == nil && b.cata != nil {
+		useCata = b.cata()
 	}
 	return agentctx.BuildToolListSection(ctx, useCata)
 }

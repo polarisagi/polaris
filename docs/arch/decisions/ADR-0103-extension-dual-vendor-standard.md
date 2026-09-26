@@ -40,7 +40,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 |---|---|---|
 | skills（`skills/<n>/SKILL.md`、清单 `skills` 路径、根 `SKILL.md` 单技能） | 两家 + agentskills.io | `skills` 表，`plugin_id` FK；决策五 |
 | commands（`commands/*.md`、对象映射 `source`/`content`） | Anthropic | 转为 `user-invocable` 技能（Claude 已声明 commands 为技能旧形态），`kind=command` |
-| agents（`agents/*.md` frontmatter） | Anthropic | `orchestrator.AgentProfile`（来源 `plugin`），命名 `<plugin>:<agent>` |
+| agents（`agents/*.md` frontmatter） | Anthropic | `lifecycle.AgentDefinitionProvider` → `types.AgentProfileSpec`（来源 `plugin:<id>`），命名 `<plugin>:<agent>`；见下方「决策三补充」 |
 | hooks（`hooks/hooks.json` + 清单 `hooks` + Codex `extensions.com.openai.hooks`） | 两家 | `internal/action/hook`；决策六 |
 | mcpServers（`.mcp.json`、`mcp.json`、清单内联、`.json` 路径、`.mcpb`/`.dxt` 包） | 两家 + agent-plugins | `mcp_servers`，`plugin_id` FK；类型 `stdio`/`http`/`streamable-http`/`sse`/`ws` |
 | userConfig | Anthropic | `plugin_user_config`；`sensitive=true` 经 `credential.Vault` 加密；提示词中敏感值替换为占位符 |
@@ -49,6 +49,18 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | apps（`.app.json`） | OpenAI Codex | 决策四 |
 | interface（Codex）/ displayName | 两家 | `plugins` 展示元数据 |
 | lspServers / outputStyles / themes / monitors / workflows / `bin/` / `settings.json` / `experimental.*` | Anthropic | **解析 + 校验，不激活**，记入 `unsupported_components` 并在 UI 标注「此宿主不适用」（agent-plugins 一致性条款 3：Ignore unsupported component types）。`bin/` 不进入任何 PATH |
+
+### 决策三补充：子 Agent 定义与委派（2026-09-26）
+
+- **来源与格式**：插件 `agents/`（仅 Claude `.md`）；项目 `<root>/.polaris/agents/`、用户 `<data>/agents/`（Claude `.md` + Codex `.toml`，同名 `.md` 优先）。同名优先级项目 > 用户（Claude 规则）；插件 agent 带 `<plugin>:` 命名空间。删除 Polaris 私有 `agents/*.yaml`（ADR-0016 §2.4，与决策二「删除自造格式」一致）。解析唯一实现 `pluginspec.{ParseAgentFile,ListAgentDir}`。
+- **调用**：`transfer_to_agent(target_agent_role, context_summary)` 为委派入口，`list_agents` 列出本地子 Agent + `mcp:` A2A 目标 + `general-purpose`；二者注册为内置工具（此前 `transfer_to_agent` 未注册，S_VALIDATE 按未知工具拒绝，委派在生产不可达）。`DefaultTaskWorker` 把 `agent_handoff:<name>` 解析为角色规格经 `WithAgentProfile` 注入 `AcquireHeadless`；未知名称使任务失败（Claude：未知 subagent_type 报错），失败原因写入 `tasks.result` 回传委派方。
+- **角色只收窄能力**，全部在内核执行入口硬拦截（`Agent.checkProfileTool`，可见性过滤仅辅助）：
+  - `tools`/`disallowedTools`：Claude 工具名映射到 Polaris 内置名（`Read`→`read_file`… `Bash`→`bash`/`run_command`/`code_act:*`，`Agent`/`Task`→委派工具，`Skill`/`Skill(x)`，`mcp__server`/`mcp__server__*`）；Polaris 原生名直接有效。白名单中参数级规则（`Bash(git *)`）无法等价映射 → 整条忽略（不放宽为整个工具）；黑名单中按整个工具拒绝。`Agent(a, b)` 限定委派目标。
+  - 只读：Codex `sandbox_mode="read-only"`、Claude `permissionMode: plan` → 只放行能力 ≤ `CapReadOnly` 的工具，`code_act` 与未知工具 fail-closed。其余 sandbox/permission 模式继承宿主，不得放宽。
+  - `maxTurns` → 收紧 `MaxStepsLimit`。
+  - 子 Agent 默认不能再委派（Claude 子 Agent 无 Agent 工具；Codex `agents.max_depth` 默认 1）；深度仍受 `SpawnDepth` 门控。
+- **角色指令**写入 `ZoneMutableSkill`（`<agent_profile>`），不进 `ZoneImmutable`：用户目录 TaintLow；插件/项目目录与 AGENTS.md 同一威胁模型 TaintMedium（Spotlighting）。`skills` 字段经技能执行器渲染后预加载（插件命名空间优先），缺失即失败，不带缺口运行。
+- **解析但不生效**（记入 `not_applied` + 诊断，UI 标注）：`model`/`effort`/Codex `model_reasoning_effort`（模型按阶段池路由，ADR-0101）、`background`、`isolation`、`memory`（子 Agent 共享委派方命名空间）、`initialPrompt`、agent 级 `mcpServers`/`hooks`、Codex 其余 config 覆盖键；插件 agent 的 `hooks`/`mcpServers`/`permissionMode` 按 Claude 安全规则忽略。
 
 ## 决策四：Codex「应用」= 插件内的连接器绑定，不是扩展类型
 
@@ -116,7 +128,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 
 ## 引用代码
 
-`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/execute/orchestrator/agent_profile.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
+`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
 
 ## 重新评估触发条件
 
@@ -131,3 +143,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-26 | 初稿 |
 | 2026-09-26 | 决策六：补充落地实现约束（RunStdio 执行、veto-only、PostToolUse 同步回传、Stop 续跑上限、ShellHooks 删除）。 |
 | 2026-09-26 | 决策五：技能校验由「违规即不加载」改为硬错误/规范告警两级。理由：Claude 规定 `name`、`description` 均可缺省（分别回落目录名与正文首行），按 agentskills 严格拒绝会使合法 Claude 技能无法加载，违背双标准兼容目标。新增决策二补充：宿主环境变量展开限制。 |
+| 2026-09-26 | 决策三补充：子 Agent 定义与委派落地（双格式解析、工具名映射、只读/步数/禁委派硬拦截、YAML 私有格式删除、`transfer_to_agent` 注册）。 |

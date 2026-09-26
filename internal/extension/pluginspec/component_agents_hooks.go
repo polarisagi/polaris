@@ -15,18 +15,23 @@ const (
 	RuleHooksShape = "hooks.shape"
 )
 
-// AgentFile Claude 插件 agents/*.md 子 Agent 定义。结构化常用字段，其余 frontmatter
-// 原样保留在 Fields，由 AgentProfile 映射层（ADR-0103 决策三）按需读取。
+// AgentFile 子 Agent 定义（Claude agents/*.md 或 Codex agents/*.toml，见 agent.go）。结构化
+// 常用字段，其余原样保留在 Fields；NotApplied 列出已解析但本宿主不生效的字段（UI 展示）。
 type AgentFile struct {
 	Name            string         `json:"name"` // 缺省取相对 agents/ 的路径，子目录以 ":" 连接
 	Description     string         `json:"description"`
+	Format          string         `json:"format"` // claude / codex
 	File            string         `json:"file"`
 	Tools           []string       `json:"tools,omitempty"`
 	DisallowedTools []string       `json:"disallowed_tools,omitempty"`
 	Model           string         `json:"model,omitempty"`
 	Skills          []string       `json:"skills,omitempty"`
+	MaxTurns        int            `json:"max_turns,omitempty"`
+	ReadOnly        bool           `json:"read_only,omitempty"`
+	Nicknames       []string       `json:"nicknames,omitempty"`
+	NotApplied      []string       `json:"not_applied,omitempty"`
 	Fields          map[string]any `json:"fields,omitempty"`
-	Body            string         `json:"-"`
+	Body            string         `json:"-"` // Claude 正文 / Codex developer_instructions
 }
 
 // loadAgents 默认 agents/（递归，子目录计入名称）；Claude 清单 agents 替换默认，且只接受 .md 文件。
@@ -39,7 +44,7 @@ func loadAgents(root string, docs []manifestDoc, ds *diagnostics) []AgentFile {
 		}
 		var out []AgentFile
 		for _, f := range markdownFilesUnder(dir, ds) {
-			out = appendAgent(out, f, commandName(dir, f), ds)
+			out = appendAgent(out, f, commandName(dir, f), true, ds)
 		}
 		return out
 	}
@@ -60,13 +65,13 @@ func loadAgents(root string, docs []manifestDoc, ds *diagnostics) []AgentFile {
 				ds.errorf("agent", doc.path, RuleAgentShape, "agents entry %q must be a .md file (directories are not accepted)", rel)
 				continue
 			}
-			out = appendAgent(out, abs, strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)), ds)
+			out = appendAgent(out, abs, strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)), true, ds)
 		}
 	}
 	return out
 }
 
-func appendAgent(out []AgentFile, file, defaultName string, ds *diagnostics) []AgentFile {
+func appendAgent(out []AgentFile, file, defaultName string, inPlugin bool, ds *diagnostics) []AgentFile {
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		ds.errorf("agent", file, RuleAgentParse, "read failed: %v", err)
@@ -80,18 +85,15 @@ func appendAgent(out []AgentFile, file, defaultName string, ds *diagnostics) []A
 	if fields == nil {
 		fields = map[string]any{}
 	}
-	a := AgentFile{File: file, Fields: fields, Body: body}
+	a := AgentFile{Format: AgentFormatClaude, File: file, Fields: fields, Body: body}
 	a.Name, _ = fmString(fields, "name")
 	a.Name = firstNonEmpty(strings.TrimSpace(a.Name), defaultName)
 	a.Description, _ = fmString(fields, "description")
-	a.Model, _ = fmString(fields, "model")
-	a.Tools = fmList(fields, "tools", " ,")
-	a.DisallowedTools = fmList(fields, "disallowedTools", " ,")
-	a.Skills = fmList(fields, "skills", " ,")
 	if !validSkillName(a.Name) {
 		ds.errorf("agent", file, RuleAgentParse, "agent name %q is invalid", a.Name)
 		return out
 	}
+	a.applyClaudeAgentFields(inPlugin, ds)
 	return append(out, a)
 }
 

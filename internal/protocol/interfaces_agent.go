@@ -119,6 +119,8 @@ AgentController interface {
 	// 随 types.HeadlessOptions.Namespace 补齐 AcquireHeadless 路径透传）。
 	// ns 为空表示不共享，与引入本机制前的行为一致。
 	SetMemoryNamespace(ns string)
+	// SetAgentProfile 以子 Agent 角色运行（ADR-0103 决策三）；nil 清除角色。
+	SetAgentProfile(p *types.AgentProfileSpec)
 	SendIntent(trigger types.AgentTrigger) error
 	SurpriseIndex() float64
 	Memory() MemoryFacade

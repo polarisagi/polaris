@@ -136,7 +136,10 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 
 	meta, err := e.registry.Get(ctx, skillID, "")
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: registry.Get", err)
+		return nil, apperr.Wrap(apperr.CodeOf(err), "skill_executor: registry.Get", err)
+	}
+	if meta == nil {
+		return nil, apperr.New(apperr.CodeNotFound, "skill_executor: skill not found: "+skillID)
 	}
 	if meta.Deprecated {
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("skill_executor: skill %s is deprecated", skillID))

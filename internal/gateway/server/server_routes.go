@@ -199,8 +199,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}", s.sysadminHandler.MCP.HandleUpdateMCPServer)
 	mux.HandleFunc("DELETE /v1/mcp-servers/{serverID}", s.sysadminHandler.MCP.HandleDeleteMCPServer)
 
-	// [W-6-E] AgentProfile 接入
-	mux.HandleFunc("GET /v1/admin/profiles", s.sysadminHandler.HandleListAgentProfiles)
 	// [W-6-A] csv_fanout 接入
 	mux.HandleFunc("POST /v1/admin/tasks/csv-fanout", s.sysadminHandler.HandleCSVFanout)
 	mux.HandleFunc("POST /v1/admin/tasks/pipeline", s.sysadminHandler.HandlePipelineRun)
@@ -227,6 +225,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/plugins/{id}/config", s.pluginHandler.HandleGetPluginConfig)
 	mux.HandleFunc("PUT /v1/plugins/{id}/config", s.pluginHandler.HandleUpdatePluginConfig)
 	// hooks.json 来源审阅与信任（安装 ≠ 信任；ADR-0103 决策六）
+	// 子 Agent 定义（插件 agents/ + 项目/用户 agents 目录，Claude .md / Codex .toml；ADR-0103 决策三）
+	mux.HandleFunc("GET /v1/agents", s.pluginHandler.HandleListAgents)
 	mux.HandleFunc("GET /v1/hooks", s.pluginHandler.HandleListHooks)
 	mux.HandleFunc("POST /v1/hooks/trust", s.pluginHandler.HandleTrustHook)
 	mux.HandleFunc("DELETE /v1/hooks/trust", s.pluginHandler.HandleRevokeHookTrust)

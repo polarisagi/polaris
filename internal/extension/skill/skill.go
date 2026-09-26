@@ -61,7 +61,7 @@ func hasCapability(caps []string, required []string) bool {
 
 var (
 	errCosignVerifyFailed = apperr.New(apperr.CodeInternal, "skill: cosign signature verification failed")
-	errSkillNotFound      = apperr.New(apperr.CodeInternal, "skill: not found")
+	errSkillNotFound      = apperr.New(apperr.CodeNotFound, "skill: not found")
 	errInvalidSkillName   = apperr.New(apperr.CodeInternal, "skill: name must start with 'skill:'")
 )
 

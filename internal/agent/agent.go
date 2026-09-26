@@ -75,6 +75,8 @@ type Agent struct {
 	dagValidator      DAGValidator             // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
 	handoffPoster     HandoffPoster            // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
 	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
+	// profileTools 子 Agent 角色的工具限制（SetAgentProfile 写入；执行入口与目录视图读取）。
+	profileTools atomic.Pointer[catalog.ToolRestriction]
 
 	// workspaceCtxLoader / workspaceRoot 工作区标准上下文装载（GD-14-005）。
 	// 任一为空即禁用该能力。信任判定在 loader 内部完成——未在配置中显式声明

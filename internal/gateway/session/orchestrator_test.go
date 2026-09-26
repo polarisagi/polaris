@@ -218,8 +218,9 @@ func (a *fakeAgentController) AgentID() string { return "fake-agent" }
 func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
 	a.intents = append(a.intents, intent.UnsafeContent())
 }
-func (a *fakeAgentController) SetSpawnDepth(depth int)      {}
-func (a *fakeAgentController) SetMemoryNamespace(ns string) {}
+func (a *fakeAgentController) SetSpawnDepth(depth int)                 {}
+func (a *fakeAgentController) SetMemoryNamespace(ns string)            {}
+func (a *fakeAgentController) SetAgentProfile(*types.AgentProfileSpec) {}
 func (a *fakeAgentController) SendIntent(trigger types.AgentTrigger) error {
 	return a.sendErr
 }

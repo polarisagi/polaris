@@ -109,6 +109,7 @@ func (f *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
 }
 func (f *fakeAgentController) SetSpawnDepth(depth int)                         {}
 func (f *fakeAgentController) SetMemoryNamespace(ns string)                    {}
+func (f *fakeAgentController) SetAgentProfile(*types.AgentProfileSpec)         {}
 func (f *fakeAgentController) SurpriseIndex() float64                          { return 0 }
 func (f *fakeAgentController) Memory() protocol.MemoryFacade                   { return nil }
 func (f *fakeAgentController) Interrupt(_ types.InterruptRequest)              {}

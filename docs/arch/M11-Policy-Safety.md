@@ -555,7 +555,7 @@ Layer 4: Agent 间交互规则 (在 §1 三层宪法之上):
 3. **PII 脱敏出境（A6）**：投递前对 `context_summary` 静态不可逆脱敏（`PIIDetector.Redact`，非可逆令牌化）。
 4. **超时（A4）**：`MCPManager.CallTool` 施加 `context.WithTimeout`（默认 600s，`state.yaml §m8_multiagent.mcp_a2a_handoff_timeout_seconds`）。
 5. **网络出口（A7）**：不新增网络客户端，复用 `MCPManager.CallTool` 既有 `SafeHTTP`（SafeDialer）出口。
-6. **可发现性（A2/A5）**：`MCPManager.ListA2AAgents` + 内置工具 `list_a2a_agents` 向 LLM 暴露合法 `mcp:` 目标。
+6. **可发现性（A2/A5）**：`MCPManager.ListA2AAgents` + 内置工具 `list_agents`（2026-09-26 由 `list_a2a_agents` 并入，ADR-0103 决策三补充）向 LLM 暴露合法 `mcp:` 目标。
 7. **执行前二次校验**：`MCPA2AWorker` 认领任务后、发起外部调用前重新比对深度上限（入口 + 执行前两道闸，防配置热更后已入库任务在极端场景越界执行）。
 
 ---

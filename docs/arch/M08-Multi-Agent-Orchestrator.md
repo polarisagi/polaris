@@ -389,41 +389,19 @@ inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所�
 
 ---
 
-## 12. Custom Agent Profile（ADR-0016（Architecture Decision Record，架构决策记录） §2.4）
+## 12. 子 Agent 定义（ADR-0103 决策三补充；原 ADR-0016 §2.4 YAML Profile 已删除）
 
-> End-User 通过 YAML 文件定义专用子 Agent，无需修改源码。
-> 映射到现有 AgentCard 注册到 Blackboard，不引入新执行路径。
+> 2026-09-26 订正：原 `.polaris/agents/*.yaml` + `orchestrator.AgentProfile` 仅被 `GET /v1/admin/profiles` 列出、从未参与执行，且 `agent_handoff:<role>` 的 role 被 `DefaultTaskWorker` 丢弃。现改为两家标准格式并真正按角色执行。
 
-**配置位置**:
-- `~/.polarisagi/polaris/agents/*.yaml` — 用户级
-- `.polaris/agents/*.yaml` — 项目级
+**来源**（`lifecycle.AgentDefinitionProvider`，解析唯一实现 `pluginspec`）:
+- 项目 `<project_root>/.polaris/agents/` > 用户 `<data>/agents/`：Claude `*.md`（frontmatter + 正文）/ Codex `*.toml`（`developer_instructions`）
+- 已启用插件 `agents/*.md` → `<plugin>:<agent>`
 
-**Profile 格式**:
-```yaml
-name: pr_explorer
-description: "只读探索 Agent，用于 PR 代码路径映射"
-instructions: "探索代码，追踪调用链，禁止修改文件"
-model: deepseek-v4         # 可选，空则继承全局配置
-sandbox_tier: 1            # 1=read-only, 2=workspace-write, 3=privileged
-max_depth: 1               # 防递归嵌套（默认 1）
-max_threads: 0             # 0=继承全局 agents.max_threads
-skills: []
-mcp_servers: []
-```
+**执行链**: `transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker.resolveProfile` → `AcquireHeadless(WithAgentProfile)` → `Agent.SetAgentProfile`。`list_agents` 向模型列出目标；`general-purpose` = 无角色；未知名称任务失败并把原因回传委派方。`mcp:` 目标仍由 `MCPA2AWorker` 认领（ADR-0084）。
 
-**max_depth 防递归**:
-- `TaskEntry` 注入 `SpawnDepth int`，子 Agent PostTask 时检查 `SpawnDepth ≥ Profile.MaxDepth`
-- 默认 `max_depth=1`（直接子 Agent 可生成，禁止孙 Agent），全局阈值见 `state.yaml §agents.max_depth`
-- 超深度 → `sqlite_blackboard.go` 返回 `apperr.New(apperr.CodeForbidden, ...)`（无专用 `ErrMaxDepthExceeded` 哨兵错误），冒泡至父 Saga 决策
+**角色边界**（执行入口硬拦截 `Agent.checkProfileTool`）: 工具白/黑名单（Claude 工具名映射）、只读（Codex `read-only` / Claude `plan`）、`maxTurns`→`MaxStepsLimit`、默认禁再委派；指令进 `ZoneMutableSkill`。字段级映射与「解析但不生效」清单见 ADR-0103。
 
-**内置 Agent 类型**（参考 Codex）:
-| 名称 | 用途 | Sandbox |
-|------|------|---------|
-| `default` | 通用 fallback | Sbx-L2 |
-| `worker` | 实现/修复 focused | Sbx-L2 |
-| `explorer` | 只读代码探索 | Sbx-L1 |
-
-用户定义同名 Profile → 覆盖内置。AgentProfile 实现位于 `internal/execute/orchestrator/`。
+**max_depth 防递归**（不变）: `TaskEntry.SpawnDepth` + `sqlite_blackboard.go resolveMaxDepth`，超深度 `CodeForbidden`。
 
 ---
 

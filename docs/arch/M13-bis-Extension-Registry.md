@@ -157,6 +157,8 @@ MCP 连接一律经 `MCPManager.StartFromDB(serverID)`：`mcp_servers` 行是配
 
 `pluginspec.Load` → 清理同一插件上一版本的子组件（停连接、删行）→ 注册技能（`skill:{plugin}__{skill}`，命令同样转为技能）→ 子 MCP 逐个 PolicyGate 授权后写 `mcp_servers`（`plugin_id` FK，保留 `${...}` 原文）→ 写 `plugins`（`manifest` 为归一化快照：诊断、不适用组件、应用绑定、hooks、agents、userConfig）→ `defaultEnabled` 时启动子 MCP。
 
+插件 `agents/` 不单独落表：`lifecycle.AgentDefinitionProvider` 运行期按 `manifest.agents[].file` 重新解析（正文不入库，限定在安装目录内），与项目/用户 agents 目录合并为可委派子 Agent（`GET /v1/agents`；执行链见 M08 §12、ADR-0103 决策三补充）。
+
 **插件生命周期级联**：`mcp_servers.enabled` 是子 MCP 启停的唯一权威：
 - **禁用**：`UPDATE mcp_servers SET enabled=0`，`UPDATE skills SET deprecated=1`，MCPManager.Remove() × N
 - **启用**：`UPDATE mcp_servers SET enabled=1`，`UPDATE skills SET deprecated=0`，StartFromDB() × N

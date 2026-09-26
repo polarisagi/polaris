@@ -362,9 +362,9 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			// 不新增第二条执行路径。TaskID 注入方式与 promptPlan 里 BuildToolListSection
 			// 保持一致（懒加载工具激活作用域需要同一个 TaskID，否则上一轮 search_tools
 			// 激活的工具在本轮 Schemas() 重建时对不上，见 catalog/composite.go）。
-			if a.sm.Current() == types.AgentStatePlan && a.catalog != nil {
+			if cata := a.visibleCatalog(); a.sm.Current() == types.AgentStatePlan && cata != nil {
 				toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
-				if schemas := a.catalog.Schemas(toolCtx, types.TrustCommunity); len(schemas) > 0 {
+				if schemas := cata.Schemas(toolCtx, types.TrustCommunity); len(schemas) > 0 {
 					inferOpts = append(inferOpts, types.WithTools(schemas))
 				}
 			}

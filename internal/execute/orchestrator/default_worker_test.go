@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -266,6 +267,7 @@ type spawnDepthCapturingPool struct {
 	replyOutput    string
 	lastSpawnDepth int
 	lastNamespace  string
+	lastProfile    *types.AgentProfileSpec
 }
 
 func (p *spawnDepthCapturingPool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
@@ -280,6 +282,7 @@ func (p *spawnDepthCapturingPool) AcquireHeadless(ctx context.Context, intent ty
 	p.mu.Lock()
 	p.lastSpawnDepth = opt.SpawnDepth
 	p.lastNamespace = opt.Namespace
+	p.lastProfile = opt.Profile
 	p.mu.Unlock()
 	return &types.AgentResult{Output: p.replyOutput}, nil
 }
@@ -315,4 +318,47 @@ func (b *mockFailTrackingBlackboard) failCalledForTest() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.failCalled
+}
+
+type mapProfileResolver map[string]*types.AgentProfileSpec
+
+func (m mapProfileResolver) ResolveAgentProfile(_ context.Context, name string) (*types.AgentProfileSpec, error) {
+	if p, ok := m[name]; ok {
+		return p, nil
+	}
+	return nil, apperr.New(apperr.CodeNotFound, "unknown agent "+name)
+}
+
+// TestDefaultTaskWorker_ResolvesAgentProfile ADR-0103 决策三：agent_handoff:<name> 以角色执行。
+func TestDefaultTaskWorker_ResolvesAgentProfile(t *testing.T) {
+	bb := &mockBlackboard{tasks: make(map[string]*types.TaskEntry), events: make(chan types.BlackboardEvent, 10)}
+	bb.tasks["task-p-1"] = &types.TaskEntry{ID: "task-p-1", Type: "agent_handoff:review:security", Status: types.TaskPending, Intent: []byte("x")}
+	pool := &spawnDepthCapturingPool{replyOutput: "ok"}
+	spec := &types.AgentProfileSpec{Name: "review:security"}
+	worker := NewDefaultTaskWorker(bb, pool).WithProfileResolver(mapProfileResolver{"review:security": spec})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "task-p-1"}
+	time.Sleep(50 * time.Millisecond)
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if pool.lastProfile != spec {
+		t.Fatalf("profile not passed to AcquireHeadless: %+v", pool.lastProfile)
+	}
+}
+
+func TestDefaultTaskWorker_ResolveProfileRules(t *testing.T) {
+	w := NewDefaultTaskWorker(nil, nil).WithProfileResolver(mapProfileResolver{})
+	for _, typ := range []string{"agent_query", "agent_handoff:general-purpose", "agent_handoff:"} {
+		if p, err := w.resolveProfile(context.Background(), typ); p != nil || err != nil {
+			t.Errorf("%s must run as a general agent: %v %v", typ, p, err)
+		}
+	}
+	if _, err := w.resolveProfile(context.Background(), "agent_handoff:ghost"); !apperr.IsCode(err, apperr.CodeNotFound) {
+		t.Fatalf("unknown agent must fail the task, got %v", err)
+	}
 }

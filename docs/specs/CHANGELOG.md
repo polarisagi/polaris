@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103：子 Agent 定义与委派 — 含**契约变更**）
+
+- **[契约] `protocol.AgentController.SetAgentProfile(*types.AgentProfileSpec)`**、`types.WithAgentProfile`：子 Agent 角色只收窄能力，工具限制在 `Agent.checkProfileTool` 硬拦截；新增 `catalog.NewToolRestriction` / `catalog.Restrict`（Claude 工具名映射）。
+- **[契约] `builtin.RegisterA2ATools` → `RegisterDelegationTools`，`list_a2a_agents` → `list_agents`**；`transfer_to_agent` 注册为内置工具（执行仍由内核特判）。`orchestrator.DefaultTaskWorker.WithProfileResolver`：`agent_handoff:<name>` 按角色执行，未知名称失败。
+- **[删除] `orchestrator.AgentProfile`（YAML）与 `GET /v1/admin/profiles`** → `GET /v1/agents`（Claude `.md` / Codex `.toml` / 插件 agents）。`Blackboard.FailTask` 失败原因写入 `tasks.result`。
+
 ## 2026-09-26（ADR-0103：技能动态注入）
 
 - **[契约] `skill.ScriptSkillExecutor.WithInjector(*skill.SkillInjector)`**：技能正文 `` !`cmd` `` / ` ```! ` 按命令集合哈希审阅信任后在沙箱执行；新增 `pluginspec.FindInjections` / `RenderCommand`（参数 shell 转义）；API `GET /v1/skills/injections`、`POST /v1/skills/injections/trust`。

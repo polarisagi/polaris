@@ -614,6 +614,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 防止 target_agent_role 的 mcp: 委派语义被当作纯文本 headless 查询丢弃。
 	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool,
 		"workflow_step", orchestrator.DebateTaskType, orchestrator.MCPA2AHandoffPrefix)
+	// ADR-0103 决策三：agent_handoff:<name> 按插件/项目/用户子 Agent 定义以角色执行。
+	if tb.AgentDefs != nil {
+		defaultTaskWorker.WithProfileResolver(tb.AgentDefs)
+	}
 
 	// ADR-0084：MCP A2A 出站委派专用 Worker，认领 "agent_handoff:mcp:<server>/<agent>"
 	// 任务，转译为对目标 MCP Server 的 a2a_delegate 工具调用。*mcp.MCPManager 已天然

@@ -48,6 +48,7 @@ func WriteConversationHistory(b *prompt.PromptBuilder, sCtx *StateContext) {
 // （agent/context.BuildRespondContext）与无记忆降级路径共用，两条路径 prompt 同构。
 func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
 	WriteKernelInstruction(b, "kernel/respond.md", "Reply to the user's latest message in natural language.")
+	WriteAgentProfile(b, sCtx)
 	WriteConversationHistory(b, sCtx)
 
 	sCtx.Mu.RLock()

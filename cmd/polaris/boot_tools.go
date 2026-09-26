@@ -64,6 +64,7 @@ type ToolBundle struct {
 	HITLGateway           *hitl.GatewayImpl
 	SysRepo               *repo.SQLiteSystemRepository
 	ExtRepo               *repo.SQLiteExtensionRepository
+	AgentDefs             *lifecycle.AgentDefinitionProvider // 子 Agent 定义（委派解析 / 列表 API）
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
 	HookRunner            *hook.Runner
@@ -347,12 +348,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		}
 	}
 
-	// ADR-0084：list_a2a_agents 让 transfer_to_agent 的 "mcp:<server>/<agent>"
-	// 委派目标第一次拥有真实可发现路径，独立于 mb.Mem 是否可用。
-	if err := builtin.RegisterA2ATools(inProcSandbox, toolReg, &mcpA2AListerAdapter{inner: mcpMgr}); err != nil {
-		slog.Warn("polaris: a2a tool registration failed", "err", err)
-	}
-
 	var nativeCogn native.CognitiveSearcher
 	if sb.SurrealStore != nil {
 		nativeCogn = nativeCognAdapter{s: sb.SurrealStore}
@@ -522,6 +517,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry + InProcessSandbox，
 	// 注册的执行函数委托至 skillExecutor（唯一实现，禁止重复渲染 instructions）。
 	loadSkillsToToolRegistry(ctx, sb.Store.DB(), toolReg, inProcSandbox, skillExecutor)
+	// 子 Agent 定义（ADR-0103 决策三）+ 委派工具 list_agents / transfer_to_agent（ADR-0084）。
+	agentDefs := registerDelegationTools(inProcSandbox, toolReg, extRepo, sb.DataDir, projectRepo, mcpMgr, skillExecutor)
 
 	skillReg := skillRegistry
 	skillCatalog := catalog.NewSkillCatalog(skillReg)
@@ -666,6 +663,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		HITLGateway:           hitlGateway,
 		SysRepo:               sysRepo,
 		ExtRepo:               extRepo,
+		AgentDefs:             agentDefs,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
 		HookRunner:            hookRunner,

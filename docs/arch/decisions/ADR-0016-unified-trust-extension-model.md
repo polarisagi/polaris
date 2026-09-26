@@ -43,3 +43,5 @@ Plugin Catalog 正确位置是 M13（`plugin_catalog.go`），非 M7——修正
 
 > 2026-09-26 追记：决策二「Hook 仅实现 PreToolUse/PostToolUse」「Custom Agent 仅 YAML」与决策三「`apps` 作为 Layer 2 运行时表」由 ADR-0103 修订——
 > App 不再是独立扩展类型（删除 `apps` 表），hooks 扩为两家共同的 `hooks.json` 事件模型，插件 `agents/*.md` 映射为 AgentProfile。
+
+> 2026-09-26 追记（ADR-0103 决策三补充）：§2.4 Custom Agent YAML（`.polaris/agents/*.yaml`、`orchestrator.AgentProfile`）已删除，由 Claude `.md` / Codex `.toml` 双标准子 Agent 定义取代；`SpawnDepth` 防递归保留。原文保持可见。

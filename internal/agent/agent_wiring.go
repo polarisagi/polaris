@@ -285,7 +285,7 @@ func (a *Agent) InjectToolExecutor(te protocol.AgentToolExecutor) { a.toolRegist
 // InjectCatalog 注入工具目录（运行时绑定）。
 func (a *Agent) InjectCatalog(c catalog.Catalog) {
 	a.catalog = c
-	a.sm.SetContextBuilder(&agentContextBuilder{cata: c})
+	a.sm.SetContextBuilder(&agentContextBuilder{cata: a.visibleCatalog})
 }
 
 // InjectMemory 注入记忆系统（运行时绑定，允许测试注入 mock）。

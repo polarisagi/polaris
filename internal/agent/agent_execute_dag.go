@@ -182,6 +182,10 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	// 由 CodeAct.validatePolicyAndEnv 在放行副作用前调用（ADR-0088 决策二）。
 	// 按 ADR-0062 deadcode 纪律删除，避免后续维护者误以为此处已有防护。
 	toolExecFnInner := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+		// 子 Agent 角色的工具限制在全部特判分支之前硬拦截（ADR-0103 决策三）。
+		if err := a.checkProfileTool(toolName, delegateTarget(toolName, args)); err != nil {
+			return nil, err
+		}
 		if toolName == "spawn_planner" {
 			// spawn_planner 特殊处理：不走普通工具执行路径，而是：
 			// 1. 发送 InterruptRequest{Action: InterruptResume}（挂起自身，等待 whisperChan）

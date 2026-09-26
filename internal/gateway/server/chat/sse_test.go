@@ -30,7 +30,8 @@ func (m *mockAgentController) SetTaskIntent(intent taint.TaintedString) {
 
 func (m *mockAgentController) SetSpawnDepth(depth int) {}
 
-func (m *mockAgentController) SetMemoryNamespace(ns string) {}
+func (m *mockAgentController) SetMemoryNamespace(ns string)            {}
+func (m *mockAgentController) SetAgentProfile(*types.AgentProfileSpec) {}
 
 func (m *mockAgentController) SendIntent(trigger types.AgentTrigger) error {
 	m.lastTrigger = trigger

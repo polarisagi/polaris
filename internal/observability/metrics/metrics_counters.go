@@ -30,6 +30,8 @@ func simpleCounters() []counterSpec {
 		{"polaris.agent.schema_validation_failure_total", "LLMFillEffect responses failing SchemaRef validation", &GlobalSchemaValidationFailureTotal},
 		{"polaris.agent.context_overflow_recovery_total", "LLM requests pruned and retried after context overflow", &GlobalContextOverflowRecoveryTotal},
 		{"polaris.agent.skill_cache_hit_total", "Skill cache hits in effect execution", &GlobalSkillCacheHitTotal},
+		{"polaris.agent.subagent_runs_total", "Subagent executions started with an agent profile", &GlobalSubagentRunsTotal},
+		{"polaris.agent.subagent_tool_denied_total", "Tool calls blocked by a subagent profile restriction", &GlobalSubagentToolDeniedTotal},
 		{"polaris.agent.replan_ext_activation_degraded_total", "S_REPLAN extension activation degraded after retries exhausted", &GlobalReplanExtActivationDegradedTotal},
 		{"polaris.orchestrator.checkpoint_write_failures_total", "Debate/StateGraph checkpoint write failures", &GlobalCheckpointWriteFailuresTotal},
 		{"polaris.trace.exporter_errors_total", "SpanExporter.ExportSpan failures", &GlobalTraceExporterErrorsTotal},

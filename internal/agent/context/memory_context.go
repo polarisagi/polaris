@@ -31,6 +31,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 	if err := writePhaseInstruction(b, sCtx, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object."); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext", err)
 	}
+	fsm.WriteAgentProfile(b, sCtx)
 
 	// GD-14-005：用户显式声明信任的工作区约束文档，作为项目级系统指令写入
 	// ZoneImmutable。只有 WorkspaceContextLoader 判定 Trusted 的内容才会到这里
@@ -159,6 +160,7 @@ func BuildPlanContext( //nolint:gocyclo
 	if err := writePhaseInstruction(b, sCtx, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section."); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext", err)
 	}
+	fsm.WriteAgentProfile(b, sCtx)
 
 	if sCtx.TaskModel != nil {
 		taskJSON, _ := json.Marshal(sCtx.TaskModel)

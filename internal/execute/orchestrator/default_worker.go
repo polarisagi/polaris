@@ -49,6 +49,39 @@ type DefaultTaskWorker struct {
 	pool            protocol.AgentPool
 	excludeTypes    map[string]struct{}
 	excludePrefixes []string
+	profiles        AgentProfileResolver
+}
+
+// AgentProfileResolver 子 Agent 名称 → 角色规格（ADR-0103 决策三；调用方定义接口，实现由
+// lifecycle.AgentDefinitionProvider 提供）。未知名称返回 CodeNotFound。
+type AgentProfileResolver interface {
+	ResolveAgentProfile(ctx context.Context, name string) (*types.AgentProfileSpec, error)
+}
+
+// handoffTypePrefix / generalPurposeAgent 委派任务类型前缀与无角色通用目标（Claude 同名内置 agent）。
+const (
+	handoffTypePrefix   = "agent_handoff:"
+	generalPurposeAgent = "general-purpose"
+)
+
+// WithProfileResolver 注入子 Agent 定义解析。未注入时委派任务一律按通用 Agent 执行。
+func (w *DefaultTaskWorker) WithProfileResolver(r AgentProfileResolver) *DefaultTaskWorker {
+	w.profiles = r
+	return w
+}
+
+// resolveProfile agent_handoff:<name> 的角色规格。未知名称使任务失败（Claude：未知 subagent_type
+// 报错）——静默按通用 Agent 执行会让委派方误以为专用角色生效。
+func (w *DefaultTaskWorker) resolveProfile(ctx context.Context, taskType string) (*types.AgentProfileSpec, error) {
+	name, ok := strings.CutPrefix(taskType, handoffTypePrefix)
+	if !ok || w.profiles == nil || name == "" || name == generalPurposeAgent {
+		return nil, nil
+	}
+	p, err := w.profiles.ResolveAgentProfile(ctx, name)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeOf(err), "resolve agent "+name+" (call list_agents for valid targets)", err)
+	}
+	return p, nil
 }
 
 // NewDefaultTaskWorker 构造通用兜底 Worker。excludeTypes 列出已有专用自订阅
@@ -172,12 +205,17 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		// 附加嵌套标记及当前委派的角色
 		ev.IsNested = true
 		ev.ParentTaskID = taskID
-		ev.ChildAgentRole = strings.TrimPrefix(snap.Type, "agent_handoff:")
+		ev.ChildAgentRole = strings.TrimPrefix(snap.Type, handoffTypePrefix)
 		w.bb.PublishTaskEvent(taskID, ev)
 	})
 
+	profile, err := w.resolveProfile(bgCtx, snap.Type)
+	if err != nil {
+		w.failTask(taskID, err.Error())
+		return
+	}
 	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt},
-		types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb)
+		types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb, types.WithAgentProfile(profile))
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())
