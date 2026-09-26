@@ -105,6 +105,7 @@ ADR 被代码引用时，源文件头部加：
 | 0100 | DeepSeek Harness 设计评审：上下文溢出是请求侧故障（容量感知 failover、不计熔断、Agent 确定性修剪一次重试）；执行结果 spill 统一到 read_tool_ref 可取回通道、首尾保留截断 | Accepted | 2026-09-25 |
 | 0101 | Token 消耗治理：Curriculum 受开关门控、记忆蒸馏每回合一次、分阶段思考档位与后台关闭思考、系统提示词稳定层/易变层分消息、工具 schema 只下发一次、llm_calls 逐次记账、日常调用走便宜档模型 | Accepted | 2026-09-25 |
 | 0102 | Token 经济增量（基于 ADR-0101）：零 LLM 寒暄快路 + 短确认精简感知；规划便宜池先行、失败再升级（ThinkingMode 去污点输入，修订 ADR-0020 决策二）；缓存稳定前缀（Anthropic 多断点、SysEnv 去易变量）；回合调用数压缩（Proposed） | Accepted | 2026-09-25 |
+| 0103 | 扩展体系对齐 OpenAI / Anthropic 双标准：技能 / 连接器 / 插件三分类，删除独立 App 类型（Codex 应用 = 插件内连接器绑定）；插件清单三格式归一化（agent-plugins 1.0 / .claude-plugin / .codex-plugin）；hooks 统一 hooks.json 模型且安装≠信任；双市场格式；MCP 2026-07-28（修订 ADR-0016 决策二/三） | Accepted | 2026-09-26 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

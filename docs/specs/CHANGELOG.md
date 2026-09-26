@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103 扩展体系对齐 OpenAI / Anthropic 双标准 — 含**契约变更**）
+
+- **[契约] 删除 `ext_type=app`**：`types.TypeApp`、`types.AppRow`、`protocol.App`、`protocol.AppJSON/AppDef`、`protocol.AIPluginJSON`、`repo.AppRepository`、`ExtensionRepository.UpsertApp/DeleteApp`、`/v1/apps*` 路由、`apps`（028）表一并删除。新代码不得再引入 App 扩展类型；Codex `.app.json` 按「插件内连接器绑定」处理（ADR-0103 决策四，后续阶段落地）。
+- UI「MCP」改称「连接器 / Connectors」，底层 `ext_type` 仍为 `mcp`。
+- 插件/技能/市场/hooks/MCP 协议按 ADR-0103 决策二~八分阶段对齐；新增清单解析只接受 agent-plugins 1.0 / `.claude-plugin` / `.codex-plugin`，不得新增私有格式。
+
 ## 2026-09-25（R7 文件行数改为软/硬双阈值）
 
 - **[阈值] R7 文件行数**：≤ 400 硬上限 → 软 500 / 硬 550。501–550 门控仅告警（`go test -v` 可见），> 550 拦截须拆分（`00-Constitution.md §R7`，`internal/lint/naming_and_size_test.go`）。

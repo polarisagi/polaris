@@ -40,3 +40,6 @@ Plugin Catalog 正确位置是 M13（`plugin_catalog.go`），非 M7——修正
 > 扩张需要频繁人工新增，考虑改为可配置白名单而非硬编码，但离线优先/供应链风险
 > 控制的原则不变；② P3 搁置项（prefix_rule DSL、Permission Profile）若 Cedar
 > 覆盖被证明有真实缺口，重议纳入路线图，而非因"业界流行"直接采纳。
+
+> 2026-09-26 追记：决策二「Hook 仅实现 PreToolUse/PostToolUse」「Custom Agent 仅 YAML」与决策三「`apps` 作为 Layer 2 运行时表」由 ADR-0103 修订——
+> App 不再是独立扩展类型（删除 `apps` 表），hooks 扩为两家共同的 `hooks.json` 事件模型，插件 `agents/*.md` 映射为 AgentProfile。

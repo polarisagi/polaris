@@ -417,14 +417,22 @@ PII 检测与红化（见 11-Policy-Safety, §5.1）。
 - **存储与解密**：SessionPIIVault 加密存储原文，SecureUnredact 仅在审计回放时解密。
 - **用户提示**：用户首次进入处理 PII 数据的场景（如开启 Notion/Gmail Connector）时，系统主动告警 Tier 0 PII 防护范围。
 
-### [Codex-Plugin] (Plugin / Skill / MCP 统一范式)
-参考 OpenAI Codex 官方文档定义的行业标准共识。
+### [Codex-Plugin] (Plugin / Skill / Connector 统一范式)
+参考 OpenAI Codex、Anthropic Claude 插件规范与 agent-plugins.org 1.0 可移植标准（ADR-0103）。
 
-在 Polaris 中，“插件（Plugin）”并非指编译进核心二进制的代码，而是**聚合了 Skill（可复用的认知与 Prompt 工作流）与 App Integration / MCP（外部工具与应用集成）** 的标准能力分发载体（Bundle）。
+在 Polaris 中，“插件（Plugin）”并非指编译进核心二进制的代码，而是**聚合了 Skill（可复用的认知与 Prompt 工作流）、Connector（MCP 外部系统连接）、hooks、agents 以及 Codex 应用绑定** 的标准能力分发载体（Bundle）。清单格式只接受两家标准与 agent-plugins 1.0，不存在 Polaris 私有格式。
 
 Plugin 机制负责统一定义生命周期、依赖和权限声明，而底层具体执行则完全委托给 M7 (MCP Manager) 和 M6 (Skill Registry) 进行物理隔离。
 
-### [App] (富交互前端扩展)
+### [Connector] (连接器)
+Claude 称 Connector、ChatGPT/Codex 称 App：一条到外部产品的 MCP 连接（stdio / Streamable HTTP，含 OAuth 与权限）。底层 `ext_type` 为 `mcp`，UI 称「连接器」。富交互 UI 属于连接器能力（MCP Apps 扩展，`ui://` 资源），不是独立扩展类型。
+
+### [Codex-App-Binding] (Codex 应用绑定)
+Codex 插件 `.app.json` 中的 `apps.<alias>.id`：插件对“平台上已注册连接器”的**引用**，不是连接定义。Polaris 在本地连接器目录中解析该 id，解析不到则为 `unbound` 待用户绑定（ADR-0103 决策四）。不得转换为 `ext_type=mcp` 条目。
+
+### [App] (富交互前端扩展) — 已撤销
+> 2026-09-26 复核：本概念由 ADR-0103 撤销。推翻理由：2026-07 ChatGPT 以 Plugin Directory 取代 App Directory，App 降为插件子组件（连接器）；Claude 无 App 概念；富 UI 已标准化为 MCP Apps 扩展。Polaris 的 `apps` 表仅存 URL、全仓无 Widget 渲染，属空壳。现由 [Connector] 与 [Codex-App-Binding] 承接。原定义保留如下以便追溯：
+
 参考 OpenAI Codex App 与 ChatGPT Apps SDK 概念。
 
 在 Polaris 架构中，App 代表了**独立于单纯后端工具（MCP）和文本技能（Skill）的富交互层**。它为大模型或用户提供独立的 UI Widget（前端组件）、工作流视图或独立的 Web Endpoint。
@@ -432,7 +440,7 @@ Plugin 机制负责统一定义生命周期、依赖和权限声明，而底层�
 与 MCP（纯后端无头服务）不同，App 拥有前端路由与用户状态交互能力，允许深度集成（如工作树、本地环境、自动化任务管理等），能够下发自定义的交互式卡片到聊天流中，甚至包含认证和状态流。App 在架构中有专属的运行时表（`apps`）以管理其独立的权限与路由端点。
 
 ### [Marketplace] (插件与技能应用市场)
-参考 MCP Registry (registry.modelcontextprotocol.io) 与第三方市场生态（如 mcp.so）。Marketplace 是系统发现、安装和分发外部 Plugin、Skill 和 App 的中心枢纽。
+参考 MCP Registry (registry.modelcontextprotocol.io) 与第三方市场生态（如 mcp.so）。Marketplace 是系统发现、安装和分发外部 Plugin、Skill 和 Connector 的中心枢纽（市场格式：`.claude-plugin/marketplace.json` 与 `.agents/plugins/marketplace.json`，ADR-0103 决策七）。
 
 Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而是内置对接开源市场协议。它支持大模型在会话中根据用户意图直接向 Marketplace 检索可用扩展，获取安装与配置指令（如 `npx` 执行参数或下载链接），然后全自动完成配置并注册生效。
 
@@ -625,7 +633,7 @@ Go 内存内统一为 `internal/security/` 的 `TaintLevel` 枚举类型 (int)�
 | `[SurpriseIndex]` | `internal/observability/` (Prometheus Gauge) / `internal/learning/` (M9 完整版推送) |
 | `[KillSwitch]` | `internal/security/` (FSM + 阶段变迁) |
 | `[Taint-Sanitizer]` | `internal/security/` (TaintedString / SafeString / Sanitize) |
-| 各模块 DDL | `internal/protocol/schema/001-039_*.sql`（公权目录 `internal/protocol/schema/`，共 36 个） |
+| 各模块 DDL | `internal/protocol/schema/001-039_*.sql`（公权目录 `internal/protocol/schema/`，共 35 个；025~028 预留） |
 
 ---
 
