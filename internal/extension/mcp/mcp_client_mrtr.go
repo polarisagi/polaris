@@ -37,7 +37,8 @@ type mrtrResult struct {
 // request 发起一次可能触发 MRTR 的客户端请求（仅 methodToolsCall / resources/read /
 // prompts/get 三种受支持，mrtr §Supported Requests）。新纪元下解析 resultType：
 // 收到 "input_required" 时构造 inputResponses 并携带 requestState 原样重试，直到
-// 服务器返回最终结果或轮数耗尽。旧纪元没有 MRTR，一次往返即完成。
+// 服务器返回最终结果或轮数耗尽；收到 "task"（tasks 扩展 SEP-2663）时转入 awaitTask
+// 轮询，其 completed 结果原样作为本函数的返回值。旧纪元没有 MRTR/tasks，一次往返即完成。
 func (c *MCPClient) request(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
 	current := params
 	for round := 0; round < maxMRTRRounds; round++ {
@@ -52,14 +53,24 @@ func (c *MCPClient) request(ctx context.Context, method string, params map[strin
 		if err := json.Unmarshal(result, &probe); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "mcp: parse result envelope", err)
 		}
-		if probe.ResultType != "input_required" {
+		switch probe.ResultType {
+		case "task":
+			// tasks 扩展只对 methodToolsCall 定义了语义（tasks §Supported Requests），
+			// 其余受 MRTR 支持的请求类型规范未覆盖，本客户端不代为猜测。
+			if method != methodToolsCall {
+				return nil, apperr.New(apperr.CodeUnimplemented,
+					fmt.Sprintf("mcp: resultType=task is undefined for method %q (only %s)", method, methodToolsCall))
+			}
+			return c.awaitTask(ctx, result)
+		case "input_required":
+			next, err := c.fulfillInputRequired(ctx, current, probe)
+			if err != nil {
+				return nil, err
+			}
+			current = next
+		default:
 			return result, nil
 		}
-		next, err := c.fulfillInputRequired(ctx, current, probe)
-		if err != nil {
-			return nil, err
-		}
-		current = next
 	}
 	return nil, apperr.New(apperr.CodeResourceExhausted,
 		fmt.Sprintf("mcp: %s exceeded %d MRTR rounds without completing", method, maxMRTRRounds))

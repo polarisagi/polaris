@@ -101,6 +101,9 @@ func (c *MCPClient) protocolVersion() string {
 }
 
 // withMeta 在请求参数中合并新纪元必需的 _meta（版本、客户端身份、与本请求相关的客户端能力）。
+// 新纪元请求额外声明 extensions.tasks（SEP-2663，见 mcp_client_tasks.go）——只在这里合并，
+// 不改 clientCapabilities 本身：clientCapabilities 同时被 initializeLegacy 直接复用于旧纪元
+// initialize，旧纪元的 core tasks 语义与本扩展不同，本任务不实现，不能让旧纪元也声明它。
 func (c *MCPClient) withMeta(params any, protoVersion string) map[string]any {
 	m := map[string]any{}
 	if params != nil {
@@ -120,7 +123,9 @@ func (c *MCPClient) withMeta(params any, protoVersion string) map[string]any {
 	}
 	meta[metaProtocolVersion] = protoVersion
 	meta[metaClientInfo] = map[string]string{"name": "polaris", "version": version.Version}
-	meta[metaClientCapabilities] = c.clientCapabilities()
+	caps := c.clientCapabilities()
+	caps["extensions"] = map[string]any{extensionTasks: map[string]any{}}
+	meta[metaClientCapabilities] = caps
 	m["_meta"] = meta
 	return m
 }
