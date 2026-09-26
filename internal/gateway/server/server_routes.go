@@ -227,6 +227,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 插件 userConfig（ADR-0103 决策三；敏感值加密存储、只回报 is_set）
 	// Codex 应用绑定（ADR-0103 决策四）
 	mux.HandleFunc("GET /v1/plugins/{id}/apps", s.pluginHandler.HandleListPluginApps)
+	mux.HandleFunc("GET /v1/plugins/{id}/dependencies", s.pluginHandler.HandleListPluginDependencies)
 	mux.HandleFunc("PUT /v1/plugins/{id}/apps/{alias}", s.pluginHandler.HandleBindPluginApp)
 	mux.HandleFunc("GET /v1/plugins/{id}/config", s.pluginHandler.HandleGetPluginConfig)
 	mux.HandleFunc("PUT /v1/plugins/{id}/config", s.pluginHandler.HandleUpdatePluginConfig)

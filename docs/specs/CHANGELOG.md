@@ -6,6 +6,10 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-27（ADR-0103：插件依赖加载期检查）
+
+- 新增 `lifecycle.PluginDependencies`（`Check/EnableBlocker/EnforceAll`）与 API `GET /v1/plugins/{id}/dependencies`；启用依赖不满足的插件返回 409；新增依赖 `github.com/Masterminds/semver/v3`。
+
 ## 2026-09-27（ADR-0103：Codex 应用绑定 — 含 **DDL 变更**）
 
 - **[DDL] `021_plugins.sql` 新增 `plugin_app_bindings`**：开发库需删除重建。

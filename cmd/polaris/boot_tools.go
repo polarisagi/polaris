@@ -66,6 +66,7 @@ type ToolBundle struct {
 	ExtRepo               *repo.SQLiteExtensionRepository
 	AgentDefs             *lifecycle.AgentDefinitionProvider // 子 Agent 定义（委派解析 / 列表 API）
 	PluginChannels        *lifecycle.ChannelService          // Claude 插件 channels（入站事件 / 审批转发）
+	PluginDeps            *lifecycle.PluginDependencies      // 插件依赖加载期检查
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
 	HookRunner            *hook.Runner
@@ -296,6 +297,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	mcpMgr.SetRowSource(extRepo, sb.DataDir)
 	// Claude 插件 channels（ADR-0103 决策三）：通知出口须先于任何服务器连接注入，避免丢失早期事件。
 	pluginChannels := lifecycle.NewChannelService(extRepo, mcpMgr)
+	// 插件依赖加载期检查（ADR-0103 决策三）：启动时停用依赖不满足的插件，须在恢复 MCP 连接之前。
+	pluginDeps := lifecycle.NewPluginDependencies(extRepo, mcpMgr)
+	if disabled, err := pluginDeps.EnforceAll(ctx); err != nil {
+		slog.Warn("polaris: plugin dependency enforcement failed", "err", err)
+	} else if len(disabled) > 0 {
+		slog.Warn("polaris: plugins disabled, dependencies not satisfied", "plugins", disabled)
+	}
 	mcpMgr.SetNotificationSink(pluginChannels.HandleNotification)
 	// sb.Vault 为 nil（密钥文件不可用）时敏感 userConfig 拒绝写入，已有密文无法解密→相关服务器拒绝启动。
 	var configCipher lifecycle.CredentialCipher
@@ -673,6 +681,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExtRepo:               extRepo,
 		AgentDefs:             agentDefs,
 		PluginChannels:        pluginChannels,
+		PluginDeps:            pluginDeps,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
 		HookRunner:            hookRunner,

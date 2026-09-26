@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Masterminds/semver/v3 v3.3.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/ebitengine/purego v0.10.1
 	github.com/fsnotify/fsnotify v1.10.1

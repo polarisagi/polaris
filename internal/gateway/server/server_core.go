@@ -388,6 +388,13 @@ func (s *Server) SetSubagentRunner(r chat.SubagentRunner) {
 	}
 }
 
+// SetPluginDependencies 注入插件依赖检查（启用阻断、级联停用、GET /v1/plugins/{id}/dependencies）。
+func (s *Server) SetPluginDependencies(d plugin.PluginDependencyManager) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.Dependencies = d
+	}
+}
+
 // SetPluginChannels 注入 Claude 插件 channels 管理，启用 /v1/plugins/channels。
 func (s *Server) SetPluginChannels(c plugin.PluginChannelManager) {
 	if s.pluginHandler != nil {

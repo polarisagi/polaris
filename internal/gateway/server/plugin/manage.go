@@ -191,6 +191,13 @@ func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Reques
 		newMCPPolicy = string(b)
 	}
 
+	// 依赖不满足不得启用（Claude：依赖缺失/停用/版本不符的插件不加载）。
+	if newEnabled == 1 && currentEnabled == 0 && h.Dependencies != nil {
+		if err := h.Dependencies.EnableBlocker(r.Context(), pluginID); err != nil {
+			httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
+			return
+		}
+	}
 	if err := h.ExtRepo.UpdatePluginStatus(r.Context(), pluginID, newEnabled, newMCPPolicy, now); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
@@ -216,6 +223,14 @@ func (h *PluginHandler) disablePluginComponents(ctx context.Context, pluginID, n
 	}
 	if err := h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 0, now); err != nil {
 		slog.Warn("plugin_manage: disable plugin components failed", "plugin", pluginID, "err", err)
+	}
+	// 依赖本插件的已启用插件级联停用。
+	if h.Dependencies != nil {
+		if disabled, err := h.Dependencies.EnforceAll(ctx); err != nil {
+			slog.Warn("plugin_manage: dependency enforcement failed", "plugin", pluginID, "err", err)
+		} else if len(disabled) > 0 {
+			slog.Warn("plugin_manage: dependents disabled", "plugin", pluginID, "dependents", disabled)
+		}
 	}
 	h.reloadHooks(ctx)
 	h.ClearToolSchemaCache()

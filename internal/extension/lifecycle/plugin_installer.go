@@ -73,21 +73,22 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (InstallR
 	if err := p.resetPreviousComponents(ctx, pluginID); err != nil {
 		return InstallResult{}, err
 	}
-	p.registerSkills(ctx, req, pluginID, plug)
+	enabled := p.effectiveEnabled(ctx, plug)
+	p.registerSkills(ctx, req, pluginID, plug, enabled)
 	var serverIDs []string
 	for _, srv := range plug.MCPServers {
-		if id, ok := p.registerBundleMCP(ctx, req, pluginID, plug, srv); ok {
+		if id, ok := p.registerBundleMCP(ctx, req, pluginID, plug, srv, enabled); ok {
 			serverIDs = append(serverIDs, id)
 		}
 	}
-	if err := p.savePlugin(ctx, req, pluginID, plug); err != nil {
+	if err := p.savePlugin(ctx, req, pluginID, plug, enabled); err != nil {
 		return InstallResult{}, err
 	}
 	// 应用绑定解析失败不阻断安装：绑定是引用元数据，可在 UI 中重新绑定（ADR-0103 决策四）。
 	if err := ResolveAppBindings(ctx, p.extRepo, pluginID, plug.Apps); err != nil {
 		slog.Warn("plugin_installer: resolve app bindings failed", "plugin", plug.Name, "err", err)
 	}
-	if plug.DefaultEnabled {
+	if enabled {
 		p.startServers(serverIDs)
 	}
 	for _, d := range plug.Diagnostics {
@@ -107,12 +108,44 @@ func (p *PluginInstaller) Uninstall(ctx context.Context, req UninstallReq) error
 	if err := p.extRepo.UninstallCleanup(ctx, pluginID, "", string(types.TypePlugin)); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "plugin_installer.Uninstall", err)
 	}
+	// 依赖方随之停用（Claude：依赖缺失的插件不加载）。
+	var stopper ServerStopper
+	if p.mcpConn != nil {
+		stopper = p.mcpConn
+	}
+	if disabled, err := NewPluginDependencies(p.extRepo, stopper).EnforceAll(ctx); err != nil {
+		slog.Warn("plugin_installer: dependency enforcement after uninstall failed", "plugin", pluginID, "err", err)
+	} else if len(disabled) > 0 {
+		slog.Warn("plugin_installer: dependents disabled after uninstall", "plugin", pluginID, "dependents", disabled)
+	}
 	if p.dataDir != "" {
 		if err := os.RemoveAll(PluginDataDir(p.dataDir, pluginID)); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "plugin_installer.Uninstall: remove plugin data", err)
 		}
 	}
 	return nil
+}
+
+// effectiveEnabled defaultEnabled 且依赖全部满足才启用（Claude：依赖不满足时安装完成但插件不加载）；
+// 不满足的依赖记入诊断供 UI 展示。依赖的自动安装随市场来源实现（ADR-0103 决策七）。
+func (p *PluginInstaller) effectiveEnabled(ctx context.Context, plug *pluginspec.Plugin) bool {
+	if !plug.DefaultEnabled || len(plug.Dependencies) == 0 {
+		return plug.DefaultEnabled
+	}
+	idx, err := NewPluginDependencies(p.extRepo, nil).index(ctx)
+	if err != nil {
+		slog.Warn("plugin_installer: dependency check failed, plugin left disabled", "plugin", plug.Name, "err", err)
+		return false
+	}
+	ok := true
+	for _, st := range evaluateDeps(idx, plug.Dependencies) {
+		if st.State != DepOK {
+			ok = false
+			plug.Diagnostics = append(plug.Diagnostics, pluginspec.Diagnostic{Severity: pluginspec.SeverityError,
+				Component: "dependency", Rule: "polaris.dependency." + st.State, Message: st.Message})
+		}
+	}
+	return ok
 }
 
 func (p *PluginInstaller) resetPreviousComponents(ctx context.Context, pluginID string) error {
@@ -133,7 +166,7 @@ func (p *PluginInstaller) resetPreviousComponents(ctx context.Context, pluginID 
 
 // savePlugin 写 plugins 行；manifest 列保存归一化模型快照（含诊断、不适用组件、应用绑定），
 // 供 UI 展示与后续阶段（hooks 信任、用户配置、Agent 映射）读取。
-func (p *PluginInstaller) savePlugin(ctx context.Context, req InstallReq, pluginID string, plug *pluginspec.Plugin) error {
+func (p *PluginInstaller) savePlugin(ctx context.Context, req InstallReq, pluginID string, plug *pluginspec.Plugin, enabled bool) error {
 	snapshot, err := json.Marshal(plug)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "plugin_installer: marshal manifest", err)
@@ -146,7 +179,7 @@ func (p *PluginInstaller) savePlugin(ctx context.Context, req InstallReq, plugin
 	row := types.PluginRow{
 		ID: pluginID, Name: plug.Name, Version: firstNonEmpty(plug.Version, "0.0.0"),
 		DisplayName: firstNonEmpty(plug.DisplayName, plug.Name), Description: plug.Description,
-		Publisher: publisher, Homepage: plug.Homepage, InstallPath: plug.Root, Enabled: plug.DefaultEnabled,
+		Publisher: publisher, Homepage: plug.Homepage, InstallPath: plug.Root, Enabled: enabled,
 		TrustTier: req.TrustTier, CatalogID: req.CatalogID, MCPPolicy: "{}", Manifest: string(snapshot),
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -156,7 +189,7 @@ func (p *PluginInstaller) savePlugin(ctx context.Context, req InstallReq, plugin
 	return nil
 }
 
-func (p *PluginInstaller) registerSkills(ctx context.Context, req InstallReq, pluginID string, plug *pluginspec.Plugin) {
+func (p *PluginInstaller) registerSkills(ctx context.Context, req InstallReq, pluginID string, plug *pluginspec.Plugin, enabled bool) {
 	if p.skillReg == nil {
 		// Tier-0 等未装配 SkillRegistry 的形态：技能不可用须留痕，不能让插件看起来完整安装。
 		if len(plug.Skills) > 0 {
@@ -166,7 +199,7 @@ func (p *PluginInstaller) registerSkills(ctx context.Context, req InstallReq, pl
 	}
 	for _, s := range plug.Skills {
 		meta := skillMetaFromSpec(s, PluginSkillName(plug.Name, s.Name), pluginspec.QualifiedName(plug.Name, s.Name), plug.Version, pluginID, types.TrustTier(req.TrustTier))
-		if !plug.DefaultEnabled {
+		if !enabled {
 			meta.Deprecated = true // 与插件停用级联语义一致：停用插件的技能不对模型可见
 		}
 		if err := p.skillReg.Register(ctx, meta); err != nil {
@@ -178,7 +211,7 @@ func (p *PluginInstaller) registerSkills(ctx context.Context, req InstallReq, pl
 }
 
 // registerBundleMCP 注册插件内嵌的单个子 MCP（先独立授权，拒绝则 skip）。
-func (p *PluginInstaller) registerBundleMCP(ctx context.Context, req InstallReq, pluginID string, plug *pluginspec.Plugin, srv pluginspec.MCPServer) (string, bool) {
+func (p *PluginInstaller) registerBundleMCP(ctx context.Context, req InstallReq, pluginID string, plug *pluginspec.Plugin, srv pluginspec.MCPServer, enabled bool) (string, bool) {
 	serverID := "plugin_" + pluginID + "_" + srv.Name
 	target := firstNonEmpty(srv.Command, srv.URL)
 	if !p.authorizeBundleMCP(ctx, req, serverID, target) {
@@ -187,7 +220,7 @@ func (p *PluginInstaller) registerBundleMCP(ctx context.Context, req InstallReq,
 		return "", false
 	}
 	row := mcpRowFromSpec(srv, mcpRowParams{ID: serverID, Name: scopedServerName(plug.Name, srv.Name),
-		PluginID: pluginID, TrustTier: req.TrustTier, Enabled: plug.DefaultEnabled})
+		PluginID: pluginID, TrustTier: req.TrustTier, Enabled: enabled})
 	if err := p.extRepo.UpsertMCPServer(ctx, row); err != nil {
 		// L2：子 MCP 持久化失败不中断父插件安装（硬约束 3），但不能再启动一个
 		// 重启后无法恢复的进程；留痕并跳过。

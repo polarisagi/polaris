@@ -45,7 +45,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | mcpServers（`.mcp.json`、`mcp.json`、清单内联、`.json` 路径、`.mcpb`/`.dxt` 包） | 两家 + agent-plugins | `mcp_servers`，`plugin_id` FK；类型 `stdio`/`http`/`streamable-http`/`sse`/`ws` |
 | userConfig | Anthropic | `plugin_user_config`；`sensitive=true` 经 `credential.Vault` 加密；提示词中敏感值替换为占位符 |
 | channels | Anthropic | `lifecycle.ChannelService`：插件 MCP 服务器的 `notifications/claude/channel` 事件进入该 channel 专属会话；见「决策三补充：channels」 |
-| dependencies / defaultEnabled | Anthropic | 同市场内解析依赖，安装按拓扑序；启用前校验依赖已启用 |
+| dependencies / defaultEnabled | Anthropic | 同市场内解析依赖，安装按拓扑序；启用前校验依赖已启用；见「决策三补充：dependencies」 |
 | apps（`.app.json`） | OpenAI Codex | 决策四 |
 | interface（Codex）/ displayName | 两家 | `plugins` 展示元数据 |
 | lspServers / outputStyles / themes / monitors / workflows / `bin/` / `settings.json` / `experimental.*` | Anthropic | **解析 + 校验，不激活**，记入 `unsupported_components` 并在 UI 标注「此宿主不适用」（agent-plugins 一致性条款 3：Ignore unsupported component types）。`bin/` 不进入任何 PATH |
@@ -68,6 +68,12 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - **安装 ≠ 启用**：`plugin_channels` 存用户显式开启状态（Claude 同样要求逐会话 `--channels` 开启）；未启用、服务器未连接或未声明能力的事件丢弃。启用后事件经 `session.Orchestrator.RunTurn(Headless)` 进入专属会话 `ch_plugin_<plugin>_<server>`（同一 channel 串行），意图按 TaintHigh；回复由模型调用服务器自身的回复工具完成，宿主不回发最终文本。
 - **审批转发**：须另行开启 `permission_relay` 且服务器声明 `claude/channel/permission`。HITL 等待注册后发 `notifications/claude/channel/permission_request {request_id(5 位 a-z 去 l), tool_name, description, input_preview}`；只接受宿主签发、未过期、且由同一服务器回传的 `notifications/claude/channel/permission {request_id, behavior}`，裁决经 `GatewayImpl.Respond` 进入同一审批守卫，一个裁决作废同一请求的其余转发。`RiskPrivileged` 请求不外发。
 - sender 鉴别由 channel 服务器负责（Claude 规则）；宿主侧边界是启用开关 + 污点 + 审批守卫。
+
+### 决策三补充：dependencies（2026-09-27）
+
+- 加载期语义按 Claude plugin dependencies：依赖须已安装、已启用，且版本满足 npm semver 范围（`^ ~ >= = ||`、连字符；范围不匹配预发布版本，除非范围自带预发布后缀；实现 Masterminds/semver v3）。不满足 → 依赖方不加载：安装完成但置停用并写诊断；启用请求 409；停用/卸载某插件后 `EnforceAll` 迭代到不动点级联停用依赖方（断开其子 MCP）；启动时在恢复 MCP 连接前执行同一检查。
+- `defaultEnabled`：安装后初始启用状态 = `defaultEnabled` ∧ 依赖满足；用户后续显式启停不被升级覆盖（Claude：`enabledPlugins` 写入后跨更新保留）。
+- 依赖的自动安装、按 git tag 解析版本、跨市场白名单 `allowCrossMarketplaceDependenciesOn` 与 prune 依赖市场来源，随决策七实现；在此之前依赖须由用户先行安装（诊断指明缺失项）。
 
 ## 决策四：Codex「应用」= 插件内的连接器绑定，不是扩展类型
 
@@ -158,3 +164,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-26 | 决策五/六补充：`context: fork` 技能、两家内置 agent 类型、SubagentStart/SubagentStop、`agent` 类型 hook（只读子 Agent + hook 抑制）。 |
 | 2026-09-27 | 决策三补充：Claude 插件 channels（事件入会话、`plugin_channels` 显式启用、审批转发）。 |
 | 2026-09-27 | 决策四：应用绑定落地（解析、手动绑定、升级保留）。 |
+| 2026-09-27 | 决策三补充：dependencies 加载期检查（安装停用、启用阻断、级联停用、启动检查）。 |

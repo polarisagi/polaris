@@ -29,6 +29,8 @@ type PluginHandler struct {
 	AgentDefs AgentDefinitionLister
 	// Channels Claude 插件 channels 启用管理（ADR-0103 决策三）。
 	Channels PluginChannelManager
+	// Dependencies 插件依赖加载期检查（启用阻断 / 级联停用）。
+	Dependencies PluginDependencyManager
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
