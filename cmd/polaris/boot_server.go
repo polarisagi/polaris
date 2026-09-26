@@ -275,9 +275,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	))
 	httpServer.SetSkillSigningKey(skillSigningKey)
 	httpServer.SetMCPManager(tb.MCPMgr)
-	if tb.ContainerSandbox != nil {
-		httpServer.SetScriptRunner(tb.ContainerSandbox)
-	}
+	httpServer.SetPluginConfig(tb.PluginConfig)
 	httpServer.SetToolRegistry(tb.ToolReg)
 	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SeedBuiltinConfig(mpData, regData)

@@ -90,3 +90,81 @@ func (r *SQLiteExtensionRepository) GetPluginInstallPath(ctx context.Context, pl
 	}
 	return path, nil
 }
+
+func (r *SQLiteExtensionRepository) GetPluginManifest(ctx context.Context, pluginID string) (string, error) {
+	var manifest string
+	err := r.db.QueryRowContext(ctx, "SELECT manifest FROM plugins WHERE id=?", pluginID).Scan(&manifest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", apperr.New(apperr.CodeNotFound, "plugin not found: "+pluginID)
+	}
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.GetPluginManifest", err)
+	}
+	return manifest, nil
+}
+
+func (r *SQLiteExtensionRepository) DeletePluginComponents(ctx context.Context, pluginID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.DeletePluginComponents", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, q := range []string{`DELETE FROM mcp_servers WHERE plugin_id=?`, `DELETE FROM skills WHERE plugin_id=?`} {
+		if _, err := tx.ExecContext(ctx, q, pluginID); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.DeletePluginComponents", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.DeletePluginComponents: commit", err)
+	}
+	return nil
+}
+
+func (r *SQLiteExtensionRepository) ListPluginUserConfig(ctx context.Context, pluginID string) ([]types.PluginUserConfigRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT plugin_id, scope, key, value, sensitive FROM plugin_user_config WHERE plugin_id=? ORDER BY scope, key", pluginID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginUserConfig", err)
+	}
+	defer rows.Close()
+	var out []types.PluginUserConfigRow
+	for rows.Next() {
+		var row types.PluginUserConfigRow
+		var sensitive int
+		if err := rows.Scan(&row.PluginID, &row.Scope, &row.Key, &row.Value, &sensitive); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginUserConfig scan", err)
+		}
+		row.Sensitive = sensitive == 1
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginUserConfig: rows", err)
+	}
+	return out, nil
+}
+
+func (r *SQLiteExtensionRepository) SavePluginUserConfig(ctx context.Context, pluginID string, cfg []types.PluginUserConfigRow) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SavePluginUserConfig", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, "DELETE FROM plugin_user_config WHERE plugin_id=?", pluginID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SavePluginUserConfig: delete", err)
+	}
+	for _, row := range cfg {
+		sensitive := 0
+		if row.Sensitive {
+			sensitive = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO plugin_user_config(plugin_id, scope, key, value, sensitive) VALUES(?,?,?,?,?)",
+			pluginID, row.Scope, row.Key, row.Value, sensitive); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SavePluginUserConfig: insert", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SavePluginUserConfig: commit", err)
+	}
+	return nil
+}

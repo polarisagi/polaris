@@ -46,3 +46,21 @@ CREATE TABLE IF NOT EXISTS plugins (
 CREATE INDEX IF NOT EXISTS idx_plugins_enabled ON plugins(enabled);
 CREATE INDEX IF NOT EXISTS idx_plugins_catalog ON plugins(catalog_id) WHERE catalog_id != '';
 CREATE INDEX IF NOT EXISTS idx_plugins_trust   ON plugins(trust_tier);
+
+-- ============================================================================
+-- plugin_user_config: 插件 userConfig 取值（Claude plugin.json userConfig / channels[].userConfig，
+-- 以及 .mcpb 包 user_config；ADR-0103 决策三）
+-- ============================================================================
+-- scope: '' = 插件级选项；非空 = 所属 channel 绑定的 MCP 服务器名（channel 级选项只作用于该服务器）。
+-- sensitive=1 的 value 为 credential.Vault 密文，禁止明文落盘；明文只在启动 MCP / 执行 hook 时解密。
+-- 选项定义（类型/必填/默认值）的权威源是 plugins.manifest 快照，本表只存用户填写的值。
+-- 插件卸载时随 plugins 行一并删除（UninstallCleanup）。
+CREATE TABLE IF NOT EXISTS plugin_user_config (
+    plugin_id   TEXT    NOT NULL,
+    scope       TEXT    NOT NULL DEFAULT '',
+    key         TEXT    NOT NULL,
+    value       TEXT    NOT NULL DEFAULT '',   -- JSON 编码的值（字符串/数字/布尔/字符串数组）；sensitive 时为密文
+    sensitive   INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (plugin_id, scope, key)
+);

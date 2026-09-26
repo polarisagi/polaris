@@ -91,7 +91,6 @@ type Server struct {
 	dataDir        string                                                                         // 项目统一的数据根目录
 	installMgr     ExtensionInstaller                                                             // 扩展安装/卸载管理器（接口）
 	pluginCreator  plugin.PluginGenerator                                                         // LLM 驱动 MCP 插件自动生成（M2 PluginCreator，消费端接口）
-	scriptRunner   plugin.HookRunner                                                              // install hook 沙箱执行器（ContainerSandbox.RunScript）
 	skillSignKey   []byte
 
 	ks *security.KillSwitch // [B1] KillSwitch
@@ -285,13 +284,6 @@ func (s *Server) SetKillSwitch(ks *security.KillSwitch) {
 	}
 }
 
-func (s *Server) SetScriptRunner(r plugin.HookRunner) {
-	s.scriptRunner = r
-	if s.pluginHandler != nil {
-		s.pluginHandler.ScriptRunner = r
-	}
-}
-
 func (s *Server) SetSkillSigningKey(k []byte) {
 	s.skillSignKey = k
 	if s.sysadminHandler != nil {
@@ -362,6 +354,13 @@ func (s *Server) SetCatalog(c catalog.Catalog) {
 	s.catalog = c
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Catalog = c
+	}
+}
+
+// SetPluginConfig 注入插件 userConfig 服务（NewServer 之后、Start 之前调用）。
+func (s *Server) SetPluginConfig(svc plugin.PluginConfigManager) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.PluginConfig = svc
 	}
 }
 

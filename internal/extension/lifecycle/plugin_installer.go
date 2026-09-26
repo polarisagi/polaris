@@ -100,6 +100,9 @@ func (p *PluginInstaller) Uninstall(ctx context.Context, req UninstallReq) error
 	if err := p.resetPreviousComponents(ctx, pluginID); err != nil {
 		return apperr.Wrap(apperr.CodeOf(err), "plugin_installer.Uninstall", err)
 	}
+	if err := p.extRepo.UninstallCleanup(ctx, pluginID, "", string(types.TypePlugin)); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "plugin_installer.Uninstall", err)
+	}
 	if p.dataDir != "" {
 		if err := os.RemoveAll(PluginDataDir(p.dataDir, pluginID)); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "plugin_installer.Uninstall: remove plugin data", err)
@@ -118,7 +121,7 @@ func (p *PluginInstaller) resetPreviousComponents(ctx context.Context, pluginID 
 			p.mcpConn.Remove(s.ID)
 		}
 	}
-	if err := p.extRepo.UninstallCleanup(ctx, pluginID, "", string(types.TypePlugin)); err != nil {
+	if err := p.extRepo.DeletePluginComponents(ctx, pluginID); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "plugin_installer: reset components", err)
 	}
 	return nil

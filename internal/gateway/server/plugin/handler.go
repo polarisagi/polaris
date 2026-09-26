@@ -20,16 +20,11 @@ type PluginHandler struct {
 	// StartMCPServer 按 mcp_servers 行 ID 启动连接（MCPManager.StartFromDB），行是配置权威源。
 	StartMCPServer func(ctx context.Context, serverID string) error
 	SkillReg       protocol.SkillRegistry
-	ScriptRunner   HookRunner
 	PluginCreator  PluginGenerator
+	PluginConfig   PluginConfigManager
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
-}
-
-// HookRunner 在受限环境下执行插件 hook 脚本
-type HookRunner interface {
-	RunHook(ctx context.Context, hookPath, workDir string) error
 }
 
 type Dependencies struct {
@@ -43,7 +38,6 @@ type Dependencies struct {
 	DataDir              string
 	StartMCPServer       func(ctx context.Context, serverID string) error
 	SkillReg             protocol.SkillRegistry
-	ScriptRunner         HookRunner
 	PluginCreator        PluginGenerator
 }
 
@@ -63,7 +57,6 @@ func NewPluginHandler(deps Dependencies) *PluginHandler {
 		DataDir:              deps.DataDir,
 		StartMCPServer:       deps.StartMCPServer,
 		SkillReg:             deps.SkillReg,
-		ScriptRunner:         deps.ScriptRunner,
 		PluginCreator:        deps.PluginCreator,
 	}
 }

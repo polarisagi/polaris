@@ -163,6 +163,18 @@ MCPServerRow struct {
 
 type
 
+// PluginUserConfigRow 对应 plugin_user_config 表一行（021）。Value 为 JSON 编码值；
+// Sensitive 时 Value 是 credential.Vault 密文。
+PluginUserConfigRow struct {
+	PluginID  string
+	Scope     string // '' 插件级；非空为 channel 绑定的 MCP 服务器名
+	Key       string
+	Value     string
+	Sensitive bool
+}
+
+type
+
 // PluginRow 对应 plugins 表一行（021）。Manifest 为 pluginspec 归一化模型快照（含诊断）。
 PluginRow struct {
 	ID          string

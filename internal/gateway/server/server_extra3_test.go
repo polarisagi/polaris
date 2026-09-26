@@ -15,7 +15,7 @@ func TestServerBuilderMethods(t *testing.T) {
 func TestServerSetters(t *testing.T) {
 	defer func() { recover() }()
 	s := &Server{}
-	s.SetScriptRunner(nil)
+	s.SetPluginConfig(nil)
 	s.SetSkillSigningKey(nil)
 	s.SetUpdater(nil)
 	s.SetMCPManager(nil)

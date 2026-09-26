@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103：插件 userConfig — 含 **DDL 变更**）
+
+- **[DDL] `021_plugins.sql` 新增 `plugin_user_config`**：开发库需删除重建。敏感值只以 Vault 密文落库。
+- **[契约] `mcp.PluginVarsResolver.ResolvePluginVars(ctx, pluginID, serverID)`**（新增 serverID 定位 channel 作用域）；`ExtensionRepository` 新增 `GetPluginManifest` / `DeletePluginComponents` / `ListPluginUserConfig` / `SavePluginUserConfig`。升级重装只删子组件（保留用户配置），卸载才删 plugins 行与配置。
+- 新增 API：`GET/PUT /v1/plugins/{id}/config`；删除插件私有 install 钩子执行器（`Server.SetScriptRunner`）。
+
 ## 2026-09-26（ADR-0103 第二阶段：统一插件/技能/连接器安装路径 — 含**契约变更**与 **DDL 变更**）
 
 - **[DDL] `015_mcp_servers.sql` 新增 `headers`**（上线前直接改原文件）：开发库需删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。

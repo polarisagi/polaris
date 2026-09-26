@@ -16,7 +16,7 @@ import (
 // PluginVarsResolver 解析插件组件运行期变量（插件根、数据目录、userConfig）。
 // consumer-side 定义；实现在 lifecycle（读 plugins 表与用户配置存储）。
 type PluginVarsResolver interface {
-	ResolvePluginVars(ctx context.Context, pluginID string) (pluginspec.Vars, error)
+	ResolvePluginVars(ctx context.Context, pluginID, serverID string) (pluginspec.Vars, error)
 }
 
 // SetRowSource 注入 mcp_servers 读取源与数据根目录。StartFromDB 与 RestoreServersFromDB
@@ -103,7 +103,7 @@ func (m *MCPManager) ConfigFromRow(ctx context.Context, row types.MCPServerRow) 
 	if resolver == nil {
 		return cfg, apperr.New(apperr.CodeInternal, "mcp_manager: plugin vars resolver not configured")
 	}
-	vars, err := resolver.ResolvePluginVars(ctx, row.PluginID)
+	vars, err := resolver.ResolvePluginVars(ctx, row.PluginID, row.ID)
 	if err != nil {
 		return cfg, apperr.Wrap(apperr.CodeOf(err), "mcp_manager.ConfigFromRow", err)
 	}

@@ -218,6 +218,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/plugins/{id}", s.pluginHandler.HandleUpdatePlugin)
 	mux.HandleFunc("POST /v1/plugins/{id}/mcp/{serverName}/toggle", s.pluginHandler.HandleTogglePluginMCP)
 	mux.HandleFunc("POST /v1/plugins/{id}/upgrade", s.pluginHandler.HandleUpgradePlugin)
+	// 插件 userConfig（ADR-0103 决策三；敏感值加密存储、只回报 is_set）
+	mux.HandleFunc("GET /v1/plugins/{id}/config", s.pluginHandler.HandleGetPluginConfig)
+	mux.HandleFunc("PUT /v1/plugins/{id}/config", s.pluginHandler.HandleUpdatePluginConfig)
 
 	// 插件市场 API
 	mux.HandleFunc("GET /v1/plugins/marketplaces", s.pluginHandler.HandleListMarketplaces)

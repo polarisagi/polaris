@@ -163,6 +163,10 @@ PATCH  /v1/plugins/{id}/mcp/{name}     切换子 MCP（操作 mcp_servers.enable
 DELETE /v1/mcp-servers/{plugin_xxx}    返回 405——插件 MCP 须通过插件管理接口操作
 ```
 
+### 5.3.2 插件 userConfig
+
+选项定义来自清单（Claude `userConfig`、`channels[].userConfig`、`.mcpb` 的 `user_config`），权威源是 `plugins.manifest` 快照；取值存 `plugin_user_config`（021，`scope` 区分插件级与 channel 服务器级）。`sensitive` 值经 `credential.Vault` 加密落库，API（`GET/PUT /v1/plugins/{id}/config`）只回报 `is_set`；Vault 不可用时拒绝写入敏感值。`MCPManager.ConfigFromRow` 经 `PluginVarsResolver` 展开 `${user_config.*}`（channel 级同名覆盖插件级，默认值兜底），必填项缺失则拒绝启动该服务器并返回缺失键名。保存配置后自动重启该插件已启用的子 MCP。
+
 ### 5.4 Automation
 
 1. **Cedar Gate 验证**

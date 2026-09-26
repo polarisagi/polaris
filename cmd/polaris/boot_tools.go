@@ -66,6 +66,7 @@ type ToolBundle struct {
 	ExtRepo               *repo.SQLiteExtensionRepository
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
+	PluginConfig          *lifecycle.PluginConfigService
 	SkillRegistry         protocol.SkillRegistry
 	SkillExecutor         protocol.SkillExecutor // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
 	ConsolidationPipeline *consolidation.ConsolidationPipeline
@@ -293,7 +294,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// mcp_servers 行是连接配置权威源；插件 MCP 的 ${PLUGIN_ROOT} / ${user_config.*} 在每次启动时
 	// 由解析器展开（ADR-0103 决策二）。两者须在任何 StartFromDB / RestoreServersFromDB 之前注入。
 	mcpMgr.SetRowSource(extRepo, sb.DataDir)
-	mcpMgr.SetPluginVarsResolver(lifecycle.NewPluginVarsResolver(extRepo, sb.DataDir))
+	// sb.Vault 为 nil（密钥文件不可用）时敏感 userConfig 拒绝写入，已有密文无法解密→相关服务器拒绝启动。
+	var configCipher lifecycle.CredentialCipher
+	if sb.Vault != nil {
+		configCipher = sb.Vault
+	}
+	pluginConfig := lifecycle.NewPluginConfigService(extRepo, configCipher)
+	mcpMgr.SetPluginVarsResolver(lifecycle.NewPluginVarsResolver(extRepo, sb.DataDir, pluginConfig))
 
 	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap, sb.Outbox)
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
@@ -644,6 +651,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExtRepo:               extRepo,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
+		PluginConfig:          pluginConfig,
 		SkillRegistry:         skillReg,
 		SkillExecutor:         skillExecutor,
 		ConsolidationPipeline: consolidationPipeline,

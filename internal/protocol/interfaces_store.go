@@ -199,6 +199,13 @@ ExtensionRepository interface {
 	UpsertPlugin(ctx context.Context, row types.PluginRow) error
 	// GetPluginInstallPath 返回插件安装根（插件变量 ${PLUGIN_ROOT} 的权威源）；不存在返回 CodeNotFound。
 	GetPluginInstallPath(ctx context.Context, pluginID string) (string, error)
+	// GetPluginManifest 返回 plugins.manifest（pluginspec 归一化快照 JSON）；不存在返回 CodeNotFound。
+	GetPluginManifest(ctx context.Context, pluginID string) (string, error)
+	// DeletePluginComponents 删除插件子组件行（mcp_servers / skills），保留 plugins 行与用户配置（升级重装用）。
+	DeletePluginComponents(ctx context.Context, pluginID string) error
+	ListPluginUserConfig(ctx context.Context, pluginID string) ([]types.PluginUserConfigRow, error)
+	// SavePluginUserConfig 以给定集合整体替换该插件的用户配置（事务内先删后写）。
+	SavePluginUserConfig(ctx context.Context, pluginID string, rows []types.PluginUserConfigRow) error
 	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
 	SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error
 	UpdatePluginMCPServerEnabled(ctx context.Context, pluginID, serverID string, enabled int, now string) error
