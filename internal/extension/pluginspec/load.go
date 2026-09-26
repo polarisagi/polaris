@@ -49,6 +49,8 @@ type LoadOptions struct {
 	FallbackName string
 	// RemoteBundles 安装层已下载的远程 MCP 包（https URL → 本地 .mcpb 路径），见 ListRemoteBundles。
 	RemoteBundles map[string]string
+	// Entry 从市场安装时的条目：与插件自身清单按 strict 规则组合（见 applyMarketplaceEntry）。
+	Entry *MarketplaceEntry
 }
 
 // ErrNotAPlugin 目录既无任何清单也无任何默认布局组件。
@@ -64,7 +66,10 @@ func Load(root string, opts LoadOptions) (*Plugin, error) {
 		return nil, apperr.Wrap(apperr.CodeInvalidInput, "pluginspec.Load", err)
 	}
 	var ds diagnostics
-	docs := readManifests(abs, &ds)
+	docs, err := applyMarketplaceEntry(readManifests(abs, &ds), opts.Entry, &ds)
+	if err != nil {
+		return nil, err
+	}
 	p := &Plugin{Root: abs, DefaultEnabled: true}
 	for _, d := range docs {
 		p.Formats = append(p.Formats, d.format)
@@ -79,6 +84,7 @@ func Load(root string, opts LoadOptions) (*Plugin, error) {
 		ds.warnf("manifest", abs, RuleManifestName, "name %q should be 1-64 lowercase letters/digits separated by '-' or '.'", p.Name)
 	}
 	loadComponents(p, docs, opts, &ds)
+	applyEntryDisplay(p, opts.Entry)
 	p.Diagnostics = ds
 	if len(docs) == 0 && p.isEmpty() {
 		return nil, apperr.Wrap(apperr.CodeInvalidInput, "pluginspec.Load: "+abs, ErrNotAPlugin)

@@ -155,7 +155,7 @@ func loadHooks(root string, docs []manifestDoc, ds *diagnostics) []HookSource {
 			}
 		}
 	}
-	return out
+	return replaceEntryHookEvents(out)
 }
 
 func appendHookFile(out []HookSource, file string, seen map[string]bool, ds *diagnostics) []HookSource {
@@ -198,7 +198,12 @@ func decodeHookEvents(raw []byte, source string, ds *diagnostics) (HookSource, b
 			return HookSource{}, false
 		}
 	}
-	canon, _ := json.Marshal(events) // map 键有序编码，哈希与声明顺序无关
+	return HookSource{Source: source, Events: events, Digest: hookDigest(events)}, true
+}
+
+// hookDigest map 键有序编码，哈希与声明顺序无关。
+func hookDigest(events map[string]json.RawMessage) string {
+	canon, _ := json.Marshal(events) //nolint:errchkjson // RawMessage 映射编码不会失败
 	sum := sha256.Sum256(canon)
-	return HookSource{Source: source, Events: events, Digest: hex.EncodeToString(sum[:])}, true
+	return hex.EncodeToString(sum[:])
 }
