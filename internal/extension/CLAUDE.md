@@ -23,7 +23,11 @@
   使用——全部真实调用点均直接走本文件，与本文档§硬约束1、`M13-bis-Extension-Registry.md §6`
   描述一致——已删除，AI 查代码请以此为准，不要再找 bus/facade）
 - [标杆] `native/extension_manager.go`: 原生工具 (InstallExtensionFn)
-- [参照] `marketplace/adapter.go`: 多厂商清单解析 (OpenAI/Anthropic/Google→RegistryEntry)；
+- [**唯一解析器**] `pluginspec/`: 插件（agent-plugins 1.0 / .claude-plugin / .codex-plugin）、技能（agentskills.io
+  + 两家扩展）、MCP 配置的唯一解析实现（ADR-0103 决策二）；安装器与 gateway 不得另写清单解析。
+- [**安装器**] `lifecycle/{plugin,skill,mcp}_installer.go`: 经 `Manager.CompleteInstall` → `InstallFSM` 分发；
+  MCP 连接一律 `MCPManager.StartFromDB`（行是配置权威源）。
+- [待改造] `marketplace/adapter.go`: 市场同步爬虫的旧清单解析（随 ADR-0103 决策七改造移除）；
   mcp.json 解析 (loadMCPConfig/parseFlatMCPConfig) 亦收敛于此（2026-07-13 deadcode 复核：
   原 `marketplace/loader.go` 的 SKILL.md 解析/Registry 内存注册表/GetPlugin Codex 插件树
   确认零生产调用点已删除——native 格式 Skill 由 `skill/skill_creator.go` 直接构造

@@ -12,11 +12,14 @@
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id          TEXT    PRIMARY KEY,
     name        TEXT    NOT NULL,
-    transport   TEXT    NOT NULL DEFAULT 'stdio',  -- 'stdio' | 'sse' | 'streamable_http'
+    transport   TEXT    NOT NULL DEFAULT 'stdio',  -- 'stdio' | 'sse' | 'streamable_http' | 'ws'
     command     TEXT    NOT NULL DEFAULT '',        -- stdio: 可执行命令
     args        TEXT    NOT NULL DEFAULT '[]',      -- stdio: JSON array
     env         TEXT    NOT NULL DEFAULT '{}',      -- stdio: JSON object
     url         TEXT    NOT NULL DEFAULT '',        -- sse / streamable_http 端点
+    -- 远程传输请求头（JSON object）。插件 MCP 保留 ${user_config.*} 等占位原文，启动时展开
+    -- （ADR-0103 决策二）；不在此落明文凭据——敏感 userConfig 值存于 credential.Vault。
+    headers     TEXT    NOT NULL DEFAULT '{}',
     enabled     INTEGER NOT NULL DEFAULT 1,
     timeout     INTEGER NOT NULL DEFAULT 30,        -- 单次请求超时（秒）
     trust_tier  INTEGER NOT NULL DEFAULT 2,         -- 0-4，见上方说明
@@ -24,7 +27,7 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     -- 来自插件 bundle 的 MCP 标注其所属插件 ID（plugins.id = "pl_xxx"）；独立安装时为空。
     -- 插件卸载时级联删除，插件禁用/启用时级联 enabled 同步。
     plugin_id   TEXT    NOT NULL DEFAULT '',
-    -- stdio 进程工作目录；插件 MCP 设为 install_path，独立 MCP 留空（继承父进程 cwd）。
+    -- stdio 进程工作目录；插件 MCP 存声明的 cwd 原文（空=插件根），独立 MCP 留空（继承父进程 cwd）。
     work_dir         TEXT    NOT NULL DEFAULT '',
     -- 服务器主动声明需要网络访问（TrustTier<=2 默认断网，声明后可由用户审批放行）。
     -- 0=不需要（默认）；1=需要（待审批或已审批由 preferences 表 mcp.net.approved.<id> 决定）。

@@ -2,8 +2,11 @@ package repo
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ============================================================================
@@ -61,12 +64,29 @@ func (r *SQLiteExtensionRepository) UpdatePluginMCPServerEnabled(ctx context.Con
 	return nil
 }
 
-func (r *SQLiteExtensionRepository) UpsertPlugin(ctx context.Context, id, name, version, displayName, description, publisher, homepage, installPath string, enabled, trustTier int, catalogID, mcpPolicy, manifest, createdAt, updatedAt string) error {
+func (r *SQLiteExtensionRepository) UpsertPlugin(ctx context.Context, row types.PluginRow) error {
+	enabled := 0
+	if row.Enabled {
+		enabled = 1
+	}
 	_, err := r.db.ExecContext(ctx,
 		"INSERT INTO plugins(id, name, version, display_name, description, publisher, homepage, install_path, enabled, trust_tier, catalog_id, mcp_policy, manifest, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, version=excluded.version, display_name=excluded.display_name, description=excluded.description, publisher=excluded.publisher, homepage=excluded.homepage, install_path=excluded.install_path, enabled=excluded.enabled, trust_tier=excluded.trust_tier, catalog_id=excluded.catalog_id, mcp_policy=excluded.mcp_policy, manifest=excluded.manifest, updated_at=excluded.updated_at",
-		id, name, version, displayName, description, publisher, homepage, installPath, enabled, trustTier, catalogID, mcpPolicy, manifest, createdAt, updatedAt)
+		row.ID, row.Name, row.Version, row.DisplayName, row.Description, row.Publisher, row.Homepage, row.InstallPath,
+		enabled, row.TrustTier, row.CatalogID, row.MCPPolicy, row.Manifest, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "error", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpsertPlugin", err)
 	}
 	return nil
+}
+
+func (r *SQLiteExtensionRepository) GetPluginInstallPath(ctx context.Context, pluginID string) (string, error) {
+	var path string
+	err := r.db.QueryRowContext(ctx, "SELECT install_path FROM plugins WHERE id=?", pluginID).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", apperr.New(apperr.CodeNotFound, "plugin not found: "+pluginID)
+	}
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.GetPluginInstallPath", err)
+	}
+	return path, nil
 }

@@ -148,12 +148,11 @@ type mockFSMInstaller struct {
 }
 
 func (m *mockFSMInstaller) ExtType() types.ExtType { return m.extType }
-func (m *mockFSMInstaller) Install(ctx context.Context, req lifecycle.InstallReq) (string, error) {
-	_ = m.extRepo.UpdateInstanceStatus(ctx, req.InstID, "installed", "")
+func (m *mockFSMInstaller) Install(ctx context.Context, req lifecycle.InstallReq) (lifecycle.InstallResult, error) {
 	if req.LocalPath != "" {
-		return req.LocalPath, nil
+		return lifecycle.InstallResult{Dir: req.LocalPath, RuntimeID: "rt_" + req.InstID}, nil
 	}
-	return "/test/dir", nil
+	return lifecycle.InstallResult{Dir: "/test/dir"}, nil
 }
 func (m *mockFSMInstaller) Uninstall(ctx context.Context, req lifecycle.UninstallReq) error {
 	return nil

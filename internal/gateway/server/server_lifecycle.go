@@ -201,7 +201,13 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		HITLGateway:          hitlGateway,
 		DataDir:              dataDir,
 		ClearToolSchemaCache: s.sysadminHandler.ClearToolSchemaCache,
-		StartMCPServer:       s.sysadminHandler.MCP.StartMCPServerCtx,
+		// mcpMgr 在 NewServer 之后经 SetMCPManager 注入：闭包按调用时刻读取。
+		StartMCPServer: func(ctx context.Context, serverID string) error {
+			if s.mcpMgr == nil {
+				return apperr.New(apperr.CodeInternal, "mcp manager not initialized")
+			}
+			return s.mcpMgr.StartFromDB(ctx, serverID)
+		},
 	})
 	mux := http.NewServeMux()
 

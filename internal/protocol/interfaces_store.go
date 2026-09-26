@@ -176,6 +176,7 @@ ExtensionRepository interface {
 	GetInstance(ctx context.Context, id string) (*types.ExtInstanceRow, error)
 	UpdateInstanceStatus(ctx context.Context, id, status, errorMsg string) error
 	UpdateInstanceInstallPath(ctx context.Context, id, installPath string) error
+	UpdateInstanceRuntimeID(ctx context.Context, id, runtimeID string) error
 	UpdateInstanceInstalledVersion(ctx context.Context, id, version string) error
 	ListInstances(ctx context.Context) ([]types.ExtInstanceRow, error)
 	DeleteInstance(ctx context.Context, id string) error
@@ -195,7 +196,9 @@ ExtensionRepository interface {
 	SeedCatalogEntry(ctx context.Context, row types.ExtCatalogRow) error
 
 	// plugins
-	UpsertPlugin(ctx context.Context, id, name, version, displayName, description, publisher, homepage, installPath string, enabled, trustTier int, catalogID, mcpPolicy, manifest, createdAt, updatedAt string) error
+	UpsertPlugin(ctx context.Context, row types.PluginRow) error
+	// GetPluginInstallPath 返回插件安装根（插件变量 ${PLUGIN_ROOT} 的权威源）；不存在返回 CodeNotFound。
+	GetPluginInstallPath(ctx context.Context, pluginID string) (string, error)
 	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
 	SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error
 	UpdatePluginMCPServerEnabled(ctx context.Context, pluginID, serverID string, enabled int, now string) error

@@ -19,11 +19,12 @@ import (
 // ─── SSE transport ────────────────────────────────────────────────────────────
 
 func (c *MCPClient) connectSSE(ctx context.Context) error {
-	sseURL := strings.TrimRight(c.cfg.URL, "/") + "/sse"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sseURL, nil)
+	// 两家标准中 sse 类型的 url 即 SSE 端点本身，不得再拼接 "/sse"（ADR-0103 决策八）。
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.URL, nil)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MCPClient.connectSSE", err)
 	}
+	c.setConfiguredHeaders(req)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 

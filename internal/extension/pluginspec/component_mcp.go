@@ -108,3 +108,15 @@ func ListRemoteBundles(root string) []string {
 	}
 	return out
 }
+
+// ListMCPServersInDir 读取目录下的默认 MCP 配置（.mcp.json 与 mcp.json），供独立连接器安装使用。
+func ListMCPServersInDir(dir string) ([]MCPServer, []Diagnostic) {
+	var ds diagnostics
+	var set mcpServerSet
+	for _, name := range []string{".mcp.json", "mcp.json"} {
+		if f, ok := existingFile(dir, name); ok {
+			parseMCPFile(f, &set, &ds)
+		}
+	}
+	return set.list(), ds
+}

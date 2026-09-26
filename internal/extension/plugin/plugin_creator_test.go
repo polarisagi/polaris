@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 )
 
 // MockLLMClient is a mock implementation of LLMClient for testing.
@@ -51,13 +53,15 @@ func TestPluginCreator(t *testing.T) {
 		t.Errorf("deno.json was not created")
 	}
 
-	// Verify plugin.json exists
-	if _, err := os.Stat(filepath.Join(expectedDir, ".polaris-plugin", "plugin.json")); os.IsNotExist(err) {
-		t.Errorf("plugin.json was not created")
+	// 产物须是 agent-plugins 1.0 布局，且能被统一解析器完整读回（ADR-0103 决策二）。
+	p, err := pluginspec.Load(expectedDir, pluginspec.LoadOptions{})
+	if err != nil {
+		t.Fatalf("generated plugin must load via pluginspec: %v", err)
 	}
-
-	// Verify .mcp.json exists
-	if _, err := os.Stat(filepath.Join(expectedDir, ".mcp.json")); os.IsNotExist(err) {
-		t.Errorf(".mcp.json was not created")
+	if len(p.Formats) != 1 || p.Formats[0] != pluginspec.FormatAgentPlugins || len(p.MCPServers) != 1 {
+		t.Fatalf("unexpected generated plugin: formats=%v servers=%+v", p.Formats, p.MCPServers)
+	}
+	if p.HasErrors() {
+		t.Fatalf("generated plugin has errors: %v", p.Diagnostics)
 	}
 }

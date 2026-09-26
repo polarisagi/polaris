@@ -26,22 +26,37 @@ func (f *InstallFSM) RegisterInstaller(installer Installer) {
 	f.installers[installer.ExtType()] = installer
 }
 
-func (f *InstallFSM) Install(ctx context.Context, req InstallReq, extType types.ExtType) (string, error) {
+func (f *InstallFSM) Install(ctx context.Context, req InstallReq, extType types.ExtType) (InstallResult, error) {
 	installer, ok := f.installers[extType]
 	if !ok {
-		return "", apperr.New(apperr.CodeInternal,
+		return InstallResult{}, apperr.New(apperr.CodeInternal,
 			fmt.Sprintf("install_fsm: no installer registered for ext_type=%q", extType))
 	}
 
-	installDir, err := installer.Install(ctx, req)
+	res, err := installer.Install(ctx, req)
 	if err != nil {
 		_ = f.extRepo.UpdateInstanceStatus(ctx, req.InstID, "failed", err.Error())
-		return installDir, apperr.Wrap(apperr.CodeInternal, "install_fsm: Install 失败", err)
+		return res, apperr.Wrap(apperr.CodeOf(err), "install_fsm: Install 失败", err)
 	}
+	if res.Dir != "" {
+		if err := f.extRepo.UpdateInstanceInstallPath(ctx, req.InstID, res.Dir); err != nil {
+			return res, apperr.Wrap(apperr.CodeInternal, "install_fsm: 回写 install_path", err)
+		}
+	}
+	if res.RuntimeID != "" {
+		if err := f.extRepo.UpdateInstanceRuntimeID(ctx, req.InstID, res.RuntimeID); err != nil {
+			return res, apperr.Wrap(apperr.CodeInternal, "install_fsm: 回写 runtime_id", err)
+		}
+	}
+	if err := f.extRepo.UpdateInstanceStatus(ctx, req.InstID, "installed", ""); err != nil {
+		return res, apperr.Wrap(apperr.CodeInternal, "install_fsm: 回写 installed", err)
+	}
+	return res, nil
+}
 
-	// 如果 installer 没有标记状态，统一标记
-	_ = f.extRepo.UpdateInstanceStatus(ctx, req.InstID, "installed", "")
-	return installDir, nil
+// UninstallRuntime 实现 sandbox.RuntimeUninstaller：outbox 卸载处理器删除文件前调用。
+func (f *InstallFSM) UninstallRuntime(ctx context.Context, extType, instanceID, runtimeID string) error {
+	return f.Uninstall(ctx, UninstallReq{InstID: instanceID, RuntimeID: runtimeID, ExtType: types.ExtType(extType)})
 }
 
 func (f *InstallFSM) Uninstall(ctx context.Context, req UninstallReq) error {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -94,34 +93,10 @@ func (m *MCPManager) ApproveNetworkAccess(ctx context.Context, serverID string, 
 	}
 
 	// 3. 异步重启连接（与 Update 模式一致，不阻塞当前请求）
-	var args []string
-	var env map[string]string
-	if err := json.Unmarshal([]byte(row.Args), &args); err != nil {
-		args = nil
-	}
-	if err := json.Unmarshal([]byte(row.Env), &env); err != nil {
-		env = nil
-	}
-	for i, a := range args {
-		args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
-	}
-	transport := row.Transport
-	if transport == "streamable-http" {
-		transport = string(MCPStreamableHTTP)
-	}
-	clientCfg := MCPClientConfig{
-		Transport:       MCPTransport(transport),
-		Command:         row.Command,
-		Args:            args,
-		Env:             env,
-		URL:             strings.ReplaceAll(row.URL, "{DATA_DIR}", dataDir),
-		WorkDir:         row.WorkDir,
-		Timeout:         time.Duration(row.Timeout) * time.Second,
-		ServerName:      row.Name,
-		TrustTier:       row.TrustTier,
-		Trusted:         row.TrustTier >= 3,
-		RequiresNetwork: row.RequiresNetwork,
-		// NetworkApproved 由 Add() 内部重新查询 preferences，此处不预设
+	m.SetRowSource(extRepo, dataDir)
+	clientCfg, err := m.ConfigFromRow(ctx, *row)
+	if err != nil {
+		return err
 	}
 	m.Remove(serverID)
 	concurrent.SafeGo(context.Background(), "mcp_net_approve_reconnect", func(_ context.Context) {

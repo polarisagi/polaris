@@ -76,6 +76,9 @@ func TestMCPClient_SSE(t *testing.T) {
 	clientHTTP := &http.Client{
 		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
 			if strings.HasSuffix(req.URL.Path, "/sse") {
+				if req.Header.Get("Authorization") != "Bearer t" {
+					return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(""))}
+				}
 				pr, pw := io.Pipe()
 				go func() {
 					fmt.Fprintf(pw, "event: endpoint\ndata: %s/post\n\n", "http://"+req.Host)
@@ -114,9 +117,11 @@ func TestMCPClient_SSE(t *testing.T) {
 		}),
 	}
 
+	// url 即 SSE 端点（两家标准），配置 headers 须随每个请求发送。
 	cfg := MCPClientConfig{
 		Transport: MCPSSE,
-		URL:       "http://dummy",
+		URL:       "http://dummy/sse",
+		Headers:   map[string]string{"Authorization": "Bearer t"},
 		Timeout:   2 * time.Second,
 	}
 	client := NewMCPClient(cfg, testSafeHTTP(clientHTTP.Transport))

@@ -87,7 +87,15 @@ func (c *MCPClient) send(ctx context.Context, req mcpRPCRequest) error {
 
 // setMCPHeaders 在 HTTP 请求上设置 MCP 规范要求的请求头。
 // MCP 2025-11-25 §Transports：HTTP 模式下所有请求必须携带 MCP-Protocol-Version。
+// 配置头先写、协议头后写：配置不能改写协议必需头。
 func (c *MCPClient) setMCPHeaders(req *http.Request) {
+	c.setConfiguredHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
+}
+
+func (c *MCPClient) setConfiguredHeaders(req *http.Request) {
+	for k, v := range c.cfg.Headers {
+		req.Header.Set(k, v)
+	}
 }

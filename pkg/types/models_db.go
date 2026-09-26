@@ -149,6 +149,7 @@ MCPServerRow struct {
 	Args            string
 	Env             string
 	URL             string
+	Headers         string // JSON object；远程传输请求头，可含 ${user_config.*} 占位
 	Enabled         bool
 	Timeout         int
 	TrustTier       int
@@ -158,6 +159,27 @@ MCPServerRow struct {
 	RequiresNetwork bool
 	CreatedAt       string
 	UpdatedAt       string
+}
+
+type
+
+// PluginRow 对应 plugins 表一行（021）。Manifest 为 pluginspec 归一化模型快照（含诊断）。
+PluginRow struct {
+	ID          string
+	Name        string
+	Version     string
+	DisplayName string
+	Description string
+	Publisher   string
+	Homepage    string
+	InstallPath string
+	Enabled     bool
+	TrustTier   int
+	CatalogID   string
+	MCPPolicy   string
+	Manifest    string
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 type

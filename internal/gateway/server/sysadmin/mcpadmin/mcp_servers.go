@@ -156,6 +156,7 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 		Args:            string(argsBytes),
 		Env:             string(envBytes),
 		URL:             c.URL,
+		Headers:         jsonObject(c.Headers),
 		Enabled:         c.Enabled,
 		Timeout:         c.Timeout,
 		TrustTier:       c.TrustTier,
@@ -173,7 +174,7 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 
 	if c.Enabled && h.MCPMgr != nil {
 		concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.sysadmin.start_mcp_server", func(ctx context.Context) {
-			h.startMCPServer(ctx, c)
+			h.startMCPServer(ctx, c.ID)
 		})
 	}
 
@@ -241,6 +242,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 			Args:            c.Args,
 			Env:             c.Env,
 			URL:             c.URL,
+			Headers:         c.Headers,
 			Enabled:         c.Enabled,
 			Timeout:         c.Timeout,
 			TrustTier:       c.TrustTier,
@@ -258,6 +260,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 			"args":             string(argsBytes),
 			"env":              string(envBytes),
 			"url":              c.URL,
+			"headers":          jsonObject(c.Headers),
 			"enabled":          boolToInt(c.Enabled),
 			"timeout":          c.Timeout,
 			"trust_tier":       c.TrustTier,
@@ -319,4 +322,15 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func jsonObject(m map[string]string) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }

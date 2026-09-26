@@ -59,11 +59,14 @@ type MCPManager struct {
 	toolReg          ToolRegistrar         // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
 	catalog          catalog.Catalog       // 新的统一工具目录（仅注册 schema 和 metadata）
 	httpClient       network.SafeHTTPClient
-	policy           protocol.PolicyGate // 对 process_spawn 的策略检查
-	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
-	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
-	netApproval      NetApprovalStore    // 网络访问审批持久化；nil 时跳过审批逻辑（安全降级：保持断网）
-	asyncTasks       *asyncTaskCache     // GD-08-001: CallToolAsync 的 tasks_cache（内存，TTL=300s）
+	policy           protocol.PolicyGate          // 对 process_spawn 的策略检查
+	samplingProvider protocol.Provider            // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
+	onToolsChanged   func()                       // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
+	netApproval      NetApprovalStore             // 网络访问审批持久化；nil 时跳过审批逻辑（安全降级：保持断网）
+	asyncTasks       *asyncTaskCache              // GD-08-001: CallToolAsync 的 tasks_cache（内存，TTL=300s）
+	rowRepo          protocol.ExtensionRepository // StartFromDB 读取 mcp_servers 行
+	dataDir          string                       // {DATA_DIR} 旧占位的展开值
+	varsResolver     PluginVarsResolver           // 插件 MCP 的 ${PLUGIN_ROOT} / ${user_config.*} 等
 
 	// starting 是阶段03 R-03 新增的 per-serverID 互斥占位集合：Add() 的
 	// Connect/Initialize/ListTools 三步长时 IO 移出 m.mu 写锁后，用它防止

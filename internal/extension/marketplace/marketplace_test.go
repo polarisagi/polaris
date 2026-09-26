@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -105,13 +106,13 @@ func TestMCPMarketplaceClient_Install_Stdio(t *testing.T) {
 		t.Errorf("expected %s, got %s", expectedDir, outDir)
 	}
 
-	mcpJSONPath := filepath.Join(outDir, ".mcp.json")
-	if _, err := os.Stat(mcpJSONPath); err != nil {
-		t.Errorf("missing .mcp.json: %v", err)
+	servers, diags := pluginspec.ListMCPServersInDir(outDir)
+	if len(servers) != 1 || servers[0].Type != pluginspec.MCPTypeStdio || servers[0].Command != "test_cmd" {
+		t.Fatalf("standard .mcp.json not produced: %+v (%v)", servers, diags)
 	}
-	pluginJSONPath := filepath.Join(outDir, ".polaris-plugin", "plugin.json")
-	if _, err := os.Stat(pluginJSONPath); err != nil {
-		t.Errorf("missing plugin.json: %v", err)
+	// 独立连接器不产出任何插件清单（私有 .polaris-plugin 已删除，ADR-0103 决策二）。
+	if _, err := os.Stat(filepath.Join(outDir, ".polaris-plugin")); !os.IsNotExist(err) {
+		t.Errorf("private manifest directory must not be written")
 	}
 }
 
@@ -131,23 +132,13 @@ func TestMCPMarketplaceClient_Install_HTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mcpJSONPath := filepath.Join(outDir, ".mcp.json")
-	data, err := os.ReadFile(mcpJSONPath)
-	if err != nil {
-		t.Fatal(err)
+	// 产物须能被标准解析器（pluginspec）原样读回。
+	servers, diags := pluginspec.ListMCPServersInDir(outDir)
+	if len(servers) != 1 || servers[0].Name != "test_pkg" {
+		t.Fatalf("expected test_pkg server, got %+v (%v)", servers, diags)
 	}
-
-	var cfg protocol.MCPConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	server, ok := cfg.MCPServers["test_pkg"]
-	if !ok {
-		t.Fatal("missing test_pkg server")
-	}
-	if server.Type != "http" || server.URL != "http://localhost:8080/mcp" {
-		t.Errorf("unexpected server def: %+v", server)
+	if servers[0].Type != pluginspec.MCPTypeHTTP || servers[0].URL != "http://localhost:8080/mcp" {
+		t.Errorf("unexpected server def: %+v", servers[0])
 	}
 }
 

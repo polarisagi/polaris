@@ -62,6 +62,7 @@ func TestHandleMCPServers(t *testing.T) {
 			args TEXT,
 			env TEXT,
 			url TEXT,
+			headers TEXT NOT NULL DEFAULT '{}',
 			enabled INTEGER,
 			timeout INTEGER,
 			trust_tier INTEGER,

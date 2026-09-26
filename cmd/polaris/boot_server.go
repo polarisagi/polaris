@@ -142,10 +142,6 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	// M09 §1.3 /steer 命令面（2026-07-21 deadcode 审查补齐）：sb.Steering/sb.CVStore
 	// 均可为 nil（FeatureActivationSteer 未启用），SetSteering/handleSteer 全链 nil-safe。
 	httpServer.SetSteering(sb.Steering, sb.CVStore)
-	httpServer.SetSyncSkillFunc(func(skillName, instructions string) {
-		// Temporarily disabled in Phase 1, Phase 2 UnifiedToolCatalog will replace this.
-	})
-
 	// 设置插件同步向量索引器
 	// 传低优先级 BackgroundEmbedder（ADR-0099）：它实现 EmbedBatch，经批处理器 Low 通道按
 	// 单批上限切块串行下发。此前直传 sb.DynEmbedder，一次把上百条扩展描述整批压给串行

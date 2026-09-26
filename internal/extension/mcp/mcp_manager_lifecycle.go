@@ -78,6 +78,7 @@ func (m *MCPManager) ServerToolNames(serverName string) []string {
 // 统一加载独立安装的 MCP（plugin_id=”）和插件内嵌的 MCP（plugin_id != ”）。
 // dataDir 用于展开 args/url 中的 {DATA_DIR} 占位符；plugin MCP 的工作目录由 work_dir 字段提供。
 func (m *MCPManager) RestoreServersFromDB(ctx context.Context, extRepo protocol.ExtensionRepository, dataDir string) {
+	m.SetRowSource(extRepo, dataDir)
 	servers, err := extRepo.ListMCPServers(ctx)
 	if err != nil {
 		slog.Error("mcp_manager: load from db", "err", err)
@@ -88,41 +89,15 @@ func (m *MCPManager) RestoreServersFromDB(ctx context.Context, extRepo protocol.
 		if !s.Enabled {
 			continue
 		}
-		var args []string
-		json.Unmarshal([]byte(s.Args), &args) //nolint:errcheck
-		var env map[string]string
-		json.Unmarshal([]byte(s.Env), &env) //nolint:errcheck
-
-		for i, a := range args {
-			args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
-		}
-
-		resolvedURL := strings.ReplaceAll(s.URL, "{DATA_DIR}", dataDir)
-		// "streamable_http" 是数据库存储值，兼容 Claude Code 的 "streamable-http" 别名
-		transport := s.Transport
-		if transport == "streamable-http" {
-			transport = string(MCPStreamableHTTP)
-		}
-		cfg := MCPClientConfig{
-			Transport:  MCPTransport(transport),
-			Command:    s.Command,
-			Args:       args,
-			Env:        env,
-			URL:        resolvedURL,
-			WorkDir:    s.WorkDir, // plugin MCP 设为 install_path；独立 MCP 为空（继承父进程 cwd）
-			Timeout:    time.Duration(s.Timeout) * time.Second,
-			ServerName: s.Name,
-			// TrustTier 驱动沙箱策略（bwrap 网络隔离）和污点等级（TaintMedium/TaintHigh）。
-			// SandboxPolicy 不设置（""）：applyStdioSandbox 将其视为 "auto"，自动按 TrustTier 决策。
-			TrustTier:       s.TrustTier,
-			Trusted:         s.TrustTier >= 3,
-			RequiresNetwork: s.RequiresNetwork,
-			// NetworkApproved 由 Add() 内部按 preferences 表动态解析，此处留零值。
-		}
 		// 每个 server 独立 goroutine，避免一个慢连接阻塞其他
 		concurrent.SafeGo(ctx, "mcp_manager_add", func(_ context.Context) {
 			connCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
+			cfg, err := m.ConfigFromRow(connCtx, s)
+			if err != nil {
+				slog.Error("mcp_manager: build config failed", "id", s.ID, "err", err)
+				return
+			}
 			if err := m.Add(connCtx, s.ID, s.Name, cfg); err != nil {
 				slog.Error("mcp_manager: load server failed", "id", s.ID, "err", err)
 			}
@@ -199,6 +174,10 @@ func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectReque
 func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg MCPUpdateConfig, dataDir string) error {
 	argsBytes, _ := json.Marshal(cfg.Args)
 	envBytes, _ := json.Marshal(cfg.Env)
+	headersBytes, _ := json.Marshal(cfg.Headers)
+	if cfg.Headers == nil {
+		headersBytes = []byte("{}")
+	}
 
 	requiresNetworkInt := 0
 	if cfg.RequiresNetwork {
@@ -211,6 +190,7 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 		"args":             string(argsBytes),
 		"env":              string(envBytes),
 		"url":              cfg.URL,
+		"headers":          string(headersBytes),
 		"enabled":          cfg.Enabled,
 		"timeout":          cfg.Timeout,
 		"trust_tier":       cfg.TrustTier,
@@ -226,27 +206,11 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 
 	m.Remove(id)
 	if cfg.Enabled {
-		clientCfg := MCPClientConfig{
-			Transport:  MCPTransport(cfg.Transport),
-			Command:    cfg.Command,
-			Args:       make([]string, len(cfg.Args)),
-			Env:        cfg.Env,
-			URL:        strings.ReplaceAll(cfg.URL, "{DATA_DIR}", dataDir),
-			Timeout:    time.Duration(cfg.Timeout) * time.Second,
-			ServerName: cfg.Name,
-			// TrustTier 驱动沙箱策略和污点等级；SandboxPolicy 不设置（""=auto）。
-			TrustTier:       cfg.TrustTier,
-			Trusted:         cfg.TrustTier >= 3,
-			RequiresNetwork: cfg.RequiresNetwork,
-			// NetworkApproved 由 Add() 内部按 preferences 表动态解析，此处留零值。
-		}
-		for i, a := range cfg.Args {
-			clientCfg.Args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
-		}
+		m.SetRowSource(extRepo, dataDir)
 		concurrent.SafeGo(context.Background(), "mcp_manager_update", func(_ context.Context) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			if err := m.Add(bgCtx, id, cfg.Name, clientCfg); err != nil {
+			if err := m.StartFromDB(bgCtx, id); err != nil {
 				slog.Warn("mcp: connect server failed after update", "id", id, "err", err)
 			}
 		})

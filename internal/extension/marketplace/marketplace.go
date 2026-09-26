@@ -256,69 +256,22 @@ func (c *MCPMarketplaceClient) Install(ctx context.Context, pkg protocol.Registr
 		actualCommand = binaryPath
 	}
 
-	// Generate .mcp.json — 根据传输类型选择正确字段
-	var serverDef protocol.MCPServerDef
+	// 生成标准 .mcp.json（两家共同的 mcpServers 映射）；独立连接器由 MCPInstaller 经 pluginspec 读取。
+	server := map[string]any{"env": pkg.Env}
 	switch pkg.Transport {
 	case "http", "streamable-http", "streamable_http":
-		// HTTP transport：URL 是 MCP 端点，无本地命令
-		serverDef = protocol.MCPServerDef{
-			Type: "http",
-			URL:  pkg.URL,
-			Env:  pkg.Env,
-		}
+		server["type"], server["url"] = "http", pkg.URL
 	case "sse":
-		serverDef = protocol.MCPServerDef{
-			Type: "sse",
-			URL:  pkg.URL,
-			Env:  pkg.Env,
-		}
+		server["type"], server["url"] = "sse", pkg.URL
 	default:
-		// stdio（默认）：本地进程
-		serverDef = protocol.MCPServerDef{
-			Type:    "stdio",
-			Command: actualCommand,
-			Args:    pkg.Args,
-			Env:     pkg.Env,
-		}
+		server["type"], server["command"], server["args"] = "stdio", actualCommand, pkg.Args
 	}
-	mcpConfig := protocol.MCPConfig{
-		MCPServers: map[string]protocol.MCPServerDef{
-			pkg.Name: serverDef,
-		},
-	}
-
-	mcpData, err := json.MarshalIndent(mcpConfig, "", "  ")
+	mcpData, err := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{pkg.Name: server}}, "", "  ")
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "marketplace: marshal mcp.json failed", err)
 	}
-
-	mcpPath := filepath.Join(pluginDir, ".mcp.json")
-	if err := os.WriteFile(mcpPath, mcpData, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pluginDir, ".mcp.json"), mcpData, 0o644); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "marketplace: failed to write .mcp.json", err)
-	}
-
-	// Generate .polaris-plugin/plugin.json
-	pluginMetaDir := filepath.Join(pluginDir, ".polaris-plugin")
-	if err := os.MkdirAll(pluginMetaDir, 0755); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "marketplace: failed to create .polaris-plugin directory", err)
-	}
-
-	manifest := protocol.PluginJSON{
-		Name:        pkg.Name,
-		Version:     "1.0.0", // from market
-		Description: pkg.Description,
-		MCPServers:  "./.mcp.json",
-	}
-
-	manifestData, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "marketplace: marshal plugin.json failed", err)
-	}
-
-	manifestPath := filepath.Join(pluginMetaDir, "plugin.json")
-	if err := os.WriteFile(manifestPath, manifestData, 0644); err != nil {
-		slog.Error("marketplace: failed to write plugin.json", "err", err)
-		return "", apperr.Wrap(apperr.CodeInternal, "marketplace: failed to write plugin.json", err)
 	}
 
 	slog.Info("marketplace: install success", "pkg_id", pkg.ID, "dir", pluginDir)

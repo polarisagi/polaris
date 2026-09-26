@@ -12,7 +12,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
-	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
@@ -159,18 +158,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 
 	if h.MCPMgr != nil {
 		concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.start_mcp_server", func(ctx context.Context) {
-			if err := h.StartMCPServer(ctx, types.MCPServerConfig{
-				ID:        mcpID,
-				Name:      req.Name,
-				Transport: req.Transport,
-				Command:   req.Command,
-				Args:      req.Args,
-				Env:       req.Env,
-				URL:       req.URL,
-				Timeout:   30,
-				TrustTier: 1,
-				Enabled:   true,
-			}); err != nil {
+			if err := h.StartMCPServer(ctx, mcpID); err != nil {
 				slog.Warn("plugin_custom: start mcp server failed", "id", mcpID, "err", err)
 			}
 		})

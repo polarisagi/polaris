@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -57,23 +58,56 @@ func (s *SkillInstaller) WithValidators(analyzer ScriptStaticAnalyzer, riskAsses
 
 func (s *SkillInstaller) ExtType() types.ExtType { return types.TypeSkill }
 
-func (s *SkillInstaller) Install(ctx context.Context, req InstallReq) (string, error) {
+// Install 独立技能安装：SKILL.md 经 pluginspec 按 agentskills.io + 两家扩展字段解析。
+// 标准技能是指令包（正文 + scripts、references、assets 等资源目录），不要求入口脚本；存在 Polaris
+// 脚本技能入口（src/index.ts 等）时额外做静态分析与风险分级。
+func (s *SkillInstaller) Install(ctx context.Context, req InstallReq) (InstallResult, error) {
 	installDir := req.LocalPath
 	if installDir == "" {
-		return "", apperr.New(apperr.CodeInvalidInput, "skill_installer: LocalPath required")
+		return InstallResult{}, apperr.New(apperr.CodeInvalidInput, "skill_installer: LocalPath required")
 	}
-
 	if s.skillReg == nil {
-		return installDir, nil
+		return InstallResult{}, apperr.New(apperr.CodeInternal, "skill_installer: skill registry unavailable")
 	}
-
-	// 读取 SKILL.md
-	var instructions string
-	if raw, err := os.ReadFile(filepath.Join(installDir, "SKILL.md")); err == nil {
-		instructions = string(raw)
+	spec, diags := pluginspec.ParseSkillDir(installDir)
+	if spec == nil {
+		return InstallResult{}, apperr.New(apperr.CodeInvalidInput, "skill_installer: invalid SKILL.md: "+joinDiagnostics(diags))
 	}
+	for _, d := range diags {
+		slog.Warn("skill_installer: diagnostic", "inst_id", req.InstID, "diag", d.String())
+	}
+	name := StandaloneSkillName(spec.Name)
+	if err := s.ensureNameAvailable(ctx, req.InstID, name); err != nil {
+		return InstallResult{}, err
+	}
+	meta := skillMetaFromSpec(spec, name, "", "", trustOrCommunity(req.TrustTier))
+	if err := s.applyScriptEntry(installDir, req.InstID, &meta); err != nil {
+		return InstallResult{}, err
+	}
+	if err := s.skillReg.Register(ctx, meta); err != nil {
+		return InstallResult{}, apperr.Wrap(apperr.CodeInternal, "skill_installer.Install", err)
+	}
+	slog.Info("skill_installer: skill registered", "skill_name", name, "inst_id", req.InstID, "script", meta.ScriptPath)
+	return InstallResult{Dir: installDir, RuntimeID: name}, nil
+}
 
-	// 脚本入口
+// ensureNameAvailable 同名技能已由另一安装实例持有时拒绝：静默覆盖会让先装的技能
+// 被替换而其实例记录仍显示已安装。
+func (s *SkillInstaller) ensureNameAvailable(ctx context.Context, instID, name string) error {
+	insts, err := s.extRepo.ListInstances(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "skill_installer: list instances", err)
+	}
+	for _, inst := range insts {
+		if inst.RuntimeID == name && inst.ID != instID {
+			return apperr.New(apperr.CodeAlreadyExists, fmt.Sprintf("skill_installer: skill %q already installed by %s", name, inst.ID))
+		}
+	}
+	return nil
+}
+
+// applyScriptEntry Polaris 脚本技能入口：静态分析 fail-closed，风险分级决定沙箱层级。
+func (s *SkillInstaller) applyScriptEntry(installDir, instID string, meta *types.SkillMeta) error {
 	scriptPath := ""
 	for _, candidate := range []string{"src/index.ts", "index.ts", "src/index.js", "index.js"} {
 		full := filepath.Join(installDir, candidate)
@@ -83,75 +117,54 @@ func (s *SkillInstaller) Install(ctx context.Context, req InstallReq) (string, e
 		}
 	}
 	if scriptPath == "" {
-		slog.Warn("skill_installer: skill has no entry script, skip",
-			"inst_id", req.InstID, "install_dir", installDir)
-		return installDir, nil
+		return nil
 	}
-
-	skillName := strings.TrimPrefix(req.InstID, "ext_")
-
-	// Default values
-	trustTier := types.TrustCommunity
-	if req.TrustTier != 0 {
-		trustTier = types.TrustTier(req.TrustTier)
-	}
-
-	// 默认值：s.analyzer/riskAssessor 未注入时（测试等场景）保持改造前行为。
-	riskLabel := "medium"
-	sandboxTier := 3
-
-	if s.analyzer != nil && s.riskAssessor != nil {
-		// 静态分析 + 风险分级（2026-07-12 unwired-code-audit 补齐）：此前本方法
-		// 对脚本内容零检查，直接以硬编码 RiskLevel="medium"/Sandbox=3 入库——
-		// 任何 Marketplace 安装的第三方技能脚本（无论实际内容是否包含 shell/
-		// 网络/文件写入等高危操作）都被同等对待，违规内容（如
-		// child_process.exec）从不被拦截。fail-closed：静态分析命中违规直接
-		// 拒绝安装，不静默放行、不降级为警告。
-		scriptBytes, readErr := os.ReadFile(scriptPath)
-		if readErr != nil {
-			return installDir, apperr.Wrap(apperr.CodeInternal, "skill_installer: failed to read entry script for validation", readErr)
-		}
-		passed, violations, analyzeErr := s.analyzer.Analyze(scriptBytes)
-		if analyzeErr != nil {
-			return installDir, apperr.Wrap(apperr.CodeInternal, "skill_installer: static analysis failed", analyzeErr)
-		}
-		if !passed {
-			slog.Error("skill_installer: rejecting skill install, static analysis found forbidden patterns",
-				"inst_id", req.InstID, "script", scriptPath, "violations", violations)
-			return installDir, apperr.New(apperr.CodeForbidden,
-				fmt.Sprintf("skill_installer: static analysis rejected skill %q: %v", skillName, violations))
-		}
-		riskLevelInt, tier := s.riskAssessor.Assess(scriptBytes)
-		riskLabel = riskLevelLabel(riskLevelInt)
-		sandboxTier = tier
-	} else {
+	meta.ScriptPath = scriptPath
+	if s.analyzer == nil || s.riskAssessor == nil {
 		slog.Warn("skill_installer: no validators injected, installing skill without content inspection (test-only default)",
-			"inst_id", req.InstID, "script", scriptPath)
+			"inst_id", instID, "script", scriptPath)
+		meta.RiskLevel, meta.Sandbox = "medium", 3
+		return nil
 	}
-
-	meta := types.SkillMeta{
-		Name:         skillName,
-		Version:      "1.0.0",
-		Runtime:      "script",
-		RiskLevel:    riskLabel,
-		Sandbox:      sandboxTier,
-		ExecMode:     "tool",
-		Trust:        trustTier,
-		ScriptPath:   scriptPath,
-		Instructions: instructions,
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "skill_installer: failed to read entry script for validation", err)
 	}
-
-	if err := s.skillReg.Register(ctx, meta); err != nil {
-		return installDir, apperr.Wrap(apperr.CodeInternal, "skill_installer.Install", err)
+	passed, violations, err := s.analyzer.Analyze(scriptBytes)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "skill_installer: static analysis failed", err)
 	}
+	if !passed {
+		slog.Error("skill_installer: rejecting skill install, static analysis found forbidden patterns",
+			"inst_id", instID, "script", scriptPath, "violations", violations)
+		return apperr.New(apperr.CodeForbidden, fmt.Sprintf("skill_installer: static analysis rejected skill %q: %v", meta.Name, violations))
+	}
+	level, tier := s.riskAssessor.Assess(scriptBytes)
+	meta.RiskLevel, meta.Sandbox = riskLevelLabel(level), tier
+	return nil
+}
 
-	slog.Info("skill_installer: skill registered to SkillRegistry",
-		"skill_name", skillName, "inst_id", req.InstID, "script", scriptPath)
-	return installDir, nil
+func trustOrCommunity(tier int) types.TrustTier {
+	if tier == 0 {
+		return types.TrustCommunity
+	}
+	return types.TrustTier(tier)
+}
+
+func joinDiagnostics(ds []pluginspec.Diagnostic) string {
+	parts := make([]string, 0, len(ds))
+	for _, d := range ds {
+		if d.Severity == pluginspec.SeverityError {
+			parts = append(parts, d.Message)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (s *SkillInstaller) Uninstall(ctx context.Context, req UninstallReq) error {
-	_ = s.extRepo.UninstallCleanup(ctx, "", req.RuntimeID, "skill")
+	if err := s.extRepo.UninstallCleanup(ctx, "", req.RuntimeID, string(types.TypeSkill)); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "skill_installer.Uninstall", err)
+	}
 	return nil
 }
 

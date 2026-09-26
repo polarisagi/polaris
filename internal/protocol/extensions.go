@@ -1,11 +1,8 @@
 package protocol
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-
-	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ============================================================================
@@ -146,107 +143,6 @@ type MCPServerDef struct {
 type MCPConfig struct {
 	MCPServers      map[string]MCPServerDef `json:"mcpServers"`
 	MCPServersSnake map[string]MCPServerDef `json:"mcp_servers"` // 兼容历史格式
-}
-
-// PluginBundleManifest 是多组件 Bundle 的扩展 plugin.json（M13-bis §2.1）。
-//
-// JSON "skills" 字段兼容两种格式：
-//   - 字符串路径（Codex 标准）："skills": "./skills/"  → SkillsDir
-//   - 对象数组（Polaris 扩展）："skills": [{"path":"..."}]  → Skills
-//
-// JSON "hooks" 字段兼容两种格式：
-//   - 字符串路径（Codex 标准）："hooks": "./hooks/hooks.json"  → HooksFile
-//   - 映射（Polaris 扩展，install/uninstall）："hooks": {"install":"..."}  → Hooks
-type PluginBundleManifest struct {
-	Name           string                  `json:"name"`
-	Version        string                  `json:"version"`
-	Description    string                  `json:"description"`
-	Entrypoint     string                  `json:"entrypoint,omitempty"`
-	MCPFile        string                  `json:"mcpServers,omitempty"` // 指向 .mcp.json 的相对路径
-	MCPFileSnake   string                  `json:"mcp_servers,omitempty"`
-	MCPInline      map[string]MCPServerDef `json:"mcpInline,omitempty"` // 内联 MCP 服务器映射
-	MCPInlineSnake map[string]MCPServerDef `json:"mcp_inline,omitempty"`
-	Interface      *PluginInterface        `json:"interface,omitempty"` // UI 展示元数据
-
-	// Skills: 由 UnmarshalJSON 从 "skills" 字段解析，见下方注释。
-	Skills    []BundleSkillRef // array form: [{"path":"...","name":"..."}]
-	SkillsDir string           // string form: "./skills/"
-	// Hooks: 由 UnmarshalJSON 从 "hooks" 字段解析。
-	Hooks     map[string]string // map form: {"install":"path","uninstall":"path"}
-	HooksFile string            // string form: "./hooks/hooks.json"
-}
-
-// bundleManifestWire 是 PluginBundleManifest 的 JSON 解码中间结构，
-// 用于处理 "skills" 和 "hooks" 字段的多态性。
-type bundleManifestWire struct {
-	Name           string                  `json:"name"`
-	Version        string                  `json:"version"`
-	Description    string                  `json:"description"`
-	Entrypoint     string                  `json:"entrypoint,omitempty"`
-	MCPFile        string                  `json:"mcpServers,omitempty"`
-	MCPFileSnake   string                  `json:"mcp_servers,omitempty"`
-	MCPInline      map[string]MCPServerDef `json:"mcpInline,omitempty"`
-	MCPInlineSnake map[string]MCPServerDef `json:"mcp_inline,omitempty"`
-	Interface      *PluginInterface        `json:"interface,omitempty"`
-	SkillsRaw      json.RawMessage         `json:"skills,omitempty"`
-	HooksRaw       json.RawMessage         `json:"hooks,omitempty"`
-}
-
-// UnmarshalJSON 处理 "skills" 和 "hooks" 字段的多态解码：
-//   - "skills" 可以是字符串路径（Codex 标准）或 []BundleSkillRef（Polaris 扩展）
-//   - "hooks" 可以是字符串路径（Codex 标准）或 map[string]string（Polaris 扩展）
-func (m *PluginBundleManifest) UnmarshalJSON(data []byte) error {
-	var w bundleManifestWire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "PluginBundleManifest.UnmarshalJSON", err)
-	}
-	m.Name = w.Name
-	m.Version = w.Version
-	m.Description = w.Description
-	m.Entrypoint = w.Entrypoint
-	m.MCPFile = w.MCPFile
-	if m.MCPFile == "" && w.MCPFileSnake != "" {
-		m.MCPFile = w.MCPFileSnake
-	}
-	m.MCPInline = w.MCPInline
-	if m.MCPInline == nil && w.MCPInlineSnake != nil {
-		m.MCPInline = w.MCPInlineSnake
-	}
-	m.Interface = w.Interface
-
-	// 解析 "skills"：先尝试字符串（Codex 路径形式），再尝试数组（Polaris 形式）
-	if len(w.SkillsRaw) > 0 {
-		var path string
-		if err := json.Unmarshal(w.SkillsRaw, &path); err == nil {
-			m.SkillsDir = path
-		} else {
-			var refs []BundleSkillRef
-			if err := json.Unmarshal(w.SkillsRaw, &refs); err == nil {
-				m.Skills = refs
-			}
-		}
-	}
-
-	// 解析 "hooks"：先尝试字符串（Codex 路径形式），再尝试 map（Polaris 形式）
-	if len(w.HooksRaw) > 0 {
-		var hookPath string
-		if err := json.Unmarshal(w.HooksRaw, &hookPath); err == nil {
-			m.HooksFile = hookPath
-		} else {
-			var hookMap map[string]string
-			if err := json.Unmarshal(w.HooksRaw, &hookMap); err == nil {
-				m.Hooks = hookMap
-			}
-		}
-	}
-
-	return nil
-}
-
-// BundleSkillRef 引用 Bundle 内的单个技能。
-type BundleSkillRef struct {
-	Path string `json:"path"` // 相对于 Bundle 根目录的 SKILL.md 路径
-	Name string `json:"name,omitempty"`
 }
 
 // AnthropicPluginTOML 是 Anthropic .claude-plugin/plugin.toml 格式。

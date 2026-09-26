@@ -1,17 +1,14 @@
 package plugin
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
 
@@ -66,8 +63,8 @@ func TestPluginCatalogCopyAndRegister(t *testing.T) {
 	if err != nil {
 		t.Errorf("copyDir failed: %v", err)
 	}
-
-	h.registerPluginSkills(context.Background(), "ext-1", "ext-1", dstDir, &protocol.PluginBundleManifest{}, 1)
-
-	h.registerPluginMCPServers(context.Background(), "plug-1", "plug-1", dstDir, map[string]pluginMCPDef{}, 1, time.Now().Format(time.RFC3339))
+	if b, readErr := os.ReadFile(filepath.Join(dstDir, "test.txt")); readErr != nil || string(b) != "hello" {
+		t.Errorf("copied content mismatch: %q %v", b, readErr)
+	}
+	_ = h
 }

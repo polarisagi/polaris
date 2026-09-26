@@ -108,7 +108,7 @@ Output ONLY valid JSON matching this schema:
 Do not include any Markdown wrappers like ` + "```json" + ` in the output. Ensure the TypeScript code is properly escaped in the JSON string.
 `
 
-// GeneratePlugin takes a user's intent, calls the LLM, and creates the physical plugin directory, .mcp.json, and server.py.
+// GeneratePlugin 调用 LLM 按意图生成 TypeScript MCP 服务器，并以 agent-plugins 1.0 布局落盘（plugin.json + mcp.json + src/）。
 //
 //nolint:gocyclo
 func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trustTier int) (string, error) {
@@ -175,21 +175,19 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to write deno.json", err)
 	}
 
-	// Create a default plugin.json
-	pluginMetaDir := filepath.Join(pluginDir, ".polaris-plugin")
-	if err := os.MkdirAll(pluginMetaDir, 0755); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to create .polaris-plugin directory", err)
+	// 生成物采用 agent-plugins 1.0 可移植布局（根 plugin.json + mcp.json），与市场安装的
+	// 插件走同一解析与安装路径（ADR-0103 决策二：Polaris 不产出私有清单格式）。
+	pluginJSON, err := json.MarshalIndent(map[string]any{
+		"$schema":     "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+		"name":        result.Name,
+		"version":     "1.0.0",
+		"description": result.Description,
+		"author":      map[string]string{"name": "Polaris PluginCreator"},
+	}, "", "  ")
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: marshal plugin.json", err)
 	}
-
-	pluginJSON := fmt.Sprintf(`{
-  "name": "%s",
-  "version": "1.0.0",
-  "description": "%s",
-  "mcpServers": "./.mcp.json"
-}`, result.Name, result.Description)
-
-	pluginJSONPath := filepath.Join(pluginMetaDir, "plugin.json")
-	if err := os.WriteFile(pluginJSONPath, []byte(pluginJSON), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), pluginJSON, 0o644); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to write plugin.json", err)
 	}
 
@@ -209,19 +207,22 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 		argsJSON = `["tsx", "src/index.ts"]`
 	}
 
-	// Create .mcp.json
-	mcpJSON := fmt.Sprintf(`{
-  "mcpServers": {
-    "%s": {
-      "command": "%s",
-      "args": %s
-    }
-  }
-}`, result.Name, cmd, argsJSON)
-
-	mcpJSONPath := filepath.Join(pluginDir, ".mcp.json")
-	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0644); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to write .mcp.json", err)
+	var args []string
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: args", err)
+	}
+	mcpJSON, err := json.MarshalIndent(map[string]any{
+		"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+		"mcpServers": map[string]any{
+			// cwd 缺省为插件根，args 中的 src/index.ts 以插件根为基准解析。
+			result.Name: map[string]any{"type": "stdio", "command": cmd, "args": args},
+		},
+	}, "", "  ")
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: marshal mcp.json", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "mcp.json"), mcpJSON, 0o644); err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to write mcp.json", err)
 	}
 
 	return pluginDir, nil

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -67,7 +66,6 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 	}
 
 	newVersion := catalogVersion
-	now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 
 	if extType == "skill" || extType == "plugin" {
 		// 落盘类型：必须真正同步文件，否则不得推进 installed_version。
@@ -81,18 +79,22 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 			httputil.RespondError(w, "malformed catalog entry", apperr.Wrap(apperr.CodeInvalidInput, "HandleUpgradePlugin", unmarshalErr), http.StatusInternalServerError)
 			return
 		}
+		installReq := protocol.ExtensionInstallRequest{
+			ExtensionID: pluginID, CatalogID: catalogID, Name: name, ExtType: extType,
+			TrustTier: entry.TrustTier, Publisher: entry.Publisher,
+		}
 
 		// 同步执行（而非 SafeGo 异步）：升级请求需要在响应前确认文件是否真正同步成功，
 		// install_path 由 destDir 确定性推导（filepath.Join(DataDir,"extensions",extID)），
 		// 与安装期完全一致，原地覆盖，不清空/不新建。
-		h.downloadAndInstallExtension(ctx, pluginID, catalogID, &entry, now, name)
+		h.downloadAndInstallExtension(ctx, pluginID, catalogID, installReq)
 
 		var status, errMsg string
 		if statusErr := h.DB.QueryRowContext(ctx, `SELECT status, error_msg FROM extension_instances WHERE id=?`, pluginID).Scan(&status, &errMsg); statusErr != nil {
 			httputil.RespondError(w, "failed to verify upgrade result", apperr.Wrap(apperr.CodeInternal, "HandleUpgradePlugin", statusErr), http.StatusInternalServerError)
 			return
 		}
-		if status == "error" {
+		if status == "error" || status == "failed" {
 			// downloadAndInstallExtension 内部已写入 error_msg，install_path 未被触碰
 			// （updateExtensionInstanceError 只更新 status/error_msg 两列）。
 			http.Error(w, "文件同步失败，install_path 保持原样: "+errMsg, http.StatusInternalServerError)

@@ -3,11 +3,10 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
-	"os"
-	"strings"
 
-	"github.com/polarisagi/polaris/internal/extension/mcp"
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -36,83 +35,61 @@ func (m *MCPInstaller) WithRegistry(r *connector.Registry) *MCPInstaller {
 
 func (m *MCPInstaller) ExtType() types.ExtType { return types.TypeMCP }
 
-func (m *MCPInstaller) Install(ctx context.Context, req InstallReq) (string, error) {
+// Install 独立连接器安装：目录内标准 .mcp.json / mcp.json（mcpServers 映射）恰好声明一个服务器，
+// 多服务器应以插件分发（插件有 plugin_id 级联卸载，独立连接器按实例一对一）。
+func (m *MCPInstaller) Install(ctx context.Context, req InstallReq) (InstallResult, error) {
 	installDir := req.LocalPath
 	if installDir == "" {
-		return "", apperr.New(apperr.CodeInvalidInput, "mcp_installer: LocalPath required")
+		return InstallResult{}, apperr.New(apperr.CodeInvalidInput, "mcp_installer: LocalPath required")
 	}
+	servers, diags := pluginspec.ListMCPServersInDir(installDir)
+	if len(servers) != 1 {
+		return InstallResult{}, apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"mcp_installer: expected exactly one server in .mcp.json, got %d (%s)", len(servers), joinDiagnostics(diags)))
+	}
+	srv := servers[0]
+	row := mcpRowFromSpec(srv, mcpRowParams{ID: req.InstID, Name: srv.Name, CatalogID: req.CatalogID,
+		TrustTier: req.TrustTier, Enabled: true})
+	if err := m.extRepo.UpsertMCPServer(ctx, row); err != nil {
+		return InstallResult{}, apperr.Wrap(apperr.CodeInternal, "mcp_installer: persist server", err)
+	}
+	if m.mcpConn != nil {
+		if err := m.mcpConn.StartFromDB(ctx, req.InstID); err != nil {
+			return InstallResult{}, apperr.Wrap(apperr.CodeOf(err), "mcp_installer: start server", err)
+		}
+		m.registerKnowledgeSource(req.InstID, srv)
+	}
+	slog.Info("mcp_installer: MCP server registered", "inst_id", req.InstID, "name", srv.Name, "type", srv.Type)
+	return InstallResult{Dir: installDir, RuntimeID: req.InstID}, nil
+}
 
-	if m.mcpConn == nil {
-		return installDir, nil
+// registerKnowledgeSource Polaris 私有能力声明：服务器定义中的 "capabilities" 含 knowledge-source 时
+// 注册为知识源连接器（非标准字段经 pluginspec.MCPServer.Extra 原样保留）。
+func (m *MCPInstaller) registerKnowledgeSource(serverID string, srv pluginspec.MCPServer) {
+	if m.registry == nil {
+		return
 	}
-
-	cfgPath, err := protocol.FindMCPConfig(installDir)
-	if err != nil {
-		slog.Warn("mcp_installer: mcp.json not found, skip runtime registration",
-			"inst_id", req.InstID, "dir", installDir)
-		return installDir, nil //nolint:nilerr
-	}
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return installDir, apperr.Wrap(apperr.CodeInternal, "mcp_installer: read mcp.json", err)
-	}
-
-	var mcpCfg struct {
-		Name         string            `json:"name"`
-		Transport    string            `json:"transport"`
-		Command      string            `json:"command"`
-		Args         []string          `json:"args"`
-		Endpoint     string            `json:"endpoint"`
-		Env          map[string]string `json:"env"`
-		Capabilities []string          `json:"capabilities"`
-	}
-	if jsonErr := json.Unmarshal(raw, &mcpCfg); jsonErr != nil {
-		return installDir, apperr.Wrap(apperr.CodeInvalidInput, "mcp_installer: parse mcp.json", jsonErr)
-	}
-
-	name := mcpCfg.Name
-	if name == "" {
-		name = strings.TrimPrefix(req.InstID, "ext_")
-	}
-
-	clientCfg := mcp.MCPClientConfig{
-		Transport: mcp.MCPTransport(mcpCfg.Transport),
-		Command:   mcpCfg.Command,
-		Args:      mcpCfg.Args,
-		URL:       mcpCfg.Endpoint,
-		Env:       mcpCfg.Env,
-		TrustTier: req.TrustTier,
-	}
-
-	if addErr := m.mcpConn.Add(ctx, req.InstID, name, clientCfg); addErr != nil {
-		return installDir, apperr.Wrap(apperr.CodeInternal, "mcp_installer", addErr)
-	}
-
-	// 检查是否声明了知识源能力（2026-07-21 deadcode 审查补齐：
-	// connector.MCPKnowledgeConnector.List/Fetch 此前是 CodeUnimplemented 桩实现，
-	// 曾在此处硬拦截避免 SyncScheduler 对空转桩代码指数退避重试；现已接入真实
-	// mcp.MCPClient.ResourcesList/ResourcesRead RPC 调用，可以正常注册）。
-	if m.registry != nil {
-		for _, cap := range mcpCfg.Capabilities {
-			if cap != "knowledge-source" {
-				continue
-			}
-			rawClient := m.mcpConn.GetClient(req.InstID)
-			knowledgeClient, ok := rawClient.(connector.MCPClient)
-			if !ok {
-				slog.Warn("mcp_installer: knowledge-source capability declared but client does not support resources/list+resources/read, skipping registration",
-					"inst_id", req.InstID, "name", name)
-				continue
-			}
-			m.registry.Register(connector.NewMCPKnowledgeConnector(req.InstID, name, knowledgeClient))
-			slog.Info("mcp_installer: knowledge-source MCP server registered with SyncScheduler",
-				"inst_id", req.InstID, "name", name)
+	var caps []string
+	if raw, ok := srv.Extra["capabilities"]; ok {
+		if err := json.Unmarshal(raw, &caps); err != nil {
+			// L3：私有能力声明格式错误只影响知识源注册，连接器本身已可用；留痕。
+			slog.Warn("mcp_installer: capabilities must be a string array, ignored", "server", serverID, "err", err)
+			return
 		}
 	}
-
-	slog.Info("mcp_installer: MCP server registered",
-		"inst_id", req.InstID, "name", name, "transport", mcpCfg.Transport)
-	return installDir, nil
+	for _, c := range caps {
+		if c != "knowledge-source" {
+			continue
+		}
+		knowledgeClient, ok := m.mcpConn.GetClient(serverID).(connector.MCPClient)
+		if !ok {
+			slog.Warn("mcp_installer: knowledge-source declared but client lacks resources/list+read, skipped", "server", serverID)
+			return
+		}
+		m.registry.Register(connector.NewMCPKnowledgeConnector(serverID, srv.Name, knowledgeClient))
+		slog.Info("mcp_installer: knowledge-source MCP server registered with SyncScheduler", "server", serverID)
+		return
+	}
 }
 
 func (m *MCPInstaller) Uninstall(ctx context.Context, req UninstallReq) error {
@@ -121,6 +98,15 @@ func (m *MCPInstaller) Uninstall(ctx context.Context, req UninstallReq) error {
 	if m.registry != nil {
 		m.registry.Unregister(req.InstID)
 	}
-	_ = m.extRepo.UninstallCleanup(ctx, "", req.RuntimeID, "mcp")
+	serverID := req.RuntimeID
+	if serverID == "" {
+		serverID = req.InstID // 独立连接器行 ID 即实例 ID
+	}
+	if m.mcpConn != nil {
+		m.mcpConn.Remove(serverID)
+	}
+	if err := m.extRepo.UninstallCleanup(ctx, "", serverID, string(types.TypeMCP)); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "mcp_installer.Uninstall", err)
+	}
 	return nil
 }

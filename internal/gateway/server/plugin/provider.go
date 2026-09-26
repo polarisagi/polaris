@@ -38,6 +38,8 @@ type ExtensionInstaller interface {
 	AuthorizeAction(ctx context.Context, principal string, action string, target any) error
 	// InstallExtension 执行扩展安装流程。
 	InstallExtension(ctx context.Context, req protocol.ExtensionInstallRequest) error
+	// CompleteInstall 文件就位后执行运行时绑定（唯一的插件/技能/连接器解析与注册实现在 extension 层）。
+	CompleteInstall(ctx context.Context, req protocol.ExtensionInstallRequest, dir string) error
 	// UninstallExtension 卸载指定扩展（级联清理）。
 	UninstallExtension(ctx context.Context, catalogID string) error
 	// UpdateInstance 更新扩展实例元数据（状态/错误信息）。

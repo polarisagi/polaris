@@ -49,18 +49,19 @@
 | `automation` | 触发器 + Agent 任务（cron/webhook/both/manual；规划：event/github） | `automations`（017） | user / marketplace |
 | `agent` | 外部 AI Agent 端点（A2A（Agent-to-Agent，智能体间通信） 协议）暴露为工具 | `mcp_servers`（transport=a2a） | marketplace / user |
 
-### 2.1 多厂商格式适配
+### 2.1 多厂商格式适配（ADR-0103 决策二/三/五）
 
-市场插件包（`.tar.gz`）内的清单文件通过 `internal/extension/marketplace/` 统一解析为 `RegistryEntry`：
+插件、技能、MCP 配置的**唯一解析器**是 `internal/extension/pluginspec`（纯解析，不落库）；安装器（`lifecycle`）、gateway 均经它读取，不得另写清单解析。
 
-| 清单文件 | 厂商 | 安装结果 |
-|---------|------|---------|
-| `.claude-plugin/plugin.toml` / `plugin.toml`（含 command） | Anthropic | mcp_servers |
-| `.claude-plugin/plugin.json` | Anthropic | plugin 类型 |
-| `skills.yaml` / `agent-manifest.yaml`（含 command） | Google | mcp_servers |
-| `skills.yaml`（无 command，含 name） | Google | skills（script runtime） |
+| 清单 | 标准 | 说明 |
+|------|------|------|
+| 根 `plugin.json`（`$schema` 指向 agent-plugins.org） + `mcp.json` + `skills/` | Agent Plugins 1.0 | `extensions["com.openai"]` 为对象时整体替换 `.codex-plugin/plugin.json` |
+| `.claude-plugin/plugin.json`（可缺省，按默认布局加载） | Anthropic | skills（追加）/ commands、agents（替换）/ hooks、mcpServers（合并）/ userConfig / channels / dependencies |
+| `.codex-plugin/plugin.json` | OpenAI Codex | skills / mcpServers / apps（`.app.json`）/ hooks / interface |
+| `.mcp.json` / `mcp.json` / 清单内联 / `.json` 路径 / `.mcpb`·`.dxt` 包 | 两家 + agent-plugins | 类型归一化为 stdio / http / sse / ws |
+| `SKILL.md`（+ Codex `agents/openai.yaml`） | agentskills.io + 两家扩展 | 硬错误/规范告警两级 |
 
-Polaris 原生格式（`SKILL.md` / `plugin.json`）由 `internal/extension/marketplace/` 处理。
+组件级错误逐组件隔离，记入诊断（`plugins.manifest` 快照）；LSP/主题/输出风格/monitors/workflows/`bin/`/`settings.json` 解析后标为「此宿主不适用」。`ai-plugin.json`、`plugin.toml`、Google `skills.yaml` 与 Polaris 私有 `.polaris-plugin/` 已不再作为安装格式（市场同步爬虫中的残留解析随决策七改造移除）。
 
 ### 2.2 origin 枚举
 
@@ -130,55 +131,33 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 
 ## 5. 安装流
 
-### 5.1 MCP
+### 5.1 安装主干（三类共用）
 
-1. **Cedar Gate 验证**
-2. **写 extension_instances**: `status=installing`
-3. **INSERT mcp_servers**: 继承 `trust_tier`
-4. **MCPManager.startMCPServer()**: goroutine 连接 + 工具注册 InProcessSandbox
-5. **UPDATE extension_instances**: `status=installed`，`runtime_id=mcp_servers.id`
+`Manager.InstallExtension`（授权 + 写 `extension_instances`）→ 文件就位 → `Manager.CompleteInstall` → `InstallFSM` 按 `ext_type` 分发安装器 → FSM 统一回写 `install_path` / `runtime_id` / `status`。gateway 只负责把市场缓存拷贝到 `extensions/{extID}`，不做任何清单解析或运行时注册。文件未就位（异步拷贝中）时实例保持 `installing`，不会被提前置为 `installed`。
 
-**MCP 客户端三种传输**（`internal/extension/mcp/mcp_client.go`）：`stdio`（子进程 JSON-RPC）、`sse`（HTTP Server-Sent Events）、`http`（ADR-0017（Architecture Decision Record，架构决策记录） Streamable HTTP）。`sanitizeParentEnv()`（`internal/extension/mcp/env.go`）仅向子进程传递白名单无害系统变量，防环境变量注入。
+MCP 连接一律经 `MCPManager.StartFromDB(serverID)`：`mcp_servers` 行是配置权威源，`ConfigFromRow` 统一处理 `{DATA_DIR}`、插件变量（`${PLUGIN_ROOT}`/`${CLAUDE_PLUGIN_ROOT}`/`${PLUGIN_DATA}`/`${user_config.*}`/白名单内宿主变量）与 `headers`。
 
-### 5.2 Skill
+### 5.2 MCP 连接器（独立）
 
-1. **Cedar Gate 验证**
-2. **写 extension_instances**: `status=downloading`
-3. **复制文件**到 `install_path`
-4. **解析 SKILL.md** frontmatter: `name / description / exec_mode / risk_level / sandbox / capability`
-5. **SkillRegistry.Register**: `name="skill:{hex}"`，强制 `skill:` 前缀校验
-6. **UPDATE extension_instances**: `status=installed`
+目录内标准 `.mcp.json` / `mcp.json` 恰好声明一个服务器 → 写 `mcp_servers`（行 ID = 实例 ID）→ `StartFromDB`。多服务器须以插件分发。
 
-**名称规范**：独立安装的 skill 使用 `"skill:{ext_id后缀}"` 格式（全局唯一，不依赖 SKILL.md 的 name 字段）。插件 skill 使用 `"skill:{plugin-name}/{skill-slug}"` 格式（人类可读，在命名空间内唯一）。两者均通过 `SkillRegistry.Register`，强制 `skill:` 前缀校验。
+### 5.3 Skill（独立）
 
-### 5.3 Plugin Bundle
+`pluginspec.ParseSkillDir` → 名称 `skill:{name}`（同名已被其他实例持有则 `CodeAlreadyExists`）→ `SkillRegistry.Register`（Instructions 为正文，Polaris 私有参数只取 `metadata.polaris-*`）。标准技能无需入口脚本；存在 Polaris 脚本入口（`src/index.ts` 等）时额外静态分析 fail-closed + 风险分级。
 
-**设计原则（agentskills.io 开放标准，对齐 OpenAI Codex / Claude Code）：Plugin 是容器，子组件安装时同步写入全局 Runtime 表，通过 `plugin_id` FK 关联，生命周期级联管理。**
+### 5.3.1 Plugin Bundle
 
-1. **Cedar Gate 验证**: 含 hooks 安全检查
-2. **写 extension_instances**: `status=downloading`
-3. **复制文件**
-4. **解析 plugin.json**: 收集子 MCP 定义和子 Skill
-5. **INSERT plugins(021)**
-6. **子 MCP 写 mcp_servers**: `id="plugin_{pl_id}_{name}"`，`plugin_id` FK，`work_dir=install_path` + `MCPManager.Add()` 异步连接
-7. **子 Skill 写 SkillRegistry**: `name="skill:{plugin-name}/{slug}"`，`plugin_id` FK
-8. **UPDATE extension_instances**: `status=installed`
+`pluginspec.Load` → 清理同一插件上一版本的子组件（停连接、删行）→ 注册技能（`skill:{plugin}__{skill}`，命令同样转为技能）→ 子 MCP 逐个 PolicyGate 授权后写 `mcp_servers`（`plugin_id` FK，保留 `${...}` 原文）→ 写 `plugins`（`manifest` 为归一化快照：诊断、不适用组件、应用绑定、hooks、agents、userConfig）→ `defaultEnabled` 时启动子 MCP。
 
-启动时 MCPManager.LoadFromDB 统一加载含 plugin_id 的子 MCP；Skill 注入走 `buildToolSchemas()`（tool 模式）和 `buildAmbientSkillsSection()`（ambient 模式）。
-
-所有写路径统一路由至 `marketplace.Manager.InstallExtension`，实现 ADR-0016 单写原则，消除了 `extension_instances` 的双写问题；`Manager` 新增 `UpdateStatus` 方法供状态变更使用。
-
-**插件生命周期级联**：
-
-插件生命周期级联操作均通过标准 API 执行，`mcp_servers.enabled` 是子 MCP 启停的唯一权威：
+**插件生命周期级联**：`mcp_servers.enabled` 是子 MCP 启停的唯一权威：
 - **禁用**：`UPDATE mcp_servers SET enabled=0`，`UPDATE skills SET deprecated=1`，MCPManager.Remove() × N
-- **启用**：`UPDATE mcp_servers SET enabled=1`，`UPDATE skills SET deprecated=0`，startMCPServer() × N
-- **切换子 MCP**：`PATCH /v1/plugins/{id}/mcp/{name}` 操作 `mcp_servers.enabled`（不操作 mcp_policy）
-- **卸载**：MCPManager.Remove() + 硬删除 mcp_servers/skills/plugins + os.RemoveAll(install_path) + 删 extension_instances
+- **启用**：`UPDATE mcp_servers SET enabled=1`，`UPDATE skills SET deprecated=0`，StartFromDB() × N
+- **切换子 MCP**：`PATCH /v1/plugins/{id}/mcp/{name}` 操作 `mcp_servers.enabled`
+- **卸载**：见 §5.7
 
 **管理 API**：
 ```
-GET    /v1/plugins                      已安装插件列表（子 MCP 状态从 mcp_servers 读取，不再解析 mcp_policy）
+GET    /v1/plugins                      已安装插件列表（子 MCP 状态从 mcp_servers 读取）
 PUT    /v1/plugins/{id}                 启用/停用插件（级联同步 mcp_servers + skills）
 PATCH  /v1/plugins/{id}/mcp/{name}     切换子 MCP（操作 mcp_servers.enabled，不允许独立 DELETE/PUT）
 DELETE /v1/mcp-servers/{plugin_xxx}    返回 405——插件 MCP 须通过插件管理接口操作
@@ -209,18 +188,17 @@ DELETE /v1/mcp-servers/{plugin_xxx}    返回 405——插件 MCP 须通过插�
 
 ### 5.7 彻底卸载
 
-1. **按 ext_type 清理运行时**: mcp/skill/plugin/automation/agent 各有对应删除路径
-2. **os.RemoveAll(install_path)**: 内部经 safeJoin 路径校验
-3. **DELETE extension_instances**
-4. **非 builtin 来源级联 cleanCatalog()**: plugin 类型额外级联删除 mcp_servers + skills (plugin_id FK)
+1. `Manager.UninstallExtension`：实例置 `uninstalling` 并投递 outbox `extension_uninstall`
+2. `sandbox.ExtensionUninstallHandler` → `InstallFSM.UninstallRuntime`：插件停全部子 MCP、删 `mcp_servers`/`skills`/`plugins` 行、删 `${PLUGIN_DATA}`；独立连接器停连接删行；独立技能删行
+3. 运行时清理成功后 `os.RemoveAll(install_path)` + 删 `extension_instances`；失败则保留现场并置 `error`
+
+插件私有 `hooks.install` / `hooks.uninstall` 已删除（非两家标准）；标准生命周期 hooks 由 hook 引擎按事件执行（ADR-0103 决策六）。
 
 ### 5.8 Plugin 自动生成（PluginCreator）
 
-用户以自然语言描述意图，`PluginCreator` 调用 LLM 生成 TypeScript MCP 插件并写入本地文件系统。
+`PluginCreator.GeneratePlugin()` 按意图生成 TypeScript MCP 服务器，以 **agent-plugins 1.0 布局**落盘到 `~/.polarisagi/polaris/extensions/local/{name}/`（`plugin.json` + `mcp.json` + `src/index.ts` + `deno.json`），随后以 `ext_type=plugin`、`LocalPath` 走 §5.1 主干安装——与市场插件同一解析、授权与启动路径。
 
-`PluginCreator.GeneratePlugin()` 接收自然语言意图，调用 LLM 生成 TypeScript MCP 插件（`src/index.ts` + `deno.json` + `.polaris-plugin/plugin.json` + `.mcp.json`），写入 `~/.polarisagi/polaris/extensions/local/{name}/`，返回 pluginDir（调用方负责后续注册到 extension_instances）。
-
-**运行时约定**：优先 Deno（生成 `deno.json` + `denoPermFlags`）；Deno 不可用时回退 `npx tsx`。社区插件可使用任意语言，加载层仅读 `.mcp.json` 的 `command/args`，格式无关。
+**运行时约定**：优先 Deno（`deno run --no-prompt` + `denoPermFlags`）；Deno 不可用时回退 `npx tsx`。
 
 ---
 
@@ -276,20 +254,17 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
 ```
 ~/.polarisagi/polaris/
 ├── extensions/
-│   ├── skill/{ext_id}/         # script runtime 技能安装目录
-│   │   ├── SKILL.md            # frontmatter: name, description, mode
-│   │   └── src/skill.py        # Logic Collapse 蒸馏脚本（Python，ADR-0008，存在时为 script runtime）
-│   ├── plugin/{ext_id}/        # Plugin Bundle 解压（市场安装）
-│   │   ├── plugin.json         # PluginBundleManifest
-│   │   ├── skills/             # Bundle 内技能
-│   │   └── hooks/              # Bundle 内钩子脚本
-│   ├── local/{name}/           # PluginCreator 自动生成（TypeScript，Deno 优先）
+│   ├── {ext_id}/               # 市场安装的技能 / 插件（gateway 从市场缓存原样拷贝）
+│   │   ├── SKILL.md            # 独立技能：agentskills.io frontmatter（Polaris 参数在 metadata.polaris-*）
+│   │   ├── .claude-plugin/ | .codex-plugin/ | plugin.json   # 插件：三种清单任一或并存
+│   │   ├── skills/ commands/ agents/ hooks/hooks.json .mcp.json .app.json
+│   │   └── .mcpb-cache/        # .mcpb / .dxt 包解压位置（pluginspec 生成）
+│   ├── local/{name}/           # PluginCreator 自动生成（agent-plugins 1.0 布局）
+│   │   ├── plugin.json         # $schema=agent-plugins.org 1.0
+│   │   ├── mcp.json            # { mcpServers: { name: { type:"stdio", command:"deno"|"npx", args:[...] } } }
 │   │   ├── src/index.ts        # MCP 服务器实现
-│   │   ├── deno.json           # Deno 清单 + denoPermFlags（Deno 可用时）
-│   │   ├── package.json        # npm 清单（Deno 不可用时回退 npx tsx）
-│   │   ├── .polaris-plugin/
-│   │   │   └── plugin.json     # Polaris 原生清单
-│   │   └── .mcp.json           # Deno: { command:"deno", args:["run","--allow-net","src/index.ts"] } / fallback: { command:"npx", args:["tsx","src/index.ts"] }
+│   │   └── deno.json           # Deno 清单
+│   ├── plugin-data/{plugin_id}/ # ${PLUGIN_DATA}：跨升级保留，卸载删除
 │   └── agent/{ext_id}/         # Agent Card 缓存
 │       └── agent-card.json
 ├── hooks/                      # 全局钩子（来自 Plugin Bundle 安装 + 用户配置）
@@ -298,7 +273,7 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
     ├── polaris.db
 ```
 
-`extension_instances.install_path`：skill/plugin 为绝对路径，mcp/automation/agent 为空字符串。
+`extension_instances.install_path`：skill/plugin 与市场安装的连接器为绝对路径；手工配置的 mcp、automation、agent 为空字符串。
 
 ---
 

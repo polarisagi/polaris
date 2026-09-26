@@ -6,6 +6,15 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103 第二阶段：统一插件/技能/连接器安装路径 — 含**契约变更**与 **DDL 变更**）
+
+- **[DDL] `015_mcp_servers.sql` 新增 `headers`**（上线前直接改原文件）：开发库需删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。
+- **[契约] `internal/extension/pluginspec` 是插件 / 技能 / MCP 配置的唯一解析器**；新增清单解析不得绕开它。
+- **[契约] MCP 启动只经 `MCPManager.StartFromDB(serverID)`**：`mcp_servers` 行是配置权威源，`ConfigFromRow` 统一展开插件变量与 headers；新增调用点不得再自行拼 `MCPClientConfig` 调 `Add`。`protocol.MCPClientConfig` / `MCPUpdateConfig` / `types.MCPServerRow` 新增 `Headers`。
+- **[契约] `lifecycle.Installer.Install` 返回 `InstallResult{Dir, RuntimeID}`**，由 `InstallFSM` 回写 `install_path` / `runtime_id` / `status`；`Manager.CompleteInstall` 为文件就位后的唯一绑定入口；`ExtensionRepository` 新增 `UpdateInstanceRuntimeID`、`GetPluginInstallPath`，`UpsertPlugin` 改收 `types.PluginRow`。
+- **[契约] 卸载**：`sandbox.NewExtensionUninstallHandler` 改收 `RuntimeUninstaller`（`InstallFSM`）；插件私有 `hooks.install/uninstall` 删除。
+- 行为修复：插件内技能此前从未注册、`.mcp.json` 的标准 `mcpServers` 映射被丢弃、`runtime_id` 恒为空、卸载不清运行时行与进程、`plugins` 行卸载不删、SSE 端点被拼接 `/sse`。
+
 ## 2026-09-26（ADR-0103 扩展体系对齐 OpenAI / Anthropic 双标准 — 含**契约变更**）
 
 - **[契约] 删除 `ext_type=app`**：`types.TypeApp`、`types.AppRow`、`protocol.App`、`protocol.AppJSON/AppDef`、`protocol.AIPluginJSON`、`repo.AppRepository`、`ExtensionRepository.UpsertApp/DeleteApp`、`/v1/apps*` 路由、`apps`（028）表一并删除。新代码不得再引入 App 扩展类型；Codex `.app.json` 按「插件内连接器绑定」处理（ADR-0103 决策四，后续阶段落地）。

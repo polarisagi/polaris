@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -18,16 +17,14 @@ type PluginHandler struct {
 	ClearToolSchemaCache func()
 	MCPMgr               MCPManager
 	DataDir              string
-	StartMCPServer       func(ctx context.Context, cfg types.MCPServerConfig) error
-	SkillReg             protocol.SkillRegistry
-	ScriptRunner         HookRunner
-	PluginCreator        PluginGenerator
+	// StartMCPServer 按 mcp_servers 行 ID 启动连接（MCPManager.StartFromDB），行是配置权威源。
+	StartMCPServer func(ctx context.Context, serverID string) error
+	SkillReg       protocol.SkillRegistry
+	ScriptRunner   HookRunner
+	PluginCreator  PluginGenerator
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
-
-	// SyncSkillToToolRegistry 运行时安装插件时，同步自带 skill 到 InMemoryToolRegistry
-	SyncSkillToToolRegistry func(slug, instructions string)
 }
 
 // HookRunner 在受限环境下执行插件 hook 脚本
@@ -44,7 +41,7 @@ type Dependencies struct {
 	ClearToolSchemaCache func()
 	MCPMgr               MCPManager
 	DataDir              string
-	StartMCPServer       func(ctx context.Context, cfg types.MCPServerConfig) error
+	StartMCPServer       func(ctx context.Context, serverID string) error
 	SkillReg             protocol.SkillRegistry
 	ScriptRunner         HookRunner
 	PluginCreator        PluginGenerator

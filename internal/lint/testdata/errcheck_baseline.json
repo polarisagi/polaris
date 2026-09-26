@@ -23,7 +23,6 @@
   "internal/config/layout.go:DataLayout.Migrate:Rename#0": true,
   "internal/execute/dag/executor_node.go:DAGExecutor.leaseHeartbeat:leaseRenew#0": true,
   "internal/execute/orchestrator/sqlite_blackboard_reaper.go:SQLiteBlackboard.reap:Wait#0": true,
-  "internal/extension/lifecycle/app_installer.go:AppInstaller.Uninstall:UninstallCleanup#0": true,
   "internal/extension/lifecycle/fsm.go:InstallFSM.Install:UpdateInstanceStatus#0": true,
   "internal/extension/lifecycle/fsm.go:InstallFSM.Install:UpdateInstanceStatus#1": true,
   "internal/extension/lifecycle/mcp_installer.go:MCPInstaller.Uninstall:UninstallCleanup#0": true,

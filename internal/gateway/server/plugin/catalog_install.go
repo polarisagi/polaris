@@ -103,7 +103,7 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 
 	if h.MCPMgr != nil {
 		concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.start_mcp_server_install", func(ctx context.Context) {
-			if err := h.StartMCPServer(ctx, cfg); err != nil {
+			if err := h.StartMCPServer(ctx, mcpID); err != nil {
 				slog.Warn("plugin_catalog: start mcp server on install failed", "id", cfg.ID, "err", err)
 			}
 		})
@@ -131,7 +131,7 @@ func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Reque
 	httputil.WriteJSONStatus(w, http.StatusCreated, resp)
 }
 
-// internalInstallGeneric 安装 skill / plugin / app：写 extension_instances。
+// internalInstallGeneric 安装 skill / plugin：写 extension_instances。
 // skill/plugin 通过 downloadAndInstallExtension 异步下载并写运行时表。
 func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string, bypassAuth bool) (any, error) {
 	name := cond(req.Name != "", req.Name, entry.Name)
@@ -173,7 +173,7 @@ func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string
 
 	if entry.Type == "skill" || entry.Type == "plugin" {
 		concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.download_and_install_extension", func(ctx context.Context) {
-			h.downloadAndInstallExtension(ctx, extID, req.CatalogID, entry, now, name)
+			h.downloadAndInstallExtension(ctx, extID, req.CatalogID, installReq)
 		})
 	}
 
@@ -201,7 +201,5 @@ func (h *PluginHandler) installGenericExtension(w http.ResponseWriter, r *http.R
 	httputil.WriteJSONStatus(w, http.StatusCreated, resp)
 }
 
-// downloadAndInstallExtension（skill/plugin 异步下载安装）、
-// updateExtensionInstanceError、copyDir/copyFile、pluginMCPDef 见
-// catalog_download.go（R7 拆分）。registerPluginMCPServers 定义见
-// catalog_register.go（其文档注释此前误留在本文件末尾，已随本次拆分归位）。
+// downloadAndInstallExtension（skill/plugin 异步拷贝后交 CompleteInstall）、
+// updateExtensionInstanceError、copyDir/copyFile 见 catalog_download.go（R7 拆分）。

@@ -76,7 +76,7 @@ func TestInstallGenericExtension(t *testing.T) {
 func TestDownloadAndInstallExtension(t *testing.T) {
 	h := getDummyServerWithInstallMgr(t)
 	// It triggers asynchronous or synchronous download operations. We just want it to not panic.
-	h.downloadAndInstallExtension(context.Background(), "ext1", "cat1", &protocol.RegistryEntry{}, "now", "name")
+	h.downloadAndInstallExtension(context.Background(), "ext1", "cat1", protocol.ExtensionInstallRequest{ExtensionID: "ext1", ExtType: "plugin"})
 }
 
 func TestUpdateExtensionInstanceError(t *testing.T) {

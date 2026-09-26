@@ -217,27 +217,38 @@ func (m *Manager) postInstallSteps(ctx context.Context, req protocol.ExtensionIn
 		installDir = dir
 	}
 
-	if installDir != "" {
-		_ = m.extRepo.UpdateInstanceInstallPath(ctx, instID, installDir)
-	}
-
-	if m.installFSM != nil {
-		reqFSM := lifecycle.InstallReq{
-			InstID:    req.ExtensionID,
-			Name:      req.Name,
-			Publisher: req.Publisher,
-			TrustTier: req.TrustTier,
-			Target:    req.Target,
-			LocalPath: installDir,
-			Config:    req.Config,
+	// 文件尚未就位（gateway 异步拷贝市场缓存）：保持 installing/downloading，由 CompleteInstall
+	// 在文件就位后执行运行时绑定。此前 FSM 在空目录上"安装成功"并把实例标成 installed。
+	if installDir == "" {
+		// 调用方已自行写好运行时行（如手工创建的 MCP 连接器）：只需回写 runtime_id 并置 installed。
+		if req.RuntimeID != "" {
+			return m.UpdateInstance(ctx, instID, InstanceUpdate{Status: "installed", RuntimeID: req.RuntimeID})
 		}
-		// GR-8-007：FSM 失败（实例已被置 failed）必须向上返回，原实现只 Warn 后
-		// return nil，调用方拿到"安装成功"而实例实际不可用。
-		if _, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType)); err != nil {
-			return apperr.Wrap(apperr.CodeOf(err), "marketplace: install fsm failed", err)
-		}
+		return nil
 	}
+	return m.CompleteInstall(ctx, req, installDir)
+}
 
+// CompleteInstall 对已通过 InstallExtension 授权并登记的实例，在文件就位后执行运行时绑定
+// （plugin / skill / mcp 安装器），并由 InstallFSM 回写 install_path / runtime_id / status。
+func (m *Manager) CompleteInstall(ctx context.Context, req protocol.ExtensionInstallRequest, dir string) error {
+	if m.installFSM == nil {
+		return apperr.New(apperr.CodeInternal, "marketplace: install fsm not configured")
+	}
+	reqFSM := lifecycle.InstallReq{
+		InstID:    req.ExtensionID,
+		CatalogID: req.CatalogID,
+		Name:      req.Name,
+		Publisher: req.Publisher,
+		TrustTier: req.TrustTier,
+		Target:    req.Target,
+		LocalPath: dir,
+		Config:    req.Config,
+	}
+	// GR-8-007：FSM 失败（实例已被置 failed）必须向上返回。
+	if _, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType)); err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "marketplace: install fsm failed", err)
+	}
 	return nil
 }
 
@@ -336,7 +347,10 @@ func (m *Manager) UpdateInstance(ctx context.Context, id string, upd InstanceUpd
 			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
 		}
 	}
-	// Note: RuntimeID update is dropped as it's not present in ExtensionRepository's direct update methods,
-	// but it can be handled by UpsertInstance if we really need it, though normally RuntimeID is set on install.
+	if upd.RuntimeID != "" {
+		if err := m.extRepo.UpdateInstanceRuntimeID(ctx, id, upd.RuntimeID); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
+		}
+	}
 	return nil
 }

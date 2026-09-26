@@ -20,6 +20,8 @@ type MCPManager interface {
 	ListServers() []protocol.MCPServerInfo
 	// Add 注册并启动一个新 MCP 服务器连接。
 	Add(ctx context.Context, serverID, name string, cfg protocol.MCPClientConfig) error
+	// StartFromDB 按 mcp_servers 行启动或重启连接。
+	StartFromDB(ctx context.Context, serverID string) error
 	// Remove 注销指定 MCP 服务器连接。
 	Remove(serverID string)
 	// Update 更新 MCP 服务器配置（替换原有连接）。

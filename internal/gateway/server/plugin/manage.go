@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	"github.com/polarisagi/polaris/internal/gateway/types"
-
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 
 	"context"
@@ -144,6 +142,9 @@ func (h *PluginHandler) listPluginMCPStatuses(
 		}
 		out[pluginID] = append(out[pluginID], st)
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("plugin_manage: iterate plugin mcp status failed", "err", err)
+	}
 	return out
 }
 
@@ -209,15 +210,8 @@ func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Reques
 // disablePluginComponents 停止插件的所有子 MCP，并将 skills 标记为 deprecated。
 func (h *PluginHandler) disablePluginComponents(ctx context.Context, pluginID, now string) {
 	if h.MCPMgr != nil {
-		mcpRows, err := h.DB.QueryContext(ctx, `SELECT id FROM mcp_servers WHERE plugin_id=?`, pluginID)
-		if err == nil {
-			for mcpRows.Next() {
-				var serverID string
-				if mcpRows.Scan(&serverID) == nil {
-					h.MCPMgr.Remove(serverID)
-				}
-			}
-			mcpRows.Close()
+		for _, serverID := range h.pluginServerIDs(ctx, pluginID, false) {
+			h.MCPMgr.Remove(serverID)
 		}
 	}
 	if err := h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 0, now); err != nil {
@@ -232,26 +226,13 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 		slog.Warn("plugin_manage: enable plugin components failed", "plugin", pluginID, "err", err)
 	}
 
-	if h.MCPMgr != nil { //nolint:nestif
-		mcpRows, err := h.DB.QueryContext(ctx,
-			`SELECT id, name, transport, command, args, env, url, timeout, work_dir, trust_tier
-			 FROM mcp_servers WHERE plugin_id=? AND enabled=1`, pluginID)
-		if err == nil {
-			for mcpRows.Next() {
-				var c types.MCPServerConfig
-				var argsJSON, envJSON string
-				if mcpRows.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
-					&c.URL, &c.Timeout, &c.WorkDir, &c.TrustTier) == nil {
-					json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
-					json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
-					concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.start_mcp_server_enable", func(ctx context.Context) {
-						if err := h.StartMCPServer(ctx, c); err != nil {
-							slog.Warn("plugin_manage: start mcp server on enable failed", "id", c.ID, "err", err)
-						}
-					})
+	if h.MCPMgr != nil {
+		for _, serverID := range h.pluginServerIDs(ctx, pluginID, true) {
+			concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.start_mcp_server_enable", func(ctx context.Context) {
+				if err := h.StartMCPServer(ctx, serverID); err != nil {
+					slog.Warn("plugin_manage: start mcp server on enable failed", "id", serverID, "err", err)
 				}
-			}
-			mcpRows.Close()
+			})
 		}
 	}
 	h.ClearToolSchemaCache()
@@ -309,21 +290,11 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 		if !req.Enabled {
 			h.MCPMgr.Remove(serverID)
 		} else {
-			var c types.MCPServerConfig
-			var argsJSON, envJSON string
-			row := h.DB.QueryRowContext(r.Context(),
-				`SELECT id, name, transport, command, args, env, url, timeout, work_dir, trust_tier
-				 FROM mcp_servers WHERE id=?`, serverID)
-			if row.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
-				&c.URL, &c.Timeout, &c.WorkDir, &c.TrustTier) == nil {
-				json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
-				json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
-				concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.start_mcp_server_toggle", func(ctx context.Context) {
-					if err := h.StartMCPServer(ctx, c); err != nil {
-						slog.Warn("plugin_manage: start mcp server on toggle failed", "id", c.ID, "err", err)
-					}
-				})
-			}
+			concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.start_mcp_server_toggle", func(ctx context.Context) {
+				if err := h.StartMCPServer(ctx, serverID); err != nil {
+					slog.Warn("plugin_manage: start mcp server on toggle failed", "id", serverID, "err", err)
+				}
+			})
 		}
 	}
 	h.ClearToolSchemaCache()
@@ -341,4 +312,29 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// pluginServerIDs 读取插件子 MCP ID（onlyEnabled 时仅已启用）；先读完释放连接再操作连接（R1.16）。
+func (h *PluginHandler) pluginServerIDs(ctx context.Context, pluginID string, onlyEnabled bool) []string {
+	query := `SELECT id FROM mcp_servers WHERE plugin_id=?`
+	if onlyEnabled {
+		query += ` AND enabled=1`
+	}
+	rows, err := h.DB.QueryContext(ctx, query, pluginID)
+	if err != nil {
+		slog.Warn("plugin_manage: list plugin mcp servers failed", "plugin", pluginID, "err", err)
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("plugin_manage: iterate plugin mcp servers failed", "plugin", pluginID, "err", err)
+	}
+	return ids
 }

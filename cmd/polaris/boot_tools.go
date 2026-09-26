@@ -290,6 +290,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// 注入网络审批存储：MCPManager 查询 preferences 表以决定 TrustTier<=2 MCP 的网络隔离策略。
 	mcpMgr.SetNetApprovalStore(sysRepo)
+	// mcp_servers 行是连接配置权威源；插件 MCP 的 ${PLUGIN_ROOT} / ${user_config.*} 在每次启动时
+	// 由解析器展开（ADR-0103 决策二）。两者须在任何 StartFromDB / RestoreServersFromDB 之前注入。
+	mcpMgr.SetRowSource(extRepo, sb.DataDir)
+	mcpMgr.SetPluginVarsResolver(lifecycle.NewPluginVarsResolver(extRepo, sb.DataDir))
 
 	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap, sb.Outbox)
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
@@ -442,8 +446,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, protocol.LLMInferFunc(llmInfer), nil)
 	sb.Outbox.RegisterHandler(protocol.TopicExtensionLibrarian, extensionLibrarianHandler.Handle)
-	sb.Outbox.RegisterHandler("extension_uninstall", sandbox.NewExtensionUninstallHandler(
-		sandboxRouter, extRepo, sb.Cfg.Thresholds.M7Tool.ExtUninstallHookTimeoutS).Handle)
 
 	sb.Outbox.RegisterHandler(protocol.TopicEpisodicProject, consolidation.EpisodicProjectorHandler(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey)))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
@@ -462,7 +464,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	knowledgeConnRegistry := connector.NewRegistry()
 	installFSM := lifecycle.NewInstallFSM(extRepo)
 	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr).WithRegistry(knowledgeConnRegistry))
-	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry).WithPolicyGate(sb.Gate))
+	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry).WithPolicyGate(sb.Gate).WithDataDir(sb.DataDir))
 	// [W-2-B] 接入 SkillValidationPipeline
 	signingKey := []byte(sb.Cfg.System.DataEncryptionKey)
 	// WithMaxCodeSize 2026-07-21 deadcode 审查修复：该 Option 从未被传入，
@@ -476,6 +478,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		&pipelineValidatorAdapter{pipeline: pipeline},
 	))
 	installMgr.WithInstallFSM(installFSM)
+	// 卸载：outbox 处理器先经 InstallFSM 清理运行时（停连接、删行、删插件数据），再删文件与实例。
+	sb.Outbox.RegisterHandler("extension_uninstall", sandbox.NewExtensionUninstallHandler(
+		installFSM, extRepo, sb.Cfg.Thresholds.M7Tool.ExtUninstallHookTimeoutS).Handle)
 	slog.Info("polaris: InstallFSM injected into marketplace manager")
 
 	// ScriptSkillExecutor 是技能执行的唯一实现（tool-mode instructions 渲染 / Logic Collapse

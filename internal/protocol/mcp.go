@@ -40,15 +40,18 @@ type MCPServerInfo struct {
 // MCPClientConfig MCP Server 连接配置。
 // @canonical: 此处为唯一定义，extension/mcp 包以 type alias 引用。
 type MCPClientConfig struct {
-	Transport  MCPTransport      // "stdio" | "sse" | "streamable_http"
-	Command    string            // stdio: 可执行命令
-	Args       []string          // stdio: 命令参数
-	Env        map[string]string // stdio: 附加环境变量
-	WorkDir    string            // stdio: 进程工作目录；空字符串则继承父进程
-	URL        string            // sse / streamable_http: 端点 URL
-	Timeout    time.Duration     // 单次请求超时，0 → 30s
-	ServerName string            // 用于 TaintPreservingDecoder 溯源
-	Trusted    bool              // true → TaintMedium（白名单）；false → TaintHigh
+	Transport MCPTransport      // "stdio" | "sse" | "streamable_http"
+	Command   string            // stdio: 可执行命令
+	Args      []string          // stdio: 命令参数
+	Env       map[string]string // stdio: 附加环境变量
+	WorkDir   string            // stdio: 进程工作目录；空字符串则继承父进程
+	URL       string            // sse / streamable_http: 端点 URL
+	// Headers 远程传输的附加请求头（Claude / Codex .mcp.json 的 headers，常用于 Bearer 鉴权）。
+	// 值已完成 ${user_config.*} 等变量展开；协议必需头（Content-Type / MCP-Protocol-Version）不可被覆盖。
+	Headers    map[string]string
+	Timeout    time.Duration // 单次请求超时，0 → 30s
+	ServerName string        // 用于 TaintPreservingDecoder 溯源
+	Trusted    bool          // true → TaintMedium（白名单）；false → TaintHigh
 	// SandboxPolicy 控制 stdio 进程的 OS 级隔离策略。
 	// ""（未设置）/ "auto"：按 TrustTier + OS 自动决策（默认安全路径，推荐所有调用方使用）；
 	// "none"：唯一的显式退出路径，调用方主动声明不隔离（慎用）；
@@ -76,6 +79,7 @@ type MCPUpdateConfig struct {
 	Args            []string
 	Env             map[string]string
 	URL             string
+	Headers         map[string]string
 	Enabled         bool
 	Timeout         int
 	TrustTier       int

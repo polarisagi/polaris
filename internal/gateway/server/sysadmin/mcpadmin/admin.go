@@ -20,7 +20,7 @@ type InstallMgr interface {
 // MCPManager mcpadmin 消费方视角的最小 MCP 连接管理接口。
 type MCPManager interface {
 	ListServers() []protocol.MCPServerInfo
-	Add(ctx context.Context, id, name string, cfg protocol.MCPClientConfig) error
+	StartFromDB(ctx context.Context, id string) error
 	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
 	Remove(id string)
 	ApproveNetworkAccess(ctx context.Context, id string, extRepo protocol.ExtensionRepository, dataDir string, approved bool) error

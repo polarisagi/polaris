@@ -6,14 +6,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 type ExtensionUninstallPayload struct {
@@ -25,23 +22,30 @@ type ExtensionUninstallPayload struct {
 	RuntimeID   string `json:"runtime_id"`
 }
 
-type ExtensionUninstallHandler struct {
-	router      *SandboxRouter
-	extRepo     protocol.ExtensionRepository
-	hookTimeout time.Duration // HE-6: 由 state.yaml M7Tool.ExtUninstallHookTimeoutS 注入，禁止硬编码
+// RuntimeUninstaller 按扩展类型清理运行时（停 MCP 连接、删 plugins/skills/mcp_servers 行、
+// 删插件数据目录）。consumer-side 定义，实现为 extension/lifecycle.InstallFSM——sandbox（L1）
+// 不得反向依赖 extension（L2）。
+type RuntimeUninstaller interface {
+	UninstallRuntime(ctx context.Context, extType, instanceID, runtimeID string) error
 }
 
-// NewExtensionUninstallHandler 构造卸载 Hook 处理器。
-// hookTimeoutSeconds<=0 时兜底为 180s（与 config.DefaultThresholds() 默认值一致），
+type ExtensionUninstallHandler struct {
+	runtime RuntimeUninstaller
+	extRepo protocol.ExtensionRepository
+	timeout time.Duration // HE-6: 由 state.yaml M7Tool.ExtUninstallHookTimeoutS 注入，禁止硬编码
+}
+
+// NewExtensionUninstallHandler 构造卸载处理器。
+// timeoutSeconds<=0 时兜底为 180s（与 config.DefaultThresholds() 默认值一致），
 // 防止调用方未注入配置时退化为无超时挂起。
-func NewExtensionUninstallHandler(router *SandboxRouter, extRepo protocol.ExtensionRepository, hookTimeoutSeconds int) *ExtensionUninstallHandler {
-	if hookTimeoutSeconds <= 0 {
-		hookTimeoutSeconds = 180
+func NewExtensionUninstallHandler(runtime RuntimeUninstaller, extRepo protocol.ExtensionRepository, timeoutSeconds int) *ExtensionUninstallHandler {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 180
 	}
 	return &ExtensionUninstallHandler{
-		router:      router,
-		extRepo:     extRepo,
-		hookTimeout: time.Duration(hookTimeoutSeconds) * time.Second,
+		runtime: runtime,
+		extRepo: extRepo,
+		timeout: time.Duration(timeoutSeconds) * time.Second,
 	}
 }
 
@@ -55,17 +59,23 @@ func (h *ExtensionUninstallHandler) Handle(ctx context.Context, record *store.Ou
 		return nil // Drop invalid payload
 	}
 
-	// Create a context with timeout to force destroy if hanging
-	execCtx, cancel := context.WithTimeout(ctx, h.hookTimeout)
+	execCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 
+	// 先清运行时再删文件：此前只删文件与实例记录，mcp_servers / skills / plugins 行与
+	// 运行中的 MCP 进程全部残留（重启后按残留行重新拉起已"卸载"的扩展）。
+	// 插件私有 install/uninstall 钩子已随 ADR-0103 删除；两家标准的 SessionEnd 等
+	// 生命周期 hooks 由 hook 引擎按事件执行，不在卸载时运行。
 	success := true
-
-	if payload.InstallPath != "" && payload.ExtType == "plugin" {
-		success = h.executeHook(execCtx, payload)
+	if h.runtime == nil {
+		slog.Error("extension_uninstall: runtime uninstaller not injected, runtime rows kept", "instance_id", payload.InstanceID)
+		success = false
+	} else if err := h.runtime.UninstallRuntime(execCtx, payload.ExtType, payload.InstanceID, payload.RuntimeID); err != nil {
+		slog.Error("extension_uninstall: runtime cleanup failed", "instance_id", payload.InstanceID, "err", err)
+		success = false
 	}
 
-	// Timeout 则强制保留现场，仅成功时擦除文件。
+	// 运行时清理失败则保留现场（文件与实例），仅成功时擦除。
 	//
 	// 三处错误此前全被 `_ =` 吞掉，后果各不相同且都不可见：
 	//   - RemoveAll 失败 → 磁盘残留扩展文件，重装时可能撞上旧文件
@@ -83,7 +93,7 @@ func (h *ExtensionUninstallHandler) Handle(ctx context.Context, record *store.Ou
 				"instance_id", payload.InstanceID, "err", err)
 			errs = append(errs, apperr.Wrap(apperr.CodeInternal, "extension_uninstall: delete instance", err))
 		}
-	} else if err := h.extRepo.UpdateInstanceStatus(ctx, payload.InstanceID, "error", "uninstall hook failed or timed out"); err != nil {
+	} else if err := h.extRepo.UpdateInstanceStatus(ctx, payload.InstanceID, "error", "runtime cleanup failed or timed out"); err != nil {
 		slog.Error("extension_uninstall: 失败状态回写失败，实例将停留在旧状态且无人工介入线索",
 			"instance_id", payload.InstanceID, "err", err)
 		errs = append(errs, apperr.Wrap(apperr.CodeInternal, "extension_uninstall: mark instance error", err))
@@ -107,47 +117,4 @@ func removeInstallPath(payload ExtensionUninstallPayload) []error {
 		return []error{apperr.Wrap(apperr.CodeInternal, "extension_uninstall: remove install path", err)}
 	}
 	return nil
-}
-
-func (h *ExtensionUninstallHandler) executeHook(ctx context.Context, payload ExtensionUninstallPayload) bool {
-	raw, err := os.ReadFile(filepath.Join(payload.InstallPath, "plugin.json"))
-	if err != nil {
-		return true // No plugin.json, nothing to do
-	}
-
-	var bundle protocol.PluginBundleManifest
-	_ = json.Unmarshal(raw, &bundle)
-
-	hook := bundle.Hooks["uninstall"]
-	if hook == "" {
-		return true // No uninstall hook
-	}
-
-	hookPath := filepath.Join(payload.InstallPath, hook)
-	cleanHook := filepath.Clean(hookPath)
-	cleanBase := filepath.Clean(payload.InstallPath)
-	if !strings.HasPrefix(cleanHook, cleanBase+string(filepath.Separator)) && cleanHook != cleanBase {
-		return true // Invalid path traversal
-	}
-
-	provider, err := h.router.RouteByTier(types.SandboxContainer, types.TrustTier(payload.TrustTier))
-	if err != nil {
-		slog.Warn("sandbox: failed to route uninstall hook", "err", err, "ext", payload.InstanceID)
-		return false
-	}
-
-	runner, ok := provider.(interface {
-		RunHook(context.Context, string, string) error
-	})
-	if !ok {
-		slog.Warn("sandbox: routed provider does not support RunHook", "ext", payload.InstanceID)
-		return true // Ignore if unsupported
-	}
-
-	if err := runner.RunHook(ctx, hookPath, payload.InstallPath); err != nil {
-		slog.Warn("sandbox: uninstall hook failed", "err", err, "ext", payload.InstanceID)
-		return false
-	}
-
-	return true
 }

@@ -93,6 +93,18 @@ func (r *SQLiteExtensionRepository) UpdateInstanceInstallPath(ctx context.Contex
 	return nil
 }
 
+// UpdateInstanceRuntimeID 回写运行时表主键（mcp_servers.id / skills.name / plugins.id）。
+// 此前 Manager.UpdateInstance 丢弃 RuntimeID，runtime_id 列恒为空，卸载清理无法按其定位。
+func (r *SQLiteExtensionRepository) UpdateInstanceRuntimeID(ctx context.Context, id, runtimeID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE extension_instances SET runtime_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
+		runtimeID, id)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpdateInstanceRuntimeID", err)
+	}
+	return nil
+}
+
 func (r *SQLiteExtensionRepository) ListInstances(ctx context.Context) ([]types.ExtInstanceRow, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, COALESCE(error_msg, ''), created_at, updated_at

@@ -43,6 +43,8 @@ type MCPManager interface {
 	ListServers() []protocol.MCPServerInfo
 	// Add 连接并注册一个 MCP 服务器（热插拔，工具自动注入 Catalog）。
 	Add(ctx context.Context, serverID, name string, cfg protocol.MCPClientConfig) error
+	// StartFromDB 按 mcp_servers 行（配置权威源）启动或重启连接。
+	StartFromDB(ctx context.Context, serverID string) error
 	// Remove 断开并注销一个 MCP 服务器（级联清理工具注册）。
 	Remove(serverID string)
 	// Update 更新 MCP 服务器配置（断开旧连接 → 应用新配置 → 重连）。
@@ -64,6 +66,8 @@ type ExtensionInstaller interface {
 	AuthorizeAction(ctx context.Context, principal string, action string, target any) error
 	// InstallExtension 执行扩展安装流程（lifecycle FSM → 下载 → DB 记录）。
 	InstallExtension(ctx context.Context, req protocol.ExtensionInstallRequest) error
+	// CompleteInstall 文件就位后执行运行时绑定。
+	CompleteInstall(ctx context.Context, req protocol.ExtensionInstallRequest, dir string) error
 	// UninstallExtension 卸载指定扩展（级联删除：DB + 沙箱资源）。
 	UninstallExtension(ctx context.Context, catalogID string) error
 	// UpdateInstance 更新扩展实例元数据（状态/错误信息/安装路径）。

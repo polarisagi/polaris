@@ -12,9 +12,6 @@ internal/gateway/server/plugin/catalog.go:20:rows
 internal/gateway/server/plugin/catalog.go:48:rows
 internal/gateway/server/plugin/catalog.go:82:rows
 internal/gateway/server/plugin/catalog_handlers.go:240:rows
-internal/gateway/server/plugin/manage.go:133:rows
-internal/gateway/server/plugin/manage.go:214:mcpRows
-internal/gateway/server/plugin/manage.go:240:mcpRows
 internal/gateway/server/plugin/sync.go:153:rows
 internal/gateway/server/sysadmin/channelsadmin/channels_crud.go:38:rows
 internal/gateway/server/sysadmin/export.go:105:rows

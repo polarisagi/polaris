@@ -8,6 +8,7 @@ type MCPServerConfig struct {
 	Args       []string          `json:"args,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	URL        string            `json:"url,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"` // 远程传输请求头（如 Authorization）
 	Enabled    bool              `json:"enabled"`
 	Timeout    int               `json:"timeout"` // 秒
 	TrustTier  int               `json:"trust_tier"`
