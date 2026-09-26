@@ -6,6 +6,11 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-27（ADR-0103：市场收尾 — 含**契约变更**）
+
+- **[契约] `POST /v1/plugins/create`、`/v1/skills/create` 改为 `{"name","source"}`**（删除 `manifest_url` / `repo_url` / `entrypoint`，此前只写实例行从不取回）；`pluginspec.ParseSourceSpec`、`CatalogInstaller.InstallFromSource/Prune`、API `POST /v1/plugins/prune`。
+- `POST /v1/plugins/marketplaces` 须 `plugin:manage` 授权，来源规范化，插件/技能市场添加时同步校验；`PluginInstaller.WithRemoteDownloader`（远程 .mcpb）；`PluginSource.Headers`。
+
 ## 2026-09-27（ADR-0103：标准市场同步 / 来源取回 / 依赖自动安装 — 含**契约变更**）
 
 - **[删除]** `marketplace/adapter*.go`、`gateway/server/plugin/sync_parsers*.go`、`catalog.json` 私有格式、`protocol.{PluginJSON,PluginInterface,MCPConfig,MCPServerDef,AnthropicPluginTOML,GoogleSkillsYAML}`、`downloadAndInstallExtension`。

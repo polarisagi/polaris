@@ -22,9 +22,8 @@ Alpine.store('plugins', {
   createForm: {
     name: '',
     description: '',
-    repo_url: '',
-    entrypoint: '',
-    manifest_url: '',
+    source: '',
+    mp_type: 'plugin',
     url: '',
     transport: 'stdio',
     command: '',
@@ -223,8 +222,7 @@ Alpine.store('plugins', {
 
   resetCreateForm() {
     this.createForm = {
-      name: '', description: '', repo_url: '', entrypoint: '',
-      manifest_url: '', url: '', transport: 'stdio', command: '', args: '', env: ''
+      name: '', description: '', source: '', mp_type: 'plugin', url: '', transport: 'stdio', command: '', args: '', env: ''
     }
   },
 
@@ -243,16 +241,13 @@ Alpine.store('plugins', {
         endpoint = '/v1/skills/create'
         body = {
           name: this.createForm.name,
-          description: this.createForm.description,
-          repo_url: this.createForm.repo_url,
-          entrypoint: this.createForm.entrypoint
+          source: this.createForm.source
         }
       } else if (filter === 'plugin') {
         endpoint = '/v1/plugins/create'
         body = {
           name: this.createForm.name,
-          description: this.createForm.description,
-          manifest_url: this.createForm.manifest_url
+          source: this.createForm.source
         }
       } else if (filter === 'mcp') {
         endpoint = '/v1/mcp/create'
@@ -269,7 +264,7 @@ Alpine.store('plugins', {
         body = {
           name: this.createForm.name,
           description: this.createForm.description,
-          type: 'plugin', // Default to plugin for custom marketplaces
+          type: this.createForm.mp_type,
           publisher: 'user',
           repo_url: this.createForm.url
         }

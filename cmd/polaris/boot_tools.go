@@ -322,8 +322,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
 	// 市场目录同步与目录安装（标准市场格式 + 来源取回 + 依赖先装，ADR-0103 决策七）。
 	catalogSync := marketplace.NewCatalogSync(extRepo, mktClient, sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp", "marketplaces"))
-	catalogInstaller := marketplace.NewCatalogInstaller(installMgr, extRepo,
-		marketplace.NewSourceFetcher(sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp")), catalogSync, filepath.Join(sb.DataDir, "extensions"))
+	sourceFetcher := marketplace.NewSourceFetcher(sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp"))
+	catalogInstaller := marketplace.NewCatalogInstaller(installMgr, extRepo, sourceFetcher, catalogSync, filepath.Join(sb.DataDir, "extensions"))
 	installMgr.WithOutbox(sb.Outbox)
 
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
@@ -504,7 +504,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		}
 	})
 	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr).WithRegistry(knowledgeConnRegistry))
-	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry).WithPolicyGate(sb.Gate).WithDataDir(sb.DataDir))
+	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry).WithPolicyGate(sb.Gate).
+		WithDataDir(sb.DataDir).WithRemoteDownloader(sourceFetcher))
 	// [W-2-B] 接入 SkillValidationPipeline
 	signingKey := []byte(sb.Cfg.System.DataEncryptionKey)
 	// WithMaxCodeSize 2026-07-21 deadcode 审查修复：该 Option 从未被传入，

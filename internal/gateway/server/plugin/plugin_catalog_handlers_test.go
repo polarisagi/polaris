@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
 
@@ -149,16 +150,25 @@ func TestHandleAddDeleteMarketplace(t *testing.T) {
 	}
 
 	h := &PluginHandler{
-		DB:      db,
-		ExtRepo: repo.NewSQLiteExtensionRepository(db),
+		DB:         db,
+		ExtRepo:    repo.NewSQLiteExtensionRepository(db),
+		InstallMgr: marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, nil, nil, nil, nil),
 	}
 
-	body := `{"name":"test", "repo_url":"http://test", "type":"mcp"}`
-	req := httptest.NewRequest("POST", "/api/v1/marketplaces", bytes.NewBufferString(body))
+	// http（非 https）来源拒绝。
+	req := httptest.NewRequest("POST", "/api/v1/marketplaces", bytes.NewBufferString(`{"name":"test","repo_url":"http://test","type":"mcp"}`))
 	w := httptest.NewRecorder()
 	h.HandleAddMarketplace(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for http source, got %d", w.Code)
+	}
+
+	body := `{"name":"test", "repo_url":"https://registry.example/v0.1", "type":"mcp"}`
+	req = httptest.NewRequest("POST", "/api/v1/marketplaces", bytes.NewBufferString(body))
+	w = httptest.NewRecorder()
+	h.HandleAddMarketplace(w, req)
 	if w.Result().StatusCode != http.StatusCreated {
-		t.Errorf("expected 201 Created, got %d", w.Result().StatusCode)
+		t.Errorf("expected 201 Created, got %d %s", w.Result().StatusCode, w.Body.String())
 	}
 
 	// extract ID

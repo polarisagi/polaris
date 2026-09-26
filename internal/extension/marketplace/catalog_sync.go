@@ -109,7 +109,18 @@ func (s *CatalogSync) materialize(ctx context.Context, mp protocol.Marketplace, 
 		}
 		return dir, false, nil
 	}
-	available, _ := downloader.GitCloneOrPull(ctx, nil, func(url string) error { return network.ValidateGitURL(ctx, url) }, u, dir)
+	validator := func(url string) error { return network.ValidateGitURL(ctx, url) }
+	if repo, ref := splitRef(u); ref != "" {
+		// 固定 ref 的市场每次按该 ref 重新浅拉取（分支会前进，标签可被移动）。
+		if err := os.RemoveAll(dir); err != nil {
+			return "", false, apperr.Wrap(apperr.CodeInternal, "CatalogSync: reset "+dir, err)
+		}
+		if err := downloader.GitFetchRevision(ctx, validator, repo, ref, "", dir); err != nil {
+			return "", false, apperr.Wrap(apperr.CodeOf(err), "CatalogSync: fetch "+u, err)
+		}
+		return dir, false, nil
+	}
+	available, _ := downloader.GitCloneOrPull(ctx, nil, validator, u, dir)
 	if !available {
 		return "", false, apperr.New(apperr.CodeNetworkUnavailable, "CatalogSync: fetch "+u)
 	}

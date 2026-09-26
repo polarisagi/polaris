@@ -103,7 +103,7 @@ func tagVersion(ref string) string {
 
 // fetchArchive https zip；给出 sha256 时不匹配即拒绝。插件根可在压缩包顶层或下一层（Claude 规则）。
 func (f *SourceFetcher) fetchArchive(ctx context.Context, src pluginspec.PluginSource, destDir string) error {
-	zipPath, digest, err := f.download(ctx, src.URL, nil, "archive-*.zip")
+	zipPath, digest, err := f.download(ctx, src.URL, src.Headers, "archive-*.zip")
 	if err != nil {
 		return err
 	}
@@ -229,4 +229,21 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// DownloadTo 实现 lifecycle.RemoteDownloader：https 下载到 destPath（远程 .mcpb 包等）。
+func (f *SourceFetcher) DownloadTo(ctx context.Context, rawURL, destPath string) error {
+	tmp, _, err := f.download(ctx, rawURL, nil, "remote-*")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		os.Remove(tmp) //nolint:errcheck
+		return apperr.Wrap(apperr.CodeInternal, "marketplace: mkdir", err)
+	}
+	if err := os.Rename(tmp, destPath); err != nil {
+		os.Remove(tmp) //nolint:errcheck
+		return apperr.Wrap(apperr.CodeInternal, "marketplace: place download", err)
+	}
+	return nil
 }

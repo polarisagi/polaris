@@ -6,13 +6,17 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 	"github.com/polarisagi/polaris/pkg/util"
@@ -20,190 +24,134 @@ import (
 
 // HandleCreateMCP 见 custom_mcp.go；HandleCreatePluginFromIntent 见 custom_plugin_intent.go（R7 拆分）。
 
-// HandleCreateSkill 用户手动创建 Skill 扩展。
-// POST /v1/skills/create
-func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request) { //nolint:nestif
+// HandleCreateSkill 从用户给出的来源安装技能（agentskills 目录，如 Codex skill-installer 的
+// GitHub 目录地址）。POST /v1/skills/create {"name","source"}
+func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		RepoURL     string `json:"repo_url"`
-		Entrypoint  string `json:"entrypoint"`
+		Name   string `json:"name"`
+		Source string `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
-	extID := util.GenerateHumanReadableID("ext", req.Name)
+	h.installFromSource(w, r, "skill", req.Name, req.Source)
+}
 
+// HandleCreatePlugin 用户创建插件，两种模式：
+//   - source 模式：owner/repo[@ref]、GitHub 目录地址、https git / zip、npm:<pkg>、本机绝对路径（pluginspec.ParseSourceSpec）；
+//   - intent 模式：由 PluginCreator 调用 LLM 生成标准布局插件后安装。
+//
+// POST /v1/plugins/create
+func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+		Intent string `json:"intent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
+		return
+	}
+	if req.Intent == "" || h.PluginCreator == nil {
+		h.installFromSource(w, r, "plugin", req.Name, req.Source)
+		return
+	}
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	authCtx0 := authcontext.FromContext(r.Context())
-	principal0 := authCtx0.UserID
-	if principal0 == "" {
-		principal0 = "user"
+	extID := util.GenerateHumanReadableID("ext", firstNonEmptyStr(req.Name, "plugin"))
+	installReq := protocol.ExtensionInstallRequest{Principal: requestPrincipal(r), ExtensionID: extID, ExtType: "plugin",
+		TrustTier: 1, Publisher: "user"}
+	if err := h.InstallMgr.Authorize(r.Context(), installReq); err != nil {
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
+		return
 	}
-	installReq0 := protocol.ExtensionInstallRequest{
-		Principal:   principal0,
-		ExtensionID: extID,
-		ExtType:     "skill",
-		TrustTier:   1, // TrustLocal
-		Publisher:   "user",
-		HasHooks:    false,
+	h.HandleCreatePluginFromIntent(w, r, extID, installReq, req.Intent)
+}
+
+func requestPrincipal(r *http.Request) string {
+	if p := authcontext.FromContext(r.Context()).UserID; p != "" {
+		return p
 	}
-	if err := h.InstallMgr.Authorize(r.Context(), installReq0); err != nil { //nolint:nestif
-		if errors.Is(err, marketplace.ErrRequiresApproval) {
-			if h.HITLGateway != nil {
-				bgCtx, cancel := context.WithTimeout(protocol.Detach(r.Context()), 30*time.Minute)
-				concurrent.SafeGo(bgCtx, "gateway.plugin.hitl_install_skill", func(bgCtx context.Context) {
-					defer cancel()
-					resp, err := h.HITLGateway.Prompt(bgCtx, apptypes.HITLPrompt{
-						ID:             extID,
-						CheckpointType: "security_review",
-						PromptText:     "Approve creation for custom skill: " + req.Name,
-						Options: []apptypes.HITLOption{
-							{Key: "approve", Label: "Approve"},
-							{Key: "deny", Label: "Deny"},
-						},
-					})
-					if err == nil && resp != nil && resp.Approved {
-						configJSON, _ := json.Marshal(map[string]any{
-							"repo_url":   req.RepoURL,
-							"entrypoint": req.Entrypoint,
-						})
-						installReq0.Name = req.Name
-						installReq0.Config = string(configJSON)
-						installReq0.BypassAuth = true
-						if err := h.InstallMgr.InstallExtension(bgCtx, installReq0); err != nil {
-							// 此前无论成败都打印 "installed" Info 日志，误导运维排查；
-							// 现按实际结果分级记录（HE-1）。
-							slog.Warn("plugin_custom: custom skill install via HITL failed", "id", extID, "err", err)
-						} else {
-							slog.Info("plugin_custom: custom skill installed via HITL", "id", extID)
-						}
-					}
-				})
-				httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]string{"status": "pending_approval", "id": extID})
-				return
-			}
+	return "user"
+}
+
+// installFromSource 校验来源 → 安装网关授权（需审批时走 HITL）→ 后台取回并安装。本机来源信任等级
+// 按 TrustLocal（用户显式给出）。
+func (h *PluginHandler) installFromSource(w http.ResponseWriter, r *http.Request, extType, name, spec string) {
+	src, err := pluginspec.ParseSourceSpec(spec)
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
+		return
+	}
+	if h.InstallMgr == nil || h.Catalog == nil {
+		http.Error(w, "installer not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	name = firstNonEmptyStr(name, sourceName(src))
+	req := marketplace.SourceInstallRequest{ExtensionID: util.GenerateHumanReadableID("ext", name), Name: name,
+		ExtType: extType, Principal: requestPrincipal(r), TrustTier: 1, Source: src}
+	authReq := protocol.ExtensionInstallRequest{Principal: req.Principal, ExtensionID: req.ExtensionID, ExtType: extType,
+		TrustTier: req.TrustTier, Publisher: "user"}
+	if err := h.InstallMgr.Authorize(r.Context(), authReq); err != nil {
+		if errors.Is(err, marketplace.ErrRequiresApproval) && h.HITLGateway != nil {
+			h.installAfterApproval(r, req)
+			httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]string{"status": "pending_approval", "id": req.ExtensionID})
+			return
 		}
 		httputil.RespondError(w, "", err, http.StatusForbidden)
 		return
 	}
+	h.runSourceInstall(r, req)
+	httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]any{"id": req.ExtensionID, "name": name, "type": extType, "status": "downloading"})
+}
 
-	configJSON, _ := json.Marshal(map[string]any{
-		"repo_url":   req.RepoURL,
-		"entrypoint": req.Entrypoint,
-	})
-
-	installReq0.Name = req.Name
-	installReq0.Config = string(configJSON)
-	if err := h.InstallMgr.InstallExtension(r.Context(), installReq0); err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
-		return
-	}
-	httputil.WriteJSONStatus(w, http.StatusCreated, map[string]any{
-		"id": extID, "name": req.Name, "type": "skill",
+func (h *PluginHandler) runSourceInstall(r *http.Request, req marketplace.SourceInstallRequest) {
+	concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.source_install", func(ctx context.Context) {
+		if err := h.Catalog.InstallFromSource(ctx, req); err != nil {
+			slog.Warn("plugin_custom: install from source failed", "id", req.ExtensionID, "err", err)
+			h.updateExtensionInstanceError(ctx, req.ExtensionID, err.Error())
+		}
 	})
 }
 
-// HandleCreatePlugin 用户手动创建 Plugin 扩展，支持两种模式：
-//   - manifest_url 模式：传入 manifest_url，直接安装已有插件。
-//   - intent 模式：传入 intent，由 PluginCreator（M2）调用 LLM 生成 MCP 插件代码，
-//     并自动注册为本地 MCP Server（写 mcp_servers + extension_instances 表）。
-//
-// POST /v1/plugins/create
-func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Request) { //nolint:nestif
-	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		ManifestURL string `json:"manifest_url"`
-		Intent      string `json:"intent"` // LLM 驱动生成：描述插件意图，留空则走 manifest_url 模式
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "", err, http.StatusBadRequest)
-		return
-	}
-	extID := util.GenerateHumanReadableID("ext", req.Name)
-
-	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
-		return
-	}
-	authCtx1 := authcontext.FromContext(r.Context())
-	principal1 := authCtx1.UserID
-	if principal1 == "" {
-		principal1 = "user"
-	}
-	installReq1 := protocol.ExtensionInstallRequest{
-		Principal:   principal1,
-		ExtensionID: extID,
-		ExtType:     "plugin",
-		TrustTier:   1, // TrustLocal
-		Publisher:   "user",
-		HasHooks:    false,
-	}
-	if err := h.InstallMgr.Authorize(r.Context(), installReq1); err != nil { //nolint:nestif
-		if errors.Is(err, marketplace.ErrRequiresApproval) {
-			if h.HITLGateway != nil {
-				bgCtx, cancel := context.WithTimeout(protocol.Detach(r.Context()), 30*time.Minute)
-				concurrent.SafeGo(bgCtx, "gateway.plugin.hitl_install_plugin", func(bgCtx context.Context) {
-					defer cancel()
-					resp, err := h.HITLGateway.Prompt(bgCtx, apptypes.HITLPrompt{
-						ID:             extID,
-						CheckpointType: "security_review",
-						PromptText:     "Approve creation for custom plugin: " + req.Name,
-						Options: []apptypes.HITLOption{
-							{Key: "approve", Label: "Approve"},
-							{Key: "deny", Label: "Deny"},
-						},
-					})
-					if err == nil && resp != nil && resp.Approved {
-						configJSON, _ := json.Marshal(map[string]any{
-							"manifest_url": req.ManifestURL,
-							"intent":       req.Intent,
-							"description":  req.Description,
-						})
-						installReq1.Name = req.Name
-						installReq1.Config = string(configJSON)
-						installReq1.BypassAuth = true
-						if err := h.InstallMgr.InstallExtension(bgCtx, installReq1); err != nil {
-							// 同上：按实际结果分级记录，避免安装失败仍打印 "installed"（HE-1）。
-							slog.Warn("plugin_custom: custom plugin install via HITL failed", "id", extID, "err", err)
-						} else {
-							slog.Info("plugin_custom: custom plugin installed via HITL", "id", extID)
-						}
-					}
-				})
-				httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]string{"status": "pending_approval", "id": extID})
-				return
-			}
+func (h *PluginHandler) installAfterApproval(r *http.Request, req marketplace.SourceInstallRequest) {
+	bgCtx, cancel := context.WithTimeout(protocol.Detach(r.Context()), 30*time.Minute)
+	concurrent.SafeGo(bgCtx, "gateway.plugin.hitl_source_install", func(bgCtx context.Context) {
+		defer cancel()
+		resp, err := h.HITLGateway.Prompt(bgCtx, apptypes.HITLPrompt{ID: req.ExtensionID, CheckpointType: "security_review",
+			PromptText: "Approve installing " + req.ExtType + " " + req.Name + " from a user-provided source",
+			Options:    []apptypes.HITLOption{{Key: "approve", Label: "Approve"}, {Key: "deny", Label: "Deny"}}})
+		if err != nil || resp == nil || !resp.Approved {
+			return
 		}
-		httputil.RespondError(w, "", err, http.StatusForbidden)
-		return
-	}
-
-	// ── intent 模式：LLM 生成 MCP 插件 → 注册为本地 MCP Server ───────────────
-	if req.Intent != "" && h.PluginCreator != nil {
-		h.HandleCreatePluginFromIntent(w, r, extID, installReq1, req.Intent)
-		return
-	}
-
-	// ── manifest_url 模式：直接安装已有插件 ───────────────────────────────────
-	configJSON, _ := json.Marshal(map[string]any{
-		"manifest_url": req.ManifestURL,
-		"intent":       req.Intent,
-		"description":  req.Description,
+		req.BypassAuth = true
+		if err := h.Catalog.InstallFromSource(bgCtx, req); err != nil {
+			slog.Warn("plugin_custom: install via HITL failed", "id", req.ExtensionID, "err", err)
+		}
 	})
+}
 
-	installReq1.Name = req.Name
-	installReq1.Config = string(configJSON)
-	if err := h.InstallMgr.InstallExtension(r.Context(), installReq1); err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
-		return
+// sourceName 未给名称时从来源推导（仓库名 / 子目录名 / 包名）。
+func sourceName(src pluginspec.PluginSource) string {
+	switch {
+	case src.Path != "":
+		return filepath.Base(src.Path)
+	case src.Repo != "":
+		return filepath.Base(src.Repo)
+	case src.Package != "":
+		return filepath.Base(src.Package)
 	}
-	httputil.WriteJSONStatus(w, http.StatusCreated, map[string]any{
-		"id": extID, "name": req.Name, "type": "plugin",
-	})
+	return strings.TrimSuffix(filepath.Base(src.URL), ".git")
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

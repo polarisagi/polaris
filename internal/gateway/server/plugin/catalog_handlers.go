@@ -250,27 +250,49 @@ func (h *PluginHandler) HandleListMarketplaces(w http.ResponseWriter, r *http.Re
 }
 
 // HandleAddMarketplace POST /v1/plugins/marketplaces
+// 添加市场是信任决策（其条目随后可被安装），须 plugin:manage 授权；来源先规范化，插件/技能市场
+// 立即同步一次校验格式与保留名，失败即撤销（MCP 注册表体量大，不在请求内同步）。
 func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Request) {
 	var req protocol.Marketplace
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	if h.InstallMgr == nil {
+		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := h.InstallMgr.AuthorizeAction(r.Context(), requestPrincipal(r), "plugin:manage", nil); err != nil {
+		httputil.RespondError(w, "", err, http.StatusForbidden)
+		return
+	}
+	req.Type = cond(req.Type == "", "plugin", req.Type)
+	source, err := marketplace.NormalizeMarketplaceSource(req.RepoURL, req.Type)
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
+		return
+	}
+	req.RepoURL = source
 	req.ID = util.GenerateHumanReadableID("mp", req.Name)
-	req.IsBuiltin = 0
-	req.TrustTier = 2 // Community
-	req.Enabled = 1
-	req.CreatedAt = now
-
+	req.IsBuiltin, req.TrustTier, req.Enabled = 0, 2, 1 // 用户添加的市场按 Community 信任
+	req.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	// 新增市场排在所有现有市场之后：取当前最大 sort_order + 10，留出调整空间
 	maxOrder, _ := h.ExtRepo.GetMaxMarketplaceSortOrder(r.Context())
 	req.SortOrder = maxOrder + 10
-
-	err := h.ExtRepo.CreateMarketplace(r.Context(), req)
-	if err != nil {
+	if err := h.ExtRepo.CreateMarketplace(r.Context(), req); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
+	}
+	if req.Type != "mcp" && h.CatalogSync != nil {
+		rows, syncErr := h.CatalogSync.Sync(r.Context(), req, false)
+		if syncErr != nil {
+			if _, delErr := h.ExtRepo.DeleteMarketplace(r.Context(), req.ID); delErr != nil {
+				slog.Warn("plugin_catalog: rollback marketplace failed", "id", req.ID, "err", delErr)
+			}
+			httputil.RespondError(w, "", syncErr, http.StatusUnprocessableEntity)
+			return
+		}
+		h.indexCatalogRows(rows)
 	}
 	httputil.WriteJSONStatus(w, http.StatusCreated, req)
 }

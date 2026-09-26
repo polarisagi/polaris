@@ -145,3 +145,37 @@ func TestFetch_NPMRangeAndIntegrity(t *testing.T) {
 		t.Fatalf("registry with credentials must be rejected: %v", err)
 	}
 }
+
+type headerTransport struct {
+	body []byte
+	got  http.Header
+}
+
+func (h *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.got = req.Header.Clone()
+	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(h.body)), Request: req}, nil
+}
+
+func TestFetch_ArchiveSendsEntryHeaders(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude-plugin", "marketplace.json"), []byte(`{"name":"m","owner":{"name":"o"},"plugins":[
+	  {"name":"z","source":{"source":"archive","url":"https://a.example/z.zip"},"headers":{"Authorization":"Bearer t","Host":"evil"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := pluginspec.GetMarketplace(root)
+	if err != nil || len(m.Plugins) != 1 {
+		t.Fatalf("%+v %v", m, err)
+	}
+	ht := &headerTransport{body: zipBytes(t, map[string]string{".claude-plugin/plugin.json": `{"name":"z"}`})}
+	c := network.NewSafeHTTPClient(nil)
+	c.Transport = ht
+	if _, err := NewSourceFetcher(c, t.TempDir()).Fetch(context.Background(), m.Plugins[0].Source, "", filepath.Join(t.TempDir(), "z")); err != nil {
+		t.Fatal(err)
+	}
+	if ht.got.Get("Authorization") != "Bearer t" || ht.got.Get("Host") == "evil" {
+		t.Fatalf("entry headers must be sent, routing headers dropped: %v", ht.got)
+	}
+}

@@ -226,36 +226,34 @@
             <input id="store-plugins-createform-name" name="store-plugins-createform-name" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.name" :placeholder="$store.i18n.t('plugins_placeholder_name')" />
           </div>
 
-          <div class="form-control" x-show="['skill', 'plugin', 'marketplace'].includes($store.plugins.filter)">
+          <div class="form-control" x-show="$store.plugins.filter === 'marketplace'">
             <label for="store-plugins-createform-description" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_desc')"></span></label>
             <textarea id="store-plugins-createform-description" name="store-plugins-createform-description" class="textarea textarea-bordered h-24" x-model="$store.plugins.createForm.description" :placeholder="$store.i18n.t('plugins_placeholder_desc')"></textarea>
           </div>
 
           <!-- Type specific templates ported directly, just wrapping with DaisyUI classes -->
-          <template x-if="$store.plugins.filter === 'skill'">
-            <div class="space-y-4">
-              <div class="form-control">
-                <label for="store-plugins-createform-repo-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo')"></span></label>
-                <input id="store-plugins-createform-repo-url" name="store-plugins-createform-repo-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.repo_url" placeholder="https://github.com/..." />
-              </div>
-              <div class="form-control">
-                <label for="store-plugins-createform-entrypoint" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_entry')"></span></label>
-                <input id="store-plugins-createform-entrypoint" name="store-plugins-createform-entrypoint" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.entrypoint" placeholder="python main.py" />
-              </div>
-            </div>
-          </template>
-
-          <template x-if="$store.plugins.filter === 'plugin'">
+          <template x-if="['skill', 'plugin'].includes($store.plugins.filter)">
             <div class="form-control">
-              <label for="store-plugins-createform-manifest-url" class="label"><span class="label-text font-bold">Manifest URL</span></label>
-              <input id="store-plugins-createform-manifest-url" name="store-plugins-createform-manifest-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.manifest_url" placeholder="https://.../.well-known/ai-plugin.json" />
+              <label for="store-plugins-createform-source" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_source')"></span></label>
+              <input id="store-plugins-createform-source" name="store-plugins-createform-source" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.source" placeholder="owner/repo@v1 · https://github.com/owner/repo/tree/main/skills/x · npm:@org/plugin" />
+              <label class="label"><span class="label-text-alt opacity-70" x-text="$store.i18n.t('plugins_hint_source')"></span></label>
             </div>
           </template>
 
           <template x-if="$store.plugins.filter === 'marketplace'">
-            <div class="form-control">
-              <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo_url')"></span></label>
-              <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.url" placeholder="https://..." />
+            <div class="space-y-4">
+              <div class="form-control">
+                <label for="store-plugins-createform-mptype" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_mp_type')"></span></label>
+                <select id="store-plugins-createform-mptype" name="store-plugins-createform-mptype" class="select select-bordered w-full" x-model="$store.plugins.createForm.mp_type">
+                  <option value="plugin" x-text="$store.i18n.t('plugins_mp_type_plugin')"></option>
+                  <option value="skill" x-text="$store.i18n.t('plugins_mp_type_skill')"></option>
+                  <option value="mcp" x-text="$store.i18n.t('plugins_mp_type_mcp')"></option>
+                </select>
+              </div>
+              <div class="form-control">
+                <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo_url')"></span></label>
+                <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.url" placeholder="owner/repo@main · https://git.example/repo.git · https://…/marketplace.json" />
+              </div>
             </div>
           </template>
 

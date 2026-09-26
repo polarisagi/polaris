@@ -86,6 +86,8 @@ type PluginSource struct {
 	Version  string `json:"version,omitempty"`
 	Registry string `json:"registry,omitempty"`
 	SHA256   string `json:"sha256,omitempty"`
+	// Headers 下载 archive 时发送的请求头（来自条目 headers；路由/身份类头已剔除）。
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // ErrNotAMarketplace 目录下没有任何市场文件。
@@ -234,6 +236,9 @@ func parseMarketplaceEntry(root, pluginRoot, path string, i int, raw json.RawMes
 	}
 	if len(e.Headers) > 0 && src.Type != SourceArchive {
 		ds.warnf("marketplace", path, RuleMarketplaceEntry, "Plugin %q sets headers, which only apply to \"archive\" sources", e.Name)
+	}
+	if src.Type == SourceArchive {
+		e.Source.Headers = catalogHeaders(e.Name, w.Headers, path, ds)
 	}
 	return e, true
 }
@@ -422,4 +427,24 @@ func validMarketplaceName(name string) bool {
 		}
 	}
 	return true
+}
+
+// catalogHeaders 条目不得设置请求路由/身份类头（Claude：下载时丢弃并告警）。
+func catalogHeaders(plugin string, in map[string]string, path string, ds *diagnostics) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		lk := strings.ToLower(k)
+		switch {
+		case lk == "host" || lk == "content-length" || lk == "transfer-encoding" || lk == "connection" || lk == "cookie" ||
+			lk == "forwarded" || strings.HasPrefix(lk, "x-forwarded-") || strings.HasPrefix(lk, "proxy-"):
+			ds.warnf("marketplace", path, RuleMarketplaceEntry,
+				"Header %q is a request-routing/identity header that catalog entries may not set (plugin %s); dropped", k, plugin)
+		default:
+			out[k] = v
+		}
+	}
+	return out
 }

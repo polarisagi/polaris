@@ -2,9 +2,11 @@ package plugin
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -88,22 +90,66 @@ func TestPluginCustomHandlers(t *testing.T) {
 		ClearToolSchemaCache: func() {},
 	}
 
-	// Create Skill
-	body := `{"name": "test-skill", "description": "desc", "prompt": "prompt"}`
-	req := httptest.NewRequest("POST", "/api/v1/skills/custom", bytes.NewBufferString(body))
+	// 没有来源：拒绝（此前只写实例行、永远停在 installing）。
+	req := httptest.NewRequest("POST", "/v1/skills/create", bytes.NewBufferString(`{"name":"test-skill"}`))
 	w := httptest.NewRecorder()
 	h.HandleCreateSkill(w, req)
-	if w.Result().StatusCode != http.StatusCreated {
-		t.Errorf("create skill failed: %v", w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("skill without source must be rejected: %d %s", w.Code, w.Body.String())
 	}
 
-	// Create Plugin
-	body = `{"name": "test-plugin", "display_name": "Test", "description": "desc", "version": "1.0.0"}`
-	req = httptest.NewRequest("POST", "/api/v1/plugins/custom", bytes.NewBufferString(body))
+	stub := &recordingSourceInstaller{done: make(chan marketplace.SourceInstallRequest, 2)}
+	h.Catalog = stub
+	req = httptest.NewRequest("POST", "/v1/skills/create", bytes.NewBufferString(`{"source":"https://github.com/openai/skills/tree/main/skills/.curated/pdf"}`))
+	w = httptest.NewRecorder()
+	h.HandleCreateSkill(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("create skill: %d %s", w.Code, w.Body.String())
+	}
+	if got := <-stub.done; got.ExtType != "skill" || got.Name != "pdf" || got.Source.Path != "skills/.curated/pdf" {
+		t.Fatalf("skill source install: %+v", got)
+	}
+
+	req = httptest.NewRequest("POST", "/v1/plugins/create", bytes.NewBufferString(`{"name":"fmt","source":"org/fmt@v2"}`))
 	w = httptest.NewRecorder()
 	h.HandleCreatePlugin(w, req)
-	if w.Result().StatusCode != http.StatusCreated {
-		t.Errorf("create plugin failed: %v", w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("create plugin: %d %s", w.Code, w.Body.String())
 	}
+	if got := <-stub.done; got.ExtType != "plugin" || got.Source.Repo != "org/fmt" || got.Source.Ref != "v2" {
+		t.Fatalf("plugin source install: %+v", got)
+	}
+}
 
+type recordingSourceInstaller struct {
+	done chan marketplace.SourceInstallRequest
+}
+
+func (r *recordingSourceInstaller) Install(context.Context, marketplace.CatalogInstallRequest) (string, error) {
+	return "", nil
+}
+func (r *recordingSourceInstaller) Upgrade(context.Context, marketplace.CatalogInstallRequest) error {
+	return nil
+}
+func (r *recordingSourceInstaller) Prune(context.Context) ([]string, error) {
+	return []string{"org/m/lib"}, nil
+}
+func (r *recordingSourceInstaller) InstallFromSource(_ context.Context, req marketplace.SourceInstallRequest) error {
+	r.done <- req
+	return nil
+}
+
+func TestHandlePrunePlugins(t *testing.T) {
+	h := getDummyServerWithInstallMgr(t)
+	w := httptest.NewRecorder()
+	h.HandlePrunePlugins(w, httptest.NewRequest("POST", "/v1/plugins/prune", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured: %d", w.Code)
+	}
+	h.Catalog = &recordingSourceInstaller{}
+	w = httptest.NewRecorder()
+	h.HandlePrunePlugins(w, httptest.NewRequest("POST", "/v1/plugins/prune", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "org/m/lib") {
+		t.Fatalf("prune: %d %s", w.Code, w.Body.String())
+	}
 }

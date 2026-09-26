@@ -64,21 +64,23 @@ func TestCatalog_SyncAndInstallWithDependencies(t *testing.T) {
 		  {"name":"lib","source":"./plugins/lib","version":"1.0.0"},
 		  {"name":"loop-a","source":"./plugins/loop-a"},
 		  {"name":"loop-b","source":"./plugins/loop-b"},
-		  {"name":"far","source":"./plugins/far"}]}`,
-		"plugins/app/.claude-plugin/plugin.json":    `{"name":"app","dependencies":["lib"]}`,
-		"plugins/app/skills/a/SKILL.md":             "---\nname: a\ndescription: d\n---\nx",
-		"plugins/lib/.claude-plugin/plugin.json":    `{"name":"lib","version":"1.0.0"}`,
-		"plugins/lib/skills/l/SKILL.md":             "---\nname: l\ndescription: d\n---\nx",
-		"plugins/loop-a/.claude-plugin/plugin.json": `{"name":"loop-a","dependencies":["loop-b"]}`,
-		"plugins/loop-b/.claude-plugin/plugin.json": `{"name":"loop-b","dependencies":["loop-a"]}`,
-		"plugins/far/.claude-plugin/plugin.json":    `{"name":"far","dependencies":[{"name":"x","marketplace":"other"}]}`,
-		"plugins/far/skills/f/SKILL.md":             "---\nname: f\ndescription: d\n---\nx",
+		  {"name":"far","source":"./plugins/far"},
+		  {"name":"needs-new","source":"./plugins/needs-new"}]}`,
+		"plugins/app/.claude-plugin/plugin.json":       `{"name":"app","dependencies":["lib"]}`,
+		"plugins/app/skills/a/SKILL.md":                "---\nname: a\ndescription: d\n---\nx",
+		"plugins/lib/.claude-plugin/plugin.json":       `{"name":"lib","version":"1.0.0"}`,
+		"plugins/lib/skills/l/SKILL.md":                "---\nname: l\ndescription: d\n---\nx",
+		"plugins/loop-a/.claude-plugin/plugin.json":    `{"name":"loop-a","dependencies":["loop-b"]}`,
+		"plugins/loop-b/.claude-plugin/plugin.json":    `{"name":"loop-b","dependencies":["loop-a"]}`,
+		"plugins/far/.claude-plugin/plugin.json":       `{"name":"far","dependencies":[{"name":"x","marketplace":"other"}]}`,
+		"plugins/far/skills/f/SKILL.md":                "---\nname: f\ndescription: d\n---\nx",
+		"plugins/needs-new/.claude-plugin/plugin.json": `{"name":"needs-new","dependencies":[{"name":"lib","version":"^2.0"}]}`,
 	})
 	skills := filepath.Join(t.TempDir(), "skills")
 	writeTree(t, skills, map[string]string{"skills/.curated/pdf/SKILL.md": "---\nname: pdf\ndescription: PDF tools\n---\nbody"})
 
 	sync := NewCatalogSync(extRepo, nil, network.NewSafeHTTPClient(nil), filepath.Join(data, "cache"))
-	if rows, err := sync.Sync(ctx, protocol.Marketplace{ID: "org/team", Type: "plugin", RepoURL: mkt, TrustTier: 2}, false); err != nil || len(rows) != 5 {
+	if rows, err := sync.Sync(ctx, protocol.Marketplace{ID: "org/team", Type: "plugin", RepoURL: mkt, TrustTier: 2}, false); err != nil || len(rows) != 6 {
 		t.Fatalf("plugin sync: %d %v", len(rows), err)
 	}
 	if rows, err := sync.Sync(ctx, protocol.Marketplace{ID: "org/skills", Type: "skill", RepoURL: skills, TrustTier: 2}, false); err != nil ||
@@ -90,10 +92,11 @@ func TestCatalog_SyncAndInstallWithDependencies(t *testing.T) {
 	fsm.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, nopConnector{}, nil))
 	skillReg := &memSkills{}
 	fsm.RegisterInstaller(lifecycle.NewSkillInstaller(extRepo, skillReg))
-	mgr := NewManager(extRepo, nil, &mockPolicyGate{allowed: true}, &mockPrefs{}, nil, nil, nil).WithInstallFSM(fsm)
+	mgr := NewManager(extRepo, nil, &mockPolicyGate{allowed: true}, &mockPrefs{}, nil, nil, &mockOutbox{}).WithInstallFSM(fsm)
 	inst := NewCatalogInstaller(mgr, extRepo, NewSourceFetcher(network.NewSafeHTTPClient(nil), t.TempDir()), sync, filepath.Join(data, "extensions"))
 
-	if _, err := inst.Install(ctx, CatalogInstallRequest{CatalogID: "org/team/app", Principal: "user"}); err != nil {
+	appExt, err := inst.Install(ctx, CatalogInstallRequest{CatalogID: "org/team/app", Principal: "user"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	enabled := map[string]bool{}
@@ -116,6 +119,19 @@ func TestCatalog_SyncAndInstallWithDependencies(t *testing.T) {
 		if p.Name == "far" && p.Enabled {
 			t.Fatal("unresolvable cross-marketplace dependency: installed but disabled")
 		}
+	}
+	// 已装 lib 1.0.0 不满足 ^2.0，且无满足全部范围的版本：冲突，原安装不动。
+	if _, err := inst.Install(ctx, CatalogInstallRequest{CatalogID: "org/team/needs-new", Principal: "user"}); err == nil ||
+		!strings.Contains(err.Error(), "conflicting version requirements") {
+		t.Fatalf("conflicting constraints must fail: %v", err)
+	}
+	// 依赖方移除后，作为依赖自动安装的 lib 可被 prune；用户直接安装的 app 不受影响。
+	if err := extRepo.UninstallCleanup(ctx, "pl_"+strings.TrimPrefix(appExt, "ext_"), "", "plugin"); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := inst.Prune(ctx)
+	if err != nil || len(pruned) != 1 || pruned[0] != "org/team/lib" {
+		t.Fatalf("prune: %v %v", pruned, err)
 	}
 	if _, err := inst.Install(ctx, CatalogInstallRequest{CatalogID: "org/skills/skills/.curated/pdf", Principal: "user"}); err != nil {
 		t.Fatalf("skill install: %v", err)

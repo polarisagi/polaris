@@ -220,6 +220,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Claude 插件 channels：安装 ≠ 启用（ADR-0103 决策三）；须注册在 /v1/plugins/{id} 通配之前可读。
 	mux.HandleFunc("GET /v1/plugins/channels", s.pluginHandler.HandleListPluginChannels)
 	mux.HandleFunc("PUT /v1/plugins/channels", s.pluginHandler.HandleSetPluginChannel)
+	mux.HandleFunc("POST /v1/plugins/prune", s.pluginHandler.HandlePrunePlugins)
 	mux.HandleFunc("GET /v1/plugins", s.pluginHandler.HandleListPlugins)
 	mux.HandleFunc("PUT /v1/plugins/{id}", s.pluginHandler.HandleUpdatePlugin)
 	mux.HandleFunc("POST /v1/plugins/{id}/mcp/{serverName}/toggle", s.pluginHandler.HandleTogglePluginMCP)

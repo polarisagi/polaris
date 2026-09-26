@@ -28,6 +28,7 @@ type MCPConnector interface {
 type PluginInstaller struct {
 	extRepo  protocol.ExtensionRepository
 	mcpConn  MCPConnector
+	remote   RemoteDownloader // https .mcpb 包下载；nil 时远程包引用记诊断
 	skillReg protocol.SkillRegistry
 	// policyGate 对插件内嵌子 MCP 逐个独立授权（extension/CLAUDE.md 硬约束 3，
 	// GR-8-002）。父插件的安装授权不能代替子 MCP：子 MCP 会拉起任意本地进程
@@ -72,6 +73,7 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (InstallR
 		}
 		opts.Entry, opts.FallbackName = &entry, entry.Name
 	}
+	opts.RemoteBundles = p.fetchRemoteBundles(ctx, req.LocalPath)
 	plug, err := pluginspec.Load(req.LocalPath, opts)
 	if err != nil {
 		return InstallResult{}, apperr.Wrap(apperr.CodeOf(err), "plugin_installer: load", err)

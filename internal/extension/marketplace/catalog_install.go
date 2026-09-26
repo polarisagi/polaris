@@ -81,8 +81,12 @@ func (c *CatalogInstaller) install(ctx context.Context, ic *installCtx, row *typ
 	if extID == "" {
 		extID = util.GenerateHumanReadableID("ext", payload.Name)
 	}
+	config := "{}"
+	if constraint != "" || len(ic.chain) > 0 {
+		config = autoDependencyConfig // 作为依赖自动安装：无人依赖后可被 prune
+	}
 	req := protocol.ExtensionInstallRequest{Principal: ic.principal, ExtensionID: extID, CatalogID: row.ID, Name: payload.Name,
-		ExtType: row.Type, TrustTier: row.TrustTier, Publisher: row.Publisher, Config: "{}", BypassAuth: ic.bypassAuth,
+		ExtType: row.Type, TrustTier: row.TrustTier, Publisher: row.Publisher, Config: config, BypassAuth: ic.bypassAuth,
 		MarketplaceEntry: payload.Entry}
 	if err := c.mgr.InstallExtension(ctx, req); err != nil {
 		return "", apperr.Wrap(apperr.CodeOf(err), "CatalogInstaller", err)
@@ -133,14 +137,21 @@ func (c *CatalogInstaller) Upgrade(ctx context.Context, req CatalogInstallReques
 	for _, m := range payload.AllowCrossDeps {
 		ic.rootAllow[m] = true
 	}
-	dest := filepath.Join(c.extDir, req.ExtensionID)
+	return c.upgradeTo(ctx, ic, row, payload, "", req.ExtensionID)
+}
+
+// upgradeTo 把已安装实例替换为满足 constraint 的版本（空 = 目录当前版本）。
+func (c *CatalogInstaller) upgradeTo(ctx context.Context, ic *installCtx, row *types.ExtCatalogRow, payload protocol.RegistryEntry,
+	constraint, extID string,
+) error {
+	dest := filepath.Join(c.extDir, extID)
 	stage, old := dest+".upgrade", dest+".previous"
 	for _, d := range []string{stage, old} {
 		if err := os.RemoveAll(d); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "CatalogInstaller: clean "+d, err)
 		}
 	}
-	if err := c.materialize(ctx, ic, row, payload, "", stage); err != nil {
+	if err := c.materialize(ctx, ic, row, payload, constraint, stage); err != nil {
 		os.RemoveAll(stage) //nolint:errcheck
 		return err
 	}
@@ -152,7 +163,7 @@ func (c *CatalogInstaller) Upgrade(ctx context.Context, req CatalogInstallReques
 		return apperr.Wrap(apperr.CodeInternal, "CatalogInstaller: swap", err)
 	}
 	os.RemoveAll(old) //nolint:errcheck
-	installReq := protocol.ExtensionInstallRequest{Principal: req.Principal, ExtensionID: req.ExtensionID, CatalogID: row.ID,
+	installReq := protocol.ExtensionInstallRequest{Principal: ic.principal, ExtensionID: extID, CatalogID: row.ID,
 		Name: payload.Name, ExtType: row.Type, TrustTier: row.TrustTier, Publisher: row.Publisher, Config: "{}",
 		MarketplaceEntry: payload.Entry}
 	if err := c.mgr.CompleteInstall(ctx, installReq, dest); err != nil {
@@ -204,13 +215,14 @@ func (c *CatalogInstaller) installDependency(ctx context.Context, ic *installCtx
 		slog.Warn("marketplace: dependency not found in marketplace", "dependency", key, "required_by", requiredBy)
 		return nil
 	}
-	if ok {
-		return apperr.New(apperr.CodeConflict, fmt.Sprintf("Dependency %q (required by %s) is installed at %s and does not satisfy %s; "+
-			"update or remove it first", key, requiredBy, installed.Version, dep.Version))
-	}
 	_, payload, err := c.catalogEntry(ctx, row.ID)
 	if err != nil {
 		return err
+	}
+	if ok {
+		// 已安装但版本不满足：取所有已安装依赖方的范围与本次范围的交集重新解析（Claude：解析到同时
+		// 满足全部范围的最高版本）；无交集或无满足的标签即冲突，原安装保持不动。
+		return c.reresolveDependency(ctx, ic, row, payload, installed, dep, key, requiredBy)
 	}
 	if _, err := c.install(ctx, ic, row, payload, dep.Version, ""); err != nil {
 		return apperr.Wrap(apperr.CodeOf(err), fmt.Sprintf("Dependency %q (required by %s)", key, requiredBy), err)
