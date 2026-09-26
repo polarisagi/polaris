@@ -266,7 +266,6 @@ func isPluginBundleRoot(dir string) (string, string) {
 		{".claude-plugin/plugin.json", "plugin.json"},
 		{".polaris-plugin/plugin.json", "plugin.json"},
 		{".codex-plugin/plugin.json", "plugin.json"},
-		{"ai-plugin.json", "ai-plugin.json"},
 		{"plugin.toml", "plugin.toml"},
 		{".claude-plugin/plugin.toml", "plugin.toml"},
 		{"skills.yaml", "skills.yaml"},
@@ -293,10 +292,6 @@ func parseBundleManifest( //nolint:gocyclo
 	switch manifestType {
 	case "plugin.json":
 		if entry, err := parsePluginEntry(manifestPath, mpDir, mp); err == nil && entry != nil {
-			entries = append(entries, *entry)
-		}
-	case "ai-plugin.json":
-		if entry, err := parseAIPluginEntry(manifestPath, mpDir, mp); err == nil && entry != nil {
 			entries = append(entries, *entry)
 		}
 	case "plugin.toml":

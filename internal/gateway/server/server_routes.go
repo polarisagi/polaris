@@ -168,14 +168,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/webhooks/{channelType}/{channelID}", s.sysadminHandler.Channels.HandleWebhookReceive)
 	mux.HandleFunc("GET /v1/webhooks/{channelType}/{channelID}", s.sysadminHandler.Channels.HandleWebhookReceive)
 
-	// App Sandbox 生命周期 API (M13)
-	mux.HandleFunc("GET /v1/apps", s.sysadminHandler.HandleListApps)
-	mux.HandleFunc("POST /v1/apps", s.sysadminHandler.HandleCreateApp)
-	mux.HandleFunc("GET /v1/apps/{id}", s.sysadminHandler.HandleGetApp)
-	mux.HandleFunc("PUT /v1/apps/{id}", s.sysadminHandler.HandleUpdateApp)
-	mux.HandleFunc("DELETE /v1/apps/{id}", s.sysadminHandler.HandleDeleteApp)
-	mux.HandleFunc("POST /v1/apps/{id}/enable", s.sysadminHandler.HandleSetAppEnabled)
-
 	// 工具 & Skill 管理 API
 	mux.HandleFunc("GET /v1/tools", s.sysadminHandler.HandleListTools)
 	mux.HandleFunc("POST /v1/tools/{name}/execute", s.sysadminHandler.HandleExecuteTool)
@@ -183,13 +175,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/skills/install", s.sysadminHandler.HandleInstallSkill)
 	// 用户意图驱动的技能生成入口（P3-2 SkillCreator，2026-07-21 deadcode 审查补齐）
 	// GR-9.2-006：M13 接口清单与 Web UI（web/src/js/store/plugins.js submitCreation）
-	// 约定 /v1/{skills,plugins,apps,mcp}/create 为"直接创建自定义记录"端点，
+	// 约定 /v1/{skills,plugins,mcp}/create 为"直接创建自定义记录"端点，
 	// 实现在 PluginHandler，但除 skills 外均未注册（生产 404）。skills/create 同一路径
 	// 承载两种语义：CLI 发 {"intent":...} 走 LLM 生成，UI 发 {"name",...} 走手工记录，
 	// 按请求体分派。
 	mux.HandleFunc("POST /v1/skills/create", s.handleSkillCreate)
 	mux.HandleFunc("POST /v1/plugins/create", s.pluginHandler.HandleCreatePlugin)
-	mux.HandleFunc("POST /v1/apps/create", s.pluginHandler.HandleCreateApp)
 	mux.HandleFunc("POST /v1/mcp/create", s.pluginHandler.HandleCreateMCP)
 
 	// MCP Server 管理 API

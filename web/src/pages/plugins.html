@@ -21,8 +21,7 @@
       <div class="flex flex-wrap gap-4 items-center justify-between">
         <div role="tablist" class="tabs tabs-boxed">
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'plugin' }" @click="$store.plugins.filter = 'plugin'" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'app' }" @click="$store.plugins.filter = 'app'" x-text="'📱 ' + $store.i18n.t('plugins_tab_app')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.filter = 'mcp'" x-text="'⚙ ' + $store.i18n.t('plugins_tab_mcp')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.filter = 'mcp'" x-text="'🔌 ' + $store.i18n.t('plugins_tab_mcp')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'skill' }" @click="$store.plugins.filter = 'skill'" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'marketplace' }" @click="$store.plugins.filter = 'marketplace'" x-text="'🛒 ' + $store.i18n.t('plugins_tab_marketplace')"></a>
         </div>
@@ -227,7 +226,7 @@
             <input id="store-plugins-createform-name" name="store-plugins-createform-name" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.name" :placeholder="$store.i18n.t('plugins_placeholder_name')" />
           </div>
 
-          <div class="form-control" x-show="['skill', 'plugin', 'app', 'marketplace'].includes($store.plugins.filter)">
+          <div class="form-control" x-show="['skill', 'plugin', 'marketplace'].includes($store.plugins.filter)">
             <label for="store-plugins-createform-description" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_desc')"></span></label>
             <textarea id="store-plugins-createform-description" name="store-plugins-createform-description" class="textarea textarea-bordered h-24" x-model="$store.plugins.createForm.description" :placeholder="$store.i18n.t('plugins_placeholder_desc')"></textarea>
           </div>
@@ -253,7 +252,7 @@
             </div>
           </template>
 
-          <template x-if="['app', 'marketplace'].includes($store.plugins.filter)">
+          <template x-if="$store.plugins.filter === 'marketplace'">
             <div class="form-control">
               <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo_url')"></span></label>
               <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.url" placeholder="https://..." />

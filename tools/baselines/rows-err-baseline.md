@@ -8,8 +8,6 @@ internal/execute/orchestrator/sqlite_blackboard_reaper.go:120:rows
 internal/extension/skill/skill_evolution.go:104:rows
 internal/extension/skill/sqlite_registry.go:244:rows
 internal/gateway/server/chat/system_prompt_ambient.go:179:rows
-internal/gateway/server/chat/system_prompt_extensions.go:54:rows
-internal/gateway/server/chat/system_prompt_extensions.go:110:rows
 internal/gateway/server/plugin/catalog.go:20:rows
 internal/gateway/server/plugin/catalog.go:48:rows
 internal/gateway/server/plugin/catalog.go:82:rows

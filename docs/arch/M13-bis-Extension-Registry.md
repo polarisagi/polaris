@@ -1,6 +1,6 @@
 # 模块 13-bis: Extension Registry
 
-> 扩展系统的市场、安装、路由三层模型。覆盖 MCP（Model Context Protocol，模型上下文协议） / Skill / Plugin / App / Automation / Agent 六类扩展。[HE-Rule-3] [HE-Rule-6]
+> 扩展系统的市场、安装、路由三层模型。覆盖 Skill / MCP（Model Context Protocol，模型上下文协议，UI 称「连接器」）/ Plugin / Automation / Agent 五类扩展；分类与双厂商标准对齐见 ADR-0103。[HE-Rule-3] [HE-Rule-6]
 <!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:78 技能执行模式 / 4:104 工具懒加载 / 5:133 安装流 / 6:229 信任门控 / 7:276 文件系统 / 8:307 调用路由 / 9:346 自动化 / 10:424 跨代理协作 / 11:450 学习技能归并 / 12:464 表引用 -->
 
 ---
@@ -9,7 +9,7 @@
 
 - **是**: 市场同步、目录展示、安装/卸载 API（Application Programming Interface，应用程序接口）、安装状态追踪
 - **是**: `extension_instances` 作为所有已安装扩展的单一事实来源（SSoT（Single Source of Truth，唯一真相源））
-- **是**: 安装后运行时绑定（写 `mcp_servers` / `skills` / `plugins` / `apps` / `automations`；Plugin 子 MCP 写 `mcp_servers`，Plugin 子 Skill 写 `skills`，均带 `plugin_id` FK）
+- **是**: 安装后运行时绑定（写 `mcp_servers` / `skills` / `plugins` / `automations`；Plugin 子 MCP 写 `mcp_servers`，Plugin 子 Skill 写 `skills`，均带 `plugin_id` FK）
 - **是**: 工具能力发现（ToolSearch 懒加载、Extension Card 元数据）
 - **不是**: MCP 进程生命周期管理（M7 MCPManager）
 - **不是**: Wasm 执行与沙箱（M7 WazeroRuntime）
@@ -29,7 +29,6 @@
 - `mcp_servers`（015）：所有 MCP 进程配置，含独立 MCP 和插件子 MCP（plugin_id FK）
 - `skills`（008）：script runtime 执行元数据，name 格式统一为 `"skill:{slug}"`，含 plugin_id FK
 - `plugins`（021）：插件运行时状态（install_path/enabled/mcp_policy/manifest），enabled 权威源为 mcp_servers.enabled
-- `apps`（028）：富交互应用（Codex App），runtime_id 指向此表
 - `automations`（017）：触发器 + Agent 任务配置，M13 Scheduler 消费方
 
 **数据流**：`plugin_marketplaces → 同步 → extension_catalog → 安装 → extension_instances → 绑定 → Runtime 表`
@@ -40,12 +39,13 @@
 
 ## 2. 扩展类型
 
+> 2026-09-26（ADR-0103）：`app` 扩展类型与 `apps`（028）表已删除——App 在两家标准中均为连接器/插件子组件。Codex `.app.json` 按「插件内连接器绑定」处理（ADR-0103 决策四）。UI 将 `mcp` 称为「连接器」。
+
 | ext_type | 核心能力 | 运行时绑定 | 典型来源 |
 |----------|---------|-----------|---------|
 | `mcp` | 外部工具进程（JSON-RPC 2.0 over stdio/HTTP（HyperText Transfer Protocol，超文本传输协议）） | `mcp_servers` → MCPManager | marketplace / user |
 | `skill` | 行为指令集（SKILL.md）或 Wasm 执行单元 | `skills`（008） | marketplace / learned |
 | `plugin` | Skills + MCP + Hooks 的打包分发单元 | `plugins`（021）+ 子 MCP 写 `mcp_servers`（plugin_id=plugins.id）+ 子 Skill 写 `skills`（plugin_id=plugins.id）；生命周期级联 | marketplace |
-| `app` | 独立的图形交互界面（Web UI/Widget），参考 Codex App 概念 | `apps`（028）；拥有独立的 URL 端点和权限状态 | marketplace / user |
 | `automation` | 触发器 + Agent 任务（cron/webhook/both/manual；规划：event/github） | `automations`（017） | user / marketplace |
 | `agent` | 外部 AI Agent 端点（A2A（Agent-to-Agent，智能体间通信） 协议）暴露为工具 | `mcp_servers`（transport=a2a） | marketplace / user |
 
@@ -55,8 +55,6 @@
 
 | 清单文件 | 厂商 | 安装结果 |
 |---------|------|---------|
-| `ai-plugin.json`（api.type=mcp） | OpenAI | mcp_servers，启动 MCP 进程 |
-| `ai-plugin.json`（api.type=openapi） | OpenAI | app 类型，URL + OpenAPI schema 存储 |
 | `.claude-plugin/plugin.toml` / `plugin.toml`（含 command） | Anthropic | mcp_servers |
 | `.claude-plugin/plugin.json` | Anthropic | plugin 类型 |
 | `skills.yaml` / `agent-manifest.yaml`（含 command） | Google | mcp_servers |
@@ -211,7 +209,7 @@ DELETE /v1/mcp-servers/{plugin_xxx}    返回 405——插件 MCP 须通过插�
 
 ### 5.7 彻底卸载
 
-1. **按 ext_type 清理运行时**: mcp/skill/plugin/app/automation/agent 各有对应删除路径
+1. **按 ext_type 清理运行时**: mcp/skill/plugin/automation/agent 各有对应删除路径
 2. **os.RemoveAll(install_path)**: 内部经 safeJoin 路径校验
 3. **DELETE extension_instances**
 4. **非 builtin 来源级联 cleanCatalog()**: plugin 类型额外级联删除 mcp_servers + skills (plugin_id FK)
@@ -471,7 +469,6 @@ M9 Self-Improvement Engine promote 候选技能时：
 | `mcp_servers` | 015 | M7 MCPManager.LoadFromDB() | `plugin_id`、`work_dir` |
 | `skills` | 008 | M6 SkillRegistry + buildToolSchemas() + buildAmbientSkillsSection() | `plugin_id` |
 | `plugins` | 021 | plugin_catalog.go（bundle 元数据）；mcp_policy 仅存附加策略 | — |
-| `apps` | 028 | M13 API；extension_instances.runtime_id 指向此表 | — |
 | `automations` | 017 | M13 Scheduler（`internal/gateway/`） | — |
 | `automation_runs` | 017 | M13 Scheduler — 执行历史 | — |
 | `cron_jobs` | 014 | 旧版定时任务表，由 017_automations 接管，逐步废弃 | — |
@@ -481,4 +478,4 @@ M9 Self-Improvement Engine promote 候选技能时：
 **关键关系（2026-06 新增）**：
 - `mcp_servers.plugin_id → plugins.id`：插件子 MCP，卸载插件时级联删除
 - `skills.plugin_id → plugins.id`：插件子 Skill，卸载插件时级联删除
-- `extension_instances.runtime_id` 指向对应 runtime 表 PK：`mcp_servers.id` | `skills.name` | `plugins.id` | `apps.id`
+- `extension_instances.runtime_id` 指向对应 runtime 表 PK：`mcp_servers.id` | `skills.name` | `plugins.id`

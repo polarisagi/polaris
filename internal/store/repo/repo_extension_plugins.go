@@ -4,43 +4,13 @@ import (
 	"context"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ============================================================================
-// apps 表 + plugins 表操作（R7 拆分自 repo_extension.go）。
+// plugins 表操作（R7 拆分自 repo_extension.go）。
 // 结构体/构造函数/extension_instances/extension_catalog 见 repo_extension.go；
 // mcp_servers/卸载清理见 repo_extension_mcp.go。
 // ============================================================================
-
-// --- apps ---
-
-func (r *SQLiteExtensionRepository) UpsertApp(ctx context.Context, row types.AppRow) error {
-	enabledInt := 0
-	if row.Enabled {
-		enabledInt = 1
-	}
-	_, err := r.db.ExecContext(ctx,
-		"INSERT INTO apps(id, name, display_name, description, url, publisher, enabled, trust_tier, catalog_id, created_at, updated_at) "+
-			"VALUES(?,?,?,?,?,?,?,?,?,?,?) "+
-			"ON CONFLICT(id) DO UPDATE SET "+
-			"name=excluded.name, display_name=excluded.display_name, description=excluded.description, url=excluded.url, "+
-			"publisher=excluded.publisher, enabled=excluded.enabled, trust_tier=excluded.trust_tier, "+
-			"catalog_id=excluded.catalog_id, updated_at=excluded.updated_at",
-		row.ID, row.Name, row.DisplayName, row.Description, row.URL, row.Publisher, enabledInt, row.TrustTier, row.CatalogID, row.CreatedAt, row.UpdatedAt)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpsertApp", err)
-	}
-	return nil
-}
-
-func (r *SQLiteExtensionRepository) DeleteApp(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM apps WHERE id=?", id)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "error", err)
-	}
-	return nil
-}
 
 // --- plugins ---
 

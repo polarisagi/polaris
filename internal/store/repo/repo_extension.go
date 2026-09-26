@@ -319,4 +319,4 @@ func (r *SQLiteExtensionRepository) SeedCatalogEntry(ctx context.Context, row ty
 }
 
 // mcp_servers 表操作 + 卸载清理见 repo_extension_mcp.go（R7 拆分）。
-// apps/plugins 表操作见 repo_extension_apps.go（R7 拆分）。
+// plugins 表操作见 repo_extension_plugins.go（R7 拆分）。

@@ -99,7 +99,6 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 	s.eventRepo = repo.NewSQLiteEventRepository(rwDB)
 	s.cronRepo = repo.NewSQLiteCronRepository(rwDB)
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(rwDB)
-	s.appRepo = repo.NewSQLiteAppRepository(rwDB)
 	s.projectRepo = repo.NewSQLiteProjectRepository(rwDB)
 
 	// 系统提示词模板（含 embedded FS / 三层加载 Layer 0/1）的初始化推迟到
@@ -171,7 +170,6 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		AutomationRepo: s.automationRepo,
 		EventRepo:      s.eventRepo,
 		CronRepo:       s.cronRepo,
-		AppRepo:        s.appRepo,
 		Registry:       s.registry,
 		HTTPClient:     httpClient,
 		DataDir:        s.dataDir,

@@ -8,27 +8,6 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
-func TestParseAIPluginEntry(t *testing.T) {
-	manifest := `{
-		"name_for_human": "Test Plugin",
-		"description_for_human": "A test plugin",
-		"api": {
-			"url": "http://localhost:8080/openapi.yaml"
-		}
-	}`
-	tmpDir := t.TempDir()
-	os.WriteFile(filepath.Join(tmpDir, "ai-plugin.json"), []byte(manifest), 0644)
-
-	mp := protocol.Marketplace{ID: "testmp"}
-	entry, err := parseAIPluginEntry(filepath.Join(tmpDir, "ai-plugin.json"), tmpDir, mp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry.Name != "Test Plugin" || entry.Description != "A test plugin" {
-		t.Errorf("unexpected entry: %+v", entry)
-	}
-}
-
 func TestParsePluginTOMLEntry(t *testing.T) {
 	manifest := `
 [plugin]

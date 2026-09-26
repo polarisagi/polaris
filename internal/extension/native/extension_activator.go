@@ -177,13 +177,6 @@ func (a *ExtensionActivator) activateOne(ctx context.Context, extID, snippet str
 	case "plugin":
 		// Plugin 是 TypeScript MCP server，与 MCP 激活路径相同。
 		return a.activateMCP(ctx, extID, runtimeID, config, snippet, trustTier)
-	case "app":
-		// App 是前端 UI 扩展，不注册工具，直接返回描述提示
-		return &ActivatedToolHint{
-			ExtensionID: extID,
-			ToolName:    runtimeID,
-			Description: snippet,
-		}, nil
 	default:
 		slog.Warn("extension_activator: unknown ext_type, skip activation",
 			"ext_id", extID, "ext_type", extType)

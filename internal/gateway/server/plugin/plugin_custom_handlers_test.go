@@ -76,26 +76,6 @@ func TestPluginCustomHandlers(t *testing.T) {
 			created_at DATETIME,
 			updated_at DATETIME
 		);
-		CREATE TABLE IF NOT EXISTS apps (
-			id TEXT PRIMARY KEY,
-			name TEXT,
-			display_name TEXT,
-			description TEXT,
-			version TEXT,
-			trust_tier INTEGER,
-			catalog_id TEXT,
-			enabled BOOLEAN,
-			url TEXT,
-			publisher TEXT,
-			status TEXT,
-			install_path TEXT,
-			error_msg TEXT,
-			config TEXT,
-			runtime_id TEXT,
-			plugin_id TEXT,
-			created_at DATETIME,
-			updated_at DATETIME
-		);
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -126,12 +106,4 @@ func TestPluginCustomHandlers(t *testing.T) {
 		t.Errorf("create plugin failed: %v", w.Body.String())
 	}
 
-	// Create App
-	body = `{"name": "test-app", "display_name": "Test", "description": "desc", "version": "1.0.0"}`
-	req = httptest.NewRequest("POST", "/api/v1/apps/custom", bytes.NewBufferString(body))
-	w = httptest.NewRecorder()
-	h.HandleCreateApp(w, req)
-	if w.Result().StatusCode != http.StatusCreated {
-		t.Errorf("create app failed: %v", w.Body.String())
-	}
 }

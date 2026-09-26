@@ -136,7 +136,7 @@ func (h *PluginHandler) downloadAndInstallExtension(ctx context.Context, extID, 
 				}
 			}
 		}
-		// 兼容第三方格式（OpenAI ai-plugin.json / Anthropic plugin.toml 等）
+		// 兼容第三方格式（Anthropic plugin.toml 等）
 		if subEntries, err2 := marketplace.ParseManifestDir(destDir, "", protocol.Marketplace{
 			ID: "bundle_" + extID, Publisher: entry.Publisher, TrustTier: entry.TrustTier,
 		}); err2 == nil {

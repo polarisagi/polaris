@@ -174,23 +174,6 @@ AuditEventRow struct {
 
 type
 
-// AppRow 对应 apps 表一行（自定义 App）。
-AppRow struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
-	URL         string `json:"url"`
-	Publisher   string `json:"publisher"`
-	Enabled     bool   `json:"enabled"`
-	TrustTier   int    `json:"trust_tier"`
-	CatalogID   string `json:"catalog_id"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-type
-
 // TokenCostAgg 按任务聚合的 Token 费用统计。
 TokenCostAgg struct {
 	Pool         string

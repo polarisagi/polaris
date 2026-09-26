@@ -194,10 +194,6 @@ ExtensionRepository interface {
 	GetMaxMarketplaceSortOrder(ctx context.Context) (int, error)
 	SeedCatalogEntry(ctx context.Context, row types.ExtCatalogRow) error
 
-	// apps
-	UpsertApp(ctx context.Context, row types.AppRow) error
-	DeleteApp(ctx context.Context, id string) error
-
 	// plugins
 	UpsertPlugin(ctx context.Context, id, name, version, displayName, description, publisher, homepage, installPath string, enabled, trustTier int, catalogID, mcpPolicy, manifest, createdAt, updatedAt string) error
 	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
@@ -210,7 +206,7 @@ ExtensionRepository interface {
 	UpdateMCPServer(ctx context.Context, id string, fields map[string]any) error
 	DeleteMCPServer(ctx context.Context, id string) error
 
-	// UninstallCleanup 卸载扩展时清理关联数据（mcp_servers/skills/apps/plugins）
+	// UninstallCleanup 卸载扩展时清理关联数据（mcp_servers/skills/plugins）
 	UninstallCleanup(ctx context.Context, id, runtimeID, extType string) error
 	// DeleteInstancesByPluginID 按 plugin_id 删除所有关联实例
 	DeleteInstancesByPluginID(ctx context.Context, pluginID string) error

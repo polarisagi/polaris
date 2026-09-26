@@ -74,7 +74,6 @@ type Server struct {
 	eventRepo      prepo.EventRepository
 	cronRepo       protocol.CronRepository
 	workflowRepo   prepo.WorkflowRepository
-	appRepo        prepo.AppRepository
 	projectRepo    prepo.ProjectRepository  // ADR-0097
 	registry       protocol.LLMRegistry     // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
 	httpClient     *http.Client             // 复用 SafeHTTPClient

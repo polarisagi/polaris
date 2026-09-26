@@ -25,7 +25,7 @@ func validateTable(table string) error {
 		"knowledge_nodes", "knowledge_edges", "rag_chunks",
 		"plugin_marketplaces", "preferences", "decision_log", "skills",
 		"self_improve", "outbox", "extension_instances", "notes",
-		"reflection_memory", "apps":
+		"reflection_memory":
 		return nil
 	default:
 		return apperr.New(apperr.CodeInvalidInput,

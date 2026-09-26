@@ -53,7 +53,6 @@ type SysAdminHandler struct {
 	ChatRepo       protocol.ChatRepository
 	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
 	ProviderRepo   protocol.ProviderRepository
-	AppRepo        repo.AppRepository
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Registry       protocol.LLMRegistry
@@ -123,7 +122,6 @@ type Dependencies struct {
 	ChatRepo       protocol.ChatRepository
 	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
 	ProviderRepo   protocol.ProviderRepository
-	AppRepo        repo.AppRepository
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Chat           ChatDispatcher
@@ -177,7 +175,6 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		ChatRepo:             deps.ChatRepo,
 		ProjectRepo:          deps.ProjectRepo,
 		ProviderRepo:         deps.ProviderRepo,
-		AppRepo:              deps.AppRepo,
 		ServerAddr:           deps.ServerAddr,
 		AutomationRepo:       deps.AutomationRepo,
 		Chat:                 deps.Chat,

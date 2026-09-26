@@ -358,7 +358,7 @@ func identsIn(s string) []string {
 //
 // 两层收窄，都是实测校准出来的：
 //   - 只在「所列 token 至少有一个是本包的真实声明名」时才校验。指针文本里常写的是
-//     业务名词而非符号（`apps/plugins 见 repo_extension_apps.go`、
+//     业务名词而非符号（`plugins 见 repo_extension_plugins.go`、
 //     `provider_models/CRUD/model/roles 见 providers_models.go`），那不是符号清单，
 //     拿它去比对必然误报。
 //   - 命中判定只要求「之一」而非全部——同一条指针里常混有 `错误类型定义` 这类描述。

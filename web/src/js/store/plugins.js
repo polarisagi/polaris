@@ -7,7 +7,7 @@ Alpine.store('plugins', {
   catalog: [],
   loading: false,
   syncing: false,
-  filter: 'plugin',   // 'plugin' | 'app' | 'mcp' | 'skill' | 'marketplace'
+  filter: 'plugin',   // 'plugin' | 'mcp'（UI 名「连接器」）| 'skill' | 'marketplace'
   search: '',
   installing: {},  // catalogID → true
   uninstalling: {},
@@ -254,13 +254,6 @@ Alpine.store('plugins', {
           description: this.createForm.description,
           manifest_url: this.createForm.manifest_url
         }
-      } else if (filter === 'app') {
-        endpoint = '/v1/apps/create'
-        body = {
-          name: this.createForm.name,
-          description: this.createForm.description,
-          url: this.createForm.url
-        }
       } else if (filter === 'mcp') {
         endpoint = '/v1/mcp/create'
         body = {
@@ -302,13 +295,13 @@ Alpine.store('plugins', {
   },
 
   typeLabel(type) {
-    return { mcp: 'MCP 服务', skill: '技能', plugin: '插件', app: '应用', marketplace: '市场' }[type] || type || '插件'
+    return { mcp: '连接器', skill: '技能', plugin: '插件', marketplace: '市场' }[type] || type || '插件'
   },
   typeColor(type) {
-    return { mcp: '#3b82f6', skill: '#8b5cf6', plugin: '#f59e0b', app: '#10b981', marketplace: '#ec4899' }[type] || '#3b82f6'
+    return { mcp: '#3b82f6', skill: '#8b5cf6', plugin: '#f59e0b', marketplace: '#ec4899' }[type] || '#3b82f6'
   },
   typeIcon(type) {
-    return { mcp: '⚙', skill: '⚡', plugin: '📦', app: '📱', marketplace: '🛒' }[type] || '📦'
+    return { mcp: '🔌', skill: '⚡', plugin: '📦', marketplace: '🛒' }[type] || '📦'
   },
 
   trustLabel(tier) {

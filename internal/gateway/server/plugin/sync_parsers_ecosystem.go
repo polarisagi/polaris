@@ -1,5 +1,5 @@
 // Package plugin 的本文件收录第三方生态清单格式适配器（R7 文件行数治理，
-// 从 sync_parsers.go 拆出，2026-07-07）：OpenAI ai-plugin.json、Anthropic
+// 从 sync_parsers.go 拆出，2026-07-07）：Anthropic
 // plugin.toml、Google skills.yaml/agent-manifest.yaml、npm package.json、
 // Python pyproject.toml。与 sync_parsers.go 保留的原生格式（SKILL.md/
 // plugin.json/mcp.json）解析器 + discoverMarketplaceEntries 发现编排逻辑
@@ -19,59 +19,6 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
-
-// parseAIPluginEntry 解析 OpenAI ai-plugin.json 格式。
-// api.type=="mcp" 时映射为 mcp 条目；其余映射为 app（URL 直连）。
-func parseAIPluginEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "parseAIPluginEntry", err)
-	}
-	var p protocol.AIPluginJSON
-	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "parseAIPluginEntry", err)
-	}
-	relDir, _ := filepath.Rel(mpDir, filepath.Dir(path))
-	relPath := filepath.ToSlash(relDir)
-
-	name := p.NameForHuman
-	if name == "" {
-		name = p.NameForModel
-	}
-	if name == "" {
-		name = filepath.Base(relDir)
-		name = formatName(name)
-	}
-	desc := p.DescriptionForHuman
-	if desc == "" {
-		desc = p.DescriptionForModel
-	}
-
-	extType := "app"
-	command := ""
-	if strings.EqualFold(p.API.Type, "mcp") {
-		extType = "mcp"
-		command = p.API.URL
-	}
-
-	url := p.API.URL
-	if strings.Contains(mp.RepoURL, "github.com") && url == "" {
-		url = strings.TrimSuffix(mp.RepoURL, "/") + "/tree/main/" + relPath
-	}
-
-	return &protocol.RegistryEntry{
-		ID:          mp.ID + "/" + relPath,
-		Publisher:   mp.Publisher,
-		Type:        extType,
-		TrustTier:   mp.TrustTier,
-		Name:        name,
-		Description: desc,
-		URL:         url,
-		Homepage:    p.LegalInfoURL,
-		Command:     command,
-		Timeout:     60,
-	}, nil
-}
 
 var errSkipEntry = apperr.New(apperr.CodeInternal, "skip entry")
 

@@ -268,19 +268,6 @@ func TestExtensionManager_InstallExtension(t *testing.T) {
 			created_at DATETIME,
 			updated_at DATETIME
 		);
-		CREATE TABLE IF NOT EXISTS apps (
-			id TEXT PRIMARY KEY,
-			name TEXT,
-			display_name TEXT,
-			description TEXT,
-			version TEXT,
-			trust_tier INTEGER,
-			catalog_id TEXT,
-			enabled BOOLEAN,
-			status TEXT,
-			created_at DATETIME,
-			updated_at DATETIME
-		);
 		CREATE TABLE IF NOT EXISTS extension_catalog (
 			id TEXT PRIMARY KEY,
 			marketplace_id TEXT,

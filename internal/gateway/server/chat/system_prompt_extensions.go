@@ -8,21 +8,18 @@ import (
 )
 
 // ============================================================================
-// 插件 / MCP / App 感知摘要构建（R7 拆分自 system_prompt.go）。
+// 插件 / MCP 感知摘要构建（R7 拆分自 system_prompt.go）。
 // InjectSystemPrompt 主入口见 system_prompt.go；ambient skills 见
 // system_prompt_ambient.go。
 // ============================================================================
 
-// buildExtensionSummary 构建插件/MCP/App 感知摘要字符串（单行，| 分隔）。
+// buildExtensionSummary 构建插件/MCP 感知摘要字符串（单行，| 分隔）。
 // 只注入名称和连接状态；详细工具参数由 BuildToolSchemas() 注入 function schema 传递，避免双重注入。
 func (s *PromptAssemblyService) buildExtensionSummary(ctx context.Context) string {
 	var parts []string
 	if s.DB != nil {
 		if plugParts := s.queryPluginSummary(ctx); len(plugParts) > 0 {
 			parts = append(parts, "Plugins: "+strings.Join(plugParts, ", "))
-		}
-		if appParts := s.queryAppSummary(ctx); len(appParts) > 0 {
-			parts = append(parts, "Apps: "+strings.Join(appParts, ", "))
 		}
 	}
 	if s.MCPMgr != nil {
@@ -71,54 +68,36 @@ func (s *PromptAssemblyService) queryPluginSummary(ctx context.Context) []string
 				"plugin_id", plugID, "err", err)
 		}
 
-		connected, total := 0, 0
-		for serverName, entry := range policy {
-			enabled := true
-			if v, ok := entry["enabled"].(bool); ok {
-				enabled = v
-			}
-			if !enabled {
-				continue
-			}
-			total++
-			if connectedSet["plugin_"+plugID+"_"+serverName] {
-				connected++
-			}
-		}
-
-		mark := "✗"
-		if total > 0 && connected == total {
-			mark = "✓"
-		} else if connected > 0 {
-			mark = "~"
-		}
-		result = append(result, label+"("+mark+")")
+		result = append(result, label+"("+pluginConnectMark(plugID, policy, connectedSet)+")")
+	}
+	if err := rows.Err(); err != nil {
+		// 迭代中途出错会让摘要静默少插件；摘要非阻断路径，留痕后返回已读部分。
+		slog.Warn("system_prompt: plugins 摘要迭代中断，结果可能不完整", "err", err)
 	}
 	return result
 }
 
-// queryAppSummary 查询已启用 App 的显示名称列表。
-func (s *PromptAssemblyService) queryAppSummary(ctx context.Context) []string {
-	rows, err := s.DB.QueryContext(ctx,
-		`SELECT display_name, name FROM apps WHERE enabled=1`)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
-	var result []string
-	for rows.Next() {
-		var displayName, name string
-		if rows.Scan(&displayName, &name) != nil {
+// pluginConnectMark 按 mcp_policy 中启用的子 MCP 计算连接标记：
+// ✓ 全部已连接；~ 部分连接；✗ 无连接或无启用子 MCP。
+func pluginConnectMark(plugID string, policy map[string]map[string]any, connectedSet map[string]bool) string {
+	connected, total := 0, 0
+	for serverName, entry := range policy {
+		if v, ok := entry["enabled"].(bool); ok && !v {
 			continue
 		}
-		label := displayName
-		if label == "" {
-			label = name
+		total++
+		if connectedSet["plugin_"+plugID+"_"+serverName] {
+			connected++
 		}
-		result = append(result, label)
 	}
-	return result
+	switch {
+	case total > 0 && connected == total:
+		return "✓"
+	case connected > 0:
+		return "~"
+	default:
+		return "✗"
+	}
 }
 
 // standaloneMCPSummary 返回非插件独立 MCP 服务的名称+连接状态列表。

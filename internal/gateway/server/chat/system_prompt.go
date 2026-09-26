@@ -148,8 +148,8 @@ const (
 
 // Ambient skills 相关性判定/文本注入 (relevanceScore/skillTextKey/
 // cachedSkillEmbed/isSkillRelevant/buildAmbientSkillsSection/
-// SetActivatedSystemPrompt) 见 system_prompt_ambient.go；插件/MCP/App 感知
-// 摘要 (buildExtensionSummary/queryPluginSummary/queryAppSummary/
+// SetActivatedSystemPrompt) 见 system_prompt_ambient.go；插件/MCP 感知
+// 摘要 (buildExtensionSummary/queryPluginSummary/
 // standaloneMCPSummary) 见 system_prompt_extensions.go（均为 R7 拆分）。
 
 func loadOperationalDirectives(pm PromptManager) string {

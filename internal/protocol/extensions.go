@@ -49,7 +49,7 @@ type RegistryEntry struct {
 	// ID 全局唯一 slug，格式："{publisher}/{name}" 或 "mcp/{name}"
 	ID        string `json:"id" yaml:"id"`
 	Publisher string `json:"publisher" yaml:"publisher"`
-	// Type "mcp" | "skill" | "plugin" | "app"
+	// Type "mcp" | "skill" | "plugin"
 	Type      string `json:"type" yaml:"type"`
 	TrustTier int    `json:"trust_tier" yaml:"trust_tier"`
 
@@ -94,22 +94,6 @@ type Marketplace struct {
 	Enabled     int    `json:"enabled" yaml:"enabled"`
 	SortOrder   int    `json:"sort_order" yaml:"sort_order"` // 展示排序权重，值越小越靠前
 	CreatedAt   string `json:"created_at" yaml:"created_at"`
-}
-
-// App 富交互应用（App）运行时模型（对应 028_apps.sql）。
-// 提供独立于 MCP 的前端扩展能力。
-type App struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
-	URL         string `json:"url"`
-	Publisher   string `json:"publisher"`
-	Enabled     bool   `json:"enabled"`
-	TrustTier   int    `json:"trust_tier"`
-	CatalogID   string `json:"catalog_id"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
 }
 
 // PluginInterface 对应 plugin.json 的 interface 块（UI 展示元数据）。
@@ -263,40 +247,6 @@ func (m *PluginBundleManifest) UnmarshalJSON(data []byte) error {
 type BundleSkillRef struct {
 	Path string `json:"path"` // 相对于 Bundle 根目录的 SKILL.md 路径
 	Name string `json:"name,omitempty"`
-}
-
-// AppJSON 是 OpenAI Codex .app.json connector/app 映射格式。
-// 用于声明插件所包含的 App 或第三方 Connector。
-type AppJSON struct {
-	Apps []AppDef `json:"apps,omitempty"`
-}
-
-// AppDef 单个 App/Connector 定义。
-type AppDef struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	URL         string `json:"url,omitempty"`     // HTTP connector 端点
-	Command     string `json:"command,omitempty"` // 本地进程命令
-}
-
-// AIPluginJSON 是 OpenAI ai-plugin.json 清单格式（ChatGPT Plugins 时代，已逐步被 MCP 取代）。
-// https://platform.openai.com/docs/plugins/getting-started/plugin-manifest
-type AIPluginJSON struct {
-	SchemaVersion       string `json:"schema_version"`
-	NameForModel        string `json:"name_for_model"`
-	NameForHuman        string `json:"name_for_human"`
-	DescriptionForModel string `json:"description_for_model"`
-	DescriptionForHuman string `json:"description_for_human"`
-	Auth                struct {
-		Type string `json:"type"` // "none" | "service_http" | "user_http" | "oauth"
-	} `json:"auth"`
-	API struct {
-		Type string `json:"type"` // "openapi" | "mcp"
-		URL  string `json:"url"`
-	} `json:"api"`
-	LogoURL      string `json:"logo_url"`
-	ContactEmail string `json:"contact_email"`
-	LegalInfoURL string `json:"legal_info_url"`
 }
 
 // AnthropicPluginTOML 是 Anthropic .claude-plugin/plugin.toml 格式。

@@ -277,7 +277,7 @@ export const zh = {
   agents_tools_count: '已注册工具',
   agents_skills: '技能',
   agents_skills_count: '已安装技能',
-  agents_mcp: 'MCP 服务器',
+  agents_mcp: '连接器（MCP）',
   agents_mcp_count: '已配置服务器',
   agents_channels: '第三方接入',
   agents_channels_count: '已启用接入',
@@ -488,12 +488,11 @@ export const zh = {
   computer_chrome_desc:       '通过 CDP 协议启动无头浏览器执行精准网页交互。',
 
   // ── Agent 监控 tab ───────────────────────────────────────────────────────
-  agents_no_mcp: '暂无 MCP 服务器，请前往「插件」安装。',
+  agents_no_mcp: '暂无连接器，请前往「插件 › 连接器」配置。',
 
   // ── 插件目录新增 key ──────────────────────────────────────────────────────
   plugins_tab_plugin:          '插件',
-  plugins_tab_app:             '应用',
-  plugins_tab_mcp:             'MCP',
+  plugins_tab_mcp:             '连接器',
   plugins_tab_skill:           '技能',
   plugins_tab_marketplace:     '市场',
   plugins_search_marketplace:  '搜索市场...',
@@ -920,7 +919,7 @@ export const en = {
   agents_tools_count: 'Registered Tools',
   agents_skills: 'Skills',
   agents_skills_count: 'Installed Skills',
-  agents_mcp: 'MCP Servers',
+  agents_mcp: 'Connectors (MCP)',
   agents_mcp_count: 'Configured Servers',
   agents_channels: 'Channels',
   agents_channels_count: 'Active Channels',
@@ -1097,11 +1096,10 @@ export const en = {
   computer_chrome_desc:       'Launch headless browser via CDP for precise web interactions.',
 
   // ── Agent monitor tab ─────────────────────────────────────────────────────
-  agents_no_mcp: 'No MCP servers installed. Go to "Plugins" to install one.',
+  agents_no_mcp: 'No connectors configured. Go to "Plugins › Connectors" to add one.',
 
   plugins_tab_plugin: 'Plugins',
-  plugins_tab_app: 'Apps',
-  plugins_tab_mcp: 'MCP',
+  plugins_tab_mcp: 'Connectors',
   plugins_tab_skill: 'Skills',
   plugins_tab_marketplace: 'Marketplace',
   plugins_search_marketplace: 'Search marketplace...',

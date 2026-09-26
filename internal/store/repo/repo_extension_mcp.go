@@ -13,7 +13,7 @@ import (
 // ============================================================================
 // mcp_servers 表操作 + 卸载清理（R7 拆分自 repo_extension.go）。
 // 结构体/构造函数/extension_instances/extension_catalog 见 repo_extension.go；
-// apps/plugins 表操作见 repo_extension_apps.go。
+// plugins 表操作见 repo_extension_plugins.go。
 // ============================================================================
 
 // --- mcp_servers ---
@@ -136,10 +136,6 @@ func (r *SQLiteExtensionRepository) UninstallCleanup(ctx context.Context, id, ru
 		_, err = tx.ExecContext(ctx, `DELETE FROM skills WHERE plugin_id=?`, id)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skills", err)
-		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM apps WHERE origin=?`, id)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup apps", err)
 		}
 	}
 

@@ -3,8 +3,6 @@ package marketplace
 // adapter.go — 多厂商插件清单解析适配器（M13-bis §2.1）
 //
 // 支持格式：
-//   - OpenAI   ai-plugin.json（ChatGPT Plugins 旧格式，兼容保留）
-//   - OpenAI   .app.json（Codex connector/app 格式）
 //   - Anthropic .claude-plugin/plugin.toml 或 plugin.toml
 //   - Anthropic .claude-plugin/plugin.json（Claude 原生 Bundle）
 //   - Google    skills.yaml / agent-manifest.yaml
@@ -19,8 +17,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -30,7 +26,7 @@ import (
 
 // ParseManifestDir 探测 dir 中所有已知的外部厂商清单格式并返回 RegistryEntry 列表。
 // mpRoot 为市场克隆根目录（用于计算相对路径 ID）；Bundle 安装时传空字符串。
-// 一个目录可能返回多个条目（如同时含 ai-plugin.json 和 SKILL.md）。
+// 一个目录可能返回多个条目（如同时含 plugin.json 和 SKILL.md）。
 func ParseManifestDir(dir, mpRoot string, mp protocol.Marketplace) ([]protocol.RegistryEntry, error) {
 	relPath := "."
 	if mpRoot != "" {
@@ -42,9 +38,6 @@ func ParseManifestDir(dir, mpRoot string, mp protocol.Marketplace) ([]protocol.R
 
 	var entries []protocol.RegistryEntry
 
-	if e, ok := parseAIPlugin(dir, baseID, mp); ok {
-		entries = append(entries, e)
-	}
 	if e, ok := parseAnthropicTOML(filepath.Join(dir, ".claude-plugin", "plugin.toml"), baseID, mp); ok {
 		entries = append(entries, e)
 	}
@@ -60,9 +53,6 @@ func ParseManifestDir(dir, mpRoot string, mp protocol.Marketplace) ([]protocol.R
 	if es := parseGoogleYAML(dir, baseID, mp, "agent-manifest.yaml"); len(es) > 0 {
 		entries = append(entries, es...)
 	}
-	if es := parseAppJSON(dir, baseID, mp); len(es) > 0 {
-		entries = append(entries, es...)
-	}
 	if e, ok := parsePackageJSON(filepath.Join(dir, "package.json"), baseID, mp); ok {
 		entries = append(entries, e)
 	}
@@ -76,56 +66,6 @@ func ParseManifestDir(dir, mpRoot string, mp protocol.Marketplace) ([]protocol.R
 // GetMCPConfig 加载并解析 .mcp.json 文件，供 server 包调用。
 func GetMCPConfig(path string) (*protocol.MCPConfig, error) {
 	return loadMCPConfig(path)
-}
-
-// ─── OpenAI ──────────────────────────────────────────────────────────────────
-
-func parseAIPlugin(dir, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
-	data, err := os.ReadFile(filepath.Join(dir, "ai-plugin.json"))
-	if err != nil {
-		return protocol.RegistryEntry{}, false
-	}
-	var p protocol.AIPluginJSON
-	if err := json.Unmarshal(data, &p); err != nil {
-		return protocol.RegistryEntry{}, false
-	}
-
-	name := p.NameForHuman
-	if name == "" {
-		name = p.NameForModel
-	}
-	desc := p.DescriptionForHuman
-	if desc == "" {
-		desc = p.DescriptionForModel
-	}
-	if name == "" {
-		return protocol.RegistryEntry{}, false
-	}
-
-	// OpenAI ai-plugin.json 的 api.type 一般是 "openapi"（REST API），极少数声明 "mcp"。
-	// - openapi: 注册为 "app" 类型，URL 指向 OpenAPI spec；不生成 command（非 stdio 进程）
-	// - mcp: 服务器是 MCP HTTP 端点，URL 作为 HTTP transport 的 endpoint
-	extType := "app"
-	transport := ""
-	entryURL := p.API.URL
-	if strings.EqualFold(p.API.Type, "mcp") {
-		extType = "mcp"
-		transport = "http" // MCP HTTP transport，非 stdio
-	}
-
-	return protocol.RegistryEntry{
-		ID:          baseID,
-		Publisher:   mp.Publisher,
-		Type:        extType,
-		TrustTier:   mp.TrustTier,
-		Name:        name,
-		Description: desc,
-		Transport:   transport,
-		URL:         entryURL,
-		Homepage:    p.LegalInfoURL,
-		// Command 留空：OpenAI 插件是 HTTP 服务，不是本地 stdio 进程
-		Timeout: 60,
-	}, true
 }
 
 // ─── Anthropic TOML ──────────────────────────────────────────────────────────
@@ -207,43 +147,6 @@ func parseClaudePluginJSON(dir, baseID string, mp protocol.Marketplace) (protoco
 	}
 	return e, true
 }
-
-// ─── OpenAI Codex .app.json ──────────────────────────────────────────────────
-
-// parseAppJSON 解析 Codex .app.json connector/app 映射格式。
-// 每个 AppDef 生成一条 type="app" 的 RegistryEntry。
-func parseAppJSON(dir, baseID string, mp protocol.Marketplace) []protocol.RegistryEntry {
-	data, err := os.ReadFile(filepath.Join(dir, ".app.json"))
-	if err != nil {
-		return nil
-	}
-	var cfg protocol.AppJSON
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil
-	}
-	entries := make([]protocol.RegistryEntry, 0, len(cfg.Apps))
-	for i, app := range cfg.Apps {
-		if app.Name == "" {
-			continue
-		}
-		entries = append(entries, protocol.RegistryEntry{
-			ID:          baseID + "/app_" + strconv.Itoa(i),
-			Publisher:   mp.Publisher,
-			Type:        "app",
-			TrustTier:   mp.TrustTier,
-			Name:        app.Name,
-			Description: app.Description,
-			URL:         app.URL,
-			Command:     app.Command,
-			Timeout:     60,
-		})
-	}
-	return entries
-}
-
-// parseGoogleYAML（Google Agent Skills）、PackageJSON/parsePackageJSON、
-// PyProjectTOML/parsePyProjectTOML（npm/PyPI 依赖启发式推导）见
-// adapter_heuristic.go（R7 拆分）。
 
 // ─── mcp.json 解析（原 loader.go，随 GetMCPConfig 迁移保留）───────────────────
 

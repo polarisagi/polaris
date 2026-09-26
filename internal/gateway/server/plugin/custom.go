@@ -18,7 +18,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/util"
 )
 
-// HandleCreateApp/HandleCreateMCP/HandleCreatePluginFromIntent 见 custom_app_mcp.go（R7 拆分）。
+// HandleCreateMCP 见 custom_mcp.go；HandleCreatePluginFromIntent 见 custom_plugin_intent.go（R7 拆分）。
 
 // HandleCreateSkill 用户手动创建 Skill 扩展。
 // POST /v1/skills/create

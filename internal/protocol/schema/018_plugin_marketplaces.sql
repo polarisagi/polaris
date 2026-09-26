@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS plugin_marketplaces (
     id          TEXT    PRIMARY KEY,
     name        TEXT    NOT NULL,
-    type        TEXT    NOT NULL,   -- 'skill' | 'mcp' | 'plugin' | 'app'
+    type        TEXT    NOT NULL,   -- 'skill' | 'mcp' | 'plugin'
     publisher   TEXT    NOT NULL,
     repo_url    TEXT    NOT NULL,
     description TEXT    NOT NULL DEFAULT '',

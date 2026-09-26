@@ -9,7 +9,7 @@
 CREATE TABLE IF NOT EXISTS extension_catalog (
     id             TEXT PRIMARY KEY,            -- "{publisher}/{name}" slug
     marketplace_id TEXT NOT NULL,               -- plugin_marketplaces.id
-    type           TEXT NOT NULL,               -- 'mcp' | 'skill' | 'plugin' | 'app'
+    type           TEXT NOT NULL,               -- 'mcp' | 'skill' | 'plugin'
     name           TEXT NOT NULL,
     description    TEXT NOT NULL DEFAULT '',
     publisher      TEXT NOT NULL DEFAULT '',

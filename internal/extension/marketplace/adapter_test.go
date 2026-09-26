@@ -64,67 +64,6 @@ func TestGetMCPConfig(t *testing.T) {
 	})
 }
 
-func TestParseManifestDir_AIPlugin(t *testing.T) {
-	dir := t.TempDir()
-	content := `{
-		"name_for_human": "Test Plugin",
-		"description_for_human": "Test Description",
-		"api": {
-			"type": "openapi",
-			"url": "http://localhost/openapi.json"
-		},
-		"legal_info_url": "http://localhost/legal"
-	}`
-	err := os.WriteFile(filepath.Join(dir, "ai-plugin.json"), []byte(content), 0644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mp := protocol.Marketplace{ID: "test_mp", Publisher: "test_pub", TrustTier: 3}
-	entries, err := ParseManifestDir(dir, dir, mp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	e := entries[0]
-	if e.Name != "Test Plugin" || e.Description != "Test Description" || e.Type != "app" || e.Transport != "" || e.URL != "http://localhost/openapi.json" {
-		t.Errorf("unexpected entry: %+v", e)
-	}
-}
-
-func TestParseManifestDir_AIPlugin_MCP(t *testing.T) {
-	dir := t.TempDir()
-	content := `{
-		"name_for_model": "Test Model",
-		"description_for_model": "Test Model Desc",
-		"api": {
-			"type": "mcp",
-			"url": "http://localhost/mcp"
-		}
-	}`
-	err := os.WriteFile(filepath.Join(dir, "ai-plugin.json"), []byte(content), 0644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mp := protocol.Marketplace{ID: "test_mp", Publisher: "test_pub", TrustTier: 3}
-	entries, err := ParseManifestDir(dir, dir, mp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	e := entries[0]
-	if e.Name != "Test Model" || e.Type != "mcp" || e.Transport != "http" || e.URL != "http://localhost/mcp" {
-		t.Errorf("unexpected entry: %+v", e)
-	}
-}
-
 func TestParseManifestDir_AnthropicTOML(t *testing.T) {
 	dir := t.TempDir()
 	content := `
@@ -187,36 +126,6 @@ func TestParseManifestDir_ClaudePluginJSON(t *testing.T) {
 	e := entries[0]
 	if e.Name != "Claude Test" || e.Type != "plugin" || e.DisplayName != "Display Name" {
 		t.Errorf("unexpected entry: %+v", e)
-	}
-}
-
-func TestParseManifestDir_AppJSON(t *testing.T) {
-	dir := t.TempDir()
-	content := `{
-		"apps": [
-			{"name": "App1", "command": "cmd1"},
-			{"name": "App2", "url": "url2"}
-		]
-	}`
-	err := os.WriteFile(filepath.Join(dir, ".app.json"), []byte(content), 0644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mp := protocol.Marketplace{ID: "test_mp"}
-	entries, err := ParseManifestDir(dir, dir, mp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(entries))
-	}
-	if entries[0].Name != "App1" || entries[0].Command != "cmd1" || entries[0].Type != "app" {
-		t.Errorf("unexpected entry 0: %+v", entries[0])
-	}
-	if entries[1].Name != "App2" || entries[1].URL != "url2" || entries[1].Type != "app" {
-		t.Errorf("unexpected entry 1: %+v", entries[1])
 	}
 }
 

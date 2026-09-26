@@ -85,7 +85,6 @@ func setupTestDB(t *testing.T) *sql.DB {
 		CREATE TABLE mcp_servers (id TEXT PRIMARY KEY, plugin_id TEXT);
 		CREATE TABLE skills (name TEXT PRIMARY KEY, plugin_id TEXT);
 		CREATE TABLE plugins (id TEXT PRIMARY KEY);
-		CREATE TABLE apps (id TEXT PRIMARY KEY);
 	`)
 	if err != nil {
 		t.Fatal(err)

@@ -151,7 +151,7 @@ DELETE /v1/mcp-servers/{serverID}          删除 MCP Server
 POST   /v1/mcp-servers/{serverID}/test     测试 MCP Server 连通性
 
 ─── 插件与市场 (Marketplace) ──────────────────────────────
-GET    /v1/plugins/catalog                 读取聚合市场目录缓存（MCP/Skill/Plugin/App）
+GET    /v1/plugins/catalog                 读取聚合市场目录缓存（MCP/Skill/Plugin）
 POST   /v1/plugins/sync                    异步拉取并解析远程市场 Manifest
 GET    /v1/plugins/marketplaces            获取已订阅市场列表
 POST   /v1/plugins/marketplaces            添加订阅远程市场
@@ -161,7 +161,6 @@ DELETE /v1/plugins/{catalogID}             卸载已安装目录项
 POST   /v1/mcp/create                      直接创建自定义 MCP Server 记录
 POST   /v1/skills/create                   直接创建自定义 Skill 记录
 POST   /v1/plugins/create                  直接创建自定义 Plugin 记录
-POST   /v1/apps/create                     直接创建自定义 App 记录
 
 ─── 第三方接入（Channel）────────────────────────────────────
 GET    /v1/channels                        列出接入
@@ -330,13 +329,6 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/agent/{taskID}/interrupt` | `handleAgentInterrupt` |
 | POST | `/v1/approvals/` | `handleResolveApproval` |
 | GET | `/v1/approvals/pending` | `handleGetPendingApprovals` |
-| GET | `/v1/apps` | `sysadminHandler.HandleListApps` |
-| POST | `/v1/apps` | `sysadminHandler.HandleCreateApp` |
-| POST | `/v1/apps/create` | `pluginHandler.HandleCreateApp` |
-| DELETE | `/v1/apps/{id}` | `sysadminHandler.HandleDeleteApp` |
-| GET | `/v1/apps/{id}` | `sysadminHandler.HandleGetApp` |
-| PUT | `/v1/apps/{id}` | `sysadminHandler.HandleUpdateApp` |
-| POST | `/v1/apps/{id}/enable` | `sysadminHandler.HandleSetAppEnabled` |
 | POST | `/v1/audio/speech` | `chatHandler.AudioService.HandleAudioSpeech` |
 | POST | `/v1/audio/transcriptions` | `chatHandler.AudioService.HandleAudioTranscriptions` |
 | GET | `/v1/automation-templates` | `sysadminHandler.Cron.HandleListAutomationTemplates` |
@@ -391,6 +383,11 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/plugins/{id}/upgrade` | `pluginHandler.HandleUpgradePlugin` |
 | GET | `/v1/preferences` | `sysadminHandler.HandleGetPreferences` |
 | PUT | `/v1/preferences/{key}` | `sysadminHandler.HandleSetPreference` |
+| GET | `/v1/projects` | `chatHandler.HandleListProjects` |
+| POST | `/v1/projects` | `chatHandler.HandleCreateProject` |
+| DELETE | `/v1/projects/{id}` | `chatHandler.HandleDeleteProject` |
+| GET | `/v1/projects/{id}` | `chatHandler.HandleGetProject` |
+| PUT | `/v1/projects/{id}` | `chatHandler.HandleUpdateProject` |
 | GET | `/v1/providers` | `providerHandler.HandleListProviders` |
 | POST | `/v1/providers` | `providerHandler.HandleCreateProvider` |
 | POST | `/v1/providers/from-catalog` | `providerHandler.HandleCreateProviderFromCatalog` |
@@ -408,6 +405,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | DELETE | `/v1/sessions/{sessionID}` | `chatHandler.HandleDeleteSession` |
 | GET | `/v1/sessions/{sessionID}` | `chatHandler.HandleGetSession` |
 | GET | `/v1/sessions/{sessionID}/context` | `chatHandler.HandleGetSessionContext` |
+| PUT | `/v1/sessions/{sessionID}/project` | `chatHandler.HandleMoveSession` |
 | POST | `/v1/sessions/{sessionID}/recap` | `chatHandler.HandleSessionRecap` |
 | GET | `/v1/skills` | `sysadminHandler.HandleListSkills` |
 | POST | `/v1/skills/create` | `handleSkillCreate` |
@@ -417,6 +415,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | GET | `/v1/system/version` | `sysadminHandler.HandleGetVersion` |
 | GET | `/v1/tools` | `sysadminHandler.HandleListTools` |
 | POST | `/v1/tools/{name}/execute` | `sysadminHandler.HandleExecuteTool` |
+| POST | `/v1/vault/rotate-master-key` | `sysadminHandler.HandleVaultRotateMasterKey` |
 | GET | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |
 | POST | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |
 | GET | `/v1/workflows` | `sysadminHandler.Workflow.HandleListWorkflows` |

@@ -64,7 +64,6 @@ type ToolBundle struct {
 	HITLGateway           *hitl.GatewayImpl
 	SysRepo               *repo.SQLiteSystemRepository
 	ExtRepo               *repo.SQLiteExtensionRepository
-	AppRepo               *repo.SQLiteAppRepository
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
 	SkillRegistry         protocol.SkillRegistry
@@ -288,7 +287,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
 	prefsRepo := sysRepo
 	extRepo := repo.NewSQLiteExtensionRepository(sb.Store.DB())
-	appRepo := repo.NewSQLiteAppRepository(sb.Store.DB())
 
 	// 注入网络审批存储：MCPManager 查询 preferences 表以决定 TrustTier<=2 MCP 的网络隔离策略。
 	mcpMgr.SetNetApprovalStore(sysRepo)
@@ -477,7 +475,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		&pipelineValidatorAdapter{pipeline: pipeline},
 		&pipelineValidatorAdapter{pipeline: pipeline},
 	))
-	installFSM.RegisterInstaller(lifecycle.NewAppInstaller(extRepo))
 	installMgr.WithInstallFSM(installFSM)
 	slog.Info("polaris: InstallFSM injected into marketplace manager")
 
@@ -640,7 +637,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		HITLGateway:           hitlGateway,
 		SysRepo:               sysRepo,
 		ExtRepo:               extRepo,
-		AppRepo:               appRepo,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
 		SkillRegistry:         skillReg,
