@@ -19,6 +19,8 @@ type RenderInput struct {
 	// UserConfig 非敏感 userConfig 值；SensitiveKeys 中的键渲染为占位符（Claude：技能正文不替换敏感值）。
 	UserConfig    map[string]string
 	SensitiveKeys map[string]bool
+	// ArgsConsumed 参数已被正文以外的位置（动态注入命令）消费，不再追加 "ARGUMENTS:" 行。
+	ArgsConsumed bool
 }
 
 // renderToken：可选的前导反斜杠 + ${...} / $ARGUMENTS[N] / $ARGUMENTS / $N / $name。
@@ -45,7 +47,7 @@ func RenderSkill(body string, in RenderInput) string {
 		}
 		return slashes + val
 	})
-	if !consumed && strings.TrimSpace(in.RawArgs) != "" {
+	if !consumed && !in.ArgsConsumed && strings.TrimSpace(in.RawArgs) != "" {
 		out = strings.TrimRight(out, "\n") + "\n\nARGUMENTS: " + in.RawArgs + "\n"
 	}
 	return out
@@ -142,4 +144,33 @@ func splitShellArgs(s string) []string {
 		args = append(args, cur.String())
 	}
 	return args
+}
+
+// RenderCommand 渲染动态注入命令：替换规则同 RenderSkill，但参数值一律 shell 单引号转义
+// （比 Claude 的字面插入更严格：参数可能来自模型输出，字面插入等于允许经参数注入命令）。
+// 返回是否消费了参数占位。
+func RenderCommand(cmd string, in RenderInput) (string, bool) {
+	positional := splitShellArgs(in.RawArgs)
+	consumed := false
+	out := renderToken.ReplaceAllStringFunc(cmd, func(m string) string {
+		sub := renderToken.FindStringSubmatch(m)
+		slashes, tok := sub[1], sub[2]
+		if len(slashes) == 1 {
+			return tok
+		}
+		val, ok, isArg := in.resolve(tok, positional)
+		if !ok {
+			return m
+		}
+		if isArg {
+			consumed = true
+			val = shellQuote(val)
+		}
+		return slashes + val
+	})
+	return out, consumed
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }

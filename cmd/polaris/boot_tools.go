@@ -516,7 +516,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if containerSandbox != nil {
 		skillRunner = containerSandbox
 	}
-	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, skillRunner, nil).WithPolicy(sb.Gate).WithPluginContext(pluginVars)
+	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, skillRunner, nil).WithPolicy(sb.Gate).WithPluginContext(pluginVars).
+		WithInjector(&skill.SkillInjector{Wrapper: toolsb.NewRustArgvWrapper(), Policy: sb.Gate, Trust: extRepo})
 
 	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry + InProcessSandbox，
 	// 注册的执行函数委托至 skillExecutor（唯一实现，禁止重复渲染 instructions）。

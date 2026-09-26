@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,8 @@ type ScriptSkillExecutor struct {
 	policy protocol.PolicyGate
 	// pluginCtx 插件技能渲染上下文（插件根 / 数据目录 / 非敏感 userConfig）。
 	pluginCtx PluginRenderContextResolver
+	// injector 动态注入执行器；nil 时注入命令替换为"已禁用"提示，不执行（fail-closed）。
+	injector *SkillInjector
 
 	// P1-8：幂等缓存与限流，与 InMemoryToolRegistry 保持能力对等。
 	// PII 令牌还原：Skill 脚本的输入来自 Agent planning 层，不经过 LLM 对话的
@@ -76,6 +79,35 @@ type PluginRenderContextResolver interface {
 func (e *ScriptSkillExecutor) WithPluginContext(r PluginRenderContextResolver) *ScriptSkillExecutor {
 	e.pluginCtx = r
 	return e
+}
+
+// WithInjector 注入技能动态注入执行器。
+func (e *ScriptSkillExecutor) WithInjector(i *SkillInjector) *ScriptSkillExecutor {
+	e.injector = i
+	return e
+}
+
+// renderWithInjections 注入命令在模板上定位与审阅、参数转义后执行；正文渲染时注入点以哨兵
+// 占位，渲染完成后再换入命令输出——参数不会拼出新的注入点，命令输出也不会被二次展开。
+func (e *ScriptSkillExecutor) renderWithInjections(ctx context.Context, meta *types.SkillMeta, in pluginspec.RenderInput) (string, error) {
+	plan := planInjections(meta.Instructions, in)
+	if len(plan.points) == 0 {
+		return pluginspec.RenderSkill(meta.Instructions, in), nil
+	}
+	outputs, err := e.injector.run(ctx, meta, plan)
+	if err != nil {
+		return "", err
+	}
+	sentinels := make([]string, len(plan.points))
+	for i := range sentinels {
+		sentinels[i] = fmt.Sprintf("\x00polaris-injection-%d\x00", i)
+	}
+	in.ArgsConsumed = plan.consumed
+	out := pluginspec.RenderSkill(pluginspec.ReplaceInjections(meta.Instructions, plan.points, sentinels), in)
+	for i, s := range sentinels {
+		out = strings.Replace(out, s, outputs[i], 1)
+	}
+	return out, nil
 }
 
 // WithPolicy 注入 Cedar PolicyGate（M11），脚本执行前的唯一权限判定入口。
@@ -219,7 +251,10 @@ func (e *ScriptSkillExecutor) renderInstructions(ctx context.Context, meta *type
 		}
 		in.PluginRoot, in.PluginData, in.UserConfig, in.SensitiveKeys = pc.PluginRoot, pc.PluginData, pc.UserConfig, pc.SensitiveKeys
 	}
-	out := pluginspec.RenderSkill(meta.Instructions, in)
+	out, err := e.renderWithInjections(ctx, meta, in)
+	if err != nil {
+		return nil, err
+	}
 	if meta.SkillDir != "" {
 		out = "Base directory for this skill: " + meta.SkillDir + "\n\n" + out
 	}

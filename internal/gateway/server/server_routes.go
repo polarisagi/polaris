@@ -174,6 +174,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/skills", s.sysadminHandler.HandleListSkills)
 	// 用户可调用技能命令（/plugin:skill、$skill 补全；ADR-0103 决策五）
 	mux.HandleFunc("GET /v1/skills/commands", s.chatHandler.HandleListSkillCommands)
+	// 技能动态注入（!`cmd`）审阅信任（ADR-0103 决策五）
+	mux.HandleFunc("GET /v1/skills/injections", s.pluginHandler.HandleListSkillInjections)
+	mux.HandleFunc("POST /v1/skills/injections/trust", s.pluginHandler.HandleTrustSkillInjection)
 	mux.HandleFunc("POST /v1/skills/install", s.sysadminHandler.HandleInstallSkill)
 	// 用户意图驱动的技能生成入口（P3-2 SkillCreator，2026-07-21 deadcode 审查补齐）
 	// GR-9.2-006：M13 接口清单与 Web UI（web/src/js/store/plugins.js submitCreation）

@@ -133,6 +133,11 @@ func (r *SQLiteExtensionRepository) UninstallCleanup(ctx context.Context, id, ru
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup plugin mcp", err)
 		}
+		// 技能动态注入信任随技能删除（须在删 skills 行之前按 plugin_id 定位）。
+		_, err = tx.ExecContext(ctx, `DELETE FROM hook_trust WHERE source_key IN (SELECT 'skill:' || name FROM skills WHERE plugin_id=?)`, id)
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skill trust", err)
+		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM skills WHERE plugin_id=?`, id)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skills", err)
@@ -151,6 +156,9 @@ func (r *SQLiteExtensionRepository) UninstallCleanup(ctx context.Context, id, ru
 		_, err = tx.ExecContext(ctx, `DELETE FROM skills WHERE name=? AND plugin_id=''`, runtimeID)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skill", err)
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM hook_trust WHERE source_key=?`, "skill:"+runtimeID); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skill trust", err)
 		}
 	}
 

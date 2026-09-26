@@ -105,6 +105,7 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 - **模型侧**：`catalog.ModelToolView` 是技能以工具形态暴露的唯一视图（启动期 `skill_loader.go` 与动态 `SkillCatalog` 共用）。`model_invocable=0`（`disable-model-invocation` / Codex `allow_implicit_invocation: false`）或已废弃的技能不进入模型可见列表；描述 = `description` + `when_to_use`（前缀对外名，截断 1536 字符），参数 schema 为 `{"arguments": string}`（附 `argument-hint`）。
 - **用户侧**：`/插件:技能 参数`、`/技能 参数`（裸名唯一时）或 Codex `$技能 参数` 由 `SlashCommandRouter` 展开为渲染后的技能内容，作为本轮任务意图继续推理（`CommandResult.RewrittenInput`）；`user_invocable=0` 的技能不可由用户触发。`GET /v1/skills/commands` 供前端补全。
 - **渲染**：`pluginspec.RenderSkill` 单遍替换 `$ARGUMENTS` / `$ARGUMENTS[N]` / `$N` / 具名参数 / `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` / `${CLAUDE_SESSION_ID}` / 非敏感 `${user_config.*}`（敏感键输出 `<sensitive:KEY>` 占位）；未消费参数占位时追加 `ARGUMENTS:`；结果首行给出技能目录。
+- **动态注入**（`` !`cmd` `` / ` ```! `）：注入点在模板上定位，命令集合哈希审阅信任后才执行（`hook_trust` 键 `skill:<技能名>`，`GET /v1/skills/injections`、`POST /v1/skills/injections/trust`）；命令中的参数单引号转义（比 Claude 字面插入更严格，防模型参数注入命令）；经 `sandbox.RunStdio` 在技能目录执行，失败中止整次调用（grep/diff/test 等退出码 1 除外）；正文渲染时注入点以哨兵占位，输出不被二次展开；未装配执行器时替换为 `[shell command execution disabled by policy]`。
 - **脚本**：`script_path` 列持久化 Polaris 脚本技能入口（空=纯指令技能，不执行代码）；标准技能 `scripts/` 由模型经受控工具执行。
 
 ## 4. 工具发现与懒加载

@@ -107,10 +107,10 @@
 | `M04-Agent-Kernel.md` | L1 内核 | 25K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 20K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
 | `M09-Self-Improvement-Engine.md` | L2 自演化 | 18K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
+| `M13-bis-Extension-Registry.md` | L3 扩展 | 17K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M01-Inference-Runtime.md` | L0 推理 | 17K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
 | `M02-Storage-Fabric.md` | L0 存储 | 17K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
 | `M10-Knowledge-RAG.md` | L2 知识 | 16K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
-| `M13-bis-Extension-Registry.md` | L3 扩展 | 16K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M06-Skill-Library.md` | L1 技能 | 15K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
 | `M03-Observability.md` | L0 可观测 | 13K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
 | `M12-Eval-Harness.md` | L3 评测 | 12K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |

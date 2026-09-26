@@ -6,6 +6,10 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103：技能动态注入）
+
+- **[契约] `skill.ScriptSkillExecutor.WithInjector(*skill.SkillInjector)`**：技能正文 `` !`cmd` `` / ` ```! ` 按命令集合哈希审阅信任后在沙箱执行；新增 `pluginspec.FindInjections` / `RenderCommand`（参数 shell 转义）；API `GET /v1/skills/injections`、`POST /v1/skills/injections/trust`。
+
 ## 2026-09-26（ADR-0103：hooks.json 引擎 — 含**契约变更**与 **DDL 变更**）
 
 - **[DDL] `021_plugins.sql` 新增 `hook_trust`**：开发库需删除重建。

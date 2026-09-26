@@ -45,3 +45,14 @@ func TestRenderSkill_ArgumentsInsertedLiterally(t *testing.T) {
 		t.Fatalf("no args must not append ARGUMENTS: %q", got)
 	}
 }
+
+func TestRenderCommand_QuotesArguments(t *testing.T) {
+	in := RenderInput{RawArgs: `"a; rm -rf /" b`, SkillDir: "/s"}
+	got, consumed := RenderCommand("gh pr view $0 --repo $1 && cat ${CLAUDE_SKILL_DIR}/x", in)
+	if !consumed || got != `gh pr view 'a; rm -rf /' --repo 'b' && cat /s/x` {
+		t.Fatalf("got %q consumed=%v", got, consumed)
+	}
+	if got, _ := RenderCommand("echo $0", RenderInput{RawArgs: `"it's"`}); got != `echo 'it'"'"'s'` {
+		t.Fatalf("quote escaping: %q", got)
+	}
+}
