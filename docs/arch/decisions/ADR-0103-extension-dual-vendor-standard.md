@@ -30,6 +30,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - **路径规则**（两家 + agent-plugins 一致）：组件路径必须 `./` 开头、解析后在插件根内、必须存在；含 `..` 拒绝。违规组件单独失败，不连坐其他组件（agent-plugins 一致性条款 5）。
 - **未知字段**：顶层未知字段剥离 + 告警；严格对象（`userConfig` 项、`channels` 项、`lspServers` 项、`monitors` 项）含未知键 → 该组件失败。
 - **路径变量**：`${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` → 安装根；`${PLUGIN_DATA}` / `${CLAUDE_PLUGIN_DATA}` → `<data>/extensions/plugin-data/<id>/`（升级保留、卸载删除）；`${user_config.KEY}`；stdio 子进程同时导出四个变量。展开非递归、字面替换。
+- **宿主环境变量**：Claude `.mcp.json` 支持 `${VAR}` / `${VAR:-default}` 展开宿主环境变量。Polaris 只允许展开 `sanitizeParentEnv` 白名单内的变量，其余视为未定义（取默认值或空串）并告警——否则插件可用 `${OPENAI_API_KEY}` 等引用把宿主密钥注入自身进程或请求头（R1.15 / HE-7）。
 - **Polaris 生成物也用标准格式**：`PluginCreator` 与市场 MCP 包装产物改为 agent-plugins 1.0 布局（根 `plugin.json` + `mcp.json` + `skills/`），删除 `.polaris-plugin/`。Polaris 私有数据只允许放在 `extensions["ai.polarisagi"]`。
 - 删除自造格式解析：`plugin.toml`、`skills.yaml`/`agent-manifest.yaml`、`ai-plugin.json`（2024-04 已关闭的 ChatGPT Plugins）、`PluginBundleManifest` 的 `entrypoint`/`mcpInline`/`mcp_inline`/`hooks{install,uninstall}`/`skills[{path}]` 私有变体。
 
@@ -57,7 +58,11 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 
 ## 决策五：技能遵循 agentskills.io 规范 + 两家扩展字段
 
-- 必校验（agentskills.io）：`name` 1–64 字符、仅 `[a-z0-9-]`、首尾不为 `-`、无 `--`、与父目录名一致；`description` 1–1024 字符；`compatibility` ≤500 字符；`metadata` 为 string→string map。违规 → 技能不加载 + 报错（不静默修正）。
+- 校验分两级（宿主须同时运行两家技能，只有两家都拒绝的才算硬错误）：
+  - **硬错误 → 技能不加载**：frontmatter 不是合法 YAML；解析后的名称为空、>64 字符、含空白 / 路径分隔符 / `..` / 控制字符。
+  - **规范告警 → 加载并在 UI 展示**（agentskills.io 条款，Claude 宽容处理）：`name` 非 `[a-z0-9-]` / 首尾 `-` / 含 `--` / 与目录名不一致；`description` 缺失（按 Claude 回落为正文首个非空行）或 >1024 字符；`compatibility` >500 字符；`metadata` 非 string→string。
+- `name` 缺省取目录名（Claude 规则）；插件内技能对外名为 `<plugin>:<name>`，`name` 已带本插件前缀时不重复加前缀。
+- Polaris 私有技能参数（`exec_mode`、`risk_level`、`sandbox` 等）只从 `metadata` 读取（键前缀 `polaris-`），Polaris 生成的 SKILL.md 同样写入 `metadata`，保证产物可被 `skills-ref validate` 通过。
 - 可选字段全量解析：`license`、`compatibility`、`metadata`、`allowed-tools`；Anthropic 扩展 `when_to_use`、`argument-hint`、`arguments`、`disable-model-invocation`、`user-invocable`、`disallowed-tools`、`model`、`effort`、`context`、`agent`、`paths`；Codex `agents/openai.yaml`（`interface`、`policy.allow_implicit_invocation`、`dependencies.tools`）。
 - 调用控制：`disable-model-invocation: true` 或 `allow_implicit_invocation: false` → 不进入模型可见技能索引，只能用户显式调用；`user-invocable: false` → 仅模型可调用。
 - 正文变量：`$ARGUMENTS` / `$ARGUMENTS[N]` / `$N` / `$name`、`${CLAUDE_SKILL_DIR}`、`${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PLUGIN_DATA}`、`${CLAUDE_SESSION_ID}`。
@@ -118,3 +123,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 日期 | 变更 |
 |---|---|
 | 2026-09-26 | 初稿 |
+| 2026-09-26 | 决策五：技能校验由「违规即不加载」改为硬错误/规范告警两级。理由：Claude 规定 `name`、`description` 均可缺省（分别回落目录名与正文首行），按 agentskills 严格拒绝会使合法 Claude 技能无法加载，违背双标准兼容目标。新增决策二补充：宿主环境变量展开限制。 |

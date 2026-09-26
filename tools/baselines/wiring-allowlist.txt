@@ -41,3 +41,8 @@ internal/sysmgr/locale # CLAUDE.md §项目结构列为「locale/ 本地化」�
 # internal/extension/models 2026-08-15 删除：仅 doc.go 占位，0 导出符号，注释声称的激活条件
 #                           FeatureGate.ModelExtensions 全仓不存在——属臆测开发的产物
 #                           （CLAUDE.md 硬约束「禁止超前抽象、臆测开发」）。
+
+# ── 分提交落地中的新包（落地提交内移除）──────────────────────────────────────
+internal/extension/pluginspec # ADR-0103 决策二：双标准插件/技能唯一解析器，解析器与安装器
+#                    改造按 R8 分两个提交；去向：紧随提交由 lifecycle.PluginInstaller /
+#                    SkillInstaller / MCPInstaller 接线后本条删除。
