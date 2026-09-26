@@ -27,6 +27,8 @@ type PluginHandler struct {
 	HookRunner *hook.Runner
 	// AgentDefs 子 Agent 定义来源（插件 agents/、项目/用户 agents 目录，ADR-0103 决策三）。
 	AgentDefs AgentDefinitionLister
+	// Channels Claude 插件 channels 启用管理（ADR-0103 决策三）。
+	Channels PluginChannelManager
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer

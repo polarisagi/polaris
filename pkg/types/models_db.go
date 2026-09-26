@@ -216,3 +216,11 @@ TokenCostAgg struct {
 	TotalCacheRd int64
 	TotalCostUSD float64
 }
+
+// PluginChannelState 对应 plugin_channels 表一行（021）：插件 channel 的用户启用状态。
+type PluginChannelState struct {
+	PluginID        string
+	Server          string
+	Enabled         bool
+	PermissionRelay bool
+}

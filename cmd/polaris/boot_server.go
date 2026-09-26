@@ -104,7 +104,11 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetChannelStarter(channelMgr)
 	if ca := httpServer.ChannelsAdmin(); ca != nil {
 		channelMgr.SetMessageHandler(ca.DispatchChannelMessage)
+		if ca.SessionOrch != nil && tb.PluginChannels != nil {
+			tb.PluginChannels.BindTurns(channelTurnRunner{orch: ca.SessionOrch})
+		}
 	}
+	httpServer.SetPluginChannels(tb.PluginChannels)
 
 	httpServer.SetAuditTrail(sb.AuditTrail)
 	// 2026-07-12 修复：此前从未调用，s.outboxWriter 恒为 nil，导致

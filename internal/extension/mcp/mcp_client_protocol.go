@@ -36,8 +36,16 @@ func (c *MCPClient) Initialize(ctx context.Context) error {
 	// 校验服务器返回的协议版本（规范要求：不支持则应断连）
 	var initResp struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		Instructions    string `json:"instructions"`
+		Capabilities    struct {
+			Experimental map[string]json.RawMessage `json:"experimental"`
+		} `json:"capabilities"`
 	}
-	if json.Unmarshal(result, &initResp) == nil && initResp.ProtocolVersion != "" {
+	if err := json.Unmarshal(result, &initResp); err != nil {
+		slog.Warn("mcp: unparsable initialize result", "server", c.cfg.ServerName, "err", err)
+	}
+	c.serverMeta.Store(&ServerMeta{Instructions: initResp.Instructions, Experimental: initResp.Capabilities.Experimental})
+	if initResp.ProtocolVersion != "" {
 		if initResp.ProtocolVersion != mcpProtocolVersion {
 			slog.Warn("mcp: server protocol version mismatch",
 				"server", initResp.ProtocolVersion, "client", mcpProtocolVersion)

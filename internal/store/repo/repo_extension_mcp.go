@@ -143,7 +143,8 @@ func (r *SQLiteExtensionRepository) UninstallCleanup(ctx context.Context, id, ru
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skills", err)
 		}
 		// plugins.name 唯一：不删行则同名插件无法重装；用户配置（含密文）随插件一并删除。
-		for _, q := range []string{`DELETE FROM plugins WHERE id=?`, `DELETE FROM plugin_user_config WHERE plugin_id=?`} {
+		for _, q := range []string{`DELETE FROM plugins WHERE id=?`, `DELETE FROM plugin_user_config WHERE plugin_id=?`,
+			`DELETE FROM plugin_channels WHERE plugin_id=?`} {
 			if _, err = tx.ExecContext(ctx, q, id); err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup plugins", err)
 			}

@@ -33,6 +33,8 @@ type GatewayImpl struct {
 	notifier Notifier
 	// hooks hooks.json 的 PermissionRequest / Notification（可为 nil）。
 	hooks PermissionHooks
+	// relay 审批请求远程转发（可为 nil）。
+	relay PromptRelay
 
 	// waiters 保存等待审批结果的 channel
 	mu      sync.Mutex
@@ -90,6 +92,15 @@ type PermissionHooks interface {
 
 // SetPermissionHooks 注入 hooks.json 审批事件。
 func (g *GatewayImpl) SetPermissionHooks(h PermissionHooks) { g.hooks = h }
+
+// PromptRelay 把待审批请求转发到远程通道（Claude 插件 channel 的审批转发，ADR-0103 决策三）。
+// 远程裁决仍经 Respond 进入同一审批守卫（applyApprovalGuards）。
+type PromptRelay interface {
+	RelayPrompt(ctx context.Context, p types.HITLPrompt)
+}
+
+// SetPromptRelay 注入审批转发（可为 nil）。
+func (g *GatewayImpl) SetPromptRelay(r PromptRelay) { g.relay = r }
 
 // Prompt 挂起当前任务并请求人工审批。
 //
@@ -193,6 +204,13 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 		delete(g.waiters, p.ID)
 		g.mu.Unlock()
 	}()
+	// waiter 注册之后再转发：远程裁决可能立即到达，先转发会找不到 waiter。
+	if g.relay != nil {
+		relay, prompt := g.relay, p
+		concurrent.SafeGo(context.WithoutCancel(ctx), "automation.hitl.prompt_relay", func(ctx context.Context) {
+			relay.RelayPrompt(ctx, prompt)
+		})
+	}
 
 	// 3. 阻塞等待或超时 (上下文控制)
 	select {

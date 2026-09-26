@@ -8,6 +8,7 @@ import (
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -105,4 +106,21 @@ func newSubagentRunner(pool protocol.AgentPool, tb *ToolBundle) *orchestrator.Su
 		tb.HookEvaluator.bindSubagents(runner)
 	}
 	return runner
+}
+
+// channelTurnRunner 实现 lifecycle.ChannelTurnRunner：channel 事件作为该 channel 专属会话的一轮
+// headless 对话（与聊天平台 channel 同一会话编排路径）。回复经模型调用服务器的回复工具送出，
+// 宿主不回发最终文本（Claude channel 语义）。
+type channelTurnRunner struct{ orch session.Orchestrator }
+
+func (r channelTurnRunner) RunChannelTurn(ctx context.Context, sessionID, input string) error {
+	res, err := r.orch.RunTurn(ctx, session.Request{SessionID: sessionID, Input: input, Channel: "plugin_channel",
+		Headless: true, TitleHint: sessionID}, session.NewBufferSink())
+	if err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "channelTurnRunner", err)
+	}
+	if res != nil && res.Aborted {
+		return apperr.New(apperr.CodeCancelled, "channel turn aborted")
+	}
+	return nil
 }

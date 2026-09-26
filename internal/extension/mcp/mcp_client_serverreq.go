@@ -12,8 +12,12 @@ import (
 
 func (c *MCPClient) dispatch(resp *mcpRPCResponse) {
 	if resp.ID == nil {
-		if resp.Method != "" {
-			slog.Debug("mcp: server notification", "server", c.cfg.ServerName, "method", resp.Method)
+		if resp.Method == "" {
+			return
+		}
+		slog.Debug("mcp: server notification", "server", c.cfg.ServerName, "method", resp.Method)
+		if h := c.notificationHandler.Load(); h != nil && *h != nil {
+			(*h)(resp.Method, resp.Params)
 		}
 		return
 	}

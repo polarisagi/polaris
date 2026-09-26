@@ -44,7 +44,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | hooks（`hooks/hooks.json` + 清单 `hooks` + Codex `extensions.com.openai.hooks`） | 两家 | `internal/action/hook`；决策六 |
 | mcpServers（`.mcp.json`、`mcp.json`、清单内联、`.json` 路径、`.mcpb`/`.dxt` 包） | 两家 + agent-plugins | `mcp_servers`，`plugin_id` FK；类型 `stdio`/`http`/`streamable-http`/`sse`/`ws` |
 | userConfig | Anthropic | `plugin_user_config`；`sensitive=true` 经 `credential.Vault` 加密；提示词中敏感值替换为占位符 |
-| channels | Anthropic | 绑定插件 MCP 服务器为 channel 来源（`internal/channel`） |
+| channels | Anthropic | `lifecycle.ChannelService`：插件 MCP 服务器的 `notifications/claude/channel` 事件进入该 channel 专属会话；见「决策三补充：channels」 |
 | dependencies / defaultEnabled | Anthropic | 同市场内解析依赖，安装按拓扑序；启用前校验依赖已启用 |
 | apps（`.app.json`） | OpenAI Codex | 决策四 |
 | interface（Codex）/ displayName | 两家 | `plugins` 展示元数据 |
@@ -61,6 +61,13 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
   - 子 Agent 默认不能再委派（Claude 子 Agent 无 Agent 工具；Codex `agents.max_depth` 默认 1）；深度仍受 `SpawnDepth` 门控。
 - **角色指令**写入 `ZoneMutableSkill`（`<agent_profile>`），不进 `ZoneImmutable`：用户目录 TaintLow；插件/项目目录与 AGENTS.md 同一威胁模型 TaintMedium（Spotlighting）。`skills` 字段经技能执行器渲染后预加载（插件命名空间优先），缺失即失败，不带缺口运行。
 - **解析但不生效**（记入 `not_applied` + 诊断，UI 标注）：`model`/`effort`/Codex `model_reasoning_effort`（模型按阶段池路由，ADR-0101）、`background`、`isolation`、`memory`（子 Agent 共享委派方命名空间）、`initialPrompt`、agent 级 `mcpServers`/`hooks`、Codex 其余 config 覆盖键；插件 agent 的 `hooks`/`mcpServers`/`permissionMode` 按 Claude 安全规则忽略。
+
+### 决策三补充：channels（2026-09-27）
+
+- 协议按 Claude channels reference：服务器 `capabilities.experimental["claude/channel"]` 为对象即声明（`false`/缺省为未声明）；事件 `notifications/claude/channel {content, meta}` 渲染为 `<channel source="<server>" k="v">content</channel>`（meta 键仅 `[A-Za-z0-9_]`，其余丢弃；属性值与闭合标签转义），服务器 `instructions` 以 `<channel-instructions>` 随事件下发。
+- **安装 ≠ 启用**：`plugin_channels` 存用户显式开启状态（Claude 同样要求逐会话 `--channels` 开启）；未启用、服务器未连接或未声明能力的事件丢弃。启用后事件经 `session.Orchestrator.RunTurn(Headless)` 进入专属会话 `ch_plugin_<plugin>_<server>`（同一 channel 串行），意图按 TaintHigh；回复由模型调用服务器自身的回复工具完成，宿主不回发最终文本。
+- **审批转发**：须另行开启 `permission_relay` 且服务器声明 `claude/channel/permission`。HITL 等待注册后发 `notifications/claude/channel/permission_request {request_id(5 位 a-z 去 l), tool_name, description, input_preview}`；只接受宿主签发、未过期、且由同一服务器回传的 `notifications/claude/channel/permission {request_id, behavior}`，裁决经 `GatewayImpl.Respond` 进入同一审批守卫，一个裁决作废同一请求的其余转发。`RiskPrivileged` 请求不外发。
+- sender 鉴别由 channel 服务器负责（Claude 规则）；宿主侧边界是启用开关 + 污点 + 审批守卫。
 
 ## 决策四：Codex「应用」= 插件内的连接器绑定，不是扩展类型
 
@@ -131,7 +138,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 
 ## 引用代码
 
-`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/execute/orchestrator/subagent_runner.go`、`internal/agent/agent_skill_fork.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
+`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/execute/orchestrator/subagent_runner.go`、`internal/agent/agent_skill_fork.go`、`internal/extension/lifecycle/channels*.go`、`internal/extension/mcp/mcp_manager_notify.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
 
 ## 重新评估触发条件
 
@@ -148,3 +155,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-26 | 决策五：技能校验由「违规即不加载」改为硬错误/规范告警两级。理由：Claude 规定 `name`、`description` 均可缺省（分别回落目录名与正文首行），按 agentskills 严格拒绝会使合法 Claude 技能无法加载，违背双标准兼容目标。新增决策二补充：宿主环境变量展开限制。 |
 | 2026-09-26 | 决策三补充：子 Agent 定义与委派落地（双格式解析、工具名映射、只读/步数/禁委派硬拦截、YAML 私有格式删除、`transfer_to_agent` 注册）。 |
 | 2026-09-26 | 决策五/六补充：`context: fork` 技能、两家内置 agent 类型、SubagentStart/SubagentStop、`agent` 类型 hook（只读子 Agent + hook 抑制）。 |
+| 2026-09-27 | 决策三补充：Claude 插件 channels（事件入会话、`plugin_channels` 显式启用、审批转发）。 |

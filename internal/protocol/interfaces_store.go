@@ -212,6 +212,9 @@ ExtensionRepository interface {
 	ListHookTrust(ctx context.Context) (map[string]string, error)
 	SaveHookTrust(ctx context.Context, sourceKey, digest string) error
 	DeleteHookTrust(ctx context.Context, sourceKey string) error
+	// ListPluginChannelStates / SavePluginChannelState 插件 channel 的用户启用状态（定义在 manifest 快照）。
+	ListPluginChannelStates(ctx context.Context) ([]types.PluginChannelState, error)
+	SavePluginChannelState(ctx context.Context, s types.PluginChannelState) error
 	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
 	SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error
 	UpdatePluginMCPServerEnabled(ctx context.Context, pluginID, serverID string, enabled int, now string) error

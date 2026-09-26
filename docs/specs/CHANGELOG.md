@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-27（ADR-0103：Claude 插件 channels — 含**契约变更**与 **DDL 变更**）
+
+- **[DDL] `021_plugins.sql` 新增 `plugin_channels`**：开发库需删除重建。
+- **[契约] `MCPClient.SetNotificationHandler/ServerMeta/Notify`、`MCPManager.SetNotificationSink/ServerMeta/NotifyServer`**；`hitl.GatewayImpl.SetPromptRelay`；`ExtensionRepository.ListPluginChannelStates/SavePluginChannelState`。
+- 新增 `lifecycle.ChannelService` 与 API `GET|PUT /v1/plugins/channels`。
+
 ## 2026-09-26（ADR-0103：fork 技能、Subagent hooks、agent 类型 hook — 含**契约变更**）
 
 - **[契约] `orchestrator.SubagentRunner`**：子 Agent 执行唯一实现；`DefaultTaskWorker.WithProfileResolver` → `WithSubagents`。`hook.Runner.FireSubagentStart/FireSubagentStop`；`hook.Input.LastAssistantMessage`（Stop 不再用 `message`）。

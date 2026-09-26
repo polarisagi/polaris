@@ -388,6 +388,13 @@ func (s *Server) SetSubagentRunner(r chat.SubagentRunner) {
 	}
 }
 
+// SetPluginChannels 注入 Claude 插件 channels 管理，启用 /v1/plugins/channels。
+func (s *Server) SetPluginChannels(c plugin.PluginChannelManager) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.Channels = c
+	}
+}
+
 // SetAgentDefinitions 注入子 Agent 定义来源，启用 GET /v1/agents（ADR-0103 决策三）。
 func (s *Server) SetAgentDefinitions(defs plugin.AgentDefinitionLister) {
 	if s.pluginHandler != nil {

@@ -69,6 +69,42 @@ type MCPClient struct {
 	once sync.Once
 
 	serverReqHandler ServerRequestHandler
+
+	// serverMeta initialize 结果中的 instructions 与 experimental 能力（channel 声明等）。
+	serverMeta atomic.Pointer[ServerMeta]
+	// notificationHandler 服务端通知（无 id 的请求）回调；nil 时只记日志。
+	notificationHandler atomic.Pointer[NotificationHandler]
+}
+
+// ServerMeta MCP 服务器在 initialize 中声明的元数据。
+type ServerMeta struct {
+	Instructions string
+	Experimental map[string]json.RawMessage
+}
+
+// DeclaresExperimental 能力值为对象即声明；缺省或 false 为未声明（Claude channel 规则）。
+func (m ServerMeta) DeclaresExperimental(key string) bool {
+	v, ok := m.Experimental[key]
+	return ok && len(v) > 0 && v[0] == '{'
+}
+
+// NotificationHandler 服务端通知回调（method、params）。
+type NotificationHandler func(method string, params json.RawMessage)
+
+// SetNotificationHandler 注册服务端通知回调（须在 Initialize 前设置，避免丢失早期通知）。
+func (c *MCPClient) SetNotificationHandler(h NotificationHandler) { c.notificationHandler.Store(&h) }
+
+// ServerMeta 返回 initialize 结果中的服务器元数据（未初始化时为零值）。
+func (c *MCPClient) ServerMeta() ServerMeta {
+	if m := c.serverMeta.Load(); m != nil {
+		return *m
+	}
+	return ServerMeta{}
+}
+
+// Notify 向服务端发送通知（如 Claude channel 的 permission_request）。
+func (c *MCPClient) Notify(ctx context.Context, method string, params any) error {
+	return c.notify(ctx, method, params)
 }
 
 // SetServerRequestHandler 注册服务端主动请求处理器。

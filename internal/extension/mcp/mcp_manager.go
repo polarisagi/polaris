@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -74,6 +75,9 @@ type MCPManager struct {
 	// CallToolAsync 的 m.mu.RLock()，此前会被整段 IO 期间的写锁排队阻塞，
 	// 单个 MCP 插件重启即冻结整个工具层）。
 	starting map[string]struct{}
+
+	// notificationSink 服务端通知出口（Claude channel 事件等）；nil 时通知只记日志。
+	notificationSink atomic.Pointer[NotificationSink]
 }
 
 // IsPluginConnected 判断给定 plugin_id 是否有至少一个已连接的 MCP Server。
@@ -244,6 +248,7 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	if samplingProv != nil {
 		client.SetServerRequestHandler(m.makeSamplingHandler(name, cfg.TrustTier))
 	}
+	m.attachNotificationSink(serverID, client)
 	if err := client.Initialize(ctx); err != nil {
 		client.Close()
 		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: initialize %q", serverID), err)

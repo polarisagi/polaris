@@ -229,3 +229,42 @@ func (r *SQLiteExtensionRepository) DeleteHookTrust(ctx context.Context, sourceK
 	}
 	return nil
 }
+
+func (r *SQLiteExtensionRepository) ListPluginChannelStates(ctx context.Context) ([]types.PluginChannelState, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT plugin_id, server, enabled, permission_relay FROM plugin_channels")
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginChannelStates", err)
+	}
+	defer rows.Close()
+	var out []types.PluginChannelState
+	for rows.Next() {
+		var s types.PluginChannelState
+		var enabled, relay int
+		if err := rows.Scan(&s.PluginID, &s.Server, &enabled, &relay); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginChannelStates scan", err)
+		}
+		s.Enabled, s.PermissionRelay = enabled == 1, relay == 1
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPluginChannelStates: rows", err)
+	}
+	return out, nil
+}
+
+func (r *SQLiteExtensionRepository) SavePluginChannelState(ctx context.Context, s types.PluginChannelState) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO plugin_channels(plugin_id, server, enabled, permission_relay) VALUES(?,?,?,?)
+		ON CONFLICT(plugin_id, server) DO UPDATE SET enabled=excluded.enabled, permission_relay=excluded.permission_relay,
+		updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')`, s.PluginID, s.Server, boolInt(s.Enabled), boolInt(s.PermissionRelay))
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SavePluginChannelState", err)
+	}
+	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}

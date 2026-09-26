@@ -65,6 +65,7 @@ type ToolBundle struct {
 	SysRepo               *repo.SQLiteSystemRepository
 	ExtRepo               *repo.SQLiteExtensionRepository
 	AgentDefs             *lifecycle.AgentDefinitionProvider // 子 Agent 定义（委派解析 / 列表 API）
+	PluginChannels        *lifecycle.ChannelService          // Claude 插件 channels（入站事件 / 审批转发）
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
 	HookRunner            *hook.Runner
@@ -293,6 +294,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// mcp_servers 行是连接配置权威源；插件 MCP 的 ${PLUGIN_ROOT} / ${user_config.*} 在每次启动时
 	// 由解析器展开（ADR-0103 决策二）。两者须在任何 StartFromDB / RestoreServersFromDB 之前注入。
 	mcpMgr.SetRowSource(extRepo, sb.DataDir)
+	// Claude 插件 channels（ADR-0103 决策三）：通知出口须先于任何服务器连接注入，避免丢失早期事件。
+	pluginChannels := lifecycle.NewChannelService(extRepo, mcpMgr)
+	mcpMgr.SetNotificationSink(pluginChannels.HandleNotification)
 	// sb.Vault 为 nil（密钥文件不可用）时敏感 userConfig 拒绝写入，已有密文无法解密→相关服务器拒绝启动。
 	var configCipher lifecycle.CredentialCipher
 	if sb.Vault != nil {
@@ -409,6 +413,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}))
 	hookRunner.SetMCPToolCaller(&mcpHookCaller{mgr: mcpMgr})
 	hitlGateway.SetPermissionHooks(hookRunner)
+	hitlGateway.SetPromptRelay(pluginChannels)
+	pluginChannels.BindApprovals(hitlGateway)
 	hookEval := &hookPromptEvaluator{infer: llmInfer}
 	hookRunner.SetPromptEvaluator(hookEval)
 	if err := hookRegistry.Reload(context.Background()); err != nil {
@@ -666,6 +672,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		SysRepo:               sysRepo,
 		ExtRepo:               extRepo,
 		AgentDefs:             agentDefs,
+		PluginChannels:        pluginChannels,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
 		HookRunner:            hookRunner,

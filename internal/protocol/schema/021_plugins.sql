@@ -76,3 +76,19 @@ CREATE TABLE IF NOT EXISTS hook_trust (
     digest      TEXT    NOT NULL,
     trusted_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
+
+-- ============================================================================
+-- plugin_channels: Claude 插件 channels 的用户启用状态（ADR-0103 决策三：安装 ≠ 启用）
+-- ============================================================================
+-- channel 定义（绑定的插件 MCP 服务器、显示名）的权威源是 plugins.manifest 快照，本表只存用户
+-- 显式开启的状态：channel 事件会把外部消息注入 Agent 会话（Claude 同样要求逐会话 --channels 显式
+-- 开启）。permission_relay=1 且服务器声明 claude/channel/permission 时，审批请求转发到该通道。
+-- 升级重装保留；插件卸载时删除（UninstallCleanup）。
+CREATE TABLE IF NOT EXISTS plugin_channels (
+    plugin_id         TEXT    NOT NULL,
+    server            TEXT    NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 0,
+    permission_relay  INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (plugin_id, server)
+);
