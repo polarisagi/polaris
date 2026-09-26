@@ -99,3 +99,34 @@ func TestHandleListSkillCommands(t *testing.T) {
 		t.Fatalf("body: %s", body)
 	}
 }
+
+type recordingSubagents struct{ agent, prompt, session string }
+
+func (r *recordingSubagents) RunSubagent(_ context.Context, sessionID, agent, prompt string) (string, error) {
+	r.agent, r.prompt, r.session = agent, prompt, sessionID
+	return "subagent result", nil
+}
+
+func TestSlashRouter_ForkSkillRunsInSubagent(t *testing.T) {
+	r := NewSlashCommandRouter(nil, nil)
+	r.SetSkills(listSkillRegistry{skills: []types.SkillMeta{
+		{Name: "skill:research", DisplayName: "research", Spec: `{"context":"fork","agent":"Explore"}`},
+		{Name: "skill:plain_fork", DisplayName: "plain-fork", Spec: `{"context":"fork"}`},
+	}}, echoSkillExec{})
+	// 未注入执行器：按普通技能内联。
+	if res := r.Dispatch(context.Background(), "/research auth", "s1", nil, nil, &nopSink{}, nil); res.Handled || res.RewrittenInput == "" {
+		t.Fatalf("without runner fork skills run inline: %+v", res)
+	}
+	subs := &recordingSubagents{}
+	r.SetSubagents(subs)
+	sink := &nopSink{}
+	res := r.Dispatch(context.Background(), "/research auth", "s1", nil, nil, sink, nil)
+	if !res.Handled || res.Response != "subagent result" || sink.text.String() != "subagent result" ||
+		subs.agent != "Explore" || subs.session != "s1" || !strings.Contains(subs.prompt, "rendered skill:research") {
+		t.Fatalf("fork: %+v %+v", res, subs)
+	}
+	r.Dispatch(context.Background(), "/plain-fork", "s1", nil, nil, &nopSink{}, nil)
+	if subs.agent != "general-purpose" {
+		t.Fatalf("agent defaults to general-purpose: %q", subs.agent)
+	}
+}

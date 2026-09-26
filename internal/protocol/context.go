@@ -47,6 +47,10 @@ type CtxIdempotencyKey struct{}
 // CtxTaskIDKey 用于在 context 中传递任务 ID (防止 TOCTOU)
 type CtxTaskIDKey struct{}
 
+// CtxHooksSuppressedKey 标记本 context 下的动作不触发 hooks.json 处理器：agent 类型 hook 的
+// 评估子 Agent 自身的工具调用若再触发 hook，会无限递归（ADR-0103 决策六）。值为 true。
+type CtxHooksSuppressedKey struct{}
+
 // CtxSessionIDKey 用于在 context 中传递 Session ID
 type CtxSessionIDKey struct{}
 

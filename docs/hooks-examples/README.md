@@ -36,3 +36,5 @@ Polaris 采用 Claude / Codex 共同的 `hooks.json` 模型（ADR-0103 决策六
 - 退出码 0：成功，stdout 可输出 JSON 决策（`hookSpecificOutput.permissionDecision`、`updatedInput`、`additionalContext`、`decision: "block"`、`continue: false`）。
 - 退出码 2：阻断，原因取 stderr。其他退出码：非阻断错误。
 - 插件 hook 可用 `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` 与环境变量 `CLAUDE_PLUGIN_OPTION_<KEY>`。
+- `SubagentStart` / `SubagentStop`：matcher 为子 Agent 类型（如 `Explore`、`review:security`）；SubagentStart 的纯文本/`additionalContext` 注入子 Agent 任务；SubagentStop 输出 `{"decision":"block","reason":"..."}` 要求子 Agent 继续（最多 3 次，`stop_hook_active` 标记续跑）。
+- `type: "agent"`：以只读子 Agent（Read/Grep/Glob/LS，最多 50 轮）核查条件，返回 `{"ok": true}` 或 `{"ok": false, "reason": "..."}`；其工具调用不再触发 hooks。

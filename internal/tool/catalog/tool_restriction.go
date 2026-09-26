@@ -87,7 +87,8 @@ func (m *toolMatcher) add(entries []string, allowList bool) []string {
 			m.addAgentTargets(spec)
 		case name == "Skill":
 			for s := range strings.SplitSeq(spec, ",") {
-				m.names[skillToolName(strings.TrimSpace(s))] = true
+				slug := skillSlug(strings.TrimSpace(s))
+				m.names[slug], m.names["skill__"+slug] = true, true
 			}
 		default:
 			ignored = append(ignored, raw)
@@ -186,10 +187,10 @@ func splitSpecifier(s string) (name, spec string, ok bool) {
 	return strings.TrimSpace(s[:open]), strings.TrimSpace(s[open+1 : len(s)-1]), true
 }
 
-// skillToolName 技能名 → 模型工具名（ModelToolView："skill:" 前缀换 "skill__"，插件命名空间 ":" 换 "__"）。
-func skillToolName(name string) string {
-	name = strings.TrimPrefix(name, types.SkillPrefix)
-	return "skill__" + strings.ReplaceAll(name, ":", "__")
+// skillSlug 技能名 → 目录中的模型调用名（SkillCatalog：去 "skill:" 前缀；插件命名空间 ":" 换 "__"）。
+// 注册表内同一技能以 "skill__" + slug 登记，两者都要匹配。
+func skillSlug(name string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(name, types.SkillPrefix), ":", "__")
 }
 
 // Restrict 返回只暴露受限工具的只读目录视图；r 为 nil 时原样返回。

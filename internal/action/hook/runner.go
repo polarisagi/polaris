@@ -64,7 +64,7 @@ func (r *Runner) Registry() *Registry { return r.deps.Registry }
 
 // Dispatch 执行匹配 in.HookEventName 的全部已信任处理器并合并结果。
 func (r *Runner) Dispatch(ctx context.Context, in Input) Outcome {
-	if r == nil || r.deps.Registry == nil || ctx.Value(hookActiveKey{}) != nil {
+	if r == nil || r.deps.Registry == nil || ctx.Value(hookActiveKey{}) != nil || ctx.Value(protocol.CtxHooksSuppressedKey{}) != nil {
 		return Outcome{}
 	}
 	if in.PermissionMode == "" {

@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103：fork 技能、Subagent hooks、agent 类型 hook — 含**契约变更**）
+
+- **[契约] `orchestrator.SubagentRunner`**：子 Agent 执行唯一实现；`DefaultTaskWorker.WithProfileResolver` → `WithSubagents`。`hook.Runner.FireSubagentStart/FireSubagentStop`；`hook.Input.LastAssistantMessage`（Stop 不再用 `message`）。
+- **[契约] `agent.SkillForker` / `Agent.InjectSkillForker`**、`chat.SlashCommandRouter.SetSubagents`、`Server.SetSubagentRunner`；`types.AgentProfileSpec.SuppressHooks` + `protocol.CtxHooksSuppressedKey`。
+- 技能 `errSkillNotFound` 改为 `CodeNotFound`，`ExecuteSkill` 保留下层错误码。
+
 ## 2026-09-26（ADR-0103：子 Agent 定义与委派 — 含**契约变更**）
 
 - **[契约] `protocol.AgentController.SetAgentProfile(*types.AgentProfileSpec)`**、`types.WithAgentProfile`：子 Agent 角色只收窄能力，工具限制在 `Agent.checkProfileTool` 硬拦截；新增 `catalog.NewToolRestriction` / `catalog.Restrict`（Claude 工具名映射）。

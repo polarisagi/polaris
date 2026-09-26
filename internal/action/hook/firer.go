@@ -71,3 +71,25 @@ func (r *Runner) FireNotification(ctx context.Context, message, notificationType
 	in.Message, in.NotificationType = message, notificationType
 	r.Dispatch(ctx, in)
 }
+
+// FireSubagentStart 子 Agent 启动（matcher 为 agent 类型）；返回注入子 Agent 上下文的附加内容。
+// 不可阻断（两家语义）。
+func (r *Runner) FireSubagentStart(ctx context.Context, sessionID, agentID, agentType string) string {
+	in := NewInput(ctx, EventSubagentStart)
+	in.SessionID = firstNonBlank(sessionID, in.SessionID)
+	in.AgentID, in.AgentType = agentID, agentType
+	return strings.Join(r.Dispatch(ctx, in).AdditionalContext, "\n")
+}
+
+// FireSubagentStop 子 Agent 结束；返回非空原因表示 hook 以 decision:block 要求子 Agent 继续。
+func (r *Runner) FireSubagentStop(ctx context.Context, sessionID, agentID, agentType, lastMessage string, stopHookActive bool) string {
+	in := NewInput(ctx, EventSubagentStop)
+	in.SessionID = firstNonBlank(sessionID, in.SessionID)
+	in.AgentID, in.AgentType = agentID, agentType
+	in.LastAssistantMessage, in.StopHookActive = lastMessage, stopHookActive
+	out := r.Dispatch(ctx, in)
+	if !out.Block || out.Stop {
+		return ""
+	}
+	return strings.TrimSpace(out.Reason)
+}

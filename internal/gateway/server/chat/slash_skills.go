@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -59,27 +60,73 @@ func (r *SlashCommandRouter) ListUserSkillCommands(ctx context.Context) []UserSk
 	return out
 }
 
+// skillInvocation 用户调用技能的渲染结果；forkAgent 非空表示技能声明 context: fork。
+type skillInvocation struct {
+	content   string
+	forkAgent string
+}
+
 // expandUserSkill 输入为 "/name args" 或 "$name args" 且命中 user-invocable 技能时返回渲染内容。
-func (r *SlashCommandRouter) expandUserSkill(ctx context.Context, input string) (string, bool) {
+func (r *SlashCommandRouter) expandUserSkill(ctx context.Context, input string) (skillInvocation, bool) {
 	if r.skillReg == nil || r.skillExec == nil {
-		return "", false
+		return skillInvocation{}, false
 	}
 	trimmed := strings.TrimSpace(input)
 	if !strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "$") {
-		return "", false
+		return skillInvocation{}, false
 	}
 	name, args, _ := strings.Cut(trimmed[1:], " ")
 	sk := r.findUserSkill(ctx, name)
 	if sk == nil {
-		return "", false
+		return skillInvocation{}, false
 	}
 	payload, _ := json.Marshal(map[string]string{"arguments": strings.TrimSpace(args)})
 	out, err := r.skillExec.ExecuteSkill(ctx, sk.Name, payload)
 	if err != nil {
 		slog.Warn("slash: render user skill failed", "skill", sk.Name, "err", err)
-		return "", false
+		return skillInvocation{}, false
 	}
-	return "<command-name>/" + skillCommandName(*sk) + "</command-name>\n" + string(out), true
+	return skillInvocation{content: "<command-name>/" + skillCommandName(*sk) + "</command-name>\n" + string(out),
+		forkAgent: forkAgentOf(*sk)}, true
+}
+
+// forkAgentOf context: fork 时返回目标子 Agent（缺省 general-purpose，Claude 规则）。
+func forkAgentOf(sk types.SkillMeta) string {
+	var spec struct {
+		Context string `json:"context"`
+		Agent   string `json:"agent"`
+	}
+	if sk.Spec == "" || json.Unmarshal([]byte(sk.Spec), &spec) != nil || spec.Context != "fork" {
+		return ""
+	}
+	if spec.Agent == "" {
+		return "general-purpose"
+	}
+	return spec.Agent
+}
+
+// SubagentRunner 子 Agent 执行（orchestrator.SubagentRunner 实现）。
+type SubagentRunner interface {
+	RunSubagent(ctx context.Context, parentSessionID, agent, prompt string) (string, error)
+}
+
+// SetSubagents 注入子 Agent 执行器，启用 context: fork 技能的用户调用。
+func (r *SlashCommandRouter) SetSubagents(s SubagentRunner) { r.subagents = s }
+
+// runForkedSkill fork 技能：渲染内容作为子 Agent 的任务，无会话历史（Claude 语义）；子 Agent
+// 最终输出作为本轮回复，由会话层持久化。
+func (r *SlashCommandRouter) runForkedSkill(ctx context.Context, sessionID string, inv skillInvocation,
+	history []types.Message, sink session.Sink,
+) session.CommandResult {
+	_ = sink.Emit(session.Event{Kind: session.KindStatus, Payload: map[string]any{"type": "subagent", "agent": inv.forkAgent,
+		"message": "running in subagent " + inv.forkAgent}})
+	out, err := r.subagents.RunSubagent(ctx, sessionID, inv.forkAgent, inv.content)
+	if err != nil {
+		slog.Warn("slash: forked skill failed", "agent", inv.forkAgent, "err", err)
+		out = "Subagent " + inv.forkAgent + " failed: " + err.Error()
+	}
+	_ = sink.Emit(session.Event{Kind: session.KindDelta, Text: out})
+	return session.CommandResult{Handled: true, Response: out, UpdatedHistory: history}
 }
 
 // findUserSkill 按对外名匹配（"plugin:skill"、裸技能名，大小写不敏感）；

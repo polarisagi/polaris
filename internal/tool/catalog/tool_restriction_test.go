@@ -19,8 +19,9 @@ func TestToolRestriction_ClaudeNames(t *testing.T) {
 		{"code_act:python", types.ToolBuiltin, false},
 		{"mcp__github__create_issue", types.ToolMCP, true},
 		{"mcp__gitlab__x", types.ToolMCP, false},
+		{"pdf", types.ToolSkill, true},
 		{"skill__pdf", types.ToolSkill, true},
-		{"skill__other", types.ToolSkill, false},
+		{"other", types.ToolSkill, false},
 		{"write_file", types.ToolBuiltin, false},
 		{DelegateToolName, types.ToolBuiltin, true},
 	}
@@ -42,7 +43,7 @@ func TestToolRestriction_InheritAndDeny(t *testing.T) {
 		t.Fatal("no lists = no restriction")
 	}
 	r := NewToolRestriction(nil, []string{"Bash(rm *)", "Skill"})
-	if r.Permits("bash", types.ToolBuiltin) || r.Permits("code_act:js", "") || r.Permits("skill__x", types.ToolSkill) {
+	if r.Permits("bash", types.ToolBuiltin) || r.Permits("code_act:js", "") || r.Permits("x", types.ToolSkill) {
 		t.Fatal("deny entries must block the whole tool")
 	}
 	if !r.Permits("read_file", types.ToolBuiltin) || !r.PermitsAgent("any") {

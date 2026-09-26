@@ -57,6 +57,8 @@ type SlashCommandRouter struct {
 	// skillReg/skillExec 用户调用技能（/plugin:skill、$skill）；见 slash_skills.go。
 	skillReg  protocol.SkillRegistry
 	skillExec protocol.SkillExecutor
+	// subagents context: fork 技能在子 Agent 中运行（ADR-0103 决策五）；nil 时内联执行。
+	subagents SubagentRunner
 }
 
 func NewSlashCommandRouter(compressor SessionCompressor, chatRepo protocol.ChatRepository) *SlashCommandRouter {
@@ -84,8 +86,11 @@ func (r *SlashCommandRouter) Dispatch(
 	cmd, args, ok := parseSlashCommand(input)
 	if !ok || !isBuiltinSlash(cmd) {
 		// 非内置命令：尝试按用户可调用技能展开（技能名可与内置命令外的任意 /xxx、$xxx 匹配）。
-		if expanded, hit := r.expandUserSkill(ctx, input); hit {
-			return session.CommandResult{Handled: false, RewrittenInput: expanded, UpdatedHistory: history}
+		if inv, hit := r.expandUserSkill(ctx, input); hit {
+			if inv.forkAgent != "" && r.subagents != nil {
+				return r.runForkedSkill(ctx, sessionID, inv, history, sink)
+			}
+			return session.CommandResult{Handled: false, RewrittenInput: inv.content, UpdatedHistory: history}
 		}
 		if !ok {
 			return session.CommandResult{Handled: false, UpdatedHistory: history}

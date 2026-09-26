@@ -91,6 +91,8 @@ type AgentBundle struct {
 
 	// AgentPool for per-session web agents
 	AgentPool *sysagent.Pool
+	// Subagents 子 Agent 执行器（fork 技能与 agent 类型 hook 经此运行）
+	Subagents *orchestrator.SubagentRunner
 
 	// PersonaRefiner 用户画像精炼器（M05 §2.3），跨 agent-0/AgentPool/ChatHandler
 	// 共享同一进程级单例；boot_server.go 通过 Server.SetPersonaRefiner 注入 ChatHandler
@@ -166,6 +168,10 @@ func buildAgent(
 	// 同一个实例，buildAgent 同时服务 agent-0 与 AgentPool 派生 Agent，
 	// 此处注入覆盖全部实例。
 	a.InjectCatalog(tb.Catalog)
+	// context: fork 技能 → 委派子 Agent（ADR-0103 决策五）。
+	if tb.SkillRegistry != nil && tb.SkillExecutor != nil {
+		a.InjectSkillForker(skillForker{reg: tb.SkillRegistry, exec: tb.SkillExecutor})
+	}
 
 	if tb.SkillRegistry != nil && tb.EmbedFn != nil {
 		matcher := skill.NewSkillIntentMatcher(tb.SkillRegistry, skill.EmbedFn(tb.EmbedFn))
@@ -612,12 +618,13 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// DefaultTaskWorker 把结构化 DebateJobIntent JSON 当纯文本传给 LLM（HE-3）。
 	// "agent_handoff:mcp:" 前缀由专用 MCPA2AWorker 认领（ADR-0084），排除后
 	// 防止 target_agent_role 的 mcp: 委派语义被当作纯文本 headless 查询丢弃。
+	// 子 Agent 执行唯一实现（委派任务 / 用户 fork 技能 / agent 类型 hook 共用，ADR-0103）。
+	subagentRunner := newSubagentRunner(agentPool, tb)
 	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool,
 		"workflow_step", orchestrator.DebateTaskType, orchestrator.MCPA2AHandoffPrefix)
-	// ADR-0103 决策三：agent_handoff:<name> 按插件/项目/用户子 Agent 定义以角色执行。
-	if tb.AgentDefs != nil {
-		defaultTaskWorker.WithProfileResolver(tb.AgentDefs)
-	}
+	// ADR-0103 决策三：agent_handoff:<name> 按插件/项目/用户子 Agent 定义以角色执行，
+	// 并触发 SubagentStart/SubagentStop hook（决策六）。
+	defaultTaskWorker.WithSubagents(subagentRunner)
 
 	// ADR-0084：MCP A2A 出站委派专用 Worker，认领 "agent_handoff:mcp:<server>/<agent>"
 	// 任务，转译为对目标 MCP Server 的 a2a_delegate 工具调用。*mcp.MCPManager 已天然
@@ -1176,6 +1183,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		M9Engine:         m9Engine,
 		RolloutStore:     rolloutStore,
 		AgentPool:        agentPool,
+		Subagents:        subagentRunner,
 		Supervisor:       sv,
 		ReaperStop:       reaperStop,
 		PersonaRefiner:   personaRefiner,

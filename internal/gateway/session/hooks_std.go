@@ -42,7 +42,7 @@ func (s *StandardHooks) UserPromptSubmit(ctx context.Context, sessionID, prompt 
 
 func (s *StandardHooks) Stop(ctx context.Context, sessionID, lastReply string, stopHookActive bool) HookVerdict {
 	return s.dispatch(ctx, sessionID, hook.Input{HookEventName: hook.EventStop, StopHookActive: stopHookActive,
-		Message: lastReply})
+		LastAssistantMessage: lastReply})
 }
 
 func (s *StandardHooks) StopFailure(ctx context.Context, sessionID, reason string) {

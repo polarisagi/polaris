@@ -289,6 +289,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetUserSkills(tb.SkillRegistry, tb.SkillExecutor)
 	httpServer.SetHookRunner(tb.HookRunner)
 	httpServer.SetAgentDefinitions(tb.AgentDefs)
+	if ab.Subagents != nil {
+		httpServer.SetSubagentRunner(ab.Subagents)
+	}
 	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
 	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
 	httpServer.SetToolExecutor(tb.Dispatcher.Execute)

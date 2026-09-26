@@ -163,3 +163,11 @@ type DAGValidator interface {
 	// Validate 执行 L0 拓扑/L1 Taint/L1 Policy/L2 Heuristic/L3 LLM 看门狗校验。
 	Validate(ctx context.Context, vCtx *protocol.DAGValidationContext) error
 }
+
+// SkillForker 声明 context: fork 的技能（Claude 技能扩展字段，ADR-0103 决策五）在模型调用时改为
+// 委派子 Agent 执行。ForkTarget 只查元数据（恢复分支不得重复渲染——渲染会再次执行动态注入命令）；
+// RenderSkill 渲染任务正文（参数替换 + 已审阅的动态注入）。
+type SkillForker interface {
+	ForkTarget(ctx context.Context, skillName string) (agent string, ok bool)
+	RenderSkill(ctx context.Context, skillName string, args []byte) (string, error)
+}

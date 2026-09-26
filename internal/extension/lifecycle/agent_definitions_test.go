@@ -38,9 +38,16 @@ func TestAgentDefinitionProvider_SourcesAndResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defs) != 2 || defs[0].Name != "explorer" || defs[0].Source != "project" ||
-		defs[1].Name != "review:security" || defs[1].Source != "plugin:pl_r" || len(defs[1].NotApplied) != 1 {
-		t.Fatalf("project must shadow user; plugin agent namespaced: %+v", defs)
+	byName := map[string]AgentDefinition{}
+	for _, d := range defs {
+		byName[d.Name] = d
+	}
+	if len(defs) != 2+len(builtinAgents())-1 || byName["explorer"].Source != "project" || byName["Explore"].Source != "builtin" ||
+		byName["review:security"].Source != "plugin:pl_r" || len(byName["review:security"].NotApplied) != 1 {
+		t.Fatalf("project must shadow user and builtin explorer; plugin agent namespaced: %+v", defs)
+	}
+	if spec, err := provider.ResolveAgentProfile(context.Background(), "Explore"); err != nil || !spec.ReadOnly || spec.InstructionTaint != types.TaintLow {
+		t.Fatalf("builtin Explore: %+v %v", spec, err)
 	}
 
 	spec, err := provider.ResolveAgentProfile(context.Background(), "review:security")

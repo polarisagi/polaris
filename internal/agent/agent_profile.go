@@ -88,22 +88,27 @@ func isDelegationTool(name string) bool {
 	return slices.Contains(delegationTools(), name)
 }
 
+// toolMeta 先查工具注册表；技能的模型调用名只在目录中（注册表内是 "skill__" 前缀名，见
+// dispatch.route），回落目录取来源。
 func (a *Agent) toolMeta(name string) (types.Tool, bool) {
-	if a.toolRegistry == nil {
-		return types.Tool{}, false
+	if a.toolRegistry != nil {
+		if t, err := a.toolRegistry.Lookup(name); err == nil {
+			return t, true
+		}
 	}
-	t, err := a.toolRegistry.Lookup(name)
-	if err != nil {
-		return types.Tool{}, false
+	if a.catalog != nil {
+		if e, ok := a.catalog.Lookup(name); ok {
+			return types.Tool{Name: e.Name, Source: e.Source, TrustTier: e.TrustTier, Capability: e.Capability}, true
+		}
 	}
-	return t, true
+	return types.Tool{}, false
 }
 
 // writesState 只读角色（Codex sandbox_mode=read-only）只放行能力等级 ≤ CapReadOnly 的工具
-// （与 S_VALIDATE isReadOnlyTool 同一判据）；code_act 恒视为可写（任意代码），元数据缺失的
-// 未知工具 fail-closed 视为可写。
+// （与 S_VALIDATE isReadOnlyTool 同一判据）；code_act 恒视为可写（任意代码），技能可能携带
+// 沙箱脚本、目录条目无能力等级，同样视为可写；元数据缺失的未知工具 fail-closed 视为可写。
 func writesState(name string, tool types.Tool, known bool) bool {
-	return strings.HasPrefix(name, "code_act:") || !known || tool.Capability > types.CapReadOnly
+	return strings.HasPrefix(name, "code_act:") || !known || tool.Source == types.ToolSkill || tool.Capability > types.CapReadOnly
 }
 
 // delegateTarget 委派调用的目标名（仅用于 Agent(a, b) 白名单判定）；解析失败返回空串，

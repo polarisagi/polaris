@@ -186,6 +186,10 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		if err := a.checkProfileTool(toolName, delegateTarget(toolName, args)); err != nil {
 			return nil, err
 		}
+		ctx = a.profileToolContext(ctx)
+		if res, handled, err := a.tryForkSkill(ctx, toolName, args, taintLevel); handled {
+			return res, err
+		}
 		if toolName == "spawn_planner" {
 			// spawn_planner 特殊处理：不走普通工具执行路径，而是：
 			// 1. 发送 InterruptRequest{Action: InterruptResume}（挂起自身，等待 whisperChan）

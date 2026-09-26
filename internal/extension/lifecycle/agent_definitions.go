@@ -18,8 +18,8 @@ import (
 type AgentDefinition struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Source      string   `json:"source"` // plugin:<id> / project / user
-	Format      string   `json:"format"` // claude / codex
+	Source      string   `json:"source"` // plugin:<id> / project / user / builtin
+	Format      string   `json:"format"` // claude / codex / builtin
 	File        string   `json:"file"`
 	Tools       []string `json:"tools,omitempty"`
 	Disallowed  []string `json:"disallowed_tools,omitempty"`
@@ -37,8 +37,8 @@ type AgentDefinition struct {
 type SkillContentLoader func(ctx context.Context, skillName string) (string, error)
 
 // AgentDefinitionProvider 子 Agent 定义来源（ADR-0103 决策三）：项目 <root>/.polaris/agents、
-// 用户 <data>/agents（Claude .md 与 Codex .toml）与已启用插件的 agents/（命名 "<插件>:<agent>"）。
-// 同名优先级按 Claude：项目 > 用户；插件 agent 自带命名空间不与之冲突。
+// 用户 <data>/agents（Claude .md 与 Codex .toml）、两家内置类型与已启用插件的 agents/（命名
+// "<插件>:<agent>"）。同名优先级：项目 > 用户 > 内置；插件 agent 自带命名空间不与之冲突。
 type AgentDefinitionProvider struct {
 	extRepo     protocol.ExtensionRepository
 	dataDir     string
@@ -75,6 +75,13 @@ func (p *AgentDefinitionProvider) ListAgentDefinitions(ctx context.Context) ([]A
 		}
 	}
 	addDir(UserAgentsDir(p.dataDir), "user")
+	for _, b := range builtinAgents() {
+		if !seen[b.Name] {
+			seen[b.Name] = true
+			b.Source, b.Format = "builtin", "builtin"
+			out = append(out, b)
+		}
+	}
 	plugins, pluginDiags, err := p.pluginAgents(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -143,10 +150,10 @@ func (p *AgentDefinitionProvider) ResolveAgentProfile(ctx context.Context, name 
 	return nil, apperr.New(apperr.CodeNotFound, fmt.Sprintf("unknown agent %q", name))
 }
 
-// definitionTaint 用户目录由本机用户编写（TaintLow）；插件与项目目录内容可来自第三方仓库，
-// 与 AGENTS.md 同一威胁模型（TaintMedium，写入时叠加 Spotlighting）。
+// definitionTaint 内置与用户目录由宿主/本机用户编写（TaintLow）；插件与项目目录内容可来自第三方
+// 仓库，与 AGENTS.md 同一威胁模型（TaintMedium，写入时叠加 Spotlighting）。
 func definitionTaint(source string) types.TaintLevel {
-	if source == "user" {
+	if source == "user" || source == "builtin" {
 		return types.TaintLow
 	}
 	return types.TaintMedium

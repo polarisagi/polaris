@@ -80,6 +80,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - 正文变量：`$ARGUMENTS` / `$ARGUMENTS[N]` / `$N` / `$name`、`${CLAUDE_SKILL_DIR}`、`${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PLUGIN_DATA}`、`${CLAUDE_SESSION_ID}`。
 - `` !`cmd` `` / ` ```! ` 动态注入：经统一沙箱执行（`CallerType="skill_inject"`），受 PolicyGate 约束；插件技能的注入命令与插件 hooks 同受「安装 ≠ 信任」约束（决策六）。
 - `allowed-tools` 只作为该技能回合内的预授权**提示**，不绕过 Cedar/PolicyGate（HE-7）。
+- `context: fork` + `agent`（2026-09-26 落地）：模型调用时内核把渲染后的正文经 `transfer_to_agent` 委派给 `agent`（缺省 `general-purpose`），复用异步挂起/恢复与 `SpawnDepth`；恢复分支不重复渲染（渲染会再次执行动态注入）。用户调用时在子 Agent 中运行、无会话历史，子 Agent 输出即本轮回复。不能再委派的子 Agent 内按普通技能内联执行。内置 agent 类型：Claude `Explore`/`Plan`（只读）、Codex `default`/`worker`/`explorer`，项目/用户同名定义覆盖。
 
 ## 决策六：Hooks 统一为两家共同的 `hooks.json` 模型
 
@@ -94,6 +95,8 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
   - PostToolUse 改为同步：`decision:block` 原因与 `additionalContext` 追加到工具输出并强制 TaintHigh（修订原"PostToolUse 不回写结果"）。
   - Stop `decision:block` 续跑上限 3 次（宿主硬上限，HE-5），hook 自身发起的调用不再触发 hook（防递归）。
   - 用户级 hooks.json 视为已信任；项目级与插件 hooks 按定义哈希信任。`[ShellHooks]` 私有事件与 `hooks.yaml` 删除。
+  - SubagentStart / SubagentStop（2026-09-26）：由 `orchestrator.SubagentRunner`（委派任务、fork 技能、agent hook 共用的子 Agent 执行唯一实现）触发，matcher 为 agent 类型，`session_id` 为委派方会话（任务 Namespace）；SubagentStart 输出作为 `<hook-context>` 附加到子 Agent 任务；SubagentStop `decision:block` 续跑上限 3 次，续跑带原任务与上一版输出。Stop / SubagentStop 输入改用标准字段 `last_assistant_message`。
+  - `agent` 类型处理器：以只读子 Agent（`Read`/`Grep`/`Glob`/`LS`，≤50 轮，禁委派）运行，多轮由内核 FSM 驱动（HE-5，不在 hook 引擎内写 LLM 循环）；其工具调用以 `protocol.CtxHooksSuppressedKey` 标记不再触发 hooks（防 PreToolUse agent hook 无限递归），亦不触发 Subagent 事件。
 
 ## 决策七：市场格式与来源
 
@@ -128,7 +131,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 
 ## 引用代码
 
-`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
+`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/execute/orchestrator/subagent_runner.go`、`internal/agent/agent_skill_fork.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
 
 ## 重新评估触发条件
 
@@ -144,3 +147,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-26 | 决策六：补充落地实现约束（RunStdio 执行、veto-only、PostToolUse 同步回传、Stop 续跑上限、ShellHooks 删除）。 |
 | 2026-09-26 | 决策五：技能校验由「违规即不加载」改为硬错误/规范告警两级。理由：Claude 规定 `name`、`description` 均可缺省（分别回落目录名与正文首行），按 agentskills 严格拒绝会使合法 Claude 技能无法加载，违背双标准兼容目标。新增决策二补充：宿主环境变量展开限制。 |
 | 2026-09-26 | 决策三补充：子 Agent 定义与委派落地（双格式解析、工具名映射、只读/步数/禁委派硬拦截、YAML 私有格式删除、`transfer_to_agent` 注册）。 |
+| 2026-09-26 | 决策五/六补充：`context: fork` 技能、两家内置 agent 类型、SubagentStart/SubagentStop、`agent` 类型 hook（只读子 Agent + hook 抑制）。 |

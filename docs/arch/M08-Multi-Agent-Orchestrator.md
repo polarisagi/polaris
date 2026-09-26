@@ -397,7 +397,7 @@ inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所�
 - 项目 `<project_root>/.polaris/agents/` > 用户 `<data>/agents/`：Claude `*.md`（frontmatter + 正文）/ Codex `*.toml`（`developer_instructions`）
 - 已启用插件 `agents/*.md` → `<plugin>:<agent>`
 
-**执行链**: `transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker.resolveProfile` → `AcquireHeadless(WithAgentProfile)` → `Agent.SetAgentProfile`。`list_agents` 向模型列出目标；`general-purpose` = 无角色；未知名称任务失败并把原因回传委派方。`mcp:` 目标仍由 `MCPA2AWorker` 认领（ADR-0084）。
+**执行链**: `transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker` → `SubagentRunner.Run`（角色解析 → SubagentStart hook → `AcquireHeadless(WithAgentProfile)` → SubagentStop hook，续跑 ≤3）→ `Agent.SetAgentProfile`。`SubagentRunner` 同时服务用户调用的 `context: fork` 技能（`SlashCommandRouter`）与 `agent` 类型 hook；模型调用的 fork 技能由内核 `tryForkSkill` 转为 `transfer_to_agent`。内置类型 `Explore`/`Plan`/`default`/`worker`/`explorer`（`lifecycle/agent_builtin.go`）。`list_agents` 向模型列出目标；`general-purpose` = 无角色；未知名称任务失败并把原因回传委派方。`mcp:` 目标仍由 `MCPA2AWorker` 认领（ADR-0084）。
 
 **角色边界**（执行入口硬拦截 `Agent.checkProfileTool`）: 工具白/黑名单（Claude 工具名映射）、只读（Codex `read-only` / Claude `plan`）、`maxTurns`→`MaxStepsLimit`、默认禁再委派；指令进 `ZoneMutableSkill`。字段级映射与「解析但不生效」清单见 ADR-0103。
 

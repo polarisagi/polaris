@@ -68,6 +68,7 @@ type ToolBundle struct {
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
 	HookRunner            *hook.Runner
+	HookEvaluator         *hookPromptEvaluator // agent 类型 hook 待 Agent 池就绪后绑定子 Agent 执行器
 	PluginConfig          *lifecycle.PluginConfigService
 	SkillRegistry         protocol.SkillRegistry
 	SkillExecutor         protocol.SkillExecutor // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
@@ -408,7 +409,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}))
 	hookRunner.SetMCPToolCaller(&mcpHookCaller{mgr: mcpMgr})
 	hitlGateway.SetPermissionHooks(hookRunner)
-	hookRunner.SetPromptEvaluator(&hookPromptEvaluator{infer: llmInfer})
+	hookEval := &hookPromptEvaluator{infer: llmInfer}
+	hookRunner.SetPromptEvaluator(hookEval)
 	if err := hookRegistry.Reload(context.Background()); err != nil {
 		slog.Warn("polaris: hook sources load failed; hooks inactive until next reload", "err", err)
 	}
@@ -667,6 +669,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
 		HookRunner:            hookRunner,
+		HookEvaluator:         hookEval,
 		PluginConfig:          pluginConfig,
 		SkillRegistry:         skillReg,
 		SkillExecutor:         skillExecutor,

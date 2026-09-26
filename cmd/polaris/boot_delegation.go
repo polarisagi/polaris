@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -48,4 +50,59 @@ func (l localAgentLister) ListLocalAgents(ctx context.Context) ([]builtin.LocalA
 		out = append(out, builtin.LocalAgentDescriptor{Name: d.Name, Description: d.Description, Source: d.Source})
 	}
 	return out, nil
+}
+
+// skillForker 实现 agent.SkillForker：技能 spec（pluginspec.Skill JSON）声明 context: fork 时
+// 委派给其 agent 字段指定的子 Agent（缺省 general-purpose，Claude 规则）。
+type skillForker struct {
+	reg  protocol.SkillRegistry
+	exec protocol.SkillExecutor
+}
+
+func (f skillForker) ForkTarget(ctx context.Context, skillName string) (string, bool) {
+	meta, err := f.reg.Get(ctx, skillName, "")
+	if err != nil || meta == nil || meta.Spec == "" {
+		return "", false
+	}
+	var spec struct {
+		Context string `json:"context"`
+		Agent   string `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(meta.Spec), &spec); err != nil {
+		slog.Warn("skill: corrupt spec, fork context ignored", "skill", skillName, "err", err)
+		return "", false
+	}
+	if spec.Context != "fork" {
+		return "", false
+	}
+	if spec.Agent == "" {
+		spec.Agent = builtin.GeneralPurposeAgent
+	}
+	return spec.Agent, true
+}
+
+func (f skillForker) RenderSkill(ctx context.Context, skillName string, args []byte) (string, error) {
+	out, err := f.exec.ExecuteSkill(ctx, skillName, args)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeOf(err), "skillForker", err)
+	}
+	return string(out), nil
+}
+
+// newSubagentRunner 组装子 Agent 执行器：定义解析来自 AgentDefinitionProvider，生命周期 hook
+// 来自 hooks.json 引擎；并把 agent 类型 hook 的评估接到同一执行器（引擎先于 Agent 池构造）。
+func newSubagentRunner(pool protocol.AgentPool, tb *ToolBundle) *orchestrator.SubagentRunner {
+	var profiles orchestrator.AgentProfileResolver
+	if tb.AgentDefs != nil {
+		profiles = tb.AgentDefs
+	}
+	var hooks orchestrator.SubagentHooks
+	if tb.HookRunner != nil {
+		hooks = tb.HookRunner
+	}
+	runner := orchestrator.NewSubagentRunner(pool, profiles, hooks)
+	if tb.HookEvaluator != nil {
+		tb.HookEvaluator.bindSubagents(runner)
+	}
+	return runner
 }

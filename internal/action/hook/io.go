@@ -29,7 +29,8 @@ type Input struct {
 	Reason  string `json:"reason,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
 	// Stop / SubagentStop：本轮已因 Stop hook 续跑过（防无限续跑，两家语义一致）
-	StopHookActive bool `json:"stop_hook_active,omitempty"`
+	StopHookActive       bool   `json:"stop_hook_active,omitempty"`
+	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
 	// Subagent*
 	AgentID   string `json:"agent_id,omitempty"`
 	AgentType string `json:"agent_type,omitempty"`

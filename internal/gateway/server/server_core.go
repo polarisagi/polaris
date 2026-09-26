@@ -381,6 +381,13 @@ func (s *Server) SetHookRunner(r *hook.Runner) {
 	}
 }
 
+// SetSubagentRunner 注入子 Agent 执行器，启用用户调用 context: fork 技能（ADR-0103 决策五）。
+func (s *Server) SetSubagentRunner(r chat.SubagentRunner) {
+	if s.chatHandler != nil && s.chatHandler.SlashRouter != nil {
+		s.chatHandler.SlashRouter.SetSubagents(r)
+	}
+}
+
 // SetAgentDefinitions 注入子 Agent 定义来源，启用 GET /v1/agents（ADR-0103 决策三）。
 func (s *Server) SetAgentDefinitions(defs plugin.AgentDefinitionLister) {
 	if s.pluginHandler != nil {

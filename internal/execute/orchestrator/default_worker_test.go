@@ -335,7 +335,7 @@ func TestDefaultTaskWorker_ResolvesAgentProfile(t *testing.T) {
 	bb.tasks["task-p-1"] = &types.TaskEntry{ID: "task-p-1", Type: "agent_handoff:review:security", Status: types.TaskPending, Intent: []byte("x")}
 	pool := &spawnDepthCapturingPool{replyOutput: "ok"}
 	spec := &types.AgentProfileSpec{Name: "review:security"}
-	worker := NewDefaultTaskWorker(bb, pool).WithProfileResolver(mapProfileResolver{"review:security": spec})
+	worker := NewDefaultTaskWorker(bb, pool).WithSubagents(NewSubagentRunner(pool, mapProfileResolver{"review:security": spec}, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -351,14 +351,14 @@ func TestDefaultTaskWorker_ResolvesAgentProfile(t *testing.T) {
 	}
 }
 
-func TestDefaultTaskWorker_ResolveProfileRules(t *testing.T) {
-	w := NewDefaultTaskWorker(nil, nil).WithProfileResolver(mapProfileResolver{})
-	for _, typ := range []string{"agent_query", "agent_handoff:general-purpose", "agent_handoff:"} {
-		if p, err := w.resolveProfile(context.Background(), typ); p != nil || err != nil {
-			t.Errorf("%s must run as a general agent: %v %v", typ, p, err)
+func TestSubagentRunner_ResolveRules(t *testing.T) {
+	r := NewSubagentRunner(nil, mapProfileResolver{}, nil)
+	for _, name := range []string{"", "general-purpose"} {
+		if p, err := r.resolve(context.Background(), name); p != nil || err != nil {
+			t.Errorf("%q must run as a general agent: %v %v", name, p, err)
 		}
 	}
-	if _, err := w.resolveProfile(context.Background(), "agent_handoff:ghost"); !apperr.IsCode(err, apperr.CodeNotFound) {
+	if _, err := r.resolve(context.Background(), "ghost"); !apperr.IsCode(err, apperr.CodeNotFound) {
 		t.Fatalf("unknown agent must fail the task, got %v", err)
 	}
 }

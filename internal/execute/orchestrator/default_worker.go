@@ -49,7 +49,7 @@ type DefaultTaskWorker struct {
 	pool            protocol.AgentPool
 	excludeTypes    map[string]struct{}
 	excludePrefixes []string
-	profiles        AgentProfileResolver
+	subagents       *SubagentRunner
 }
 
 // AgentProfileResolver 子 Agent 名称 → 角色规格（ADR-0103 决策三；调用方定义接口，实现由
@@ -64,24 +64,11 @@ const (
 	generalPurposeAgent = "general-purpose"
 )
 
-// WithProfileResolver 注入子 Agent 定义解析。未注入时委派任务一律按通用 Agent 执行。
-func (w *DefaultTaskWorker) WithProfileResolver(r AgentProfileResolver) *DefaultTaskWorker {
-	w.profiles = r
+// WithSubagents 注入子 Agent 执行器：agent_handoff:<name> 按角色执行并触发 SubagentStart/Stop hook。
+// 未注入时委派任务按通用 Agent 执行。
+func (w *DefaultTaskWorker) WithSubagents(r *SubagentRunner) *DefaultTaskWorker {
+	w.subagents = r
 	return w
-}
-
-// resolveProfile agent_handoff:<name> 的角色规格。未知名称使任务失败（Claude：未知 subagent_type
-// 报错）——静默按通用 Agent 执行会让委派方误以为专用角色生效。
-func (w *DefaultTaskWorker) resolveProfile(ctx context.Context, taskType string) (*types.AgentProfileSpec, error) {
-	name, ok := strings.CutPrefix(taskType, handoffTypePrefix)
-	if !ok || w.profiles == nil || name == "" || name == generalPurposeAgent {
-		return nil, nil
-	}
-	p, err := w.profiles.ResolveAgentProfile(ctx, name)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeOf(err), "resolve agent "+name+" (call list_agents for valid targets)", err)
-	}
-	return p, nil
 }
 
 // NewDefaultTaskWorker 构造通用兜底 Worker。excludeTypes 列出已有专用自订阅
@@ -209,22 +196,35 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		w.bb.PublishTaskEvent(taskID, ev)
 	})
 
-	profile, err := w.resolveProfile(bgCtx, snap.Type)
-	if err != nil {
-		w.failTask(taskID, err.Error())
-		return
-	}
-	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt},
-		types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb, types.WithAgentProfile(profile))
+	output, err := w.execute(bgCtx, snap, prompt,
+		[]types.HeadlessOption{types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb})
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())
 		return
 	}
 
-	if err := w.bb.CompleteTask(context.Background(), taskID, defaultTaskWorkerAgentID, []byte(res.Output)); err != nil {
+	if err := w.bb.CompleteTask(context.Background(), taskID, defaultTaskWorkerAgentID, []byte(output)); err != nil {
 		slog.Warn("default task worker: CompleteTask failed", "task_id", taskID, "err", err)
 	}
+}
+
+// execute 委派任务（agent_handoff:<name>）经 SubagentRunner 按角色执行；其余任务为一次性 headless 查询。
+// hook 的 session_id 取任务 Namespace：委派方未配置协同命名空间时即其 SessionID（agent_handoff.go）。
+func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapshot, prompt string, opts []types.HeadlessOption) (string, error) {
+	if name, ok := strings.CutPrefix(snap.Type, handoffTypePrefix); ok && w.subagents != nil {
+		out, err := w.subagents.Run(ctx, SubagentRequest{ParentSessionID: snap.Namespace, AgentID: snap.ID,
+			AgentName: name, Prompt: prompt, Options: opts})
+		if err != nil {
+			return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: subagent", err)
+		}
+		return out, nil
+	}
+	res, err := w.pool.AcquireHeadless(ctx, types.Intent{Query: prompt}, opts...)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: headless", err)
+	}
+	return res.Output, nil
 }
 
 func (w *DefaultTaskWorker) failTask(taskID, msg string) {
