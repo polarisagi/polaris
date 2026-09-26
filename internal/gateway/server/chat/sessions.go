@@ -162,6 +162,9 @@ func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
+	if h.Hooks != nil {
+		h.Hooks.SessionEnd(r.Context(), sessionID, "other")
+	}
 	httputil.WriteJSON(w, map[string]string{"status": "deleted"})
 }
 

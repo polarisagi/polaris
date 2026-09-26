@@ -51,6 +51,9 @@ type SlashCommandRouter struct {
 	steering *llmadapter.SteeringAdapter
 	cvStore  *llmadapter.ControlVectorStore
 
+	// hooks /clear 触发 SessionEnd(clear) + SessionStart(clear)（两家语义）；可为 nil。
+	hooks session.HookRunner
+
 	// skillReg/skillExec 用户调用技能（/plugin:skill、$skill）；见 slash_skills.go。
 	skillReg  protocol.SkillRegistry
 	skillExec protocol.SkillExecutor
@@ -191,6 +194,10 @@ func (r *SlashCommandRouter) handleClear(
 	history []types.Message,
 	sink session.Sink,
 ) (string, []types.Message) {
+	if r.hooks != nil {
+		r.hooks.SessionEnd(ctx, sessionID, "clear")
+		defer r.hooks.SessionStart(ctx, sessionID, "clear")
+	}
 	if r.chatRepo != nil {
 		err := r.chatRepo.ClearNonSystemMessages(ctx, sessionID)
 		if err != nil {

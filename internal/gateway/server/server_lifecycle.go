@@ -68,7 +68,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		registry:         registry,
 		httpClient:       httpClient,
 		transcriptDir:    tDir,
-		hooks:            sysadmin.NewHookRunner(dataDir),
+		hooks:            session.NewStandardHooks(),
 		dataDir:          dataDir,
 		tbr:              tbr,
 		rateLimiter:      rateLimiter,
@@ -297,18 +297,6 @@ func (s *Server) Start() error {
 
 	concurrent.SafeGo(context.Background(), "gateway.server.boot_marketplace_init", func(ctx context.Context) {
 		s.bootMarketplaceInit(ctx)
-	})
-
-	// gateway.startup hook：服务完全启动后触发，fire-and-forget
-	workspace := os.Getenv("POLARIS_DATA_DIR")
-	if workspace == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			workspace = filepath.Join(home, ".polarisagi/polaris")
-		}
-	}
-	s.hooks.Fire("gateway.startup", map[string]string{
-		"POLARIS_WORKSPACE": workspace,
-		"POLARIS_ADDR":      s.addr,
 	})
 
 	s.isReady.Store(true)

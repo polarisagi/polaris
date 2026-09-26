@@ -150,7 +150,7 @@ func (h *WorkflowAdmin) scanStepOutputErrors(ctx context.Context, runID string) 
 // [A-03 Step5] 原内联 EnsureSession/SaveMessage(user)/AcquireHeadless/
 // SaveMessage(assistant)/SampleAndScoreReply/UpdateSessionTitle 六步序列，与
 // cronadmin.executeAutomation、channelsadmin.dispatchChannelMessage 的对应
-// 序列几乎相同又不完全一致（本函数此前从不触发 message.before hook 拦截、也
+// 序列几乎相同又不完全一致（本函数此前从不触发 UserPromptSubmit（原 message.before）hook 拦截、也
 // 不 TouchSession），收敛至 session.Orchestrator.RunTurn(Headless:true) 统一
 // 实现，见 internal/gateway/session/orchestrator_headless.go 顶部注释。
 func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, workingDir, reasoningEffort, name string) (string, error) {

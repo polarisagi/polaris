@@ -50,11 +50,22 @@ Fork 源码、参与贡献的技术用户。可直接修改 Go/Rust 代码。扩
 ### [End-User]
 下载二进制或 Docker 镜像自托管的普通用户。通过 YAML 配置 + Web UI 驱动，**不修改 Go 源码**。其扩展边界：
 1. Skills（Wasm）：LLM 主动调用的能力扩展
-2. Shell Script Hooks（见 `[ShellHooks]`）：生命周期事件自动触发
+2. Hooks（见 `[Hooks]`）：两家共同的 hooks.json 生命周期事件
 3. MCP 工具：配置文件声明外部工具
 4. `configs/*.yaml`：运行时参数
 
-### [ShellHooks]
+### [Hooks]
+两家共同的 `hooks.json` 生命周期钩子（ADR-0103 决策六）：`{"hooks":{"<Event>":[{"matcher":"<regex>","hooks":[<handler>]}]}}`。处理器类型 `command`（shell 或 exec 形式）/ `http` / `mcp_tool` / `prompt` / `agent`；输入 JSON 经 stdin（http 为请求体）；退出码 0 = 成功（stdout 可为 JSON 决策），2 = 阻断（原因取 stderr），其他 = 非阻断错误。
+
+**来源**：用户级 `<data>/hooks/hooks.json`（管理员维护，视为已信任）；项目级 `<项目根>/.polaris/hooks/hooks.json` 与已安装插件（按定义内容哈希审阅信任后才执行，`hook_trust` 表；定义变更即回到待审）。
+
+**Polaris 触发的事件**：SessionStart / SessionEnd / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop / StopFailure / PreCompact / PostCompact / Notification / Interrupt；SubagentStart/Stop 与 Elicitation* 随 Agent 画像与 MCP 升级接入。IDE/终端专属事件解析但不触发。
+
+**安全不变量**：命令经 Rust 沙箱封装 argv 执行（封装失败拒绝裸执行）；输入序列化前 PII 脱敏；输出强制 TaintHigh，不进系统提示词不可变区；PreToolUse / PermissionRequest 为 veto-only（hook 的 allow 不绕过 PolicyGate 与人工审批）；PreToolUse 改写入参后重新过 PolicyGate；hook 自身发起的调用不再触发 hook。
+
+### [ShellHooks] — 已被 [Hooks] 取代
+> 2026-09-26 复核：由 ADR-0103 决策六取代。推翻理由：私有事件名（`message.before` 等）与脚本目录模型不被任何一家标准识别，且与工具事件引擎形成两套配置源；执行路径为裸 `exec` 无沙箱。事件映射：`session.new`→SessionStart、`message.before`→UserPromptSubmit、`message.after`/`turn.stop`→Stop、`session.compact.*`→Pre/PostCompact；`gateway.startup` 无标准对应，删除。原定义保留如下以便追溯：
+
 Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模型，零依赖，脚本可用任意语言编写。
 
 **目录**：`~/.polarisagi/polaris/hooks/`（或 `POLARIS_HOOKS_DIR` 环境变量覆盖）

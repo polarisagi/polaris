@@ -143,6 +143,10 @@ func (r *SQLiteExtensionRepository) UninstallCleanup(ctx context.Context, id, ru
 				return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup plugins", err)
 			}
 		}
+		// hook 信任随插件删除：重装后须重新审阅。
+		if _, err = tx.ExecContext(ctx, `DELETE FROM hook_trust WHERE source_key LIKE ?`, "plugin:"+id+":%"); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup hook_trust", err)
+		}
 	case "skill":
 		_, err = tx.ExecContext(ctx, `DELETE FROM skills WHERE name=? AND plugin_id=''`, runtimeID)
 		if err != nil {

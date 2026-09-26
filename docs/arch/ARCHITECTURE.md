@@ -39,7 +39,7 @@ L1 架构散文（本文档 + 模块文档） → L2 结构真相（`internal/pr
 
 **可扩展性契约**（开源后 End-User 的扩展边界）：
 - Skills（Wasm）：LLM 主动调用的能力扩展，End-User 可自行编写/加载
-- Shell Script Hooks：生命周期事件（`gateway.startup` / `session.new` / `message.after` 等）自动触发用户脚本，零依赖、任意语言（`~/.polarisagi/polaris/hooks/`）
+- Hooks：两家共同的 `hooks.json` 生命周期事件（SessionStart / UserPromptSubmit / PreToolUse / Stop 等），用户级 `<data>/hooks/hooks.json` 与插件 hooks（审阅信任后执行，ADR-0103 决策六）
 - MCP（Model Context Protocol，模型上下文协议） 工具：外部工具接入，配置驱动
 - 配置文件：`configs/*.yaml` 控制所有运行时行为
 

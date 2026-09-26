@@ -48,7 +48,6 @@ type SysAdminHandler struct {
 	WorkflowRepo   repo.WorkflowRepository
 	Agent          protocol.AgentController
 	MCPMgr         MCPManager
-	Hooks          *HookRunner
 	DataDir        string
 	ChatRepo       protocol.ChatRepository
 	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
@@ -117,7 +116,6 @@ type Dependencies struct {
 	WorkflowRepo   repo.WorkflowRepository
 	AgentPool      protocol.AgentPool
 	MCPMgr         MCPManager
-	Hooks          *HookRunner
 	DataDir        string
 	ChatRepo       protocol.ChatRepository
 	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
@@ -170,7 +168,6 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		CronRepo:             deps.CronRepo,
 		WorkflowRepo:         deps.WorkflowRepo,
 		MCPMgr:               deps.MCPMgr,
-		Hooks:                deps.Hooks,
 		DataDir:              deps.DataDir,
 		ChatRepo:             deps.ChatRepo,
 		ProjectRepo:          deps.ProjectRepo,
@@ -248,7 +245,6 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.ChannelMgr,
 		deps.Registry,
 		deps.Chat,
-		deps.Hooks,
 		h.Cron,
 		deps.AgentPool,
 		deps.SessionOrch,

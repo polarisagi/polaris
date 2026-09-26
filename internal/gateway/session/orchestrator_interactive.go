@@ -37,21 +37,11 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		o.emitError(sink, "session_error", err.Error(), sessionID, err)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
-	// session.new hook：用户发起新会话时触发（req.SessionID 为空意味着 /new 后首条消息）
-	if isNewSession {
-		o.hooks.Fire("session.new", map[string]string{
-			"POLARIS_SESSION_ID": sessionID,
-			"POLARIS_CHANNEL":    req.Channel,
-		})
-	}
-
-	// message.before hook：同步拦截，非零退出 = 拒绝本条消息
-	if blocked, reason := o.hooks.FireBefore("message.before", map[string]string{
-		"POLARIS_MESSAGE":    req.Input,
-		"POLARIS_SESSION_ID": sessionID,
-		"POLARIS_CHANNEL":    req.Channel,
-	}); blocked {
-		o.emitError(sink, "hook_blocked", reason, sessionID, nil)
+	// SessionStart / UserPromptSubmit（hooks.json，ADR-0103 决策六）：阻断即拒绝本条消息，
+	// 附加上下文随本轮任务意图进入内核（污点内容，不进系统提示词）。
+	hookContext, blocked := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
+	if blocked != "" {
+		o.emitError(sink, "hook_blocked", blocked, sessionID, nil)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 
@@ -132,6 +122,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	if taskInput == "" {
 		taskInput = req.Input
 	}
+	taskInput = withHookContext(taskInput, hookContext)
 
 	// ── 上下文使用率评估（警告 + 防抖动告警 + 自动压缩）────────────────────────
 	ctxStats := o.compression.Stats(history)
@@ -183,6 +174,9 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
 	agentCtrl.SetConversationHistory(history[:len(history)-1])
 	reply, inferErr, aborted = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput)
+	if !aborted && inferErr == "" && reply != "" {
+		reply, inferErr, aborted = o.continueOnStopHooks(ctx, sink, sessionID, agentCtrl, history, reply)
+	}
 	if aborted {
 		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。
 		if reply != "" {
@@ -205,6 +199,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 			tw.WriteError("empty_response", inferErr)
 		}
 		o.emitError(sink, "empty_response", inferErr, sessionID, apperr.New(apperr.CodeInternal, inferErr))
+		o.hooks.StopFailure(ctx, sessionID, "empty_response")
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 
@@ -240,18 +235,6 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		"reply_bytes", len(reply),
 		"client_cancelled", ctx.Err() != nil,
 	)
-
-	// message.after hook：fire-and-forget，不阻塞响应
-	o.hooks.Fire("message.after", map[string]string{
-		"POLARIS_REPLY":      reply,
-		"POLARIS_SESSION_ID": sessionID,
-		"POLARIS_CHANNEL":    req.Channel,
-	})
-	// turn.stop hook（对应 ADR-0016 §2.2 Codex Stop 事件语义）
-	o.hooks.Fire("turn.stop", map[string]string{
-		"POLARIS_SESSION_ID": sessionID,
-		"POLARIS_CHANNEL":    req.Channel,
-	})
 
 	_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
 		"session_id":  sessionID,

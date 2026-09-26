@@ -168,3 +168,64 @@ func (r *SQLiteExtensionRepository) SavePluginUserConfig(ctx context.Context, pl
 	}
 	return nil
 }
+
+func (r *SQLiteExtensionRepository) ListPlugins(ctx context.Context) ([]types.PluginRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, name, version, display_name, description, publisher, homepage, install_path, enabled, trust_tier, catalog_id, mcp_policy, manifest, created_at, updated_at FROM plugins ORDER BY name")
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPlugins", err)
+	}
+	defer rows.Close()
+	var out []types.PluginRow
+	for rows.Next() {
+		var p types.PluginRow
+		var enabled int
+		if err := rows.Scan(&p.ID, &p.Name, &p.Version, &p.DisplayName, &p.Description, &p.Publisher, &p.Homepage,
+			&p.InstallPath, &enabled, &p.TrustTier, &p.CatalogID, &p.MCPPolicy, &p.Manifest, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPlugins scan", err)
+		}
+		p.Enabled = enabled == 1
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListPlugins: rows", err)
+	}
+	return out, nil
+}
+
+func (r *SQLiteExtensionRepository) ListHookTrust(ctx context.Context) (map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT source_key, digest FROM hook_trust")
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListHookTrust", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, d string
+		if err := rows.Scan(&k, &d); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListHookTrust scan", err)
+		}
+		out[k] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListHookTrust: rows", err)
+	}
+	return out, nil
+}
+
+func (r *SQLiteExtensionRepository) SaveHookTrust(ctx context.Context, sourceKey, digest string) error {
+	_, err := r.db.ExecContext(ctx,
+		"INSERT INTO hook_trust(source_key, digest) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET digest=excluded.digest, trusted_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+		sourceKey, digest)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SaveHookTrust", err)
+	}
+	return nil
+}
+
+func (r *SQLiteExtensionRepository) DeleteHookTrust(ctx context.Context, sourceKey string) error {
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM hook_trust WHERE source_key=?", sourceKey); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.DeleteHookTrust", err)
+	}
+	return nil
+}

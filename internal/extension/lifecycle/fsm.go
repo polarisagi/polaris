@@ -13,6 +13,16 @@ import (
 type InstallFSM struct {
 	installers map[types.ExtType]Installer
 	extRepo    protocol.ExtensionRepository
+	onChange   func(ctx context.Context) // 安装/卸载成功后回调（刷新 hook 来源等派生快照）
+}
+
+// SetOnChange 注入运行时组件变更回调。
+func (f *InstallFSM) SetOnChange(fn func(ctx context.Context)) { f.onChange = fn }
+
+func (f *InstallFSM) changed(ctx context.Context) {
+	if f.onChange != nil {
+		f.onChange(ctx)
+	}
 }
 
 func NewInstallFSM(extRepo protocol.ExtensionRepository) *InstallFSM {
@@ -51,6 +61,7 @@ func (f *InstallFSM) Install(ctx context.Context, req InstallReq, extType types.
 	if err := f.extRepo.UpdateInstanceStatus(ctx, req.InstID, "installed", ""); err != nil {
 		return res, apperr.Wrap(apperr.CodeInternal, "install_fsm: 回写 installed", err)
 	}
+	f.changed(ctx)
 	return res, nil
 }
 
@@ -65,6 +76,7 @@ func (f *InstallFSM) Uninstall(ctx context.Context, req UninstallReq) error {
 		if err := installer.Uninstall(ctx, req); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "install_fsm: Uninstall 失败", err)
 		}
+		f.changed(ctx)
 	}
 	return nil
 }

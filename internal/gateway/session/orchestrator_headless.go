@@ -15,14 +15,14 @@ import (
 // cronadmin/cron_runner.go（AcquireHeadless 前后片段）、
 // channelsadmin/webhook_receive.go dispatchChannelMessage 三处几乎相同又不
 // 完全一致的编排逻辑收敛于此（各自独立实现是历史代价：只有 webhook 分支接了
-// Hooks.FireBefore("message.before")/Fire("message.after")/Fire("turn.stop")
+// 会话事件 hook（现为 hooks.json 的 UserPromptSubmit / Stop，ADR-0103 决策六）
 // 与 TouchSession，workflow/cron 分支完全没有；SystemPromptGuard 扫描则由
 // AgentPool.AcquireHeadless 自身统一覆盖，三个调用方从未各自遗漏，见
 // guard.go 顶部注释）。收敛后三条路径统一获得：EnsureSession →
-// session.new(首轮) → message.before 拦截 → SaveMessage(user) →
+// SessionStart(首轮) → UserPromptSubmit 拦截 → SaveMessage(user) →
 // AcquireHeadless（含 SystemPromptGuard 净化）→ SaveMessage(assistant) →
 // SampleAndScoreReply → UpdateSessionTitle(首轮) → TouchSession →
-// message.after → turn.stop，是本次收敛的核心价值锚点（补齐此前遗漏的
+// Stop（原 message.after / turn.stop），是本次收敛的核心价值锚点（补齐此前遗漏的
 // Hook/持久化步骤，而非制造新分歧）。调用方专属 Hook 字段（如 Webhook 的
 // POLARIS_USER_ID/POLARIS_CHAT_ID）经 Request.Metadata 透传，见 types.go。
 //
@@ -36,7 +36,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	}
 	req.SessionID = sessionID
 
-	isFirstTurn, blockedResult, err := o.prepareHeadlessTurn(ctx, sink, req, sessionID, isNewSession)
+	isFirstTurn, hookContext, blockedResult, err := o.prepareHeadlessTurn(ctx, sink, req, sessionID, isNewSession)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 		return blockedResult, nil
 	}
 
-	intent := types.Intent{Query: req.Input, WorkingDir: req.WorkingDir}
+	intent := types.Intent{Query: withHookContext(req.Input, hookContext), WorkingDir: req.WorkingDir}
 	// GD-13-001：透传真实业务 SessionID，使同一会话跨多轮 Cron/Workflow/Webhook
 	// 触发命中 Pool 中同一个 per-session Agent 内核实例，而非每轮都新建
 	// 一次性实例（此前 AcquireHeadless 自行生成 headless-<时间戳> 丢弃了
@@ -56,21 +56,22 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 		return nil, apperr.Wrap(apperr.CodeOf(err), "session.RunTurn(headless): acquire headless failed", err)
 	}
 
+	// Stop hook（两家语义）：decision:block 时以原因作为续跑意图再跑一轮，上限同交互式路径。
+	for i := 0; i < maxStopContinuations; i++ {
+		v := o.hooks.Stop(ctx, sessionID, res.Output, i > 0)
+		if v.StopTurn || !v.Blocked || v.Reason == "" {
+			break
+		}
+		o.finishHeadlessTurn(ctx, req, sessionID, isFirstTurn, res)
+		next, nextErr := o.agentPool.AcquireHeadless(ctx, types.Intent{Query: "<stop-hook>\n" + v.Reason + "\n</stop-hook>",
+			WorkingDir: req.WorkingDir}, types.WithSessionID(sessionID))
+		if nextErr != nil {
+			slog.Warn("session: headless stop-hook continuation failed", "session", sessionID, "err", nextErr)
+			break
+		}
+		res, isFirstTurn = next, false
+	}
 	reply := o.finishHeadlessTurn(ctx, req, sessionID, isFirstTurn, res)
-
-	// message.after / turn.stop：三条 Headless 调用方此前只有 Webhook 分支接了
-	// （workflow/cron 分支完全没有），A-03 Step5 起统一触发，是本次收敛新补齐
-	// 的能力而非行为收窄（ADR-0016 §2.2 Codex Stop 事件语义，对应交互式路径
-	// runInteractive 同名 hook，见 orchestrator_interactive.go）。
-	o.hooks.Fire("message.after", mergeHookEnv(req.Metadata, map[string]string{
-		"POLARIS_REPLY":      reply,
-		"POLARIS_SESSION_ID": sessionID,
-		"POLARIS_CHANNEL":    req.Channel,
-	}))
-	o.hooks.Fire("turn.stop", mergeHookEnv(req.Metadata, map[string]string{
-		"POLARIS_SESSION_ID": sessionID,
-		"POLARIS_CHANNEL":    req.Channel,
-	}))
 
 	if reply != "" {
 		_ = sink.Emit(Event{Kind: KindDelta, Text: reply})
@@ -83,33 +84,22 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	return &Result{SessionID: sessionID, Reply: reply, LatencyMs: res.LatencyMs}, nil
 }
 
-// prepareHeadlessTurn 落地会话确保 + Hook 分发 + 用户消息持久化（从 runHeadless
-// 拆出，gocyclo 治理，行为不变）。blockedResult 非 nil 时调用方应直接
-// return blockedResult, nil（message.before 拦截）。
-func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req Request, sessionID string, isNewSession bool) (isFirstTurn bool, blockedResult *Result, err error) {
+// prepareHeadlessTurn 落地会话确保 + SessionStart/UserPromptSubmit 分发 + 用户消息持久化
+// （从 runHeadless 拆出，gocyclo 治理）。blockedResult 非 nil 时调用方应直接 return（hook 拦截）。
+func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req Request, sessionID string, isNewSession bool) (isFirstTurn bool, hookContext string, blockedResult *Result, err error) {
 	if err := o.persistence.EnsureSession(ctx, sessionID); err != nil {
-		return false, nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): ensure session", err)
+		return false, "", nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): ensure session", err)
 	}
-	if isNewSession {
-		o.hooks.Fire("session.new", mergeHookEnv(req.Metadata, map[string]string{
-			"POLARIS_SESSION_ID": sessionID,
-			"POLARIS_CHANNEL":    req.Channel,
-		}))
-	}
-
-	if blocked, reason := o.hooks.FireBefore("message.before", mergeHookEnv(req.Metadata, map[string]string{
-		"POLARIS_MESSAGE":    req.Input,
-		"POLARIS_SESSION_ID": sessionID,
-		"POLARIS_CHANNEL":    req.Channel,
-	})); blocked {
+	hookContext, reason := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
+	if reason != "" {
 		slog.Info("session: headless turn blocked by hook", "session", sessionID, "channel", req.Channel, "reason", reason)
 		_ = sink.Emit(Event{Kind: KindError, Payload: map[string]any{"code": "hook_blocked", "message": reason}})
-		return false, &Result{SessionID: sessionID, Aborted: true}, nil
+		return false, "", &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 
 	history, err := o.persistence.ListMessages(ctx, sessionID)
 	if err != nil {
-		return false, nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): list messages", err)
+		return false, "", nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): list messages", err)
 	}
 	isFirstTurn = len(history) == 0
 
@@ -121,7 +111,7 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 		slog.Warn("session: headless saveMessage user failed", "session", sessionID, "err", err)
 	}
 
-	return isFirstTurn, nil, nil
+	return isFirstTurn, hookContext, nil, nil
 }
 
 // finishHeadlessTurn 助手消息持久化 + 会话标题/TouchSession（从 runHeadless

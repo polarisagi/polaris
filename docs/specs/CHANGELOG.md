@@ -6,6 +6,14 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-26（ADR-0103：hooks.json 引擎 — 含**契约变更**与 **DDL 变更**）
+
+- **[DDL] `021_plugins.sql` 新增 `hook_trust`**：开发库需删除重建。
+- **[契约] `internal/action/hook` 重写为 hooks.json 模型**：`hook.NewRunner(hook.Deps{...})`；`sandbox.HookFirer` 改为 `FirePreToolUse(...) PreToolUseResult`（含 `UpdatedInput`）与同步 `FirePostToolUse(...) string`；删除 `ExecRequest.Command` / `SandboxSpec.Command` / `KindHookExecute`；新增 `sandbox.RunStdio`。
+- **[契约] `session.HookRunner` 改为标准事件方法**（SessionStart / UserPromptSubmit / Stop / StopFailure / SessionEnd）；`chat.HookRunner` 追加 PreCompact / PostCompact；删除 `sysadmin.HookRunner`（`$DATA/hooks/<event>` 脚本）、`session.Request.Metadata` 与 `gateway.startup` 事件。
+- **[契约] `hitl.GatewayImpl.SetPermissionHooks`**：PermissionRequest 为 veto-only。
+- 新增 API：`GET /v1/hooks`、`POST|DELETE /v1/hooks/trust`。
+
 ## 2026-09-26（ADR-0103：标准技能运行时 — 含**契约变更**与 **DDL 变更**）
 
 - **[DDL] `008_skills.sql` 新增** `description` / `display_name` / `kind` / `model_invocable` / `user_invocable` / `skill_dir` / `script_path` / `spec`；开发库需删除重建。`ScriptPath` 改由 `script_path` 列持久化（不再按 install_path 拼接 `/src/skill.py`）。

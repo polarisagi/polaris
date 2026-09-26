@@ -226,7 +226,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 		// [A-03 Step5] 原内联 AcquireHeadless + SaveMessage(assistant) +
 		// SampleAndScoreReply + UpdateSessionTitle 序列（此前从不 EnsureSession/
-		// 不存 user 消息/不触发 message.before hook/不 TouchSession——workflowadmin
+		// 不存 user 消息/不触发 UserPromptSubmit hook/不 TouchSession——workflowadmin
 		// 分支同款缺口），收敛至 session.Orchestrator.RunTurn(Headless:true)
 		// 统一实现，见 internal/gateway/session/orchestrator_headless.go 顶部
 		// 注释。WorkingDir 前缀拼接由 RunTurn 内部处理，此处传原始 a.Prompt。

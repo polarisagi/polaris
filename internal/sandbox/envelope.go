@@ -3,13 +3,13 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -19,7 +19,6 @@ const (
 	KindToolExecute     ExecKind = protocol.PolicyActionToolExecute
 	KindProcessSpawn    ExecKind = "process_spawn"
 	KindScriptExecute   ExecKind = "script_execute"
-	KindHookExecute     ExecKind = "hook_execute"
 	KindBrowserAutomate ExecKind = "browser_automate"
 )
 
@@ -40,8 +39,7 @@ type ExecRequest struct {
 	Input       []byte
 	ScriptPath  string
 	ScriptBytes []byte
-	Command     string   // 任意 shell 命令字符串（bash -c 语义），当前仅 Hook 引擎使用，与 ScriptPath 互斥
-	ExtraEnv    []string // 追加环境变量，随 SandboxSpec 透传给脚本执行路径（当前仅 Hook 引擎使用）
+	ExtraEnv    []string // 追加环境变量，随 SandboxSpec 透传给脚本执行路径
 
 	TaintLevel types.TaintLevel
 	CapToken   *token.Token
@@ -74,16 +72,25 @@ type ExecResult struct {
 	ImageParts  []types.ImagePart
 }
 
-// HookFirer 供 ExecEnvelope 在工具调用前后触发匹配的 PreToolUse/PostToolUse Hook。
-// 实现见 internal/action/hook.Runner；consumer-side 接口定义于此打破依赖环
-// （internal/action/hook 已反向依赖 internal/sandbox 拿 CmdRunner/ExecEnvelope 类型）。
+// PreToolUseResult PreToolUse 分发结果。
+type PreToolUseResult struct {
+	Blocked bool
+	Reason  string
+	// UpdatedInput hook 改写后的工具入参（两家 hookSpecificOutput.updatedInput）。Envelope 对改写后
+	// 的请求重新执行 PolicyGate——策略是按原入参给出的 allow，不能沿用到被改写的入参上。
+	UpdatedInput map[string]any
+}
+
+// HookFirer 供 ExecEnvelope 在工具调用前后触发 hooks.json 事件（ADR-0103 决策六）。
+// 实现见 internal/action/hook.Runner；consumer-side 接口定义于此打破依赖环。
 // Boot 通过 SetHookFirer 注入，nil 时 Execute 跳过 Hook 触发（不阻断主流程）。
 type HookFirer interface {
-	// FirePreToolUse 触发 PreToolUse，可否决本次工具调用（不能推翻 PolicyGate 已给出的 allow，
-	// 只能在 allow 基础上追加拒绝——veto-only，不构成第二策略引擎）。
-	FirePreToolUse(ctx context.Context, toolName string, toolInput map[string]any, sessionID string) (blocked bool, reason string)
-	// FirePostToolUse 触发 PostToolUse，fire-and-forget，不影响已产出的 ExecResult。
-	FirePostToolUse(ctx context.Context, toolName string, toolInput map[string]any, output string, sessionID string)
+	// FirePreToolUse veto-only：只能在 PolicyGate 已 allow 的基础上追加拒绝或改写入参，
+	// hook 的 allow 不能推翻策略 deny（不构成第二策略引擎，HE-7）。
+	FirePreToolUse(ctx context.Context, toolName string, toolInput map[string]any) PreToolUseResult
+	// FirePostToolUse 成功走 PostToolUse、失败走 PostToolUseFailure。返回需回传模型的反馈
+	// （decision:block 的 reason / additionalContext，两家语义）；不改写工具结果本身。
+	FirePostToolUse(ctx context.Context, toolName string, toolInput map[string]any, output string, success bool, errMsg string) string
 }
 
 type ExecEnvelope struct {
@@ -123,19 +130,36 @@ func RequiresCapabilityToken(c types.CapabilityLevel) bool {
 	return c > types.CapReadOnly
 }
 
-//nolint:gocyclo // A-7 Capability Token 校验覆盖非只读工具后复杂度 24，Execute 是单一责任的执行闸门，拆分会破坏线性事务语义
-func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResult, error) {
-	start := time.Now()
-
-	// Step 1: PolicyGate（deny-by-default）
-	if e.policy == nil {
-		return nil, apperr.New(apperr.CodeForbidden, "exec_envelope: policy gate not initialized (deny-by-default)")
+// applyPreToolUse 执行 PreToolUse hook：阻断时返回失败结果；改写入参时替换 req.Input 并
+// 重新执行 PolicyGate（策略按原入参放行，不能沿用到改写后的入参）。
+func (e *ExecEnvelope) applyPreToolUse(ctx context.Context, req *ExecRequest, start time.Time) (*ExecResult, error) {
+	if e.hookFirer == nil {
+		return nil, nil
 	}
+	pre := e.hookFirer.FirePreToolUse(ctx, req.Resource, hookToolInput(*req))
+	if pre.Blocked {
+		slog.WarnContext(ctx, "exec_envelope: blocked by PreToolUse hook",
+			"principal", req.Principal, "kind", req.Kind, "resource", req.Resource, "reason", pre.Reason)
+		return &ExecResult{Success: false, Error: "exec_envelope: pre_tool_use hook blocked: " + pre.Reason,
+			LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
+	}
+	if pre.UpdatedInput == nil {
+		return nil, nil
+	}
+	rewritten, err := json.Marshal(pre.UpdatedInput)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "exec_envelope: encode hook updated input", err)
+	}
+	req.Input = rewritten
+	return e.authorize(ctx, *req, start), nil
+}
+
+// authorize PolicyGate 判定；拒绝时返回失败结果（nil 表示放行）。
+func (e *ExecEnvelope) authorize(ctx context.Context, req ExecRequest, start time.Time) *ExecResult {
 	validToken := false
 	if req.CapToken != nil && e.tokenVerifier != nil {
 		validToken = e.tokenVerifier.Verify(req.CapToken) == nil
 	}
-
 	evalCtx := map[string]any{
 		"trust_tier":             int(req.TrustTier),
 		"risk_level":             int(req.Tool.RiskLevel),
@@ -145,28 +169,35 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		"capability_token_valid": validToken,
 	}
 	allowed, pErr := e.policy.IsAuthorized(ctx, req.Principal, string(req.Kind), req.Resource, evalCtx)
-	if pErr != nil || !allowed {
-		reason := "policy denied"
-		if pErr != nil {
-			reason = pErr.Error()
-		}
-		slog.WarnContext(ctx, "exec_envelope: policy denied",
-			"principal", req.Principal, "kind", req.Kind, "resource", req.Resource,
-			"trust_tier", int(req.TrustTier), "reason", reason)
-		return &ExecResult{Success: false, Error: "exec_envelope: " + reason,
-			LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
+	if pErr == nil && allowed {
+		return nil
+	}
+	reason := "policy denied"
+	if pErr != nil {
+		reason = pErr.Error()
+	}
+	slog.WarnContext(ctx, "exec_envelope: policy denied",
+		"principal", req.Principal, "kind", req.Kind, "resource", req.Resource,
+		"trust_tier", int(req.TrustTier), "reason", reason)
+	return &ExecResult{Success: false, Error: "exec_envelope: " + reason,
+		LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}
+}
+
+//nolint:gocyclo // A-7 Capability Token 校验覆盖非只读工具后复杂度 24，Execute 是单一责任的执行闸门，拆分会破坏线性事务语义
+func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResult, error) {
+	start := time.Now()
+
+	// Step 1: PolicyGate（deny-by-default）
+	if e.policy == nil {
+		return nil, apperr.New(apperr.CodeForbidden, "exec_envelope: policy gate not initialized (deny-by-default)")
+	}
+	if denied := e.authorize(ctx, req, start); denied != nil {
+		return denied, nil
 	}
 
-	// Step 1.5: PreToolUse Hook（veto-only，不构成第二策略引擎——只能在 Step 1 已 allow
-	// 的基础上追加拒绝，不能推翻 deny）。Kind=KindHookExecute 时跳过，防止 Hook 自身执行
-	// 递归触发 PreToolUse（Hook 脚本执行本身也经本入口，见 Step 4 之后的说明）。
-	if e.hookFirer != nil && req.Kind != KindHookExecute {
-		if blocked, reason := e.hookFirer.FirePreToolUse(ctx, req.Resource, hookToolInput(req), ""); blocked {
-			slog.WarnContext(ctx, "exec_envelope: blocked by PreToolUse hook",
-				"principal", req.Principal, "kind", req.Kind, "resource", req.Resource, "reason", reason)
-			return &ExecResult{Success: false, Error: "exec_envelope: pre_tool_use hook blocked: " + reason,
-				LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
-		}
+	// Step 1.5: PreToolUse Hook（hook 自身经 sandbox.RunStdio 执行，不经本入口，无递归）。
+	if denied, err := e.applyPreToolUse(ctx, &req, start); denied != nil || err != nil {
+		return denied, err
 	}
 
 	// Step 2: 沙箱等级（信任 + 工具属性 → tier）
@@ -184,8 +215,8 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		actualTier = types.SandboxPersistent
 	}
 
-	// Step 3: Capability Token（Privileged/CapWrite 强制；KindHookExecute 为系统事件 Hook 豁免）
-	if RequiresCapabilityToken(req.Tool.Capability) && req.Kind != KindHookExecute {
+	// Step 3: Capability Token（Privileged/CapWrite 强制）
+	if RequiresCapabilityToken(req.Tool.Capability) {
 		if req.CapToken == nil || e.tokenVerifier == nil || e.tokenVerifier.Verify(req.CapToken) != nil {
 			return &ExecResult{Success: false, //nolint:nilerr
 				Error:     "exec_envelope: privileged action requires valid capability token",
@@ -207,7 +238,6 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		SideEffects: req.Tool.SideEffects,
 		ScriptPath:  req.ScriptPath,
 		ScriptBytes: req.ScriptBytes,
-		Command:     req.Command,
 		ExtraEnv:    req.ExtraEnv,
 		CPUQuotaMs:  req.CPUQuotaMs,
 		IOBudget:    req.IOBudget,
@@ -237,28 +267,30 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		"kind", req.Kind, "resource", req.Resource, "trust_tier", int(req.TrustTier),
 		"actual_tier", int(actualTier), "taint", int(outTaint), "latency_ms", time.Since(start).Milliseconds())
 
-	// PostToolUse Hook：fire-and-forget，不得回写 ExecResult（HE-Rule-5，Hook 是协处理器，
-	// 不得反向操控主流程）；异步执行避免给工具调用返回路径叠加 Hook 延迟。
-	if e.hookFirer != nil && req.Kind != KindHookExecute {
-		firer, resource, toolIn, out := e.hookFirer, req.Resource, hookToolInput(req), string(toolResult.Output)
-		concurrent.SafeGo(context.WithoutCancel(ctx), "envelope.fire_post_tool_use", func(ctx context.Context) {
-			firer.FirePostToolUse(ctx, resource, toolIn, out, "")
-		})
+	// PostToolUse Hook：同步执行，反馈追加在输出之后并强制 TaintHigh（hook 输出不可信，
+	// ADR-0103 决策六修订原"不回写"约束：两家标准中 PostToolUse 的反馈必须到达模型）。
+	output := toolResult.Output
+	if e.hookFirer != nil {
+		feedback := e.hookFirer.FirePostToolUse(ctx, req.Resource, hookToolInput(req), string(toolResult.Output), toolResult.Success, toolResult.Error)
+		if feedback != "" {
+			output = append(append(append([]byte{}, output...), "\n\n<hook-feedback>\n"...), feedback+"\n</hook-feedback>"...)
+			outTaint = types.TaintHigh
+		}
 	}
 
 	return &ExecResult{
-		Success: toolResult.Success, Output: toolResult.Output, Error: toolResult.Error,
+		Success: toolResult.Success, Output: output, Error: toolResult.Error,
 		LatencyMs: time.Since(start).Milliseconds(), TaintLevel: outTaint,
 		SandboxTier: actualTier, ImageParts: toolResult.ImageParts,
 	}, nil
 }
 
-// hookToolInput 把 ExecRequest 归一为 Hook 引擎需要的 map[string]any 视图。
-// ExecRequest 本身无结构化 tool_input，Input 为已编码字节流，原样转字符串传递。
+// hookToolInput 两家 hook 的 tool_input 是工具参数对象：Input 为 JSON 对象时原样解码；
+// 脚本类执行给出 script_path 字段，便于 matcher 与 "if" 规则匹配。
 func hookToolInput(req ExecRequest) map[string]any {
-	m := map[string]any{"kind": string(req.Kind)}
-	if len(req.Input) > 0 {
-		m["input"] = string(req.Input)
+	m := map[string]any{}
+	if len(req.Input) > 0 && json.Unmarshal(req.Input, &m) != nil {
+		m = map[string]any{"input": string(req.Input)}
 	}
 	if req.ScriptPath != "" {
 		m["script_path"] = req.ScriptPath

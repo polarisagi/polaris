@@ -76,6 +76,12 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 - 输入/输出协议兼容两家：stdin JSON 带 `session_id`/`turn_id`/`hook_event_name`/`cwd`/`model`/`permission_mode` 及事件字段；退出码 0/2/其他语义；JSON 输出识别 `continue`/`stopReason`/`systemMessage`/`decision`/`reason`/`hookSpecificOutput.{permissionDecision,permissionDecisionReason,updatedInput,additionalContext}`。
 - **安装 ≠ 信任**（Codex 规则，Polaris 采纳为硬约束）：插件 hooks 按定义内容 hash 记录，未经用户审阅的 hash 不执行；定义变更后重新进入待审。
 - Hook 输出仍强制 `TaintLevel=High`，经 PolicyGate 决定注入，禁止进入 Immutable Zone（ADR-0016 决策二不变）。
+- 实现约束（2026-09-26 落地时补充）：
+  - 命令处理器经 `sandbox.RunStdio`（Rust 沙箱封装 argv，与 MCP stdio 同一能力）执行，以满足 stdin 输入与 stdout/stderr 分离；封装失败拒绝裸执行。原 `ExecEnvelope` Command 分支与 `KindHookExecute` 删除。
+  - PreToolUse / PermissionRequest 为 veto-only：hook 的 `allow` 不绕过 PolicyGate 与人工审批；`updatedInput` 改写后重新执行 PolicyGate；`ask` 在无逐次交互权限通道时按拒绝处理。
+  - PostToolUse 改为同步：`decision:block` 原因与 `additionalContext` 追加到工具输出并强制 TaintHigh（修订原"PostToolUse 不回写结果"）。
+  - Stop `decision:block` 续跑上限 3 次（宿主硬上限，HE-5），hook 自身发起的调用不再触发 hook（防递归）。
+  - 用户级 hooks.json 视为已信任；项目级与插件 hooks 按定义哈希信任。`[ShellHooks]` 私有事件与 `hooks.yaml` 删除。
 
 ## 决策七：市场格式与来源
 
@@ -123,4 +129,5 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 日期 | 变更 |
 |---|---|
 | 2026-09-26 | 初稿 |
+| 2026-09-26 | 决策六：补充落地实现约束（RunStdio 执行、veto-only、PostToolUse 同步回传、Stop 续跑上限、ShellHooks 删除）。 |
 | 2026-09-26 | 决策五：技能校验由「违规即不加载」改为硬错误/规范告警两级。理由：Claude 规定 `name`、`description` 均可缺省（分别回落目录名与正文首行），按 agentskills 严格拒绝会使合法 Claude 技能无法加载，违背双标准兼容目标。新增决策二补充：宿主环境变量展开限制。 |

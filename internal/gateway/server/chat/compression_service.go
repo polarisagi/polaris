@@ -1,13 +1,10 @@
 package chat
 
 import (
-	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
-
 	"github.com/polarisagi/polaris/internal/gateway/types"
 
 	"context"
 
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -46,7 +43,7 @@ const (
 type CompressionService struct {
 	db             protocol.SQLQuerier
 	chatRepo       protocol.ChatRepository
-	hooks          *sysadmin.HookRunner
+	hooks          HookRunner
 	contextWindow  int     // 上下文窗口大小（token）
 	autoCompactPct float64 // 自动压缩触发百分比
 	warnPct        float64 // 警告触发百分比
@@ -62,7 +59,7 @@ type CompressionService struct {
 	EmbedThreshold float64
 }
 
-func NewCompressionService(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hooks *sysadmin.HookRunner, cfg config.CompressorConfig, embedder search.Embedder, embedThreshold float64) *CompressionService {
+func NewCompressionService(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hooks HookRunner, cfg config.CompressorConfig, embedder search.Embedder, embedThreshold float64) *CompressionService {
 	contextWindow := cfg.ContextWindow
 	if contextWindow <= 0 {
 		contextWindow = defaultContextWindow
@@ -175,13 +172,15 @@ func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs
 		return msgs, skip, nil
 	}
 
-	// session.compact.before：同步，阻塞则跳过压缩
-	if blocked, reason := c.hooks.FireBefore("session.compact.before", map[string]string{
-		"POLARIS_SESSION_ID":  sessionID,
-		"POLARIS_TOKEN_COUNT": fmt.Sprintf("%d", tokensBefore),
-	}); blocked {
-		slog.Info("compressor: compact skipped by hook", "session", sessionID, "reason", reason)
-		return msgs, skip, nil
+	trigger := "auto"
+	if force {
+		trigger = "manual"
+	}
+	if c.hooks != nil {
+		if v := c.hooks.PreCompact(ctx, sessionID, trigger); v.Blocked || v.StopTurn {
+			slog.Info("compressor: compact skipped by PreCompact hook", "session", sessionID, "reason", v.Reason+v.StopReason)
+			return msgs, skip, nil
+		}
 	}
 
 	head, body := compact.SplitPinnedHead(msgs) // GD-14-001：system 前缀不参与摘要
@@ -240,11 +239,9 @@ func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs
 		"thrash_count", c.thrashedCount,
 	)
 
-	c.hooks.Fire("session.compact.after", map[string]string{
-		"POLARIS_SESSION_ID":   sessionID,
-		"POLARIS_TOKEN_BEFORE": fmt.Sprintf("%d", tokensBefore),
-		"POLARIS_TOKEN_AFTER":  fmt.Sprintf("%d", tokensAfter),
-	})
+	if c.hooks != nil {
+		c.hooks.PostCompact(ctx, sessionID, trigger)
+	}
 
 	return newMsgs, result, nil
 }

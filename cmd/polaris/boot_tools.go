@@ -66,6 +66,7 @@ type ToolBundle struct {
 	ExtRepo               *repo.SQLiteExtensionRepository
 	InstallMgr            *marketplace.Manager
 	InstallFSM            *lifecycle.InstallFSM
+	HookRunner            *hook.Runner
 	PluginConfig          *lifecycle.PluginConfigService
 	SkillRegistry         protocol.SkillRegistry
 	SkillExecutor         protocol.SkillExecutor // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
@@ -185,14 +186,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, &inlineTokenVerifier{})
 	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
 
-	// PreToolUse/PostToolUse Hook 引擎（ADR-0016 §2.2）：从 ~/.polarisagi/polaris/hooks/hooks.yaml
-	// （用户级）+ .polaris/hooks/hooks.yaml（项目级）加载，接入 ExecEnvelope 统一入口。
-	// 配置缺失/为空不报错（ADR-0006 确定性降级）；YAML 语法错误则降级为空 Registry，不阻塞启动。
-	hookRegistry, hookLoadErr := hook.GetDefaultRegistry()
-	if hookLoadErr != nil {
-		slog.Warn("polaris: hooks.yaml load failed, PreToolUse/PostToolUse hooks disabled this run", "err", hookLoadErr)
-		hookRegistry, _ = hook.Load() // 空路径列表 → 空 Registry，Match 恒返回 nil
-	}
+	// hooks.json 引擎（ADR-0103 决策六）：来源提供者（用户级 / 项目级 / 插件）依赖的仓库与
+	// 配置服务在下方构造后注入并 Reload；此处先挂上执行信封，保证工具事件入口唯一。
+	hookRegistry := hook.NewRegistry(nil)
 
 	// 初始化 PII 护栏组件 (Task 8/20)
 	piiDesens := guard.NewPIIDesensitizer()
@@ -209,9 +205,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		slog.Info("polaris: PII detector initialized (Go regex Tier 0)")
 	}
 
-	hookRunner := hook.NewRunner(hookRegistry, sb.Gate, envelope, piiDetector, piiDesens)
+	hookRunner := hook.NewRunner(hook.Deps{Registry: hookRegistry, Policy: sb.Gate, Wrapper: toolsb.NewRustArgvWrapper(),
+		HTTPClient: sb.SafeHTTPClient, PII: piiDetector, PIIDesens: piiDesens})
 	envelope.SetHookFirer(hookRunner)
-	slog.Info("polaris: PreToolUse/PostToolUse hook engine wired into ExecEnvelope")
+	slog.Info("polaris: hooks.json engine wired into ExecEnvelope")
 
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
 	// allowedPaths：DataDir 始终包含（Agent 工作区 + DB + 日志）。
@@ -409,6 +406,18 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		return "", nil
 	}
 
+	// hooks.json 来源与处理器依赖（需 extRepo / pluginConfig / mcpMgr / llmInfer 均已就绪）。
+	projectRepo := repo.NewSQLiteProjectRepository(sb.Store.DB())
+	hookRegistry.SetProvider(lifecycle.NewHookSourceProvider(extRepo, sb.DataDir, pluginConfig, func() []string {
+		return activeProjectDirs(projectRepo)
+	}))
+	hookRunner.SetMCPToolCaller(&mcpHookCaller{mgr: mcpMgr})
+	hitlGateway.SetPermissionHooks(hookRunner)
+	hookRunner.SetPromptEvaluator(&hookPromptEvaluator{infer: llmInfer})
+	if err := hookRegistry.Reload(context.Background()); err != nil {
+		slog.Warn("polaris: hook sources load failed; hooks inactive until next reload", "err", err)
+	}
+
 	// 初始化 WorkspaceManager 与 ToolRefOffloader
 	const workspaceMaxSize = 500 * 1024 * 1024 // Tier0 quota，来源：internal/vfs/workspace_manager.go §Tier0=500MB
 	vfsWM := vfs.NewWorkspaceManagerWithContext(ctx, sb.Layout.Workspace, workspaceMaxSize, config.DefaultThresholds().M7Tool)
@@ -471,6 +480,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// SyncScheduler——此前只有"注册"没有"调度"两端接线均已就绪但从未打通。
 	knowledgeConnRegistry := connector.NewRegistry()
 	installFSM := lifecycle.NewInstallFSM(extRepo)
+	// 插件安装 / 卸载改变 hook 来源：成功后立即刷新快照（新装插件的 hook 仍须审阅才执行）。
+	installFSM.SetOnChange(func(ctx context.Context) {
+		if err := hookRegistry.Reload(ctx); err != nil {
+			slog.Warn("polaris: hook sources reload failed", "err", err)
+		}
+	})
 	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr).WithRegistry(knowledgeConnRegistry))
 	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry).WithPolicyGate(sb.Gate).WithDataDir(sb.DataDir))
 	// [W-2-B] 接入 SkillValidationPipeline
@@ -652,6 +667,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExtRepo:               extRepo,
 		InstallMgr:            installMgr,
 		InstallFSM:            installFSM,
+		HookRunner:            hookRunner,
 		PluginConfig:          pluginConfig,
 		SkillRegistry:         skillReg,
 		SkillExecutor:         skillExecutor,

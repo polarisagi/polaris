@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -165,6 +166,15 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		Redirect: req.Redirect,
 	}
 	s.dispatchInterruptRequest(r.Context(), taskID, req.Action, interruptReq)
+	if s.hooks != nil {
+		hooks, reason := s.hooks, req.Reason
+		if reason == "" {
+			reason = req.Action
+		}
+		concurrent.SafeGo(context.WithoutCancel(r.Context()), "gateway.interrupt_hook", func(ctx context.Context) {
+			hooks.Interrupt(ctx, taskID, reason)
+		})
+	}
 
 	if s.auditTrail != nil {
 		detail, err := json.Marshal(map[string]any{

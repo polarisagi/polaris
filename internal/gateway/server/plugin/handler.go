@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/action/hook"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -22,6 +23,8 @@ type PluginHandler struct {
 	SkillReg       protocol.SkillRegistry
 	PluginCreator  PluginGenerator
 	PluginConfig   PluginConfigManager
+	// HookRunner hooks.json 引擎（来源审阅 / 信任管理，ADR-0103 决策六）。
+	HookRunner *hook.Runner
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer

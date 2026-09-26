@@ -60,12 +60,6 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.To
 		return s.runNativeScript(execCtx, spec)
 	}
 
-	// Hook 引擎路径：cfg.Command 是 hooks.yaml 里配置的任意 shell 命令（bash -c 语义），
-	// 不是脚本文件路径，走独立分发（复用 RunHook 同款 CmdRunner 调用形状）。
-	if spec.Command != "" {
-		return s.runRawCommand(execCtx, spec)
-	}
-
 	// L3 非脚本路径：通过 Rust 沙箱执行 polaris-sandbox 二进制。
 	// Firecracker/VZ/WSL2/native 后端已统一为 CmdRunner（bwrap/Seatbelt）。
 	if s.binPath == "" {
@@ -143,42 +137,6 @@ func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir stri
 			fmt.Sprintf("sandbox: RunHook %q exited %d: %s", scriptPath, exitCode, string(out)))
 	}
 	return nil
-}
-
-// runRawCommand 通过 CmdRunner 执行任意 shell 命令字符串（bash -c 语义）。
-// 供 ExecEnvelope.Execute 的 SandboxSpec.Command 分支使用，当前唯一调用方是 Hook 引擎
-// （internal/action/hook/runner.go）——hooks.yaml 里的 command 字段是任意 shell 命令，
-// 不是脚本文件路径，不适用 runNativeScript 的 ScriptPath 分发。
-func (s *ContainerSandbox) runRawCommand(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
-	quotaMs := spec.CPUQuotaMs
-	if quotaMs == 0 {
-		quotaMs = s.cfg.SandboxQuotaMs
-	}
-	start := time.Now()
-	out, exitCode, _, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{
-		CallerType:   "hook",
-		Command:      spec.Command,
-		AllowedPaths: spec.AllowedPaths,
-		Env:          append(containerBaseEnv(), spec.ExtraEnv...),
-		NetworkBlock: true,
-		TimeoutMs:    uint64(quotaMs),
-	})
-	latency := time.Since(start).Milliseconds()
-	if runErr != nil {
-		if errors.Is(runErr, fs.ErrPermission) {
-			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
-		}
-		return &types.ToolResult{Success: false, Error: runErr.Error(), LatencyMs: latency}, nil
-	}
-	if exitCode != 0 {
-		return &types.ToolResult{
-			Success:   false,
-			Error:     fmt.Sprintf("command exited with code %d", exitCode),
-			Output:    out,
-			LatencyMs: latency,
-		}, nil
-	}
-	return &types.ToolResult{Success: true, Output: out, LatencyMs: latency}, nil
 }
 
 func (s *ContainerSandbox) RunScript(ctx context.Context, skillName, scriptPath string, input []byte, trustTier types.TrustTier) ([]byte, error) {
@@ -270,14 +228,14 @@ func resolveInterpreter(scriptPath string) (string, error) {
 				return p, nil
 			}
 		}
-		return "", apperr.New(apperr.CodeInternal, "sandbox: python3/python not found in PATH")
+		return "", apperr.New(apperr.CodeNotFound, "sandbox: python3/python not found in PATH")
 	case ".sh", ".bash":
 		for _, name := range []string{"bash", "sh"} {
 			if p, err := exec.LookPath(name); err == nil {
 				return p, nil
 			}
 		}
-		return "", apperr.New(apperr.CodeInternal, "sandbox: bash/sh not found in PATH")
+		return "", apperr.New(apperr.CodeNotFound, "sandbox: bash/sh not found in PATH")
 	default:
 		return "", apperr.New(apperr.CodeInternal,
 			fmt.Sprintf("sandbox: unsupported script extension %q", filepath.Ext(scriptPath)))

@@ -217,6 +217,7 @@ func (h *PluginHandler) disablePluginComponents(ctx context.Context, pluginID, n
 	if err := h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 0, now); err != nil {
 		slog.Warn("plugin_manage: disable plugin components failed", "plugin", pluginID, "err", err)
 	}
+	h.reloadHooks(ctx)
 	h.ClearToolSchemaCache()
 }
 
@@ -225,6 +226,7 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 	if err := h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 1, now); err != nil {
 		slog.Warn("plugin_manage: enable plugin components failed", "plugin", pluginID, "err", err)
 	}
+	h.reloadHooks(ctx)
 
 	if h.MCPMgr != nil {
 		for _, serverID := range h.pluginServerIDs(ctx, pluginID, true) {

@@ -1,8 +1,7 @@
 package server
 
 import (
-	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
-
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/store/repo"
 
 	"bytes"
@@ -70,7 +69,7 @@ func TestServerStart(t *testing.T) {
 		chatRepo:     repo.NewSQLiteChatRepository(db),
 		extRepo:      repo.NewSQLiteExtensionRepository(db),
 		providerRepo: repo.NewSQLiteProviderRepository(db),
-		hooks:        sysadmin.NewHookRunner(t.TempDir()),
+		hooks:        session.NewStandardHooks(),
 		channelMgr:   channel.NewManager(http.DefaultClient, nil),
 		srv:          &http.Server{},
 	}

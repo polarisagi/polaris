@@ -734,61 +734,28 @@ POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.
 
 ---
 
-## 15. Hook 框架（ADR-0016 §2.2）
+## 15. Hook 框架（hooks.json，ADR-0103 决策六）
 
-> `internal/action/hook/` 实现 Codex 语义的 PreToolUse/PostToolUse 工具调用级 Hook 引擎。
-> **非** ARCHITECTURE.md §1 `[ShellHooks]`——两者是独立系统，见本节末"与 ShellHooks 的关系"。
-> 输出强制 TaintLevel=High，通过 M11 PolicyGate 才可注入 Agent 上下文。
+> 2026-09-26：由两家共同的 `hooks.json` 模型取代原 `hooks.yaml` 工具事件引擎与 `[ShellHooks]` 私有脚本事件（见 `00-Global-Dictionary.md` `[Hooks]`）。
 
-**事件触发点**（2026-07-02 起，范围收窄为 2 事件——原 ADR-0016 §2.2 设计的 SessionStart/
-UserPromptSubmit/Stop 与 ShellHooks 既有事件高度重叠，为避免同一生命周期节点两套配置源
-并存，不重复实现；`Stop` 由 ShellHooks 新增的 `turn.stop` 事件承接，见下）：
+**模型**：`internal/action/hook` —— `hook.go` 事件/处理器/配置解析；`registry.go` 来源快照（`SourceProvider` 注入，`Reload` 原子替换）；`io.go` 标准输入与输出决策合并（退出码 0/2/其他、`continue`/`decision`/`hookSpecificOutput.{permissionDecision,updatedInput,additionalContext}`，deny > ask > allow）；`runner.go` 分发（事件级 PolicyGate、PII 脱敏、同步并发 + async 后台）；`exec_command.go`（shell / exec 形式、`${CLAUDE_PLUGIN_ROOT}` 等路径变量、`CLAUDE_PLUGIN_OPTION_*`，shell 形式禁止 `${user_config.*}`）；`exec_remote.go`（http 经 SafeDialer、`allowedEnvVars`；mcp_tool 模板替换；prompt/agent 经 Provider 路由判定 `{"ok":…}`）；`filter_if.go`（`if` 规则 `Tool(glob)`）；`firer.go`（实现 `sandbox.HookFirer` 与 `hitl.PermissionHooks`）。
 
-| 事件 | 触发点 | 说明 |
-|------|---------|------|
-| `PreToolUse` | `ExecEnvelope.Execute` Step 1.5（PolicyGate 通过后、沙箱分级前） | 支持工具名 matcher 正则；veto-only，只能在 PolicyGate 已 allow 基础上追加拒绝，不构成第二策略引擎 |
-| `PostToolUse` | `ExecEnvelope.Execute` Step 5 之后 | fire-and-forget 异步触发，携带工具输出，不回写 ExecResult（HE-Rule-5） |
+**来源**：`extension/lifecycle/hook_sources.go` 组装用户级 / 项目级 hooks.json 与已启用插件的 hooks；信任按定义哈希存 `hook_trust`；`GET /v1/hooks`、`POST|DELETE /v1/hooks/trust` 审阅管理。插件安装/卸载/启停与信任变更后刷新快照。
 
-**配置格式** (`~/.polarisagi/polaris/hooks/hooks.yaml`)：`command` 字段为任意 shell 命令
-（bash -c 语义，与 ShellHooks 按脚本路径调用不同）：
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "^bash$"
-      hooks:
-        - type: command
-          command: "/path/to/pre_tool_check.sh"
-          status_message: "Checking command"
-          timeout: 30s
-```
+**触发点**：
 
-**安全不变量**：
-- Hook 脚本输出封装为 `TaintLevel=High` 的 TaintedString，不得直接注入 Immutable Zone
-- Hook 执行超时 30s（可配置），超时不中断主流程；超时告警由调用方负责处理
-- 并发 Hook（同事件多个匹配）并发执行，互不影响
-- **环境变量隔离**: Hook 子进程仅继承最小化 PATH + `HOOK_INPUT_JSON`，不继承宿主进程完整环境
-- **PII 脱敏**（2026-07-02 起）: `HookInput`（含工具调用参数/输出）序列化为 `HOOK_INPUT_JSON`
-  前经 `guard.PIIDetector.Redact`；脱敏失败按 fail-closed 拒绝执行，不裸传（HE-Rule 2）
-- **进程隔离**（2026-07-02 起）: `Runner.runCommand` 经 `ExecEnvelope.Execute`（`Kind=KindHookExecute`，
-  `Tool.Source=ToolSkill`+`SideProcessSpawn` 强制路由 Container/NativeOS tier）统一执行，
-  与 `bash` 工具、CodeAct、Skill 走同一入口——不再是绕开沙箱分级/Capability Token/Taint
-  only-up 三步的独立 `CmdRunner` 旁路；`envelope==nil` 时 fail-closed，不回退裸执行
+| 事件 | 触发点 |
+|------|--------|
+| `PreToolUse` | `ExecEnvelope.Execute` Step 1.5：veto-only；`updatedInput` 改写后重新执行 PolicyGate；`ask` 按拒绝处理（无逐次交互权限通道） |
+| `PostToolUse` / `PostToolUseFailure` | `ExecEnvelope.Execute` 执行后同步触发；`decision:block` 原因与 `additionalContext` 以 `<hook-feedback>` 追加到工具输出并强制 TaintHigh |
+| `SessionStart` / `UserPromptSubmit` | `session` 编排入口（交互式与 Headless）；阻断即拒绝本轮，附加上下文以 `<hook-context>` 随任务意图下发 |
+| `Stop` / `StopFailure` | 回合结束：`decision:block` 以原因续跑，最多 3 次（`stop_hook_active` 标记）；空响应触发 StopFailure |
+| `SessionEnd` | `/clear`（随后 SessionStart:clear）与删除会话 |
+| `PreCompact` / `PostCompact` | `CompressionService.compact`（trigger manual / auto；阻断跳过压缩） |
+| `PermissionRequest` / `Notification` | `hitl.GatewayImpl.Prompt`：deny 直接拒绝（allow 不代替人工批准）；审批发起时发 Notification |
+| `Interrupt` | 用户中断接口 |
 
-**代码位置**: `internal/action/hook/`（hook.go 类型定义 / registry.go 加载 hooks.yaml /
-runner.go 实现 `sandbox.HookFirer` 接口 + `ExecEnvelope` 化执行）；底层 `RunScript`
-exec 原语不在本包，定义在 `internal/sysmgr/osutils/script.go`，由 Hook 框架与 ShellHooks 共用；
-`sandbox.HookFirer` 接口与 `ExecEnvelope.SetHookFirer` 注入点见
-`internal/sandbox/envelope.go`；生产环境构造见 `cmd/polaris/boot_tools.go`（`hook.LoadDefault` +
-`hook.NewRunner` + `envelope.SetHookFirer`）。
-
-**与 ShellHooks 的关系**：`internal/gateway/server/sysadmin/hooks.go` 的 `HookRunner`
-（`[ShellHooks]`，见 `00-Global-Dictionary.md` §1）承接生命周期类事件：`gateway.startup`/
-`session.new`/`message.before`/`message.after`/`turn.stop`（对应 Codex Stop 语义）/
-`session.compact.before`/`session.compact.after`，按事件名读取单个脚本文件，非本节的
-`hooks.yaml`+matcher 模型；执行路径是 `osutils.RunScript` 裸 `exec.CommandContext`（无沙箱，
-类 git-hooks 信任模型，设计如此非缺陷——脚本目录可写者已具备完整文件系统权限）。两者共享
-同一底层 `RunScript` 原语，覆盖不同粒度（ShellHooks=会话/进程生命周期，本节=单次工具调用），
-相互独立、互不调用。
+**执行**：命令处理器经 `sandbox.RunStdio`（`ArgvWrapper` → Rust 沙箱封装 argv；stdin 注入、stdout/stderr 分离、退出码、超时与输出上限），封装失败拒绝执行；原 `ExecEnvelope` Command 分支与 `KindHookExecute` 已删除。
 
 > **✅ 已修复（native_sandbox mutex 中毒）**：`rust/substrate/src/native_sandbox/mod.rs` 中 stdout/stderr 采集子线程的 `buf.lock().unwrap()` 已改为 `unwrap_or_else(|e| e.into_inner())`，锁中毒时取回内部数据而非 panic，子线程不再因锁异常丢失输出。
 

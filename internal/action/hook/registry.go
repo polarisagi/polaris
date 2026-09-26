@@ -1,101 +1,142 @@
 package hook
 
 import (
-	"fmt"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
-	"path/filepath"
-	"strings"
-	"time"
+	"sync/atomic"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
-
-	"gopkg.in/yaml.v3"
 )
 
-// Registry 加载并持有 Hook 配置。
-// 从 ~/.polarisagi/polaris/hooks/hooks.yaml（用户级）和
-// .polaris/hooks/hooks.yaml（项目级）合并加载。
-// 高优先级（项目）不覆盖低优先级（用户）——两者均执行（与 Codex 语义一致）。
+// Scope 来源作用域。
+type Scope string
+
+const (
+	ScopeUser    Scope = "user"    // 本机用户级 hooks.json（管理员配置，视为已信任）
+	ScopeProject Scope = "project" // 项目目录 .polaris/hooks/hooks.json（可随仓库带入，须审阅信任）
+	ScopePlugin  Scope = "plugin"  // 已安装插件（须审阅信任）
+)
+
+// Source 一份 hook 配置来源及其执行上下文。
+type Source struct {
+	Key        string // 信任键：scope:定位符（插件为 plugin:<id>:<文件>）
+	Scope      Scope
+	PluginID   string
+	PluginName string
+	PluginRoot string            // ${PLUGIN_ROOT} / ${CLAUDE_PLUGIN_ROOT}
+	PluginData string            // ${PLUGIN_DATA} / ${CLAUDE_PLUGIN_DATA}
+	Options    map[string]string // userConfig 取值：CLAUDE_PLUGIN_OPTION_<KEY> 与 exec 形式 ${user_config.*}
+	Digest     string            // 定义内容哈希；信任绑定到哈希，定义变更即回到待审
+	Trusted    bool
+	Config     Config
+}
+
+// SourceProvider 列出当前生效的全部来源（含信任状态）。consumer-side 定义：
+// 插件来源由 extension/lifecycle 从 plugins.manifest 与信任存储构建。
+type SourceProvider interface {
+	ListHookSources(ctx context.Context) ([]Source, error)
+}
+
+// Registry 来源快照；Reload 原子替换，Dispatch 路径无锁读取。
 type Registry struct {
-	groups map[Event][]MatcherGroup // event → 已编译的匹配组
+	provider atomic.Pointer[SourceProvider]
+	snapshot atomic.Pointer[[]Source]
 }
 
-// Load 加载 Hook 配置。paths 为 hooks.yaml 路径列表（低优先级在前）。
-func Load(paths ...string) (*Registry, error) {
-	merged := Config{Hooks: make(map[Event][]MatcherGroup)}
-
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("hook: read %s: %v", p, err), err)
-		}
-
-		var cfg Config
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("hook: parse %s: %v", p, err), err)
-		}
-
-		for event, groups := range cfg.Hooks {
-			merged.Hooks[event] = append(merged.Hooks[event], groups...)
-		}
+func NewRegistry(provider SourceProvider) *Registry {
+	r := &Registry{}
+	if provider != nil {
+		r.provider.Store(&provider)
 	}
-
-	r := &Registry{groups: make(map[Event][]MatcherGroup)}
-	for event, groups := range merged.Hooks {
-		r.groups[event] = compileMatchers(applyDefaults(groups))
-	}
-	return r, nil
+	empty := []Source{}
+	r.snapshot.Store(&empty)
+	return r
 }
 
-// GetDefaultRegistry 按惯例路径加载（用户级 + 项目级）。
-func GetDefaultRegistry() (*Registry, error) {
-	home, _ := os.UserHomeDir()
-	cwd, _ := os.Getwd()
-
-	paths := []string{
-		filepath.Join(home, ".polarisagi/polaris", "hooks", "hooks.yaml"),
-		filepath.Join(cwd, ".polaris", "hooks", "hooks.yaml"),
-	}
-	return Load(paths...)
+// SetProvider 启动期注入来源提供者（其依赖的仓库与配置服务晚于执行信封构造）。
+func (r *Registry) SetProvider(p SourceProvider) {
+	r.provider.Store(&p)
 }
 
-// Match 返回匹配事件和工具名的所有 MatcherGroup。
-// toolName 空字符串 = 匹配所有（用于 SessionStart / Stop 等无工具事件）。
-func (r *Registry) Match(event Event, toolName string) []MatcherGroup {
-	groups, ok := r.groups[event]
-	if !ok {
+// Reload 重建快照（插件安装/卸载/启停、信任变更、hooks.json 修改后调用）。
+func (r *Registry) Reload(ctx context.Context) error {
+	pp := r.provider.Load()
+	if pp == nil || *pp == nil {
 		return nil
 	}
+	sources, err := (*pp).ListHookSources(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "hook.Registry.Reload", err)
+	}
+	r.snapshot.Store(&sources)
+	return nil
+}
 
-	var matched []MatcherGroup
-	for _, g := range groups {
-		if matches(g, toolName) {
-			matched = append(matched, g)
+// Sources 当前快照（只读）。
+func (r *Registry) Sources() []Source {
+	return *r.snapshot.Load()
+}
+
+// boundHandler 命中的处理器及其来源上下文。
+type boundHandler struct {
+	Handler Handler
+	Source  *Source
+}
+
+// match 返回已信任来源中匹配 event + subject 的处理器；未信任来源一律跳过。
+func (r *Registry) match(event Event, subject string) []boundHandler {
+	sources := r.Sources()
+	var out []boundHandler
+	for i := range sources {
+		src := &sources[i]
+		if !src.Trusted {
+			continue
 		}
-	}
-	return matched
-}
-
-func matches(g MatcherGroup, toolName string) bool {
-	if g.Matcher == "" {
-		return true
-	}
-	if g.compiled != nil {
-		return g.compiled.MatchString(toolName)
-	}
-	return strings.Contains(toolName, g.Matcher)
-}
-
-func applyDefaults(groups []MatcherGroup) []MatcherGroup {
-	for i := range groups {
-		for j := range groups[i].Hooks {
-			if groups[i].Hooks[j].Timeout <= 0 {
-				groups[i].Hooks[j].Timeout = 30 * time.Second
+		for gi := range src.Config[event] {
+			g := &src.Config[event][gi]
+			if !g.Matches(subject) {
+				continue
+			}
+			for _, h := range g.Hooks {
+				out = append(out, boundHandler{Handler: h, Source: src})
 			}
 		}
 	}
-	return groups
+	return out
+}
+
+// Digest 事件定义的规范化哈希（与 pluginspec.HookSource.Digest 同算法：按键排序的 JSON）。
+func Digest(events map[string]json.RawMessage) string {
+	canon, err := json.Marshal(events)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:])
+}
+
+// FileSource 读取用户级 / 项目级 hooks.json；文件不存在返回 ok=false。
+func FileSource(scope Scope, path string) (Source, bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Source{}, false, nil
+		}
+		return Source{}, false, apperr.Wrap(apperr.CodeInternal, "hook: read "+path, err)
+	}
+	var top struct {
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return Source{}, false, apperr.Wrap(apperr.CodeInvalidInput, "hook: parse "+path, err)
+	}
+	cfg, err := ParseEvents(top.Hooks)
+	if err != nil {
+		return Source{}, false, err
+	}
+	return Source{Key: string(scope) + ":" + path, Scope: scope, Digest: Digest(top.Hooks), Config: cfg,
+		Trusted: scope == ScopeUser}, true, nil
 }

@@ -1,6 +1,5 @@
 internal/agent/context/pii_vault.go:61:rows
 internal/automation/cost_report.go:157:rows
-internal/automation/hitl/gateway.go:351:iter
 internal/channel/manager.go:95:rows
 internal/eval/analysis/shadow_executor.go:246:rows
 internal/execute/orchestrator/sqlite_blackboard_reaper.go:46:rows

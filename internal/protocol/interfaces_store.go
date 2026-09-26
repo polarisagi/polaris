@@ -206,6 +206,12 @@ ExtensionRepository interface {
 	ListPluginUserConfig(ctx context.Context, pluginID string) ([]types.PluginUserConfigRow, error)
 	// SavePluginUserConfig 以给定集合整体替换该插件的用户配置（事务内先删后写）。
 	SavePluginUserConfig(ctx context.Context, pluginID string, rows []types.PluginUserConfigRow) error
+	// ListPlugins 返回全部插件行（含 manifest 快照）。
+	ListPlugins(ctx context.Context) ([]types.PluginRow, error)
+	// ListHookTrust 返回 source_key → 已信任的定义哈希。
+	ListHookTrust(ctx context.Context) (map[string]string, error)
+	SaveHookTrust(ctx context.Context, sourceKey, digest string) error
+	DeleteHookTrust(ctx context.Context, sourceKey string) error
 	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
 	SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error
 	UpdatePluginMCPServerEnabled(ctx context.Context, pluginID, serverID string, enabled int, now string) error

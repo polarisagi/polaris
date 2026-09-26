@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,23 +20,47 @@ import (
 type fakeHooks struct {
 	mu          sync.Mutex
 	fired       []string
-	blockBefore map[string]string // event -> reason，非空表示 FireBefore 该 event 返回 blocked=true
+	blockBefore map[string]string // 事件名 → 阻断原因（UserPromptSubmit / SessionStart）
+	context     string            // UserPromptSubmit 附加上下文
+	stopReasons []string          // 依次返回的 Stop 续跑原因；耗尽后放行
 }
 
-func (h *fakeHooks) Fire(event string, env map[string]string) {
+func (h *fakeHooks) record(ev string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.fired = append(h.fired, event)
+	h.fired = append(h.fired, ev)
 }
 
-func (h *fakeHooks) FireBefore(event string, env map[string]string) (bool, string) {
-	if h.blockBefore != nil {
-		if reason, ok := h.blockBefore[event]; ok {
-			return true, reason
-		}
+func (h *fakeHooks) SessionStart(_ context.Context, _, _ string) HookVerdict {
+	h.record("SessionStart")
+	if r, ok := h.blockBefore["SessionStart"]; ok {
+		return HookVerdict{StopTurn: true, StopReason: r}
 	}
-	return false, ""
+	return HookVerdict{}
 }
+
+func (h *fakeHooks) UserPromptSubmit(_ context.Context, _, _ string) HookVerdict {
+	h.record("UserPromptSubmit")
+	if r, ok := h.blockBefore["UserPromptSubmit"]; ok {
+		return HookVerdict{Blocked: true, Reason: r}
+	}
+	return HookVerdict{AdditionalContext: h.context}
+}
+
+func (h *fakeHooks) Stop(_ context.Context, _, _ string, _ bool) HookVerdict {
+	h.record("Stop")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.stopReasons) == 0 {
+		return HookVerdict{}
+	}
+	r := h.stopReasons[0]
+	h.stopReasons = h.stopReasons[1:]
+	return HookVerdict{Blocked: true, Reason: r}
+}
+
+func (h *fakeHooks) StopFailure(context.Context, string, string) { h.record("StopFailure") }
+func (h *fakeHooks) SessionEnd(context.Context, string, string)  { h.record("SessionEnd") }
 
 type fakePersistence struct {
 	mu       sync.Mutex
@@ -182,16 +207,19 @@ type fakeAgentController struct {
 	interrupted bool
 	sendErr     error
 	history     []types.Message
+	intents     []string
 }
 
 func newFakeAgentController() *fakeAgentController {
 	return &fakeAgentController{events: make(chan types.AgentStreamEvent, 8)}
 }
 
-func (a *fakeAgentController) AgentID() string                          { return "fake-agent" }
-func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {}
-func (a *fakeAgentController) SetSpawnDepth(depth int)                  {}
-func (a *fakeAgentController) SetMemoryNamespace(ns string)             {}
+func (a *fakeAgentController) AgentID() string { return "fake-agent" }
+func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
+	a.intents = append(a.intents, intent.UnsafeContent())
+}
+func (a *fakeAgentController) SetSpawnDepth(depth int)      {}
+func (a *fakeAgentController) SetMemoryNamespace(ns string) {}
 func (a *fakeAgentController) SendIntent(trigger types.AgentTrigger) error {
 	return a.sendErr
 }
@@ -358,12 +386,12 @@ func TestRunTurn_Interactive_SlashShortCircuit(t *testing.T) {
 	}
 }
 
-// TestRunTurn_Interactive_HookBlocked 验证 message.before 拦截：不应调用
+// TestRunTurn_Interactive_HookBlocked 验证 UserPromptSubmit 拦截：不应调用
 // AgentPool.Acquire（fakeAgentPool.acquireErr 若被触发会直接暴露）。
 func TestRunTurn_Interactive_HookBlocked(t *testing.T) {
 	persistence := newFakePersistence()
 	pool := &fakeAgentPool{acquireErr: apperr.New(apperr.CodeInternal, "should not be called")}
-	hooks := &fakeHooks{blockBefore: map[string]string{"message.before": "policy violation"}}
+	hooks := &fakeHooks{blockBefore: map[string]string{"UserPromptSubmit": "policy violation"}}
 	orc := newTestOrchestrator(t, persistence, hooks, &fakeSlash{}, &fakeCompression{}, pool)
 	sink := &recordingSink{}
 
@@ -449,12 +477,12 @@ func TestRunTurn_Headless_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRunTurn_Headless_HookBlocked 验证 Headless 路径同样受 message.before
+// TestRunTurn_Headless_HookBlocked 验证 Headless 路径同样受 UserPromptSubmit
 // 拦截保护（收敛前 workflow/cron 两个入口完全没有这层防护）。
 func TestRunTurn_Headless_HookBlocked(t *testing.T) {
 	persistence := newFakePersistence()
 	pool := &fakeAgentPool{headlessErr: apperr.New(apperr.CodeInternal, "should not be called")}
-	hooks := &fakeHooks{blockBefore: map[string]string{"message.before": "blocked"}}
+	hooks := &fakeHooks{blockBefore: map[string]string{"UserPromptSubmit": "blocked"}}
 	orc := newTestOrchestrator(t, persistence, hooks, &fakeSlash{}, &fakeCompression{}, pool)
 	sink := NewBufferSink()
 
@@ -549,4 +577,34 @@ func TestRunTurn_Interactive_MapsApprovalRequest(t *testing.T) {
 		}
 	}
 	t.Error("缺少 status{type:approval_required} 事件")
+}
+
+// TestRunTurn_Interactive_StopHookContinuesAndInjectsContext Stop hook decision:block 让内核按原因
+// 续跑一轮；UserPromptSubmit 的附加上下文以 <hook-context> 块随任务意图下发。
+func TestRunTurn_Interactive_StopHookContinuesAndInjectsContext(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "draft"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "final"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	persistence := newFakePersistence()
+	hooks := &fakeHooks{context: "repo uses make", stopReasons: []string{"tests not run"}}
+	orc := newTestOrchestrator(t, persistence, hooks, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{ctrl: ctrl})
+
+	res, err := orc.RunTurn(context.Background(), Request{SessionID: "s1", Input: "fix it", Channel: "web"}, &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Reply != "final" {
+		t.Fatalf("reply = %q, want continuation result", res.Reply)
+	}
+	if len(ctrl.intents) != 2 || !strings.Contains(ctrl.intents[0], "<hook-context>\nrepo uses make") ||
+		!strings.Contains(ctrl.intents[1], "<stop-hook>\ntests not run") {
+		t.Fatalf("intents = %q", ctrl.intents)
+	}
+	if replies := persistence.savedAssistantReplies(); len(replies) != 2 || replies[0] != "draft" || replies[1] != "final" {
+		t.Fatalf("saved replies = %v", replies)
+	}
 }

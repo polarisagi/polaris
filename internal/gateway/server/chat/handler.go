@@ -120,6 +120,9 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 	prompt.ContextRefExpander = deps.ContextRefExpander
 
 	slashRouter := NewSlashCommandRouter(deps.CompressionService, deps.ChatRepo)
+	if deps.Hooks != nil {
+		slashRouter.hooks = deps.Hooks
+	}
 
 	h := &ChatHandler{
 		AgentPool:          deps.AgentPool,
@@ -164,8 +167,10 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 }
 
 type HookRunner interface {
-	Fire(event string, env map[string]string)
-	FireBefore(event string, env map[string]string) (blocked bool, reason string)
+	session.HookRunner
+	// PreCompact 阻断或 continue:false 时跳过本次压缩；trigger 为 manual / auto（两家语义）。
+	PreCompact(ctx context.Context, sessionID, trigger string) session.HookVerdict
+	PostCompact(ctx context.Context, sessionID, trigger string)
 }
 
 // GenerateReply / RunPostProcessors 已删除（2026-07-12，Batch 9 B-5/G-2 修复）：

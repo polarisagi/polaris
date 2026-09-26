@@ -152,18 +152,12 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 	// orchestrator_headless.go 顶部注释——本分支此前是 workflow/cron/webhook
 	// 三者中唯一完整接了 message.before/message.after/turn.stop/TouchSession
 	// 的"参照实现"，收敛后 workflow/cron 分支同步补齐这些能力。
-	// POLARIS_USER_ID/POLARIS_CHAT_ID 经 Request.Metadata 透传给 Hook 环境变量
-	// （Metadata 不覆盖通用键，见 types.go 字段注释）。
 	result, err := h.SessionOrch.RunTurn(ctx, session.Request{
 		SessionID: sessionKey,
 		Input:     msg.Text,
 		Channel:   channelType,
 		Headless:  true,
 		TitleHint: msg.Text,
-		Metadata: map[string]string{
-			"POLARIS_USER_ID": msg.UserID,
-			"POLARIS_CHAT_ID": msg.ChatID,
-		},
 	}, session.NewBufferSink())
 	if err != nil {
 		slog.Error("channel dispatch: session.RunTurn failed", "channel", channelID, "err", err)

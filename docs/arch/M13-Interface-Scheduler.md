@@ -358,6 +358,9 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/eval/run` | `handleEvalRun` |
 | GET | `/v1/export/backup` | `sysadminHandler.HandleExportBackup` |
 | GET | `/v1/export/trajectories` | `sysadminHandler.HandleExportTrajectories` |
+| GET | `/v1/hooks` | `pluginHandler.HandleListHooks` |
+| DELETE | `/v1/hooks/trust` | `pluginHandler.HandleRevokeHookTrust` |
+| POST | `/v1/hooks/trust` | `pluginHandler.HandleTrustHook` |
 | POST | `/v1/import/backup` | `sysadminHandler.HandleImportBackup` |
 | GET | `/v1/insights` | `sysadminHandler.HandleInsights` |
 | GET | `/v1/logs/stream` | `handleLogStream` |
@@ -430,7 +433,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 123 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 126 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]

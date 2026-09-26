@@ -31,6 +31,8 @@ type Notifier interface {
 type GatewayImpl struct {
 	store    protocol.Store
 	notifier Notifier
+	// hooks hooks.json 的 PermissionRequest / Notification（可为 nil）。
+	hooks PermissionHooks
 
 	// waiters 保存等待审批结果的 channel
 	mu      sync.Mutex
@@ -80,6 +82,15 @@ func NewGateway(store protocol.Store) *GatewayImpl {
 	}
 }
 
+// PermissionHooks 审批相关 hook 事件（consumer-side；实现为 action/hook.Runner）。
+type PermissionHooks interface {
+	FirePermissionRequest(ctx context.Context, toolName string, toolInput map[string]any) (denied bool, reason string)
+	FireNotification(ctx context.Context, message, notificationType string)
+}
+
+// SetPermissionHooks 注入 hooks.json 审批事件。
+func (g *GatewayImpl) SetPermissionHooks(h PermissionHooks) { g.hooks = h }
+
 // Prompt 挂起当前任务并请求人工审批。
 //
 //nolint:gocyclo,nestif // 原因：HITL 审批流程涉及高风险拦截、强制冷却与上下文超时控制等多个不可分割的网关级拦截逻辑。
@@ -89,6 +100,16 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	// 放行逻辑——本次只加观测。agent_id 维度传空串避免时间序列爆炸，
 	// 按 Agent 下钻走审计表（见 RecordHITLPrompt 注释）。
 	metrics.RecordHITLPrompt(ctx, p.CheckpointType, "")
+
+	// PermissionRequest hook：veto-only——hook 可以直接拒绝，但不能代替人工批准
+	// （审批是安全边界，hook 的 allow 不得绕过，HE-7；ADR-0103 决策六）。
+	if g.hooks != nil {
+		if denied, reason := g.hooks.FirePermissionRequest(ctx, p.CheckpointType, map[string]any{
+			"checkpoint_id": p.ID, "prompt": p.PromptText, "risk_level": p.RiskLevel}); denied {
+			metrics.RecordHITLDecision(ctx, p.CheckpointType, "rejected", "permission_request_hook")
+			return &types.HITLResponse{Approved: false, Reason: "denied by PermissionRequest hook: " + reason}, nil
+		}
+	}
 
 	// GD-14-004 自适应降级：同一 Agent 对同类低风险 checkpoint 连续获得人工
 	// 批准达阈值后，降级为"通知"而非阻塞式审批，缓解审批疲劳。
@@ -136,6 +157,12 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	}
 	if err := g.store.Put(ctx, key, data); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "hitl_gateway: put failed", err)
+	}
+	if g.hooks != nil {
+		hooks, text := g.hooks, p.PromptText
+		concurrent.SafeGo(context.WithoutCancel(ctx), "automation.hitl.notification_hook", func(ctx context.Context) {
+			hooks.FireNotification(ctx, text, "permission_prompt")
+		})
 	}
 	if g.notifier != nil {
 		concurrent.SafeGo(context.Background(), "automation.hitl.notify", func(ctx context.Context) {
@@ -350,9 +377,15 @@ func (g *GatewayImpl) Pending(ctx context.Context) ([]types.HITLPrompt, error) {
 	var prompts []types.HITLPrompt
 	for iter.Next() {
 		var p types.HITLPrompt
-		if err := json.Unmarshal(iter.Value(), &p); err == nil {
-			prompts = append(prompts, p)
+		if err := json.Unmarshal(iter.Value(), &p); err != nil {
+			// L3：单条损坏的待审记录不应让其余待审请求不可见；留痕。
+			slog.WarnContext(ctx, "hitl_gateway: corrupt pending prompt skipped", "key", string(iter.Key()), "err", err)
+			continue
 		}
+		prompts = append(prompts, p)
+	}
+	if err := iter.Err(); err != nil {
+		return prompts, apperr.Wrap(apperr.CodeInternal, "GatewayImpl.Pending: iterate", err)
 	}
 	return prompts, nil
 }

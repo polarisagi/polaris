@@ -223,6 +223,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 插件 userConfig（ADR-0103 决策三；敏感值加密存储、只回报 is_set）
 	mux.HandleFunc("GET /v1/plugins/{id}/config", s.pluginHandler.HandleGetPluginConfig)
 	mux.HandleFunc("PUT /v1/plugins/{id}/config", s.pluginHandler.HandleUpdatePluginConfig)
+	// hooks.json 来源审阅与信任（安装 ≠ 信任；ADR-0103 决策六）
+	mux.HandleFunc("GET /v1/hooks", s.pluginHandler.HandleListHooks)
+	mux.HandleFunc("POST /v1/hooks/trust", s.pluginHandler.HandleTrustHook)
+	mux.HandleFunc("DELETE /v1/hooks/trust", s.pluginHandler.HandleRevokeHookTrust)
 
 	// 插件市场 API
 	mux.HandleFunc("GET /v1/plugins/marketplaces", s.pluginHandler.HandleListMarketplaces)

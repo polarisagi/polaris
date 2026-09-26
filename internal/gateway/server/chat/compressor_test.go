@@ -1,8 +1,6 @@
 package chat
 
 import (
-	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
-
 	"context"
 	"database/sql"
 	"strings"
@@ -11,6 +9,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -58,7 +57,7 @@ func TestCompressor_Compact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCompressionService(db, repo.NewSQLiteChatRepository(db), sysadmin.NewHookRunner(""), config.CompressorConfig{
+	c := NewCompressionService(db, repo.NewSQLiteChatRepository(db), session.NewStandardHooks(), config.CompressorConfig{
 		ContextWindow:  1000,
 		AutoCompactPct: 50, // threshold 500 tokens = 2000 chars
 	}, nil, 0.0)

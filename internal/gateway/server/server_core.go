@@ -3,6 +3,7 @@ package server
 import (
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/action/hook"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -15,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 
@@ -78,7 +80,7 @@ type Server struct {
 	registry       protocol.LLMRegistry     // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
 	httpClient     *http.Client             // 复用 SafeHTTPClient
 	transcriptDir  string                   // per-session JSONL transcript 目录
-	hooks          *sysadmin.HookRunner     // Shell Script Hooks（End-User 扩展点）
+	hooks          *session.StandardHooks   // hooks.json 会话事件适配（ADR-0103 决策六）
 	compressor     *chat.CompressionService // 上下文超长自动压缩
 	channelMgr     ChannelStarter           // 所有聊天平台 poller 管理（接口）
 	mcpMgr         MCPManager               // MCP Server 连接管理（接口）
@@ -368,6 +370,14 @@ func (s *Server) SetPluginConfig(svc plugin.PluginConfigManager) {
 func (s *Server) SetUserSkills(reg protocol.SkillRegistry, exec protocol.SkillExecutor) {
 	if s.chatHandler != nil && s.chatHandler.SlashRouter != nil {
 		s.chatHandler.SlashRouter.SetSkills(reg, exec)
+	}
+}
+
+// SetHookRunner 注入 hooks.json 引擎，启用会话与压缩事件（SessionStart / UserPromptSubmit / Stop / PreCompact 等）。
+func (s *Server) SetHookRunner(r *hook.Runner) {
+	s.hooks.SetRunner(r)
+	if s.pluginHandler != nil {
+		s.pluginHandler.HookRunner = r
 	}
 }
 

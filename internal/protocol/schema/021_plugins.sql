@@ -64,3 +64,15 @@ CREATE TABLE IF NOT EXISTS plugin_user_config (
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     PRIMARY KEY (plugin_id, scope, key)
 );
+
+-- ============================================================================
+-- hook_trust: hooks.json 来源的审阅信任（ADR-0103 决策六：安装 ≠ 信任）
+-- ============================================================================
+-- source_key: plugin:<plugin_id>:<来源文件> | project:<hooks.json 绝对路径>。用户级 hooks.json
+-- 由本机管理员维护，视为已信任，不入本表。信任绑定到定义内容哈希：定义变更后哈希不匹配，
+-- 来源回到待审状态，不执行。插件卸载时随 plugin_id 前缀删除。
+CREATE TABLE IF NOT EXISTS hook_trust (
+    source_key  TEXT    PRIMARY KEY,
+    digest      TEXT    NOT NULL,
+    trusted_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);

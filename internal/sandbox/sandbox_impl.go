@@ -99,9 +99,8 @@ type SandboxSpec struct {
 	SideEffects  []types.SideEffect
 	ScriptPath   string   // TypeScript/Python 脚本路径（L3 Container 执行时使用）
 	ScriptBytes  []byte   // 脚本源码（测试或直接下发时使用）
-	Command      string   // 任意 shell 命令字符串（bash -c 语义），当前仅 Hook 引擎使用；与 ScriptPath 互斥，ScriptPath 优先
 	AllowedPaths []string // 文件系统白名单
-	ExtraEnv     []string // 追加环境变量（叠加在 containerBaseEnv() 之后），当前仅 Hook 引擎传 HOOK_INPUT_JSON 使用
+	ExtraEnv     []string // 追加环境变量（叠加在 containerBaseEnv() 之后）
 	CPUQuotaMs   int      // 0 = 默认 5000ms
 	IOBudget     int64    // 0 = 默认 8MB
 	MaxCalls     int      // 0 = 默认 10000

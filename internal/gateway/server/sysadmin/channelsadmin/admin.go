@@ -28,14 +28,6 @@ type ChatDispatcher interface {
 	SampleAndScoreReply(sessionID, query, response string)
 }
 
-// HookFirer channelsadmin 消费方视角的最小 Hook 触发接口
-// （sysadmin.HookRunner 的子集，结构性满足，避免 channelsadmin → sysadmin 的
-// 反向 import 造成包循环）。
-type HookFirer interface {
-	Fire(event string, env map[string]string)
-	FireBefore(event string, env map[string]string) (blocked bool, reason string)
-}
-
 // ChannelMgr channelsadmin 消费方视角的最小平台管理接口。
 type ChannelMgr interface {
 	protocol.ChannelFacade
@@ -58,13 +50,12 @@ type ChannelsAdmin struct {
 	Registry         protocol.LLMRegistry
 	Chat             ChatDispatcher
 	AgentPool        protocol.AgentPool
-	Hooks            HookFirer
 	Cron             WebhookAutomationTrigger
 	TemplateCacheMap *sync.Map
 	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008），
 	// dispatchChannelMessage 经此驱动 Headless 轮次，收敛此前与
 	// workflowadmin/cronadmin 三处几乎相同又不完全一致的编排实现（本分支此前
-	// 是三者中唯一同时接了 message.before hook 与 TouchSession 的"参照实现"，
+	// 是三者中唯一同时接了 UserPromptSubmit（原 message.before）hook 与 TouchSession 的"参照实现"，
 	// 见 webhook_receive.go dispatchChannelMessage 注释）。
 	SessionOrch session.Orchestrator
 
@@ -79,7 +70,6 @@ func NewChannelsAdmin(
 	channelMgr ChannelMgr,
 	registry protocol.LLMRegistry,
 	chat ChatDispatcher,
-	hooks HookFirer,
 	cron WebhookAutomationTrigger,
 	agentPool protocol.AgentPool,
 	sessionOrch session.Orchestrator,
@@ -93,7 +83,6 @@ func NewChannelsAdmin(
 		Registry:         registry,
 		Chat:             chat,
 		AgentPool:        agentPool,
-		Hooks:            hooks,
 		Cron:             cron,
 		TemplateCacheMap: &sync.Map{},
 		SessionOrch:      sessionOrch,

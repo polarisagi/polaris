@@ -113,15 +113,6 @@ type Request struct {
 	// medium/high），后端未消费。两字段随 wire 协议保留。
 	RunID           string
 	ReasoningEffort string
-	// Metadata 额外注入 message.before/message.after/turn.stop 等 Hook 环境变量
-	// 的调用方专属字段（如 Webhook 的 POLARIS_USER_ID/POLARIS_CHAT_ID），随
-	// SessionID/Channel 等通用字段一起合入 Fire/FireBefore 的 env map（通用键
-	// 优先，Metadata 不能覆盖 POLARIS_MESSAGE/POLARIS_SESSION_ID/
-	// POLARIS_CHANNEL/POLARIS_REPLY）。Cron/Workflow 无对应概念时留空即可，
-	// 三条 Headless 调用方此前 message.after/turn.stop hook 覆盖不一致（仅
-	// Webhook 分支接了），A-03 Step5 起统一由 runHeadless 触发（见
-	// orchestrator_headless.go）。
-	Metadata map[string]string
 }
 
 // Result 一轮对话的结果。
@@ -156,10 +147,27 @@ type MemoryFacade interface {
 	RenderTaskCanvas() string
 }
 
-// HookRunner 会话编排对 Hook 系统的消费端接口。
+// HookRunner 会话编排对 hooks.json 引擎的消费端接口（ADR-0103 决策六；两家标准事件）。
+// 取代原 $DATA/hooks/<event> 私有脚本事件（session.new / message.before / turn.stop 等）。
 type HookRunner interface {
-	Fire(event string, env map[string]string)
-	FireBefore(event string, env map[string]string) (blocked bool, reason string)
+	SessionStart(ctx context.Context, sessionID, source string) HookVerdict
+	UserPromptSubmit(ctx context.Context, sessionID, prompt string) HookVerdict
+	// Stop Blocked=true 表示 hook 要求继续工作（Reason 作为续跑指令）；stopHookActive
+	// 告知 hook 本回合已因 Stop hook 续跑过，防止无限续跑（两家语义）。
+	Stop(ctx context.Context, sessionID, lastReply string, stopHookActive bool) HookVerdict
+	StopFailure(ctx context.Context, sessionID, reason string)
+	SessionEnd(ctx context.Context, sessionID, reason string)
+}
+
+// HookVerdict 标准事件分发结果的会话视图。AdditionalContext 来自 hook 输出，属不可信内容
+// （TaintHigh），只能以用户侧上下文进入模型，不得进入系统提示词不可变区。
+type HookVerdict struct {
+	Blocked           bool
+	Reason            string
+	AdditionalContext string
+	// StopTurn hook 输出 continue:false，要求整个回合终止。
+	StopTurn   bool
+	StopReason string
 }
 
 // Persistence 会话编排对消息/会话持久化的消费端接口。
