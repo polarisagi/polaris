@@ -15,7 +15,7 @@ import (
 
 // mrtrServer 是按方法名 + 出现序号（同方法第几次调用）应答的 Streamable HTTP 假服务器，
 // 记录每次调用的 JSON-RPC id（scriptedServer 按方法名覆盖存储，无法区分同一方法内的
-// 多次调用，这里需要区分第一次/第二次 tools/call 才能验证 MRTR 的多轮往返）。
+// 多次调用，这里需要区分第一次/第二次 methodToolsCall 才能验证 MRTR 的多轮往返）。
 type mrtrServer struct {
 	mu      sync.Mutex
 	calls   map[string]int
@@ -97,7 +97,7 @@ func mrtrClient(srv *mrtrServer) *MCPClient {
 	return c
 }
 
-// TestMRTR_ElicitationRoundTrip 覆盖 tools/call 第一次返回 input_required（含
+// TestMRTR_ElicitationRoundTrip 覆盖 methodToolsCall 第一次返回 input_required（含
 // elicitation/create 表单请求 + requestState），客户端调用统一输入处理器（经
 // MCPManager.makeInputHandler → Elicitor）得到 inputResponses，连同原样回传的
 // requestState 重试；第二次校验收到的内容后返回 complete。断言两次 JSON-RPC id
@@ -206,7 +206,7 @@ func TestMRTR_UndeclaredCapability(t *testing.T) {
 	}
 }
 
-// TestMRTR_HeaderMismatchRetry tools/call 收到 errCodeHeaderMismatch 时必须先
+// TestMRTR_HeaderMismatchRetry methodToolsCall 收到 errCodeHeaderMismatch 时必须先
 // ListTools 刷新 toolHeaders 缓存，再重试一次（2026-07-28 streamable-http SHOULD）。
 func TestMRTR_HeaderMismatchRetry(t *testing.T) {
 	srv := newMRTRServer(func(method string, seq int, id int64, _ map[string]any) string {

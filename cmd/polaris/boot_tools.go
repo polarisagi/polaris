@@ -36,6 +36,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/extension/native"
 	"github.com/polarisagi/polaris/internal/extension/skill"
+	"github.com/polarisagi/polaris/internal/gateway/elicitation"
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
 	"github.com/polarisagi/polaris/internal/memory"
@@ -108,6 +109,9 @@ type ToolBundle struct {
 	// （sandbox.l4_enabled=false 或 hwTier<2，Tier-0/1 默认状态）。main.go 优雅
 	// 关闭时需对非 nil 值调用 Shutdown() 终止所有存活会话进程。
 	PersistentSandbox *sandbox.PersistentSandbox
+	// ElicitationBroker ADR-0103 决策八：MCP elicitation 网关侧 broker，boot_server.go 经
+	// httpServer.SetElicitationBroker 注入，启用 /v1/elicitations 系列 API。
+	ElicitationBroker *elicitation.Broker
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -254,6 +258,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	mcpMgr.SetToolRegistrar(toolReg)
 	mcpMgr.SetCatalog(memoryCatalog)
 	mcpMgr.SetEnvelope(envelope)
+
+	// ADR-0103 决策八：MCP elicitation 网关侧 broker（hooks 优先程序化作答，否则转人工交互）。
+	// 必须在 main.go 调用 mcpMgr.RestoreServersFromDB 之前完成 SetElicitor——
+	// 已连接的客户端在 initialize 时已固化 clientCapabilities，之后再注入对其无效
+	// （见 internal/extension/mcp/elicitation.go SetElicitor 注释）。
+	elicitationBroker := elicitation.NewBroker(hookRunner, 0)
+	mcpMgr.SetElicitor(elicitationBroker)
 
 	mktClient, _ := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTPClient)
 
@@ -716,6 +727,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		VFSWorkspace:          vfsWM,
 		ExemptionVault:        exemptionVault,
 		PersistentSandbox:     persistentSandbox,
+		ElicitationBroker:     elicitationBroker,
 	}, nil
 }
 

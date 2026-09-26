@@ -294,6 +294,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetUserSkills(tb.SkillRegistry, tb.SkillExecutor)
 	httpServer.SetHookRunner(tb.HookRunner)
+	httpServer.SetElicitationBroker(tb.ElicitationBroker)
 	httpServer.SetAgentDefinitions(tb.AgentDefs)
 	if ab.Subagents != nil {
 		httpServer.SetSubagentRunner(ab.Subagents)

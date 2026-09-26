@@ -138,7 +138,7 @@ func (c *MCPClient) setRequestHeaders(req *http.Request, rpc mcpRPCRequest) {
 	req.Header.Set("Mcp-Method", rpc.Method)
 	params, _ := rpc.Params.(map[string]any)
 	switch rpc.Method {
-	case "tools/call", "prompts/get":
+	case methodToolsCall, "prompts/get":
 		if name, ok := params["name"].(string); ok {
 			req.Header.Set("Mcp-Name", encodeHeaderValue(name))
 		}
@@ -147,7 +147,7 @@ func (c *MCPClient) setRequestHeaders(req *http.Request, rpc mcpRPCRequest) {
 			req.Header.Set("Mcp-Name", encodeHeaderValue(uri))
 		}
 	}
-	if rpc.Method == "tools/call" {
+	if rpc.Method == methodToolsCall {
 		c.setParamHeaders(req, params)
 	}
 }
@@ -167,7 +167,7 @@ func (c *MCPClient) setParamHeaders(req *http.Request, params map[string]any) {
 }
 
 // filterHeaderAnnotatedTools Streamable HTTP 客户端必须排除 x-mcp-header 标注无效的工具，并缓存
-// 有效标注供 tools/call 使用；其他传输可忽略标注。
+// 有效标注供 methodToolsCall 使用；其他传输可忽略标注。
 func (c *MCPClient) filterHeaderAnnotatedTools(tools []MCPTool) []MCPTool {
 	if c.cfg.Transport != MCPStreamableHTTP {
 		return tools

@@ -79,7 +79,7 @@ type MCPClient struct {
 	// era 协议纪元（protocolEra）；legacySession 旧纪元 Streamable HTTP 的 Mcp-Session-Id。
 	era           atomic.Int32
 	legacySession atomic.Pointer[string]
-	// toolHeaders 工具名 → x-mcp-header 标注（Streamable HTTP 新纪元 tools/call 镜像到 Mcp-Param-*）。
+	// toolHeaders 工具名 → x-mcp-header 标注（Streamable HTTP 新纪元 methodToolsCall 镜像到 Mcp-Param-*）。
 	toolHeaders sync.Map
 }
 

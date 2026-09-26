@@ -5,6 +5,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/action/hook"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
+	"github.com/polarisagi/polaris/internal/gateway/elicitation"
 	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 
@@ -132,6 +133,9 @@ type Server struct {
 	sysadminHandler   *sysadmin.SysAdminHandler
 	codeActEngine     CodeActEngine // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
 	a2aCfg            config.A2AConfig
+	// elicitationBroker MCP elicitation 网关侧 broker（ADR-0103 决策八）：nil 表示未接入
+	// hooks.json/HTTP 交互能力，handleGetElicitations/handleRespondElicitation 均降级 501。
+	elicitationBroker *elicitation.Broker
 }
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
@@ -380,6 +384,10 @@ func (s *Server) SetHookRunner(r *hook.Runner) {
 		s.pluginHandler.HookRunner = r
 	}
 }
+
+// SetElicitationBroker 注入 MCP elicitation 网关侧 broker，启用
+// GET /v1/elicitations 与 POST /v1/elicitations/{id}。
+func (s *Server) SetElicitationBroker(b *elicitation.Broker) { s.elicitationBroker = b }
 
 // SetSubagentRunner 注入子 Agent 执行器，启用用户调用 context: fork 技能（ADR-0103 决策五）。
 func (s *Server) SetSubagentRunner(r chat.SubagentRunner) {

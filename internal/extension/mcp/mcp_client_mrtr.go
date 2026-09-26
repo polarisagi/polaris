@@ -9,10 +9,13 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+// methodToolsCall MCP 工具调用方法名（MRTR / Tasks / x-mcp-header 规则均以它为适用范围）。
+const methodToolsCall = "tools/call"
+
 // maxMRTRRounds MRTR（Multi Round-Trip Requests）单个客户端请求最多允许的往返轮数
 // （2026-07-28 basic/patterns/mrtr）。规范未规定上限，服务器理论上可以无限次要求更多
 // 输入（"Servers MUST NOT assume that clients will fulfill..."），客户端必须自行设界，
-// 否则一个恶意/故障服务器能让单次 tools/call 无限挂起。
+// 否则一个恶意/故障服务器能让单次 methodToolsCall 无限挂起。
 const maxMRTRRounds = 8
 
 // mrtrInputRequest InputRequiredResult.inputRequests 的单个条目（server 分配的字符串
@@ -23,7 +26,7 @@ type mrtrInputRequest struct {
 	Params json.RawMessage `json:"params"`
 }
 
-// mrtrResult tools/call / resources/read / prompts/get 结果信封的公共前缀。旧纪元结果
+// mrtrResult methodToolsCall / resources/read / prompts/get 结果信封的公共前缀。旧纪元结果
 // 没有 resultType 字段，零值走 complete 分支（规范要求：缺省视为 complete）。
 type mrtrResult struct {
 	ResultType    string                      `json:"resultType"`
@@ -31,7 +34,7 @@ type mrtrResult struct {
 	RequestState  json.RawMessage             `json:"requestState,omitempty"`
 }
 
-// request 发起一次可能触发 MRTR 的客户端请求（仅 tools/call / resources/read /
+// request 发起一次可能触发 MRTR 的客户端请求（仅 methodToolsCall / resources/read /
 // prompts/get 三种受支持，mrtr §Supported Requests）。新纪元下解析 resultType：
 // 收到 "input_required" 时构造 inputResponses 并携带 requestState 原样重试，直到
 // 服务器返回最终结果或轮数耗尽。旧纪元没有 MRTR，一次往返即完成。
@@ -62,12 +65,12 @@ func (c *MCPClient) request(ctx context.Context, method string, params map[strin
 		fmt.Sprintf("mcp: %s exceeded %d MRTR rounds without completing", method, maxMRTRRounds))
 }
 
-// callWithHeaderMismatchRetry tools/call 收到 errCodeHeaderMismatch 时（Streamable HTTP
+// callWithHeaderMismatchRetry methodToolsCall 收到 errCodeHeaderMismatch 时（Streamable HTTP
 // 的 x-mcp-header 标注与服务器当前 tools/list 不一致）刷新 toolHeaders 缓存后重试一次
 // （2026-07-28 streamable-http §Custom Headers，SHOULD）；其余请求/错误原样透传。
 func (c *MCPClient) callWithHeaderMismatchRetry(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
 	result, err := c.call(ctx, method, params)
-	if err == nil || method != "tools/call" {
+	if err == nil || method != methodToolsCall {
 		return result, err
 	}
 	var rpcErr *RPCError

@@ -172,10 +172,10 @@ func (c *MCPClient) ResourcesRead(ctx context.Context, uri string) ([]MCPResourc
 }
 
 // CallTool 调用指定工具并返回文本和图片结果。
-// tools/call 是 MRTR §Supported Requests 之一，经 c.request 处理可能的 InputRequiredResult
+// methodToolsCall 是 MRTR §Supported Requests 之一，经 c.request 处理可能的 InputRequiredResult
 // （elicitation/sampling 多轮往返）与 HeaderMismatch 重试；resultType 字段不影响下方解析。
 func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, error) {
-	result, err := c.request(ctx, "tools/call", map[string]any{
+	result, err := c.request(ctx, methodToolsCall, map[string]any{
 		"name":      name,
 		"arguments": arguments,
 	})
@@ -203,7 +203,7 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 // 污点解码作用在 c.request 完成全部 MRTR 轮次后的最终结果上，中间轮次的
 // inputRequests/inputResponses 不参与污点计算。
 func (c *MCPClient) CallToolTainted(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, types.TaintLevel, error) {
-	result, err := c.request(ctx, "tools/call", map[string]any{
+	result, err := c.request(ctx, methodToolsCall, map[string]any{
 		"name":      name,
 		"arguments": arguments,
 	})

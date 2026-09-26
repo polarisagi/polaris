@@ -27,7 +27,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/agent/{taskID}/interrupt", s.handleAgentInterrupt)      // inv_global_08 <200ms
 	mux.HandleFunc("GET /v1/agent/mmd-canvas", s.sysadminHandler.HandleGetMMDCanvas) // M05 §11.3 TaskMermaidCanvas 只读展示
 	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
-	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
+	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval)           // /v1/approvals/{id}/resolve
+	mux.HandleFunc("GET /v1/elicitations", s.handleGetElicitations)          // MCP elicitation 待办列表（ADR-0103 决策八）
+	mux.HandleFunc("POST /v1/elicitations/{id}", s.handleRespondElicitation) // 用户作答
 
 	// A2A v0.3 Endpoints
 	mux.HandleFunc("GET /.well-known/agent-card.json", a2a.AgentCardHandler(s.a2aCfg))
