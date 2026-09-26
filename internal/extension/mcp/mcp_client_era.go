@@ -104,8 +104,14 @@ func (c *MCPClient) protocolVersion() string {
 func (c *MCPClient) withMeta(params any, protoVersion string) map[string]any {
 	m := map[string]any{}
 	if params != nil {
-		if raw, err := json.Marshal(params); err == nil {
-			_ = json.Unmarshal(raw, &m) //nolint:errcheck // 非对象参数无法携带 _meta，保持空映射
+		raw, err := json.Marshal(params)
+		if err == nil {
+			err = json.Unmarshal(raw, &m)
+		}
+		if err != nil {
+			// 非对象参数无法携带 _meta：按空参数发送并留痕（请求会被服务器按缺参拒绝，而非静默错参）。
+			slog.Warn("mcp: request params are not an object, sending _meta only", "server", c.cfg.ServerName, "err", err)
+			m = map[string]any{}
 		}
 	}
 	meta, _ := m["_meta"].(map[string]any)

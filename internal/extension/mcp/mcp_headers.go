@@ -176,7 +176,10 @@ func (c *MCPClient) filterHeaderAnnotatedTools(tools []MCPTool) []MCPTool {
 	for _, t := range tools {
 		var schema any
 		if len(t.InputSchema) > 0 {
-			_ = json.Unmarshal(t.InputSchema, &schema) //nolint:errcheck // 非法 schema 由 registerTools 另行处理
+			if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+				slog.Warn("mcp: tool rejected, invalid inputSchema", "server", c.cfg.ServerName, "tool", t.Name, "err", err)
+				continue
+			}
 		}
 		params, ok := toolHeaderParams(schema)
 		if !ok {
