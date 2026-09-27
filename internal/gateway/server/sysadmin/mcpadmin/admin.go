@@ -24,6 +24,9 @@ type MCPManager interface {
 	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
 	Remove(id string)
 	ApproveNetworkAccess(ctx context.Context, id string, extRepo protocol.ExtensionRepository, dataDir string, approved bool) error
+	// BeginAuthorization 发起一次 MCP OAuth 授权流程，返回浏览器需跳转的授权 URL；
+	// stdio 服务器返回 apperr.CodeInvalidInput（HandleAuthorizeMCPServer 借此映射 400）。
+	BeginAuthorization(ctx context.Context, serverID, redirectBase string) (string, error)
 }
 
 // SystemRepo mcpadmin 消费方视角的最小系统偏好读取接口。
@@ -31,7 +34,14 @@ type SystemRepo interface {
 	ListPreferences(ctx context.Context) (map[string]string, error)
 }
 
-// MCPAdmin 承载 MCP Server CRUD + 连接测试 + 网络访问审批。
+// CredentialCipher mcpadmin 消费方视角的最小加密接口，仅用于 PUT .../oauth 预注册
+// client_secret 落库前加密。解密留给 internal/extension/mcp 包自身在令牌交换/刷新时
+// 使用——网关侧只写不读明文，因此不声明 Decrypt（HE-3：接口在调用方按需定义）。
+type CredentialCipher interface {
+	Encrypt(plaintext string) (string, error)
+}
+
+// MCPAdmin 承载 MCP Server CRUD + 连接测试 + 网络访问审批 + OAuth 网关接线。
 type MCPAdmin struct {
 	DB         protocol.SQLQuerier
 	MCPMgr     MCPManager
@@ -39,6 +49,9 @@ type MCPAdmin struct {
 	InstallMgr InstallMgr
 	ExtRepo    protocol.ExtensionRepository
 	DataDir    string
+	// Cipher 加密 PUT .../oauth 预注册的 client_secret；nil 时该写入 fail-closed 拒绝
+	// （不落明文，与 internal/extension/mcp 包令牌落库的 fail-closed 语义一致）。
+	Cipher CredentialCipher
 
 	ClearToolSchemaCache func()
 }
@@ -52,6 +65,7 @@ func NewMCPAdmin(
 	extRepo protocol.ExtensionRepository,
 	dataDir string,
 	clearToolSchemaCache func(),
+	cipher CredentialCipher,
 ) *MCPAdmin {
 	return &MCPAdmin{
 		DB:                   db,
@@ -61,5 +75,6 @@ func NewMCPAdmin(
 		ExtRepo:              extRepo,
 		DataDir:              dataDir,
 		ClearToolSchemaCache: clearToolSchemaCache,
+		Cipher:               cipher,
 	}
 }

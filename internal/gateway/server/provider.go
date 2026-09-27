@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/url"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -55,6 +56,13 @@ type MCPManager interface {
 	IsPluginConnected(pluginID string) bool
 	// SetOnToolsChanged 注册工具集变更回调（插件 MCP 连接完成时触发缓存失效）。
 	SetOnToolsChanged(fn func())
+	// BeginAuthorization 发起一次 MCP OAuth 授权流程，返回浏览器需跳转的授权 URL
+	// （basic_authorization.md §Authorization Flow Steps，8e-2 网关接线）。
+	BeginAuthorization(ctx context.Context, serverID, redirectBase string) (string, error)
+	// CompleteAuthorization 处理授权服务器回调：一次性 state 校验、iss 校验、换取令牌、
+	// 加密落库、重连。返回值第一个字段始终是 ServerID，供 GET /oauth/mcp/callback
+	// 在失败时仍能定位是哪个服务器（但不得回显 err 本身给浏览器，见该 handler 注释）。
+	CompleteAuthorization(ctx context.Context, query url.Values) (string, error)
 }
 
 // ExtensionInstaller server 包对扩展安装管理器的消费端接口（超集，覆盖所有子 handler 调用点）。

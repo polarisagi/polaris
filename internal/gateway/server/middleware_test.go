@@ -136,6 +136,18 @@ func TestHealthPaths(t *testing.T) {
 	}
 }
 
+// TestOAuthPublicGetPathSet 钉死精确白名单的两条路径，防止误加/误删。
+func TestOAuthPublicGetPathSet(t *testing.T) {
+	for _, p := range []string{"/oauth/mcp/callback", "/oauth/client-metadata.json"} {
+		if _, ok := oauthPublicGetPathSet[p]; !ok {
+			t.Errorf("expected %s in oauthPublicGetPathSet", p)
+		}
+	}
+	if len(oauthPublicGetPathSet) != 2 {
+		t.Errorf("oauthPublicGetPathSet 应恰好两条，实际 %d", len(oauthPublicGetPathSet))
+	}
+}
+
 // TestCheckAuth 覆盖 ADR-0096 决策五的五条分支及其负向面。
 //
 // 这批用例钉死的是"取消回环豁免"这件事本身：在它落地之前，下面「本机无凭证写操作」
@@ -166,6 +178,41 @@ func TestCheckAuth(t *testing.T) {
 		r := httptest.NewRequest("GET", "/index.html", nil)
 		if _, _, ok := call(newServer(), r, "1.1.1.1", ""); !ok {
 			t.Error("静态外壳应免鉴权")
+		}
+	})
+
+	// 8e-2：/oauth 两条 GET 路径靠精确白名单豁免（不是 isStaticShellRequest 的隐式
+	// 放行），且必须只豁免 GET——POST 到同一路径仍须鉴权。
+	t.Run("GET /oauth/mcp/callback 免鉴权", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/oauth/mcp/callback?state=x", nil)
+		if _, _, ok := call(newServer(), r, "8.8.8.8", "secret"); !ok {
+			t.Error("GET /oauth/mcp/callback 应免鉴权（安全边界是一次性 state，不是路径隐式豁免）")
+		}
+	})
+
+	t.Run("GET /oauth/client-metadata.json 免鉴权", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/oauth/client-metadata.json", nil)
+		if _, _, ok := call(newServer(), r, "8.8.8.8", "secret"); !ok {
+			t.Error("GET /oauth/client-metadata.json 应免鉴权（CIMD 是公开文档）")
+		}
+	})
+
+	t.Run("POST /oauth/mcp/callback 不被豁免", func(t *testing.T) {
+		r := httptest.NewRequest("POST", "/oauth/mcp/callback", nil)
+		r.RemoteAddr = "8.8.8.8:1234"
+		w, _, ok := call(newServer(), r, "8.8.8.8", "secret")
+		if ok {
+			t.Error("POST /oauth/mcp/callback 不得被鉴权豁免放行")
+		}
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("应为 401，实际 %d", w.Code)
+		}
+	})
+
+	t.Run("其它非 /v1 静态路径不受影响", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/index.html", nil)
+		if _, _, ok := call(newServer(), r, "8.8.8.8", "secret"); !ok {
+			t.Error("静态外壳豁免不应被 8e-2 改动影响")
 		}
 	})
 

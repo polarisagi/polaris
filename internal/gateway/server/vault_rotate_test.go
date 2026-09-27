@@ -9,6 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -23,14 +24,83 @@ func newVaultRotateTestDB(t *testing.T) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
-	ddl, err := schema.FS.ReadFile("011_providers.sql")
+	// 轮换覆盖全部 Vault 密文列（vaultCipherColumns），所涉表都要建。
+	for _, f := range []string{"011_providers.sql", "015_mcp_servers.sql", "021_plugins.sql", "040_mcp_oauth.sql"} {
+		ddl, err := schema.FS.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(ddl)); err != nil {
+			t.Fatalf("apply %s: %v", f, err)
+		}
+	}
+	return db
+}
+
+// TestNewVaultMasterKeyRotator_ReencryptsExtensionSecrets 插件敏感配置、MCP OAuth 令牌/客户端密钥、
+// mcp_servers.oauth 内嵌预注册密钥在轮换后都能用新 key 解密（此前轮换只覆盖 providers）。
+func TestNewVaultMasterKeyRotator_ReencryptsExtensionSecrets(t *testing.T) {
+	dataDir := t.TempDir()
+	oldVault, err := credential.NewVaultInDir(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(string(ddl)); err != nil {
-		t.Fatalf("apply 011_providers.sql: %v", err)
+	db := newVaultRotateTestDB(t)
+	enc := func(s string) string {
+		out, err := oldVault.Encrypt(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
-	return db
+	mustExec := func(q string, args ...any) {
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO plugin_user_config(plugin_id, scope, key, value, sensitive) VALUES('pl_1','','token',?,1)`, enc(`"plugin-secret"`))
+	mustExec(`INSERT INTO plugin_user_config(plugin_id, scope, key, value, sensitive) VALUES('pl_1','','region','"eu"',0)`)
+	mustExec(`INSERT INTO mcp_oauth_clients(issuer, redirect_uri, client_id, client_secret_enc) VALUES('https://as','https://cb','c1',?)`, enc("dcr-secret"))
+	mustExec(`INSERT INTO mcp_oauth_tokens(server_id, issuer, access_token_enc, refresh_token_enc) VALUES('s1','https://as',?,?)`, enc("access"), enc("refresh"))
+	mustExec(`INSERT INTO mcp_servers(id, name, oauth) VALUES('s1','s1',?)`, `{"client_id":"pre","client_secret_enc":"`+enc("pre-secret")+`"}`)
+
+	if _, err := newVaultMasterKeyRotator(db, oldVault, dataDir)(context.Background()); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	newVault, err := credential.NewVaultInDir(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(q, want string) {
+		t.Helper()
+		var ct string
+		if err := db.QueryRow(q).Scan(&ct); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		got, err := newVault.Decrypt(ct)
+		if err != nil || got != want {
+			t.Errorf("%s: want %q after rotation, got %q (err %v)", q, want, got, err)
+		}
+	}
+	check(`SELECT value FROM plugin_user_config WHERE key='token'`, `"plugin-secret"`)
+	check(`SELECT client_secret_enc FROM mcp_oauth_clients`, "dcr-secret")
+	check(`SELECT access_token_enc FROM mcp_oauth_tokens`, "access")
+	check(`SELECT refresh_token_enc FROM mcp_oauth_tokens`, "refresh")
+	var region string
+	if err := db.QueryRow(`SELECT value FROM plugin_user_config WHERE key='region'`).Scan(&region); err != nil || region != `"eu"` {
+		t.Errorf("non-sensitive config must stay untouched, got %q", region)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT oauth FROM mcp_servers WHERE id='s1'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := mcp.ParseRowOAuthConfig(raw)
+	if err != nil || cfg == nil {
+		t.Fatalf("parse oauth: %v", err)
+	}
+	if got, err := newVault.Decrypt(cfg.ClientSecretEnc); err != nil || got != "pre-secret" || cfg.ClientID != "pre" {
+		t.Errorf("mcp_servers.oauth secret not re-encrypted: %q %v", got, err)
+	}
 }
 
 // TestNewVaultMasterKeyRotator_RotatesAndSwapsKey 验证轮换后：

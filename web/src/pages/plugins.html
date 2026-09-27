@@ -91,6 +91,34 @@
                   <span x-show="!entry.command && entry.url" x-text="entry.url"></span>
                 </div>
               </template>
+
+              <!-- MCP OAuth 状态（8e-2）：需要授权徽标 + 授权/注销授权/编辑按钮 -->
+              <template x-if="(!entry.type || entry.type === 'mcp') && entry.installed && $store.plugins.mcpAuth[entry.id]">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span x-show="$store.plugins.mcpAuth[entry.id].auth_required"
+                        class="badge badge-warning badge-xs font-bold"
+                        :title="($store.plugins.mcpAuth[entry.id].auth_scopes || []).join(' ')"
+                        x-text="$store.i18n.t('plugins_mcp_auth_required')"></span>
+                  <button x-show="$store.plugins.mcpAuth[entry.id].auth_required"
+                          class="btn btn-xs btn-primary"
+                          :disabled="!!$store.plugins.authorizing[entry.id]"
+                          @click="$store.plugins.authorizeConnector(entry)">
+                    <span x-show="$store.plugins.authorizing[entry.id]" class="loading loading-spinner loading-xs"></span>
+                    <span x-text="$store.plugins.authorizing[entry.id] ? $store.i18n.t('plugins_mcp_authorizing') : $store.i18n.t('plugins_mcp_authorize')"></span>
+                  </button>
+                  <button x-show="!$store.plugins.mcpAuth[entry.id].auth_required && $store.plugins.mcpAuth[entry.id].authorized"
+                          class="btn btn-xs btn-ghost text-error"
+                          :disabled="!!$store.plugins.deauthorizing[entry.id]"
+                          @click="$store.plugins.deauthorizeConnector(entry)">
+                    <span x-show="$store.plugins.deauthorizing[entry.id]" class="loading loading-spinner loading-xs"></span>
+                    <span x-text="$store.plugins.deauthorizing[entry.id] ? $store.i18n.t('plugins_mcp_deauthorizing') : $store.i18n.t('plugins_mcp_deauthorize')"></span>
+                  </button>
+                  <button x-show="($store.plugins.mcpAuth[entry.id].transport || entry.transport) !== 'stdio'"
+                          class="btn btn-xs btn-outline"
+                          @click="$store.plugins.openEditMCPServer(entry)"
+                          x-text="$store.i18n.t('plugins_btn_edit')"></button>
+                </div>
+              </template>
               <template x-if="entry.type === 'skill' || entry.type === 'plugin'">
                 <div class="bg-base-100 rounded p-2 text-[10px] font-mono truncate border border-base-300">
                   <a :href="entry.url" target="_blank" rel="noopener" class="text-primary hover:underline" x-text="(entry.url||'').replace('https://','')"></a>
@@ -217,9 +245,9 @@
       <div class="modal-backdrop" @click="$store.plugins.resolveApproval('deny')"></div>
     </dialog>
 
-    <dialog class="modal" id="create_plugin_modal" x-effect="$store.plugins.showCreateModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showCreateModal = false">
+    <dialog class="modal" id="create_plugin_modal" x-effect="$store.plugins.showCreateModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showCreateModal = false; $store.plugins.editingId = null">
       <div class="modal-box bg-base-200 border border-base-300 w-11/12 max-w-lg">
-        <h3 class="font-bold text-lg mb-4" x-text="`${$store.i18n.t('plugins_create_title')} ${$store.plugins.typeLabel($store.plugins.filter)}`"></h3>
+        <h3 class="font-bold text-lg mb-4" x-text="$store.plugins.editingId ? `${$store.i18n.t('plugins_edit_title')} ${$store.plugins.createForm.name}` : `${$store.i18n.t('plugins_create_title')} ${$store.plugins.typeLabel($store.plugins.filter)}`"></h3>
         <div class="space-y-4">
           <div class="form-control">
             <label for="store-plugins-createform-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_name')"></span></label>
@@ -290,6 +318,36 @@
               <div class="form-control">
                 <label for="store-plugins-createform-env" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_env')"></span></label>
                 <input id="store-plugins-createform-env" name="store-plugins-createform-env" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.env" placeholder='{"API_KEY": "value"}' />
+              </div>
+
+              <!-- OAuth 预注册（8e-2，可折叠）：仅编辑远程传输连接器时展示——预注册
+                   要写入 mcp_servers.oauth 列，创建阶段服务器 ID 尚不存在，无法调用
+                   PUT .../oauth，故只在编辑既有连接器时可用。 -->
+              <div class="collapse collapse-arrow bg-base-100 border border-base-300 rounded-box" x-show="$store.plugins.editingId && $store.plugins.createForm.transport !== 'stdio'">
+                <input type="checkbox" />
+                <div class="collapse-title font-bold text-sm" x-text="$store.i18n.t('plugins_mcp_oauth_section')"></div>
+                <div class="collapse-content space-y-3">
+                  <div class="form-control">
+                    <label for="store-plugins-oauth-client-id" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_client_id')"></span></label>
+                    <input id="store-plugins-oauth-client-id" name="store-plugins-oauth-client-id" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthClientId" />
+                  </div>
+                  <div class="form-control">
+                    <label for="store-plugins-oauth-client-secret" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_client_secret')"></span></label>
+                    <input id="store-plugins-oauth-client-secret" name="store-plugins-oauth-client-secret" type="password" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthClientSecret" :disabled="$store.plugins.createForm.oauthClearSecret" :placeholder="$store.plugins.createForm.oauthHasClientSecret ? $store.i18n.t('plugins_mcp_oauth_secret_placeholder') : ''" />
+                    <label class="label cursor-pointer justify-start gap-2" x-show="$store.plugins.createForm.oauthHasClientSecret">
+                      <input type="checkbox" class="checkbox checkbox-xs" x-model="$store.plugins.createForm.oauthClearSecret" />
+                      <span class="label-text-alt" x-text="$store.i18n.t('plugins_mcp_oauth_clear_secret')"></span>
+                    </label>
+                  </div>
+                  <div class="form-control">
+                    <label for="store-plugins-oauth-metadata-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_metadata_url')"></span></label>
+                    <input id="store-plugins-oauth-metadata-url" name="store-plugins-oauth-metadata-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthAuthServerMetadataUrl" placeholder="https://as.example.com/.well-known/oauth-authorization-server" />
+                  </div>
+                  <div class="form-control">
+                    <label for="store-plugins-oauth-scopes" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_scopes')"></span></label>
+                    <input id="store-plugins-oauth-scopes" name="store-plugins-oauth-scopes" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthScopes" placeholder="read write" />
+                  </div>
+                </div>
               </div>
             </div>
           </template>

@@ -213,6 +213,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 网络访问审批：PUT /v1/mcp-servers/{id}/network-access  body: {"approved": true/false}
 	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}/network-access", s.sysadminHandler.MCP.HandleMCPNetworkApproval)
 
+	// MCP OAuth（8e-2，basic_authorization.md）：走 /v1/ 前缀正常鉴权（同源 Cookie 或令牌）。
+	mux.HandleFunc("POST /v1/mcp-servers/{serverID}/oauth/authorize", s.sysadminHandler.MCP.HandleAuthorizeMCPServer)
+	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}/oauth", s.sysadminHandler.MCP.HandlePutMCPServerOAuth)
+	mux.HandleFunc("DELETE /v1/mcp-servers/{serverID}/oauth/token", s.sysadminHandler.MCP.HandleDeleteMCPServerOAuthToken)
+	// 下面两条不带 /v1/ 前缀，鉴权中间件精确豁免（见 middleware_auth.go
+	// oauthPublicGetPathSet）：路径由 internal/extension/mcp/oauth_register.go
+	// gatewayCallbackURL / ClientMetadataDocument 硬编码约定，改动需两侧同步。
+	mux.HandleFunc("GET /oauth/mcp/callback", s.HandleMCPOAuthCallback)
+	mux.HandleFunc("GET /oauth/client-metadata.json", s.HandleMCPOAuthClientMetadata)
+
 	// 插件目录 API
 	mux.HandleFunc("GET /v1/plugins/catalog", s.pluginHandler.HandleListPluginCatalog)
 	mux.HandleFunc("POST /v1/plugins/install", s.pluginHandler.HandleInstallPlugin)

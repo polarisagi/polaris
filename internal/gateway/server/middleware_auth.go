@@ -56,6 +56,29 @@ var healthPathSet = map[string]struct{}{
 	"/.well-known/agent-card.json": {},
 }
 
+// oauthPublicGetPathSet 是 MCP OAuth 回调与 Client ID Metadata Document 的鉴权豁免
+// 精确白名单（仅 GET，见下方 checkAuth 判定）。
+//
+// 8e-2 明确要求不得依赖 isStaticShellRequest 的隐式放行——那条规则豁免的是"任意非
+// /v1、非 /_admin 的 GET/HEAD 路径"，范围远宽于这两条，且其放行理由（静态外壳无
+// 用户数据）与这两条完全不同，用它顺带盖住这两条属于巧合而非设计。这两条路径本身
+// 就设计为无令牌可达：
+//   - /oauth/mcp/callback：浏览器从第三方授权服务器跳回，不带 Polaris 令牌，安全边界
+//     是一次性 state（见 internal/extension/mcp/oauth_flow.go CompleteAuthorization），
+//     不是"未鉴权也无妨"。
+//   - /oauth/client-metadata.json：CIMD 文档设计为供第三方授权服务器公网访问的公开
+//     文档（basic_authorization_client-registration.md §Client ID Metadata Documents），
+//     鉴权反而会让它失去意义。
+//
+// 只放行 GET：POST /oauth/mcp/callback 等写方法必须仍然鉴权，防止把这两条路径的
+// "公开可读"错误扩大成"公开可写"。
+//
+//nolint:gochecknoglobals
+var oauthPublicGetPathSet = map[string]struct{}{
+	"/oauth/mcp/callback":         {},
+	"/oauth/client-metadata.json": {},
+}
+
 // localTokenCookie 是 Web UI 携带本地令牌的 Cookie 名。
 //
 // 为什么 Web UI 走 Cookie 而不是改前端加请求头：同源 fetch 与 EventSource 自动携带
@@ -166,6 +189,11 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 	// ① 健康/指标端点与静态外壳：始终放行
 	if _, isHealth := healthPathSet[r.URL.Path]; isHealth {
 		return newAuthContext(ctx, "anonymous", authcontext.ClientTypeUnknown, traceID, false), true
+	}
+	if r.Method == http.MethodGet {
+		if _, isOAuthPublic := oauthPublicGetPathSet[r.URL.Path]; isOAuthPublic {
+			return newAuthContext(ctx, "anonymous", authcontext.ClientTypeUnknown, traceID, false), true
+		}
 	}
 	if isStaticShellRequest(r) {
 		return newAuthContext(ctx, "anonymous", authcontext.ClientTypeWebUI, traceID, false), true

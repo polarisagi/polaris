@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -14,19 +15,20 @@ import (
 // newVaultMasterKeyRotator 构造一个 vault 主密钥轮换闭包，供
 // sysadmin.SysAdminHandler.RotateVaultMasterKey 使用（ADR-0096 决策一修复：
 // rotate-master-key 此前由 cmd/polaris/cli_vault.go 直连 SQLite 完成，绕过
-// "客户端与内核之间只有 HTTP 一条路"这条唯一业务通道）。
+// 守护进程，与 HTTP-only CLI 纪律冲突）。
 //
 // rwDB/oldVault/dataDir 通过闭包捕获而非存成 sysadmin 包的结构体字段——
-// inv_NoRawSQLDBField 禁止 storage 层外的包声明 *sql.DB 字段，本函数所在的
-// internal/gateway/server 顶层包持有它们的方式与 NewServer 构造其余 repo
-// 时完全一致（函数参数/局部变量，不是字段）。
+// 轮换是一次性管理动作，不值得让 sysadmin 持有写库句柄与密钥。
 //
-// 轮换流程：生成新 key → 用旧 vault 解密全部 provider API Key → 用新 vault
-// 重新加密写回 → 原子替换 vault.key。调用方（HandleVaultRotateMasterKey）负责
-// 在轮换成功后触发进程重启——本进程内除这条路径外还有其他独立构造的
-// credential.Vault 实例（Notion token、ReloadProviders 等）持有旧 masterKey
-// 的内存副本，轮换完成到进程重启之间它们仍会用旧 key 读写，重启后统一从新
+// 轮换流程：生成新 key → 单事务内用旧 vault 解密、新 vault 重新加密全部密文列
+// （repo.RekeyVaultCiphertexts）→ 提交 → 原子替换 vault.key。调用方（HandleVaultRotateMasterKey）负责
+// 轮换成功后重启进程：进程内其余持有旧 masterKey 的
+// credential.Vault 实例（Notion token、ReloadProviders、MCP OAuth 等）
 // vault.key 重新加载是唯一能保证不留不一致状态的做法。
+//
+// 为什么必须单事务：此前逐条 UPDATE providers，中途失败时已改写的行用的是随后被丢弃的新 key，
+// 永久无法解密；且只覆盖 providers，插件敏感配置与 MCP OAuth 令牌在轮换后全部失效。
+// 返回值为轮换的 provider 数（HTTP 响应字段 providers_rotated 的语义保持不变）。
 func newVaultMasterKeyRotator(rwDB *sql.DB, oldVault *credential.Vault, dataDir string) func(ctx context.Context) (int, error) {
 	return func(ctx context.Context) (int, error) {
 		keyPath := filepath.Join(dataDir, "vault.key")
@@ -42,31 +44,26 @@ func newVaultMasterKeyRotator(rwDB *sql.DB, oldVault *credential.Vault, dataDir 
 			return 0, apperr.Wrap(apperr.CodeInternal, "vault rotate: load new vault failed", err)
 		}
 
-		oldRepo := repo.NewSQLiteProviderRepository(rwDB).WithVault(oldVault)
-		newRepo := repo.NewSQLiteProviderRepository(rwDB).WithVault(newVault)
-
-		providers, err := oldRepo.ListProviders(ctx)
+		counts, err := repo.RekeyVaultCiphertexts(ctx, rwDB, func(ct string) (string, error) {
+			plain, err := oldVault.Decrypt(ct)
+			if err != nil {
+				return "", apperr.Wrap(apperr.CodeInternal, "vault rotate: decrypt", err)
+			}
+			out, err := newVault.Encrypt(plain)
+			if err != nil {
+				return "", apperr.Wrap(apperr.CodeInternal, "vault rotate: encrypt", err)
+			}
+			return out, nil
+		})
 		if err != nil {
+			// 事务已回滚，旧 vault.key 仍是全部密文的真实密钥，不落地半成品新 key。
 			os.Remove(newKeyPath) //nolint:errcheck // 轮换失败回滚，清理半成品密钥文件
-			return 0, apperr.Wrap(apperr.CodeInternal, "vault rotate: list providers failed", err)
+			return 0, apperr.Wrap(apperr.CodeInternal, "vault rotate: re-encrypt failed", err)
 		}
-
-		rotated := 0
-		for _, p := range providers {
-			if p.APIKey == "" {
-				continue
-			}
-			if err := newRepo.UpdateProviderAPIKey(ctx, p.ID, p.APIKey, p.UpdatedAt); err != nil {
-				// 轮换中途失败，旧 vault.key 仍是当前密文的真实密钥，不落地半成品新 key。
-				os.Remove(newKeyPath) //nolint:errcheck
-				return rotated, apperr.Wrap(apperr.CodeInternal, "vault rotate: update provider "+p.ID+" failed", err)
-			}
-			rotated++
-		}
-
 		if err := os.Rename(newKeyPath, keyPath); err != nil {
-			return rotated, apperr.Wrap(apperr.CodeInternal, "vault rotate: swap key file failed", err)
+			return counts.Providers, apperr.Wrap(apperr.CodeInternal, "vault rotate: swap key file failed", err)
 		}
-		return rotated, nil
+		slog.Info("vault rotate: ciphertexts re-encrypted", "providers", counts.Providers, "other_secrets", counts.Others)
+		return counts.Providers, nil
 	}
 }

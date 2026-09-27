@@ -527,6 +527,22 @@ export const zh = {
   plugins_label_env:           '环境变量 (Env - JSON Object)',
   plugins_btn_save:            '保存',
 
+  // ── MCP OAuth（8e-2）key ──────────────────────────────────────────────────
+  plugins_edit_title:              '编辑',
+  plugins_btn_edit:                '编辑',
+  plugins_mcp_auth_required:       '需要授权',
+  plugins_mcp_authorize:           '授权',
+  plugins_mcp_authorizing:         '授权中...',
+  plugins_mcp_deauthorize:         '注销授权',
+  plugins_mcp_deauthorizing:       '注销中...',
+  plugins_mcp_oauth_section:       'OAuth 预注册',
+  plugins_mcp_oauth_client_id:         '客户端 ID',
+  plugins_mcp_oauth_client_secret:     '客户端密钥',
+  plugins_mcp_oauth_secret_placeholder:'留空则保留原值，已设置',
+  plugins_mcp_oauth_clear_secret:      '清除已保存的密钥',
+  plugins_mcp_oauth_metadata_url:      '授权服务器元数据 URL',
+  plugins_mcp_oauth_scopes:            'Scopes（空格分隔）',
+
   // ── 工作流页 key ──────────────────────────────────────────────────────────
   automation_tab_workflow:   '工作流',
   wf_title:                  '工作流',
@@ -1137,6 +1153,22 @@ export const en = {
   plugins_label_args: 'Args (JSON Array)',
   plugins_label_env: 'Environment Variables (JSON Object)',
   plugins_btn_save: 'Save',
+
+  // ── MCP OAuth (8e-2) keys ──────────────────────────────────────────────────
+  plugins_edit_title: 'Edit',
+  plugins_btn_edit: 'Edit',
+  plugins_mcp_auth_required: 'Authorization required',
+  plugins_mcp_authorize: 'Authorize',
+  plugins_mcp_authorizing: 'Authorizing...',
+  plugins_mcp_deauthorize: 'Revoke authorization',
+  plugins_mcp_deauthorizing: 'Revoking...',
+  plugins_mcp_oauth_section: 'OAuth Pre-registration',
+  plugins_mcp_oauth_client_id: 'Client ID',
+  plugins_mcp_oauth_client_secret: 'Client Secret',
+  plugins_mcp_oauth_secret_placeholder: 'Leave blank to keep, already set',
+  plugins_mcp_oauth_clear_secret: 'Clear saved secret',
+  plugins_mcp_oauth_metadata_url: 'Authorization Server Metadata URL',
+  plugins_mcp_oauth_scopes: 'Scopes (space-separated)',
 
   // ── Workflow page keys ────────────────────────────────────────────────────
   automation_tab_workflow:   'Workflows',

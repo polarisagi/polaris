@@ -311,6 +311,8 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/_admin/unseal` | `sysadminHandler.HandleUnseal` |
 | GET | `/healthz` | `handleHealthz` |
 | GET | `/metrics` | `metrics.MetricsHandler(s.tbr)` |
+| GET | `/oauth/client-metadata.json` | `HandleMCPOAuthClientMetadata` |
+| GET | `/oauth/mcp/callback` | `HandleMCPOAuthCallback` |
 | GET | `/readyz` | `handleReadyz` |
 | POST | `/v1/a2a/tasks` | `a2a.TaskSubmitHandler(s.blackboard)` |
 | POST | `/v1/admin/tasks/csv-fanout` | `sysadminHandler.HandleCSVFanout` |
@@ -371,6 +373,9 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | DELETE | `/v1/mcp-servers/{serverID}` | `sysadminHandler.MCP.HandleDeleteMCPServer` |
 | PUT | `/v1/mcp-servers/{serverID}` | `sysadminHandler.MCP.HandleUpdateMCPServer` |
 | PUT | `/v1/mcp-servers/{serverID}/network-access` | `sysadminHandler.MCP.HandleMCPNetworkApproval` |
+| PUT | `/v1/mcp-servers/{serverID}/oauth` | `sysadminHandler.MCP.HandlePutMCPServerOAuth` |
+| POST | `/v1/mcp-servers/{serverID}/oauth/authorize` | `sysadminHandler.MCP.HandleAuthorizeMCPServer` |
+| DELETE | `/v1/mcp-servers/{serverID}/oauth/token` | `sysadminHandler.MCP.HandleDeleteMCPServerOAuthToken` |
 | POST | `/v1/mcp-servers/{serverID}/test` | `sysadminHandler.MCP.HandleTestMCPServer` |
 | POST | `/v1/mcp/create` | `pluginHandler.HandleCreateMCP` |
 | GET | `/v1/plugins` | `pluginHandler.HandleListPlugins` |
@@ -443,7 +448,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 136 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 141 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]

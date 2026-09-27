@@ -308,6 +308,11 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// mcp_servers 行是连接配置权威源；插件 MCP 的 ${PLUGIN_ROOT} / ${user_config.*} 在每次启动时
 	// 由解析器展开（ADR-0103 决策二）。两者须在任何 StartFromDB / RestoreServersFromDB 之前注入。
 	mcpMgr.SetRowSource(extRepo, sb.DataDir)
+	// OAuth 令牌/预注册 client_secret 加解密（8e-2 网关接线前置）：必须在 main.go 调用
+	// RestoreServersFromDB 之前完成，否则恢复期间遇到已存令牌的服务器会因 cipher 未配置
+	// fail-closed 拒绝解密，误判为需要重新授权（见 internal/extension/mcp/oauth_token.go
+	// decryptAccessToken）。
+	mcpMgr.SetCredentialCipher(sb.Vault)
 	// Claude 插件 channels（ADR-0103 决策三）：通知出口须先于任何服务器连接注入，避免丢失早期事件。
 	pluginChannels := lifecycle.NewChannelService(extRepo, mcpMgr)
 	// 插件依赖加载期检查（ADR-0103 决策三）：启动时停用依赖不满足的插件，须在恢复 MCP 连接之前。

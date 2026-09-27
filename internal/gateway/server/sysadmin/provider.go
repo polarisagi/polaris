@@ -28,6 +28,8 @@ type MCPManager interface {
 	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
 	// ApproveNetworkAccess 设置服务器网络访问审批并重启连接（approved=true 放行网络）。
 	ApproveNetworkAccess(ctx context.Context, serverID string, extRepo protocol.ExtensionRepository, dataDir string, approved bool) error
+	// BeginAuthorization 发起一次 MCP OAuth 授权流程，返回浏览器需跳转的授权 URL（8e-2）。
+	BeginAuthorization(ctx context.Context, serverID, redirectBase string) (string, error)
 }
 
 // ExtensionInstaller sysadmin 包对扩展安装管理器的消费端接口。

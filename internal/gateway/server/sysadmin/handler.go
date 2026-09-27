@@ -150,6 +150,11 @@ type Dependencies struct {
 		ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage
 	}
 	StreamIdleTimeout time.Duration
+	// MCPOAuthCipher 加密 PUT /v1/mcp-servers/{id}/oauth 预注册 client_secret（8e-2）；
+	// 实现为 security/credential.Vault（Encrypt(string)(string,error)），与
+	// internal/extension/mcp.MCPManager 持有的 Vault 实例分开构造但共享同一份磁盘
+	// 主密钥，密文可互相解密（server_lifecycle.go NewServer 内的 vault 变量）。
+	MCPOAuthCipher mcpadmin.CredentialCipher
 }
 
 // NewSysAdminHandler 故意不做构造函数级 fail-closed nil 强制校验——本包已有
@@ -262,6 +267,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.ExtRepo,
 		deps.DataDir,
 		h.ClearToolSchemaCache,
+		deps.MCPOAuthCipher,
 	)
 	return h
 }

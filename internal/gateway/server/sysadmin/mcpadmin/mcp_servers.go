@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
@@ -40,7 +41,8 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 		SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.env, ms.url,
 		       ms.enabled, ms.timeout, ms.trust_tier, COALESCE(ms.catalog_id,''),
 		       ms.plugin_id, ms.work_dir, ms.requires_network, ms.created_at, ms.updated_at,
-		       COALESCE(p.display_name, p.name, '') AS plugin_name
+		       COALESCE(p.display_name, p.name, '') AS plugin_name, ms.oauth,
+		       (SELECT COUNT(1) FROM mcp_oauth_tokens t WHERE t.server_id = ms.id) AS has_token
 		FROM mcp_servers ms
 		LEFT JOIN plugins p ON ms.plugin_id = p.id
 		ORDER BY ms.created_at`)
@@ -73,21 +75,33 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 	list := []*types.MCPServerConfig{}
 	for rows.Next() {
 		c := &types.MCPServerConfig{}
-		var enabled, requiresNetworkInt int
-		var argsJSON, envJSON string
+		var enabled, requiresNetworkInt, hasToken int
+		var argsJSON, envJSON, oauthJSON string
 		if err := rows.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
 			&c.URL, &enabled, &c.Timeout, &c.TrustTier, &c.CatalogID,
-			&c.PluginID, &c.WorkDir, &requiresNetworkInt, &c.CreatedAt, &c.UpdatedAt, &c.PluginName); err != nil {
+			&c.PluginID, &c.WorkDir, &requiresNetworkInt, &c.CreatedAt, &c.UpdatedAt,
+			&c.PluginName, &oauthJSON, &hasToken); err != nil {
 			continue
 		}
 		c.Enabled = enabled == 1
 		c.RequiresNetwork = requiresNetworkInt == 1
+		c.OAuthAuthorized = hasToken > 0
 		json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 		json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
 		if info, ok := runtimeMap[c.ID]; ok {
 			c.Connected = info.Connected
 			c.ToolCount = len(info.Tools)
 			c.Error = info.Error
+			c.AuthRequired = info.AuthRequired
+			c.AuthScopes = info.AuthScopes
+		}
+		if oauthCfg, err := mcp.ParseRowOAuthConfig(oauthJSON); err == nil && oauthCfg != nil {
+			c.OAuth = &types.MCPServerOAuthSummary{
+				ClientID:              oauthCfg.ClientID,
+				AuthServerMetadataURL: oauthCfg.AuthServerMetadataURL,
+				Scopes:                oauthCfg.Scopes,
+				HasClientSecret:       oauthCfg.ClientSecretEnc != "",
+			}
 		}
 		c.NetworkApprovalStatus = networkApprovalStatus(c, approvalMap)
 		list = append(list, c)
