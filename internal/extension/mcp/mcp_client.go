@@ -93,6 +93,11 @@ type MCPClient struct {
 	// 字段来缩短等待，不需要新增全局可变变量。
 	subscriptionBackoffInitial time.Duration
 	subscriptionBackoffMax     time.Duration
+
+	// tokenSource OAuth 访问令牌来源；nil 表示该连接不使用 OAuth（沿用 cfg.Headers 里
+	// 静态配置的 Authorization，如果有）。非 nil 时每次出站请求都用它覆盖 Authorization
+	// 头（basic_authorization.md：不得向 MCP 服务器发送非其 AS 签发的令牌）。
+	tokenSource atomic.Pointer[TokenSource]
 }
 
 // ServerMeta MCP 服务器在 initialize 中声明的元数据。
@@ -117,6 +122,11 @@ type NotificationHandler func(method string, params json.RawMessage)
 
 // SetNotificationHandler 注册服务端通知回调（须在 Initialize 前设置，避免丢失早期通知）。
 func (c *MCPClient) SetNotificationHandler(h NotificationHandler) { c.notificationHandler.Store(&h) }
+
+// SetTokenSource 注入 OAuth 访问令牌来源；调用方（MCPManager.Add）应只对远程传输
+// （SSE/Streamable HTTP）且已完成授权或声明了预注册客户端的服务器调用本方法——
+// STDIO 传输 SHOULD NOT 走 OAuth（basic_authorization.md §Protocol Requirements）。
+func (c *MCPClient) SetTokenSource(ts TokenSource) { c.tokenSource.Store(&ts) }
 
 // ServerMeta 返回 initialize 结果中的服务器元数据（未初始化时为零值）。
 func (c *MCPClient) ServerMeta() ServerMeta {

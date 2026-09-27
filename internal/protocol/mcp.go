@@ -35,6 +35,12 @@ type MCPServerInfo struct {
 	Connected bool
 	Tools     []MCPTool
 	Error     string
+	// AuthRequired 该服务器需要用户完成（重新）授权：连接阶段 401、运行期 401 刷新失败、
+	// 或运行期 403 insufficient_scope（basic_authorization.md §Error Handling）。
+	AuthRequired bool
+	// AuthScopes AuthRequired=true 时，挑战给出的所需 scope（用于 UI 提示 / 下一次
+	// BeginAuthorization 的 step-up scope 并集）。
+	AuthScopes []string
 }
 
 // MCPClientConfig MCP Server 连接配置。

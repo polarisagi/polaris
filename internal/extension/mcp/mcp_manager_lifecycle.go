@@ -26,13 +26,16 @@ func (m *MCPManager) ListServers() []MCPServerInfo {
 	defer m.mu.RUnlock()
 	result := make([]MCPServerInfo, 0, len(m.entries))
 	for id, e := range m.entries {
+		authRequired, authScopes := e.authInfo()
 		result = append(result, MCPServerInfo{
-			ID:        id,
-			Name:      e.name,
-			Transport: string(e.cfg.Transport),
-			Connected: e.errMsg == "",
-			Tools:     e.tools,
-			Error:     e.errMsg,
+			ID:           id,
+			Name:         e.name,
+			Transport:    string(e.cfg.Transport),
+			Connected:    e.errMsg == "",
+			Tools:        e.tools,
+			Error:        e.errMsg,
+			AuthRequired: authRequired,
+			AuthScopes:   authScopes,
 		})
 	}
 	return result
@@ -147,7 +150,7 @@ func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectReque
 		return apperr.Wrap(apperr.CodeInternal, "MCPManager.DynamicConnect", err)
 	}
 
-	validTools := m.registerTools(req.ServerName, client, tools)
+	validTools := m.registerTools(req.ServerName, req.ServerName, client, tools)
 
 	m.mu.Lock()
 	if _, exists := m.entries[req.ServerName]; exists {

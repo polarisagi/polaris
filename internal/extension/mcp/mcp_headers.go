@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -118,8 +119,8 @@ func headerValueOf(args map[string]any, path []string) (string, bool) {
 
 // setRequestHeaders MCP-Protocol-Version（两个纪元）；新纪元追加 Mcp-Method / Mcp-Name / Mcp-Param-*；
 // 旧纪元回传 Mcp-Session-Id。配置头先写，协议头后写：配置不能改写协议必需头。
-func (c *MCPClient) setRequestHeaders(req *http.Request, rpc mcpRPCRequest) {
-	c.setConfiguredHeaders(req)
+func (c *MCPClient) setRequestHeaders(ctx context.Context, req *http.Request, rpc mcpRPCRequest) {
+	c.setConfiguredHeaders(ctx, req)
 	req.Header.Set("Content-Type", "application/json")
 	version := c.protocolVersion()
 	if rpc.Method == "server/discover" {

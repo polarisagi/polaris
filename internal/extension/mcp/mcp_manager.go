@@ -25,6 +25,10 @@ type mcpEntry struct {
 	cfg    MCPClientConfig
 	tools  []MCPTool
 	errMsg string
+
+	// authState OAuth 需授权状态快照（连接阶段 401、运行期 401 刷新失败、运行期 403
+	// insufficient_scope 均会置位），见 oauth_entry.go。nil 表示当前无需授权。
+	authState atomic.Pointer[mcpAuthState]
 }
 
 // ToolRegistrar MCP 工具注册到 InMemoryToolRegistry 的最小接口（consumer-side 定义，防包循环）。
@@ -80,6 +84,15 @@ type MCPManager struct {
 	// notificationSink 服务端通知出口（Claude channel 事件等）；nil 时通知只记日志。
 	notificationSink atomic.Pointer[NotificationSink]
 
+	// cipher OAuth 令牌/预注册 client_secret 的加解密（consumer-side CredentialCipher，
+	// 实现为 security/credential.Vault）；nil 时 OAuth 相关写入一律 fail-closed 拒绝，
+	// 不落明文（见 oauth_flow.go / oauth_token.go）。
+	cipher CredentialCipher
+	// oauthBroker 进行中的授权流程（state → 一次性流程记录），见 oauth_flow.go。
+	oauthBroker *oauthBroker
+	// oauthRefreshLocks serverID -> *sync.Mutex，串行化同一服务器的令牌刷新（见 oauth_token.go）。
+	oauthRefreshLocks sync.Map
+
 	// refreshing per-server 的 refreshTools 合并态（serverID -> *refreshState），
 	// 见 mcp_manager_refresh.go。生命周期独立于 entries，用 sync.Map 而非受 m.mu
 	// 保护的 map。
@@ -116,15 +129,24 @@ func NewMCPManagerWithContext(ctx context.Context, sbx SandboxToolRegistrar, htt
 		panic("mcp_manager: httpClient must be a valid network.SafeHTTPClient (XR-06)")
 	}
 	m := &MCPManager{
-		entries:    make(map[string]*mcpEntry),
-		sandbox:    sbx,
-		httpClient: httpClient,
-		policy:     policy,
-		asyncTasks: newAsyncTaskCache(),
-		starting:   make(map[string]struct{}),
+		entries:     make(map[string]*mcpEntry),
+		sandbox:     sbx,
+		httpClient:  httpClient,
+		policy:      policy,
+		asyncTasks:  newAsyncTaskCache(),
+		starting:    make(map[string]struct{}),
+		oauthBroker: newOAuthBroker(),
 	}
 	m.startAsyncTaskSweeper(ctx)
 	return m
+}
+
+// SetCredentialCipher 注入 OAuth 令牌/客户端密钥的加解密实现（security/credential.Vault）。
+// 未注入时 BeginAuthorization/CompleteAuthorization 及令牌刷新一律 fail-closed 拒绝写入明文。
+func (m *MCPManager) SetCredentialCipher(c CredentialCipher) {
+	m.mu.Lock()
+	m.cipher = c
+	m.mu.Unlock()
 }
 
 // SetEnvelope 注入 Envelope，供 CallTool 直接路径使用。
@@ -239,14 +261,21 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	}
 
 	storeFailed := func(err error) error {
+		entry := &mcpEntry{name: name, cfg: cfg, errMsg: err.Error()}
+		// 连接阶段 401/403 挑战：置需授权并缓存 resource_metadata/scope，供后续
+		// BeginAuthorization 复用（basic_authorization.md §Error Handling）。
+		if ace := extractAuthChallenge(err); ace != nil {
+			entry.setAuthRequired(strings.Fields(ace.Scope), ace.ResourceMetadata)
+		}
 		m.mu.Lock()
-		m.entries[serverID] = &mcpEntry{name: name, cfg: cfg, errMsg: err.Error()}
+		m.entries[serverID] = entry
 		m.mu.Unlock()
 		slog.Error("mcp_manager: start server failed", "id", serverID, "name", name, "err", err)
 		return apperr.Wrap(apperr.CodeInternal, "MCPManager.Add", err)
 	}
 
 	client := NewMCPClient(cfg, httpClient)
+	m.attachTokenSourceIfNeeded(ctx, client, serverID, cfg)
 
 	if err := client.Connect(ctx); err != nil {
 		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: connect %q", serverID), err)
@@ -272,7 +301,7 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	// ── 段3：短写锁落库 ──────────────────────────────────────────────────
 	// 旧工具已在段1 unregisterTools 时移除，这里只需注册新工具 + 落 entries。
 	m.mu.Lock()
-	validTools := m.registerTools(name, client, tools)
+	validTools := m.registerTools(serverID, name, client, tools)
 	m.entries[serverID] = &mcpEntry{
 		client: client,
 		name:   name,

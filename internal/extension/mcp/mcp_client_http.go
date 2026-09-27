@@ -20,12 +20,15 @@ func (c *MCPClient) httpPostOnly(ctx context.Context, url string, body []byte, r
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostOnly", err)
 	}
-	c.setRequestHeaders(req, rpc)
+	c.setRequestHeaders(ctx, req, rpc)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostOnly", err)
 	}
 	defer resp.Body.Close()
+	if ace := authChallengeFromResponse(resp); ace != nil {
+		return wrapAuthChallenge(c.cfg.ServerName, ace)
+	}
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("mcp: POST status %d: %s", resp.StatusCode, b))
@@ -40,7 +43,7 @@ func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
-	c.setRequestHeaders(req, rpc)
+	c.setRequestHeaders(ctx, req, rpc)
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -48,6 +51,9 @@ func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte
 		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
 	defer resp.Body.Close()
+	if ace := authChallengeFromResponse(resp); ace != nil {
+		return nil, wrapAuthChallenge(c.cfg.ServerName, ace)
+	}
 	// 旧纪元（2025-11-25）Streamable HTTP：initialize 响应可分配会话，之后每个请求回传。
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" && rpc.Method == "initialize" {
 		c.legacySession.Store(&sid)

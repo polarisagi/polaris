@@ -230,7 +230,18 @@ ExtensionRepository interface {
 	GetMCPServer(ctx context.Context, id string) (*types.MCPServerRow, error)
 	UpsertMCPServer(ctx context.Context, row types.MCPServerRow) error
 	UpdateMCPServer(ctx context.Context, id string, fields map[string]any) error
+	// DeleteMCPServer 删除服务器行；同时删除其 mcp_oauth_tokens 令牌（basic_authorization.md
+	// 无悬空令牌要求——服务器行是令牌 server_id 外键的权威源，SQLite 未启用 FK 级联，需显式清理）。
 	DeleteMCPServer(ctx context.Context, id string) error
+
+	// mcp_oauth_clients（DCR 动态注册结果，按 issuer+redirect_uri 隔离，见 040_mcp_oauth.sql）
+	GetMCPOAuthClient(ctx context.Context, issuer, redirectURI string) (*types.MCPOAuthClientRow, error)
+	UpsertMCPOAuthClient(ctx context.Context, row types.MCPOAuthClientRow) error
+
+	// mcp_oauth_tokens（每个 MCP Server 一份已获取的令牌）
+	GetMCPOAuthToken(ctx context.Context, serverID string) (*types.MCPOAuthTokenRow, error)
+	UpsertMCPOAuthToken(ctx context.Context, row types.MCPOAuthTokenRow) error
+	DeleteMCPOAuthToken(ctx context.Context, serverID string) error
 
 	// UninstallCleanup 卸载扩展时清理关联数据（mcp_servers/skills/plugins）
 	UninstallCleanup(ctx context.Context, id, runtimeID, extType string) error

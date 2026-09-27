@@ -24,13 +24,17 @@ func (c *MCPClient) connectSSE(ctx context.Context) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MCPClient.connectSSE", err)
 	}
-	c.setConfiguredHeaders(req)
+	c.setConfiguredHeaders(ctx, req)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "mcp: SSE connect", err)
+	}
+	if ace := authChallengeFromResponse(resp); ace != nil {
+		resp.Body.Close()
+		return wrapAuthChallenge(c.cfg.ServerName, ace)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

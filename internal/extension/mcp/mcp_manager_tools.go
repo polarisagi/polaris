@@ -56,7 +56,8 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 // registerTools 注册合法的 MCP 工具到 sandbox，返回实际注册成功的工具子集。
 // 服务器名（serverName）在 Add() 中已经过 validateLLMNamePart 校验，此处信任。
 // 工具名来自外部 MCP 服务器，不可控：非法字符静默替换并记录警告；超长则跳过。
-func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools []MCPTool) []MCPTool {
+// serverID 是 entries map 键（DB 实例 ID），供工具执行期 OAuth 挑战定位对应 entry。
+func (m *MCPManager) registerTools(serverID, serverName string, client *MCPClient, tools []MCPTool) []MCPTool {
 	// 确定此 server 的污点等级：白名单 → TaintMedium；其余 → TaintHigh
 	taint := types.TaintHigh
 	if client.cfg.Trusted {
@@ -94,7 +95,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 			slog.Warn("mcp: tool LLM name too long, skipped", "server", serverName, "tool", t.Name, "llm_name", llmName, "max", maxLLMToolNameLen)
 			continue
 		}
-		fn := makeMCPToolFn(client, t.Name)
+		fn := makeMCPToolFn(m, serverID, serverName, client, t.Name)
 		// RegisterRich 将 MCP 工具注册到富工具路径（支持 ImageParts 回传）
 		m.sandbox.RegisterRich(llmName, fn, taint)
 		// 同步到 InMemoryToolRegistry (逐步废弃)
@@ -137,7 +138,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 		// 避免同步阻塞。异步变体名超长时静默跳过（不影响同步变体本身可用性）。
 		asyncLLMName := llmName + asyncToolSuffix
 		if len(asyncLLMName) <= maxLLMToolNameLen {
-			asyncFn := makeMCPToolAsyncFn(m, client, t.Name)
+			asyncFn := makeMCPToolAsyncFn(m, serverID, serverName, client, t.Name)
 			m.sandbox.RegisterRich(asyncLLMName, asyncFn, taint)
 			if m.catalog != nil {
 				m.catalog.Register(protocol.CatalogEntry{
@@ -164,7 +165,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 
 // makeMCPToolFn 创建调用 MCP 工具的富执行函数。
 // 返回完整 ToolResult（含 ImageParts），使用 CallToolTainted 进行污点保护反序列化（M07 §1 安全要求）。
-func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
+func makeMCPToolFn(m *MCPManager, serverID, serverName string, client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
 		var args map[string]any
 		if len(spec.Input) > 0 {
@@ -181,6 +182,11 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 		defer cancel()
 		text, imgs, taintLevel, err := client.CallToolTainted(callCtx, mcpName, args)
 		if err != nil {
+			// OAuth 挑战（401 刷新已失败 / 403 insufficient_scope）：置 AuthRequired，
+			// 返回面向 LLM 的可读错误，而不是透传底层传输错误（basic_authorization.md）。
+			if authErr := m.authRequiredError(serverID, serverName, err); authErr != nil {
+				return nil, authErr
+			}
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeMCPToolFn", err)
 		}
 		return &types.ToolResult{
@@ -199,7 +205,7 @@ const asyncToolSuffix = "_async"
 // {"task_id":"...","status":"pending"}，不等待实际 MCP 调用完成。
 // 真正的调用结果通过 m.runAsyncCall 派生的后台 goroutine 写入 tasks_cache，
 // LLM 侧用 get_task_result 工具轮询。
-func makeMCPToolAsyncFn(m *MCPManager, client *MCPClient, mcpName string) sandbox.InProcessRichFn {
+func makeMCPToolAsyncFn(m *MCPManager, serverID, serverName string, client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
 		var args map[string]any
 		if len(spec.Input) > 0 {
@@ -207,7 +213,7 @@ func makeMCPToolAsyncFn(m *MCPManager, client *MCPClient, mcpName string) sandbo
 				return nil, apperr.New(apperr.CodeInvalidInput, "mcp: invalid tool input JSON: "+err.Error())
 			}
 		}
-		taskID := m.runAsyncCall(ctx, client, mcpName, args)
+		taskID := m.runAsyncCall(ctx, serverID, serverName, client, mcpName, args)
 		out, _ := json.Marshal(map[string]string{"task_id": taskID, "status": string(AsyncTaskPending)}) //nolint:errchkjson // 固定字段结构体，Marshal 不会失败
 		return &types.ToolResult{Success: true, Output: out}, nil
 	}

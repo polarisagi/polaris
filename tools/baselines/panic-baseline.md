@@ -1,7 +1,7 @@
 internal/action/hook/runner.go:48:NewRunner
-internal/extension/mcp/mcp_client.go:180:NewMCPClient
-internal/extension/mcp/mcp_manager.go:113:NewMCPManagerWithContext
-internal/extension/mcp/mcp_manager.go:116:NewMCPManagerWithContext
+internal/extension/mcp/mcp_client.go:190:NewMCPClient
+internal/extension/mcp/mcp_manager.go:126:NewMCPManagerWithContext
+internal/extension/mcp/mcp_manager.go:129:NewMCPManagerWithContext
 internal/ffi/dylib.go:127:verifyABI
 internal/gateway/server/server_lifecycle.go:80:NewServer
 internal/gateway/server/server_lifecycle.go:88:NewServer

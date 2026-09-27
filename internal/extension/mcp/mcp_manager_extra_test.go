@@ -34,6 +34,7 @@ func TestMCPManager_AddRemoveUpdate(t *testing.T) {
 		env TEXT,
 		url TEXT,
 		headers TEXT NOT NULL DEFAULT '{}',
+		oauth TEXT NOT NULL DEFAULT '{}',
 		enabled INTEGER,
 		timeout INTEGER,
 		trust_tier INTEGER,
@@ -101,7 +102,7 @@ func TestMCPManager_AddRemoveUpdate(t *testing.T) {
 	testClient := NewMCPClient(MCPClientConfig{Trusted: true}, testSafeHTTP(nil))
 
 	// directly test registerTools
-	validTools := mgr.registerTools("fake-1", testClient, []MCPTool{
+	validTools := mgr.registerTools("fake-1", "fake-1", testClient, []MCPTool{
 		{Name: "tool1", Description: "desc1", InputSchema: []byte(`{"type":"object"}`)},
 	})
 	if len(validTools) != 1 {

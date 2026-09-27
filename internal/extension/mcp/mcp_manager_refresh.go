@@ -84,7 +84,7 @@ func (m *MCPManager) doRefreshTools(ctx context.Context, serverID string) error 
 	}
 	var validNew []MCPTool
 	if len(toRegister) > 0 {
-		validNew = m.registerTools(name, client, toRegister)
+		validNew = m.registerTools(serverID, name, client, toRegister)
 	}
 
 	added := m.commitRefreshedTools(serverID, client, oldTools, changed, validNew)

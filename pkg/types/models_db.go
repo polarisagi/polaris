@@ -157,7 +157,42 @@ MCPServerRow struct {
 	PluginID        string
 	WorkDir         string
 	RequiresNetwork bool
-	CreatedAt       string
+	// OAuth 预注册 OAuth 客户端配置（JSON object）：{"client_id","client_secret_enc",
+	// "auth_server_metadata_url","scopes":[...]}。client_secret 经 credential.Vault 加密后
+	// 存 client_secret_enc，不落明文（basic_authorization_client-registration.md §Pre-registration）。
+	OAuth     string
+	CreatedAt string
+	UpdatedAt string
+}
+
+type
+
+// MCPOAuthClientRow 对应 mcp_oauth_clients 表一行：Dynamic Client Registration（DCR）
+// 得到的客户端，主键 (Issuer, RedirectURI)——授权服务器变更时天然不会复用旧客户端
+// （basic_authorization_client-registration.md §Authorization Server Binding）。
+MCPOAuthClientRow struct {
+	Issuer             string
+	RedirectURI        string
+	ClientID           string
+	ClientSecretEnc    string // credential.Vault 密文；公开客户端（token_endpoint_auth_method=none）为空
+	RegistrationMethod string // 目前恒为 "dcr"
+	CreatedAt          string
+}
+
+type
+
+// MCPOAuthTokenRow 对应 mcp_oauth_tokens 表一行：每个 MCP Server 当前持有的令牌（一对一）。
+MCPOAuthTokenRow struct {
+	ServerID        string
+	Issuer          string
+	Resource        string
+	ClientID        string // 签发该令牌的客户端；刷新请求必须携带
+	RedirectURI     string // 与 Issuer 一起定位 DCR 客户端密钥
+	AccessTokenEnc  string // credential.Vault 密文
+	RefreshTokenEnc string // credential.Vault 密文；可空（AS 未签发 refresh_token 时）
+	TokenType       string
+	Scopes          string // 空格分隔，已请求 scope 集合的并集（用于 step-up 取并集）
+	ExpiresAt       string // RFC3339；空串=未知/不过期
 	UpdatedAt       string
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -32,6 +33,7 @@ func mcpRowFromSpec(srv pluginspec.MCPServer, p mcpRowParams) types.MCPServerRow
 		Env:       jsonOr(srv.Env, "{}"),
 		URL:       srv.URL,
 		Headers:   jsonOr(srv.Headers, "{}"),
+		OAuth:     mcp.BuildRowOAuthJSON(srv.OAuthConfig),
 		Enabled:   p.Enabled,
 		Timeout:   30,
 		TrustTier: p.TrustTier,

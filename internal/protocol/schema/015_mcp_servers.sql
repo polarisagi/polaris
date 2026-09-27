@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     -- 远程传输请求头（JSON object）。插件 MCP 保留 ${user_config.*} 等占位原文，启动时展开
     -- （ADR-0103 决策二）；不在此落明文凭据——敏感 userConfig 值存于 credential.Vault。
     headers     TEXT    NOT NULL DEFAULT '{}',
+    -- 预注册 OAuth 客户端配置（JSON object，basic_authorization_client-registration.md
+    -- §Pre-registration）：{"client_id","client_secret_enc","auth_server_metadata_url","scopes":[...]}。
+    -- client_secret 经 credential.Vault 加密后存 client_secret_enc，不落明文。DCR 动态注册结果与
+    -- 已获取令牌分别存 mcp_oauth_clients / mcp_oauth_tokens（040_mcp_oauth.sql），不在本表。
+    oauth       TEXT    NOT NULL DEFAULT '{}',
     enabled     INTEGER NOT NULL DEFAULT 1,
     timeout     INTEGER NOT NULL DEFAULT 30,        -- 单次请求超时（秒）
     trust_tier  INTEGER NOT NULL DEFAULT 2,         -- 0-4，见上方说明

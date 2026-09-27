@@ -24,7 +24,21 @@ const (
 	RuleMCPURL       = "mcp.remote.url"
 	RuleMCPHTTPS     = "agent-plugins.mcp.https"
 	RuleMCPSSELegacy = "mcp.sse.deprecated"
+	// RuleMCPOAuthCallbackPort Claude oauth.callbackPort 在 Polaris 不适用：授权回调走网关
+	// （internal/extension/mcp 的 BeginAuthorization/CompleteAuthorization），不经本地端口。
+	RuleMCPOAuthCallbackPort = "mcp.oauth.callback-port"
+	// RuleMCPOAuthStdio STDIO 传输 SHOULD NOT 走 basic_authorization.md（规范 §Protocol Requirements）。
+	RuleMCPOAuthStdio = "mcp.oauth.stdio-ignored"
 )
+
+// MCPOAuth 归一化后的预注册 OAuth 客户端配置（Claude oauth.{clientId,authServerMetadataUrl,scopes}
+// 与 Codex 顶层 scopes 字段的并集）。callbackPort 不适用（回调走网关），只记诊断不进入本结构。
+// 只含公开信息——client_secret 不通过插件清单声明，机密客户端需管理员经独立配置接口写入。
+type MCPOAuth struct {
+	ClientID              string   `json:"clientId,omitempty"`
+	AuthServerMetadataURL string   `json:"authServerMetadataUrl,omitempty"`
+	Scopes                []string `json:"scopes,omitempty"`
+}
 
 // MCPServer 归一化 MCP 服务器定义（Claude .mcp.json / Codex .mcp.json / agent-plugins mcp.json 的并集）。
 // 字符串字段保留 ${PLUGIN_ROOT} / ${CLAUDE_PLUGIN_ROOT} / ${user_config.X} 等原文，
@@ -40,6 +54,9 @@ type MCPServer struct {
 	Headers       map[string]string `json:"headers,omitempty"`
 	HeadersHelper string            `json:"headersHelper,omitempty"`
 	OAuth         json.RawMessage   `json:"oauth,omitempty"`
+	// OAuthConfig 归一化后的预注册 OAuth 配置；解析期由 parseMCPOAuth 计算，
+	// 无 oauth 声明（或 stdio 传输，规范 SHOULD NOT 走本规范）时为 nil。
+	OAuthConfig *MCPOAuth `json:"oauthConfig,omitempty"`
 	// Extra 未归一化的厂商私有字段原样保留（如 Codex 的 startup_timeout_sec），供激活层按需读取。
 	Extra  map[string]json.RawMessage `json:"extra,omitempty"`
 	Source string                     `json:"source"` // 声明来源文件或 "manifest"
@@ -146,7 +163,67 @@ func parseMCPServer(name string, raw json.RawMessage, source string, ds *diagnos
 		Headers: w.Headers, HeadersHelper: w.HeadersHelper, OAuth: w.OAuth, Source: source}
 	srv.Extra = extraFields(raw, knownMCPKeys())
 	srv.Type = normalizeMCPType(firstNonEmpty(w.Type, w.Transport), w.Command, w.URL)
+	parseMCPOAuth(&srv, source, ds)
 	return srv, validateMCPServer(srv, source, ds)
+}
+
+// mcpOAuthWire Claude .mcp.json 的 oauth 对象（clientId/callbackPort/authServerMetadataUrl/scopes）。
+type mcpOAuthWire struct {
+	ClientID              string   `json:"clientId"`
+	CallbackPort          int      `json:"callbackPort"`
+	AuthServerMetadataURL string   `json:"authServerMetadataUrl"`
+	Scopes                []string `json:"scopes"`
+}
+
+// parseMCPOAuth 归一化 srv.OAuth（Claude oauth 对象）与 srv.Extra["scopes"]（Codex 顶层 scopes
+// 字段）为 srv.OAuthConfig。STDIO 传输 SHOULD NOT 走 basic_authorization.md（规范
+// §Protocol Requirements），声明的 oauth 一律忽略并记诊断；callbackPort 在 Polaris 不适用
+// （授权回调走网关，非本地端口），同样只记诊断不落入归一化结构。
+func parseMCPOAuth(srv *MCPServer, source string, ds *diagnostics) {
+	if srv.Type == MCPTypeStdio {
+		if len(srv.OAuth) > 0 {
+			ds.warnf("mcp", source, RuleMCPOAuthStdio, "server %q: oauth ignored for stdio transport (MCP authorization spec: STDIO SHOULD NOT use OAuth)", srv.Name)
+		}
+		return
+	}
+	var clientID, metaURL string
+	var scopes []string
+	if len(srv.OAuth) > 0 {
+		var w mcpOAuthWire
+		if err := json.Unmarshal(srv.OAuth, &w); err != nil {
+			ds.warnf("mcp", source, RuleMCPParse, "server %q: invalid oauth object ignored: %v", srv.Name, err)
+		} else {
+			clientID, metaURL, scopes = w.ClientID, w.AuthServerMetadataURL, w.Scopes
+			if w.CallbackPort != 0 {
+				ds.warnf("mcp", source, RuleMCPOAuthCallbackPort,
+					"server %q: oauth.callbackPort not applicable (Polaris routes the OAuth callback through the gateway, not a local port)", srv.Name)
+			}
+		}
+	}
+	if raw, ok := srv.Extra["scopes"]; ok {
+		var codexScopes []string
+		if err := json.Unmarshal(raw, &codexScopes); err == nil {
+			scopes = mergeScopeLists(scopes, codexScopes)
+		}
+	}
+	if clientID == "" && metaURL == "" && len(scopes) == 0 {
+		return
+	}
+	srv.OAuthConfig = &MCPOAuth{ClientID: clientID, AuthServerMetadataURL: metaURL, Scopes: scopes}
+}
+
+// mergeScopeLists 合并两个 scope 列表并去重，保留首次出现顺序。
+func mergeScopeLists(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range append(append([]string(nil), a...), b...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 func normalizeMCPType(declared, command, rawURL string) string {

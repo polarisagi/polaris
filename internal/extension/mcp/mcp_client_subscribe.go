@@ -191,7 +191,7 @@ func (c *MCPClient) subscribeHTTPOnce(refresh func()) (subscriptionEnd, error) {
 	if err != nil {
 		return subscriptionEndAbnormal, apperr.Wrap(apperr.CodeInternal, "mcp: build subscriptions/listen request", err)
 	}
-	c.setRequestHeaders(req, rpc)
+	c.setRequestHeaders(ctx, req, rpc)
 	req.Header.Set("Accept", subscriptionSSEAccept)
 
 	resp, err := c.httpClient.Do(req)
@@ -204,14 +204,18 @@ func (c *MCPClient) subscribeHTTPOnce(refresh func()) (subscriptionEnd, error) {
 	defer resp.Body.Close()
 
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return rejectSubscription(resp)
+		return rejectSubscription(c.cfg.ServerName, resp)
 	}
 	slog.Info("mcp: subscriptions/listen stream opened", "server", c.cfg.ServerName, "id", reqID)
 	return c.readSubscriptionStream(resp.Body, reqID, refresh)
 }
 
 // rejectSubscription 服务器未打开事件流：视为不支持该方法，记录原因后结束，不重连。
-func rejectSubscription(resp *http.Response) (subscriptionEnd, error) {
+// 401/403 挑战单独识别为需要授权（而不是笼统的"不支持"），错误信息与其余传输路径一致。
+func rejectSubscription(serverName string, resp *http.Response) (subscriptionEnd, error) {
+	if ace := authChallengeFromResponse(resp); ace != nil {
+		return subscriptionEndUnsupported, wrapAuthChallenge(serverName, ace)
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return subscriptionEndUnsupported, apperr.Wrap(apperr.CodeInternal, "mcp: read subscriptions/listen rejection", err)

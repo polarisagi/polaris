@@ -131,13 +131,13 @@ func (m *MCPManager) CallToolAsync(ctx context.Context, serverID, toolName strin
 	if !ok {
 		return "", apperr.New(apperr.CodeInternal, "mcp_manager: server not found: "+serverID)
 	}
-	return m.runAsyncCall(ctx, e.client, toolName, args), nil
+	return m.runAsyncCall(ctx, serverID, e.name, e.client, toolName, args), nil
 }
 
 // runAsyncCall 是 CallToolAsync 与工具注册路径（makeMCPToolAsyncFn）共享的核心
 // 实现：立即分配 task_id 并写入 pending 状态，随后在后台 goroutine 中执行真正
 // 的 MCP 调用，完成/失败后回写 tasks_cache。
-func (m *MCPManager) runAsyncCall(ctx context.Context, client *MCPClient, mcpName string, args map[string]any) string {
+func (m *MCPManager) runAsyncCall(ctx context.Context, serverID, serverName string, client *MCPClient, mcpName string, args map[string]any) string {
 	taskID := "mcptask_" + uuid.NewString()
 	m.asyncTasks.put(&AsyncTaskResult{
 		TaskID:    taskID,
@@ -151,10 +151,14 @@ func (m *MCPManager) runAsyncCall(ctx context.Context, client *MCPClient, mcpNam
 	concurrent.SafeGo(bgCtx, "mcp.async_task_run", func(ctx context.Context) {
 		text, imgs, taintLevel, err := client.CallToolTainted(ctx, mcpName, args)
 		if err != nil {
+			errMsg := err.Error()
+			if authErr := m.authRequiredError(serverID, serverName, err); authErr != nil {
+				errMsg = authErr.Error()
+			}
 			m.asyncTasks.put(&AsyncTaskResult{
 				TaskID:    taskID,
 				Status:    AsyncTaskFailed,
-				Error:     err.Error(),
+				Error:     errMsg,
 				ExpiresAt: time.Now().Add(asyncTaskTTL),
 			})
 			return
