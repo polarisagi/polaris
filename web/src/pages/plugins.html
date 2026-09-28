@@ -36,6 +36,7 @@
             <span x-show="$store.plugins.syncing" class="loading loading-spinner loading-xs"></span>
             <span x-show="!$store.plugins.syncing" x-text="'⟳ ' + $store.i18n.t('plugins_btn_sync')"></span>
           </button>
+          <button x-show="$store.plugins.filter === 'plugin'" class="btn btn-outline btn-sm" @click="$store.plugins.prunePlugins()" x-text="'🧹 ' + $store.i18n.t('plugins_btn_prune')"></button>
         </div>
       </div>
     </div>
@@ -165,6 +166,7 @@
                   </template>
                 </div>
                 <a x-show="entry.homepage" :href="entry.homepage" target="_blank" rel="noopener" class="btn btn-ghost btn-sm text-xs px-2 shrink-0" x-text="$store.i18n.t('plugins_btn_details')"></a>
+                <button x-show="entry.type === 'plugin' && $store.plugins.installedPluginFor(entry)" class="btn btn-ghost btn-sm text-xs px-2 shrink-0" @click="$store.plugins.openDetail($store.plugins.installedPluginFor(entry))" x-text="$store.i18n.t('plugins_btn_details')"></button>
               </div>
             </div>
           </div>
@@ -358,6 +360,199 @@
         </div>
       </div>
       <div class="modal-backdrop" @click="$store.plugins.showCreateModal=false"></div>
+    </dialog>
+
+    <!-- Plugin Detail Modal：config / apps / dependencies / agents / hooks / channels -->
+    <dialog class="modal" id="plugin_detail_modal" x-effect="$store.plugins.showDetail ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showDetail = false; $store.plugins.detail = null">
+      <div class="modal-box max-w-3xl">
+        <h3 class="font-bold text-lg" x-text="$store.plugins.detail?.display_name || $store.plugins.detail?.name"></h3>
+        <div class="text-xs text-base-content/60 mb-4">
+          <span x-text="$store.plugins.detail?.publisher"></span> · v<span x-text="$store.plugins.detail?.version"></span>
+        </div>
+
+        <div role="tablist" class="tabs tabs-boxed mb-4 flex-wrap">
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'config' }" @click="$store.plugins.switchDetailTab('config')" x-text="$store.i18n.t('plugin_detail_tab_config')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'apps' }" @click="$store.plugins.switchDetailTab('apps')" x-text="$store.i18n.t('plugin_detail_tab_apps')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'deps' }" @click="$store.plugins.switchDetailTab('deps')" x-text="$store.i18n.t('plugin_detail_tab_deps')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'agents' }" @click="$store.plugins.switchDetailTab('agents')" x-text="$store.i18n.t('plugin_detail_tab_agents')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'hooks' }" @click="$store.plugins.switchDetailTab('hooks')" x-text="$store.i18n.t('plugin_detail_tab_hooks')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'channels' }" @click="$store.plugins.switchDetailTab('channels')" x-text="$store.i18n.t('plugin_detail_tab_channels')"></a>
+        </div>
+
+        <div class="max-h-[55vh] overflow-y-auto pr-1">
+
+          <!-- Config -->
+          <div x-show="$store.plugins.detailTab === 'config'">
+            <div x-show="$store.plugins.detailLoading.config" class="flex justify-center py-8"><span class="loading loading-spinner"></span></div>
+            <template x-if="!$store.plugins.detailLoading.config && $store.plugins.detailData.config">
+              <div class="flex flex-col gap-4">
+                <template x-for="sc in $store.plugins.detailData.config.scopes" :key="sc.scope">
+                  <div>
+                    <div class="text-xs font-bold text-base-content/60 mb-2" x-show="sc.title || sc.scope" x-text="sc.title || sc.scope"></div>
+                    <div x-show="(sc.options||[]).length === 0" class="text-xs text-base-content/50" x-text="$store.i18n.t('plugin_detail_config_empty')"></div>
+                    <div class="flex flex-col gap-3">
+                      <template x-for="opt in (sc.options||[])" :key="opt.key">
+                        <div class="form-control">
+                          <label class="label py-1">
+                            <span class="label-text text-xs" x-text="opt.title + (opt.required ? ' *' : '')"></span>
+                            <span x-show="opt.sensitive && $store.plugins.isConfigSet(sc.scope, opt.key)" class="badge badge-success badge-xs" x-text="$store.i18n.t('plugin_detail_config_sensitive_set')"></span>
+                          </label>
+                          <p class="text-xs text-base-content/50 -mt-1 mb-1" x-show="opt.description" x-text="opt.description"></p>
+
+                          <template x-if="opt.sensitive">
+                            <div class="flex items-center gap-2">
+                              <input type="password" class="input input-bordered input-sm flex-1" :placeholder="$store.plugins.isConfigSet(sc.scope, opt.key) ? '••••••••' : ''"
+                                     :disabled="!!$store.plugins.detailConfigClear[$store.plugins.configValueKey(sc.scope, opt.key)]"
+                                     :value="$store.plugins.configFieldModel(sc.scope, opt)" @input="$store.plugins.setConfigField(sc.scope, opt.key, $event.target.value)" />
+                              <label class="label cursor-pointer gap-1" x-show="$store.plugins.isConfigSet(sc.scope, opt.key)">
+                                <input type="checkbox" class="checkbox checkbox-xs" @change="$store.plugins.detailConfigClear[$store.plugins.configValueKey(sc.scope, opt.key)] = $event.target.checked" />
+                                <span class="text-xs" x-text="$store.i18n.t('plugin_detail_config_sensitive_clear')"></span>
+                              </label>
+                            </div>
+                          </template>
+                          <template x-if="!opt.sensitive && opt.type === 'boolean'">
+                            <input type="checkbox" class="toggle toggle-sm" :checked="$store.plugins.configFieldModel(sc.scope, opt)" @change="$store.plugins.setConfigField(sc.scope, opt.key, $event.target.checked)" />
+                          </template>
+                          <template x-if="!opt.sensitive && opt.type === 'number'">
+                            <input type="number" class="input input-bordered input-sm w-full" :min="opt.min ?? null" :max="opt.max ?? null"
+                                   :value="$store.plugins.configFieldModel(sc.scope, opt)" @input="$store.plugins.setConfigField(sc.scope, opt.key, Number($event.target.value))" />
+                          </template>
+                          <template x-if="!opt.sensitive && opt.type !== 'boolean' && opt.type !== 'number' && !opt.multiple && (opt.options||[]).length > 0">
+                            <select class="select select-bordered select-sm w-full" :value="$store.plugins.configFieldModel(sc.scope, opt)" @change="$store.plugins.setConfigField(sc.scope, opt.key, $event.target.value)">
+                              <option value=""></option>
+                              <template x-for="o in opt.options" :key="o"><option :value="o" x-text="o"></option></template>
+                            </select>
+                          </template>
+                          <template x-if="!opt.sensitive && opt.type !== 'boolean' && opt.type !== 'number' && !opt.multiple && (opt.options||[]).length === 0">
+                            <input type="text" class="input input-bordered input-sm w-full" :maxlength="null"
+                                   :value="$store.plugins.configFieldModel(sc.scope, opt)" @input="$store.plugins.setConfigField(sc.scope, opt.key, $event.target.value)" />
+                          </template>
+                          <template x-if="!opt.sensitive && opt.multiple">
+                            <textarea class="textarea textarea-bordered textarea-sm w-full" rows="2"
+                                      :value="($store.plugins.configFieldModel(sc.scope, opt) || []).join('\n')"
+                                      @input="$store.plugins.setConfigField(sc.scope, opt.key, $event.target.value.split('\n').map(v => v.trim()).filter(Boolean))"></textarea>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+                <div class="flex justify-end">
+                  <button class="btn btn-primary btn-sm" @click="$store.plugins.saveDetailConfig()" x-text="$store.i18n.t('plugin_detail_config_save')"></button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Apps -->
+          <div x-show="$store.plugins.detailTab === 'apps'">
+            <div x-show="$store.plugins.detailLoading.apps" class="flex justify-center py-8"><span class="loading loading-spinner"></span></div>
+            <div x-show="!$store.plugins.detailLoading.apps && (($store.plugins.detailData.apps||[]).length === 0)" class="text-xs text-base-content/50 py-4" x-text="$store.i18n.t('plugin_detail_apps_empty')"></div>
+            <div class="flex flex-col gap-2">
+              <template x-for="a in ($store.plugins.detailData.apps||[])" :key="a.alias">
+                <div class="flex items-center gap-3 bg-base-200 rounded p-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-mono truncate" x-text="a.alias"></div>
+                    <div class="text-[10px] text-base-content/50 truncate" x-text="a.connector_ref"></div>
+                  </div>
+                  <span class="badge badge-xs" :class="a.status === 'bound' ? 'badge-success' : 'badge-ghost'" x-text="a.status"></span>
+                  <select class="select select-bordered select-xs w-40" :disabled="!!$store.plugins.bindingApp[a.alias]"
+                          :value="a.bound_server_id || ''" @change="$store.plugins.bindApp(a.alias, $event.target.value)">
+                    <option value="" x-text="$store.i18n.t('plugin_detail_apps_unbound')"></option>
+                    <template x-for="ms in $store.plugins.mcpServers" :key="ms.id"><option :value="ms.id" x-text="ms.name"></option></template>
+                  </select>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Dependencies -->
+          <div x-show="$store.plugins.detailTab === 'deps'">
+            <div x-show="$store.plugins.detailLoading.deps" class="flex justify-center py-8"><span class="loading loading-spinner"></span></div>
+            <div x-show="!$store.plugins.detailLoading.deps && (($store.plugins.detailData.deps||[]).length === 0)" class="text-xs text-base-content/50 py-4" x-text="$store.i18n.t('plugin_detail_deps_empty')"></div>
+            <div class="flex flex-col gap-2">
+              <template x-for="d in ($store.plugins.detailData.deps||[])" :key="d.name + (d.marketplace||'')">
+                <div class="flex items-center gap-3 bg-base-200 rounded p-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-mono truncate" x-text="d.name + (d.constraint ? ('@' + d.constraint) : '')"></div>
+                    <div class="text-[10px] text-base-content/50 truncate" x-show="d.marketplace" x-text="$store.i18n.t('plugin_detail_deps_marketplace') + ': ' + d.marketplace"></div>
+                    <div class="text-[10px] text-base-content/50 truncate" x-show="d.installed_version" x-text="$store.i18n.t('plugin_detail_deps_version') + ': ' + d.installed_version"></div>
+                    <div class="text-[10px] text-error truncate" x-show="d.message" x-text="d.message"></div>
+                  </div>
+                  <span class="badge badge-xs" :class="$store.plugins.depStateBadge(d.state)" x-text="d.state"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Agents -->
+          <div x-show="$store.plugins.detailTab === 'agents'">
+            <div x-show="$store.plugins.detailLoading.agents" class="flex justify-center py-8"><span class="loading loading-spinner"></span></div>
+            <div x-show="!$store.plugins.detailLoading.agents && (($store.plugins.detailData.agents||[]).length === 0)" class="text-xs text-base-content/50 py-4" x-text="$store.i18n.t('plugin_detail_agents_empty')"></div>
+            <div class="flex flex-col gap-2">
+              <template x-for="a in ($store.plugins.detailData.agents||[])" :key="a.name">
+                <div class="bg-base-200 rounded p-2">
+                  <div class="text-sm font-bold" x-text="a.name"></div>
+                  <div class="text-xs text-base-content/70 mb-1" x-text="a.description"></div>
+                  <div class="text-[10px] text-base-content/50" x-show="(a.tools||[]).length"><span x-text="$store.i18n.t('plugin_detail_agents_tools') + ': '"></span><span x-text="(a.tools||[]).join(', ')"></span></div>
+                  <div class="text-[10px] text-base-content/50" x-show="(a.disallowed_tools||[]).length"><span x-text="$store.i18n.t('plugin_detail_agents_disallowed') + ': '"></span><span x-text="(a.disallowed_tools||[]).join(', ')"></span></div>
+                  <div class="text-[10px] text-warning" x-show="(a.not_applied||[]).length"><span x-text="$store.i18n.t('plugin_detail_agents_not_applied') + ': '"></span><span x-text="(a.not_applied||[]).join(', ')"></span></div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Hooks -->
+          <div x-show="$store.plugins.detailTab === 'hooks'">
+            <div x-show="$store.plugins.detailLoading.hooks" class="flex justify-center py-8"><span class="loading loading-spinner"></span></div>
+            <div x-show="!$store.plugins.detailLoading.hooks && (($store.plugins.detailData.hooks||[]).length === 0)" class="text-xs text-base-content/50 py-4" x-text="$store.i18n.t('plugin_detail_hooks_empty')"></div>
+            <div class="flex flex-col gap-2">
+              <template x-for="h in ($store.plugins.detailData.hooks||[])" :key="h.key">
+                <div class="bg-base-200 rounded p-2">
+                  <div class="flex items-center gap-2">
+                    <div class="text-sm font-mono flex-1 truncate" x-text="h.key"></div>
+                    <span class="badge badge-xs" :class="h.trusted ? 'badge-success' : 'badge-warning'" x-text="h.trusted ? $store.i18n.t('plugin_detail_hooks_trusted') : $store.i18n.t('plugin_detail_hooks_untrusted')"></span>
+                  </div>
+                  <div class="flex flex-wrap gap-1 mt-1">
+                    <template x-for="ev in Object.keys(h.events||{})" :key="ev"><span class="badge badge-ghost badge-xs" x-text="ev"></span></template>
+                  </div>
+                  <div class="flex justify-end mt-2" x-show="h.scope !== 'user'">
+                    <button x-show="!h.trusted" class="btn btn-xs btn-primary" @click="$store.plugins.trustHook(h)" x-text="$store.i18n.t('plugin_detail_hooks_trust')"></button>
+                    <button x-show="h.trusted" class="btn btn-xs btn-ghost text-error" @click="$store.plugins.revokeHookTrust(h)" x-text="$store.i18n.t('plugin_detail_hooks_revoke')"></button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Channels -->
+          <div x-show="$store.plugins.detailTab === 'channels'">
+            <div x-show="$store.plugins.detailLoading.channels" class="flex justify-center py-8"><span class="loading loading-spinner"></span></div>
+            <div x-show="!$store.plugins.detailLoading.channels && (($store.plugins.detailData.channels||[]).length === 0)" class="text-xs text-base-content/50 py-4" x-text="$store.i18n.t('plugin_detail_channels_empty')"></div>
+            <div class="flex flex-col gap-2">
+              <template x-for="c in ($store.plugins.detailData.channels||[])" :key="c.server">
+                <div class="flex items-center gap-3 bg-base-200 rounded p-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm truncate" x-text="c.display_name || c.server"></div>
+                    <span class="badge badge-xs" :class="c.connected ? 'badge-success' : 'badge-ghost'" x-text="c.connected ? $store.i18n.t('plugin_detail_channels_connected') : $store.i18n.t('plugin_detail_channels_disconnected')"></span>
+                  </div>
+                  <label class="label cursor-pointer gap-1" x-show="c.declares_permission">
+                    <span class="text-[10px]" x-text="$store.i18n.t('plugin_detail_channels_relay')"></span>
+                    <input type="checkbox" class="toggle toggle-xs" :checked="c.permission_relay" :disabled="!c.enabled" @change="$store.plugins.togglePermissionRelay(c)" />
+                  </label>
+                  <input type="checkbox" class="toggle toggle-sm" :checked="c.enabled" @change="$store.plugins.toggleChannel(c)" />
+                </div>
+              </template>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.plugins.showDetail=false" x-text="$store.i18n.t('cancel')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.plugins.showDetail=false"></div>
     </dialog>
 
   </div>

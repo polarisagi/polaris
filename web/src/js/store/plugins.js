@@ -22,6 +22,27 @@ Alpine.store('plugins', {
   mcpAuth: {},
   authorizing: {},   // serverID -> true（发起授权中）
   deauthorizing: {}, // serverID -> true（注销授权中）
+  mcpServers: [],    // 全量 /v1/mcp-servers 快照（Apps 绑定下拉框用，需要 name 字段）
+
+  // 已安装插件详情（config/apps/dependencies/agents/hooks/channels，见 §插件详情弹窗）。
+  // installedIndex: entry.id（目录条目 ID，两种命名空间之一）→ pluginRow（plugins 表行，
+  // 詳情类接口唯一认的 ID）。目录条目分两类来源，ID 命名空间不同：
+  //   1) 市场安装：entry.id = extension_catalog.id，等于 pluginRow.catalog_id（安装时原样写入，
+  //      见 internal/extension/lifecycle/plugin_installer.go savePlugin CatalogID: req.CatalogID）。
+  //   2) 来源直装（/v1/plugins/create）：entry.id = extension_instances.id = "ext_xxx"（见
+  //      internal/gateway/server/plugin/catalog.go AppendCustomCatalogs），而 pluginRow.ID =
+  //      "pl_xxx"（PluginRuntimeID 把 "ext_" 前缀换成 "pl_"，两者后缀相同）；catalog_id 为空。
+  // 两个键都建进同一张表，entry.id 命中哪个都能解析到同一行，不需要调用方区分来源。
+  installed: [],
+  installedIndex: {},
+  showDetail: false,
+  detail: null,       // 当前打开详情的 pluginRow
+  detailTab: 'config',
+  detailLoading: {},  // tab -> true
+  detailData: { config: null, apps: null, deps: null, agents: null, hooks: null, channels: null },
+  detailConfigValues: {}, // scope\x00key -> 待保存的表单值（敏感项默认留空=不变更）
+  detailConfigClear: {},  // scope\x00key -> true（用户勾选「清除」）
+  bindingApp: {},      // alias -> true（绑定中）
 
   // Creation Modal State
   showCreateModal: false,
@@ -104,6 +125,7 @@ Alpine.store('plugins', {
       }
       if (msRes.ok) {
         const d = await msRes.json()
+        this.mcpServers = d.mcp_servers || []
         const auth = {}
         for (const s of (d.mcp_servers || [])) {
           auth[s.id] = {
@@ -116,9 +138,27 @@ Alpine.store('plugins', {
         }
         this.mcpAuth = auth
       }
-    } catch { /* 静默 */ } finally {
-      this.loading = false
-    }
+    } catch { /* 静默 */ }
+    try {
+      const plRes = await fetch('/v1/plugins', { headers: authHeaders() })
+      if (plRes.ok) {
+        const d = await plRes.json()
+        this.installed = d.plugins || []
+        const idx = {}
+        for (const p of this.installed) {
+          if (p.catalog_id) idx[p.catalog_id] = p
+          idx['ext_' + p.id.replace(/^pl_/, '')] = p
+        }
+        this.installedIndex = idx
+      }
+    } catch { /* 静默：详情按钮按 installedPluginFor() 返回值自然隐藏 */ }
+    this.loading = false
+  },
+
+  // installedPluginFor 目录条目 → 对应的已安装 pluginRow；找不到（未安装/非 plugin 类型
+  // 装成 mcp/skill 单体）返回 null，调用方据此决定是否显示「详情」入口。
+  installedPluginFor(entry) {
+    return this.installedIndex[entry.id] || null
   },
 
   async syncMarketplaces(localOnly = false) {
@@ -471,6 +511,240 @@ Alpine.store('plugins', {
       Alpine.store('toast').show('error', `注销失败：${e.message}`)
     } finally {
       delete this.deauthorizing[entry.id]
+    }
+  },
+
+  // ── 插件详情弹窗：config / apps / dependencies / agents / hooks / channels ──
+
+  openDetail(pluginRow) {
+    this.detail = pluginRow
+    this.detailTab = 'config'
+    this.detailData = { config: null, apps: null, deps: null, agents: null, hooks: null, channels: null }
+    this.detailConfigValues = {}
+    this.detailConfigClear = {}
+    this.showDetail = true
+    this.loadDetailTab('config')
+  },
+
+  switchDetailTab(tab) {
+    this.detailTab = tab
+    if (!this.detailData[tab]) this.loadDetailTab(tab)
+  },
+
+  async loadDetailTab(tab) {
+    if (!this.detail) return
+    this.detailLoading[tab] = true
+    try {
+      if (tab === 'config') await this._loadDetailConfig()
+      else if (tab === 'apps') await this._loadDetailApps()
+      else if (tab === 'deps') await this._loadDetailDeps()
+      else if (tab === 'agents') await this._loadDetailAgents()
+      else if (tab === 'hooks') await this._loadDetailHooks()
+      else if (tab === 'channels') await this._loadDetailChannels()
+    } catch (e) {
+      Alpine.store('toast').show('error', `加载失败：${e.message}`)
+    } finally {
+      delete this.detailLoading[tab]
+    }
+  },
+
+  async _loadDetailConfig() {
+    const r = await fetch(`/v1/plugins/${encodeURIComponent(this.detail.id)}/config`, { headers: authHeaders() })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    this.detailData.config = await r.json()
+  },
+
+  async _loadDetailApps() {
+    const r = await fetch(`/v1/plugins/${encodeURIComponent(this.detail.id)}/apps`, { headers: authHeaders() })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const d = await r.json()
+    this.detailData.apps = d.apps || []
+  },
+
+  async _loadDetailDeps() {
+    const r = await fetch(`/v1/plugins/${encodeURIComponent(this.detail.id)}/dependencies`, { headers: authHeaders() })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const d = await r.json()
+    this.detailData.deps = d.dependencies || []
+  },
+
+  // _loadDetailAgents GET /v1/agents 是全局列表（子 Agent 未按插件建索引），按
+  // source === "plugin:<id>" 客户端过滤。
+  async _loadDetailAgents() {
+    const r = await fetch('/v1/agents', { headers: authHeaders() })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const d = await r.json()
+    const want = `plugin:${this.detail.id}`
+    this.detailData.agents = (d.agents || []).filter(a => a.source === want)
+  },
+
+  // _loadDetailHooks GET /v1/hooks 同样是全局列表，按 plugin_id 客户端过滤。
+  async _loadDetailHooks() {
+    const r = await fetch('/v1/hooks', { headers: authHeaders() })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const d = await r.json()
+    this.detailData.hooks = (d.sources || []).filter(s => s.plugin_id === this.detail.id)
+  },
+
+  // _loadDetailChannels GET /v1/plugins/channels 同样是全局列表，按 plugin_id 客户端过滤。
+  async _loadDetailChannels() {
+    const r = await fetch('/v1/plugins/channels', { headers: authHeaders() })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const d = await r.json()
+    this.detailData.channels = (d.channels || []).filter(c => c.plugin_id === this.detail.id)
+  },
+
+  // configValueKey scope 可能为空串（插件级选项），与 key 之间需要分隔符防止
+  // "a"+"bc" 与 "ab"+"c" 撞键；\x00 在合法 scope/key 取值中不可能出现。
+  configValueKey(scope, key) { return `${scope}\x00${key}` },
+
+  // configFieldModel 表单双向绑定的取值：用户本次编辑过的值优先；否则用已保存的值
+  // （非敏感项）；敏感项已设置时不回显明文，留空表示"不变更"。saved.value / opt.default
+  // 都是 Go json.RawMessage 字段，经 fetch().json() 后已是原生 JS 值（数字/字符串/布尔/
+  // 数组），不需要（也不能）再 JSON.parse 一次。
+  configFieldModel(scope, opt) {
+    const k = this.configValueKey(scope, opt.key)
+    if (k in this.detailConfigValues) return this.detailConfigValues[k]
+    if (opt.sensitive) return ''
+    const saved = (this.detailData.config?.values || []).find(v => v.scope === scope && v.key === opt.key)
+    if (saved && saved.value !== undefined) return saved.value
+    if (opt.default !== undefined) return opt.default
+    return opt.type === 'boolean' ? false : (opt.multiple ? [] : '')
+  },
+  setConfigField(scope, key, value) {
+    this.detailConfigValues[this.configValueKey(scope, key)] = value
+  },
+  isConfigSet(scope, key) {
+    return !!(this.detailData.config?.values || []).find(v => v.scope === scope && v.key === key && v.is_set)
+  },
+
+  // saveDetailConfig 只提交本次编辑过的字段（detailConfigValues）与显式清除的字段
+  // （detailConfigClear）；未触碰的敏感项留在服务端原值不变（PUT 语义：未出现在
+  // 更新集合中的敏感项保留原值，见 lifecycle.ConfigUpdate 注释）。
+  async saveDetailConfig() {
+    const updates = []
+    for (const [k, cleared] of Object.entries(this.detailConfigClear)) {
+      if (!cleared) continue
+      const [scope, key] = k.split('\x00')
+      updates.push({ scope, key, value: null })
+    }
+    for (const [k, value] of Object.entries(this.detailConfigValues)) {
+      if (this.detailConfigClear[k]) continue
+      const [scope, key] = k.split('\x00')
+      // value 直接嵌入外层 JSON.stringify（不再手动 JSON.stringify 一次）：
+      // 后端 ConfigUpdate.Value 是 json.RawMessage，按 option.Type 原生反序列化校验，
+      // 若这里先转成字符串会把布尔/数字统统包成 JSON 字符串，类型校验必然失败。
+      updates.push({ scope, key, value })
+    }
+    if (updates.length === 0) {
+      Alpine.store('toast').show('ok', '没有改动')
+      return
+    }
+    this.detailLoading.config = true
+    try {
+      const r = await fetch(`/v1/plugins/${encodeURIComponent(this.detail.id)}/config`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values: updates }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      Alpine.store('toast').show('ok', '配置已保存')
+      this.detailConfigValues = {}
+      this.detailConfigClear = {}
+      await this._loadDetailConfig()
+    } catch (e) {
+      Alpine.store('toast').show('error', `保存失败：${e.message}`)
+    } finally {
+      delete this.detailLoading.config
+    }
+  },
+
+  async bindApp(alias, serverID) {
+    this.bindingApp[alias] = true
+    try {
+      const r = await fetch(`/v1/plugins/${encodeURIComponent(this.detail.id)}/apps/${encodeURIComponent(alias)}`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server_id: serverID }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      Alpine.store('toast').show('ok', serverID ? `已绑定 ${alias}` : `已解绑 ${alias}`)
+      await this._loadDetailApps()
+    } catch (e) {
+      Alpine.store('toast').show('error', `绑定失败：${e.message}`)
+    } finally {
+      delete this.bindingApp[alias]
+    }
+  },
+
+  async trustHook(src) {
+    try {
+      const r = await fetch('/v1/hooks/trust', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: src.key, digest: src.digest }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      Alpine.store('toast').show('ok', `已信任：${src.key}`)
+      await this._loadDetailHooks()
+    } catch (e) {
+      Alpine.store('toast').show('error', `信任失败：${e.message}`)
+    }
+  },
+
+  async revokeHookTrust(src) {
+    try {
+      const r = await fetch(`/v1/hooks/trust?key=${encodeURIComponent(src.key)}`, { method: 'DELETE', headers: authHeaders() })
+      if (!r.ok) throw new Error(await r.text())
+      Alpine.store('toast').show('ok', `已撤销信任：${src.key}`)
+      await this._loadDetailHooks()
+    } catch (e) {
+      Alpine.store('toast').show('error', `撤销失败：${e.message}`)
+    }
+  },
+
+  async toggleChannel(ch) {
+    try {
+      const r = await fetch('/v1/plugins/channels', {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin_id: ch.plugin_id, server: ch.server, enabled: !ch.enabled, permission_relay: ch.permission_relay }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      await this._loadDetailChannels()
+    } catch (e) {
+      Alpine.store('toast').show('error', `切换失败：${e.message}`)
+    }
+  },
+
+  async togglePermissionRelay(ch) {
+    try {
+      const r = await fetch('/v1/plugins/channels', {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin_id: ch.plugin_id, server: ch.server, enabled: ch.enabled, permission_relay: !ch.permission_relay }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      await this._loadDetailChannels()
+    } catch (e) {
+      Alpine.store('toast').show('error', `切换失败：${e.message}`)
+    }
+  },
+
+  depStateBadge(state) {
+    return { ok: 'badge-success', missing: 'badge-error', disabled: 'badge-warning', version_mismatch: 'badge-warning' }[state] || 'badge-ghost'
+  },
+
+  async prunePlugins() {
+    try {
+      const r = await fetch('/v1/plugins/prune', { method: 'POST', headers: authHeaders() })
+      if (!r.ok) throw new Error(await r.text())
+      const d = await r.json()
+      const n = (d.pruned || []).length
+      Alpine.store('toast').show('ok', n > 0 ? `已清理 ${n} 个孤儿依赖插件` : '没有可清理的插件')
+      if (n > 0) await this.load()
+    } catch (e) {
+      Alpine.store('toast').show('error', `清理失败：${e.message}`)
     }
   },
 

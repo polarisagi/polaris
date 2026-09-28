@@ -8,6 +8,8 @@
 
 ## 2026-09-29（ADR-0103 决策八：MCP 2026-07-28 客户端 — 含**契约变更**与 **DDL 变更**）
 
+- **[前端]** 插件详情弹窗（`plugins.js`/`plugins.html`）：已安装插件卡片新增「详情」入口，覆盖 userConfig 表单（敏感项脱敏/清除）、应用绑定、依赖状态、子 Agent（`GET /v1/agents` 按 `plugin:<id>` 过滤）、hooks 信任（`GET/POST/DELETE /v1/hooks*`）、消息通道开关；目录条目 ID 与 `plugins.id` 命名空间不同（市场安装走 `catalog_id`，来源直装走 `ext_`/`pl_` 前缀互推），`installedIndex` 统一解析；工具栏新增「清理孤儿依赖」（`POST /v1/plugins/prune`）。全部为既有后端接口的前端接线，未新增路由。
+
 - **[前端]** 聊天页 elicitation 对话框（`web/src/js/store/elicitations.js` + `chat.html`）：轮询 `/v1/elicitations`，按 requestedSchema 渲染表单（string/number/boolean/单选枚举/多选枚举），url 模式只展示域名与打开按钮，accept/decline/cancel 经 `POST /v1/elicitations/{id}`。
 
 - **[DDL] `015_mcp_servers.sql` 增 `oauth` 列；新增 `040_mcp_oauth.sql`（`mcp_oauth_clients` / `mcp_oauth_tokens`）；`013_chat.sql` 新增 `chat_app_views`、`chat_sessions.app_model_context`**：开发库需删除重建。
