@@ -57,8 +57,9 @@ Alpine.store('plugins', {
     url: '',
     transport: 'stdio',
     command: '',
-    args: '', // JSON array string
-    env: '',  // JSON object string
+    args: '',    // JSON array string
+    env: '',     // JSON object string
+    headers: '', // JSON object string（远程传输请求头，如 Authorization）
     // OAuth 预注册（仅远程传输 MCP 连接器编辑时展示，可折叠区）
     oauthClientId: '',
     oauthClientSecret: '',
@@ -134,6 +135,7 @@ Alpine.store('plugins', {
             authorized: !!s.oauth_authorized,
             oauth: s.oauth || null,
             transport: s.transport,
+            headers: s.headers || {},
           }
         }
         this.mcpAuth = auth
@@ -294,7 +296,7 @@ Alpine.store('plugins', {
   resetCreateForm() {
     this.editingId = null
     this.createForm = {
-      name: '', description: '', source: '', mp_type: 'plugin', url: '', transport: 'stdio', command: '', args: '', env: '',
+      name: '', description: '', source: '', mp_type: 'plugin', url: '', transport: 'stdio', command: '', args: '', env: '', headers: '',
       oauthClientId: '', oauthClientSecret: '', oauthAuthServerMetadataUrl: '', oauthScopes: '',
       oauthClearSecret: false, oauthHasClientSecret: false,
     }
@@ -324,6 +326,7 @@ Alpine.store('plugins', {
       command: entry.command || '',
       args: JSON.stringify(entry.args || []),
       env: '{}',
+      headers: JSON.stringify(info.headers || {}),
       oauthClientId: oauth.client_id || '',
       oauthClientSecret: '',
       oauthAuthServerMetadataUrl: oauth.auth_server_metadata_url || '',
@@ -364,6 +367,7 @@ Alpine.store('plugins', {
           command: this.createForm.command,
           args: this.createForm.args ? JSON.parse(this.createForm.args) : [],
           env: this.createForm.env ? JSON.parse(this.createForm.env) : {},
+          headers: this.createForm.headers ? JSON.parse(this.createForm.headers) : {},
           url: this.createForm.url
         }
       } else if (filter === 'marketplace') {
@@ -411,6 +415,7 @@ Alpine.store('plugins', {
           command: f.command,
           args: f.args ? JSON.parse(f.args) : [],
           env: f.env ? JSON.parse(f.env) : {},
+          headers: f.headers ? JSON.parse(f.headers) : {},
           url: f.url,
           enabled: true,
         }),

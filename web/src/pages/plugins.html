@@ -293,7 +293,8 @@
                 <label for="store-plugins-createform-transport" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_transport')"></span></label>
                 <select id="store-plugins-createform-transport" name="store-plugins-createform-transport" class="select select-bordered" x-model="$store.plugins.createForm.transport">
                   <option value="stdio">stdio</option>
-                  <option value="sse">sse</option>
+                  <option value="streamable_http">streamable_http</option>
+                  <option value="sse">sse（已弃用，仅兼容旧服务器）</option>
                 </select>
               </div>
               
@@ -320,6 +321,12 @@
               <div class="form-control">
                 <label for="store-plugins-createform-env" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_env')"></span></label>
                 <input id="store-plugins-createform-env" name="store-plugins-createform-env" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.env" placeholder='{"API_KEY": "value"}' />
+              </div>
+
+              <div class="form-control" x-show="$store.plugins.createForm.transport !== 'stdio'">
+                <label for="store-plugins-createform-headers" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_headers')"></span></label>
+                <input id="store-plugins-createform-headers" name="store-plugins-createform-headers" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.headers" placeholder='{"Authorization": "Bearer ..."}' />
+                <p class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('plugins_label_headers_hint')"></p>
               </div>
 
               <!-- OAuth 预注册（8e-2，可折叠）：仅编辑远程传输连接器时展示——预注册

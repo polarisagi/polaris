@@ -38,7 +38,7 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 	// 统一查询：独立安装的 MCP（plugin_id=''）和插件内嵌的 MCP（plugin_id!=''）都在 mcp_servers 表中。
 	// LEFT JOIN plugins 取 display_name 用于前端展示插件来源。
 	rows, err := h.DB.QueryContext(r.Context(), `
-		SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.env, ms.url,
+		SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.env, ms.url, ms.headers,
 		       ms.enabled, ms.timeout, ms.trust_tier, COALESCE(ms.catalog_id,''),
 		       ms.plugin_id, ms.work_dir, ms.requires_network, ms.created_at, ms.updated_at,
 		       COALESCE(p.display_name, p.name, '') AS plugin_name, ms.oauth,
@@ -76,9 +76,9 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		c := &types.MCPServerConfig{}
 		var enabled, requiresNetworkInt, hasToken int
-		var argsJSON, envJSON, oauthJSON string
+		var argsJSON, envJSON, headersJSON, oauthJSON string
 		if err := rows.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
-			&c.URL, &enabled, &c.Timeout, &c.TrustTier, &c.CatalogID,
+			&c.URL, &headersJSON, &enabled, &c.Timeout, &c.TrustTier, &c.CatalogID,
 			&c.PluginID, &c.WorkDir, &requiresNetworkInt, &c.CreatedAt, &c.UpdatedAt,
 			&c.PluginName, &oauthJSON, &hasToken); err != nil {
 			continue
@@ -86,8 +86,9 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 		c.Enabled = enabled == 1
 		c.RequiresNetwork = requiresNetworkInt == 1
 		c.OAuthAuthorized = hasToken > 0
-		json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
-		json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
+		json.Unmarshal([]byte(argsJSON), &c.Args)       //nolint:errcheck
+		json.Unmarshal([]byte(envJSON), &c.Env)         //nolint:errcheck
+		json.Unmarshal([]byte(headersJSON), &c.Headers) //nolint:errcheck
 		if info, ok := runtimeMap[c.ID]; ok {
 			c.Connected = info.Connected
 			c.ToolCount = len(info.Tools)

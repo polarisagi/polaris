@@ -567,6 +567,8 @@ export const zh = {
   plugins_label_cmd:           '执行命令 (Command)',
   plugins_label_args:          '参数 (Args - JSON Array)',
   plugins_label_env:           '环境变量 (Env - JSON Object)',
+  plugins_label_headers:       '请求头 (Headers - JSON Object)',
+  plugins_label_headers_hint:  '仅远程传输（streamable_http/sse）生效，随每次请求发送；OAuth 已启用时 Authorization 头会被令牌覆盖。',
   plugins_btn_save:            '保存',
 
   // ── MCP OAuth（8e-2）key ──────────────────────────────────────────────────
@@ -1236,6 +1238,8 @@ export const en = {
   plugins_label_cmd: 'Command',
   plugins_label_args: 'Args (JSON Array)',
   plugins_label_env: 'Environment Variables (JSON Object)',
+  plugins_label_headers: 'Headers (JSON Object)',
+  plugins_label_headers_hint: 'Only applies to remote transports (streamable_http/sse); sent with every request. When OAuth is enabled the Authorization header is overridden by the token.',
   plugins_btn_save: 'Save',
 
   // ── MCP OAuth (8e-2) keys ──────────────────────────────────────────────────
