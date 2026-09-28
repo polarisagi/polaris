@@ -1,7 +1,7 @@
 # 模块 13-bis: Extension Registry
 
 > 扩展系统的市场、安装、路由三层模型。覆盖 Skill / MCP（Model Context Protocol，模型上下文协议，UI 称「连接器」）/ Plugin / Automation / Agent 五类扩展；分类与双厂商标准对齐见 ADR-0103。[HE-Rule-3] [HE-Rule-6]
-<!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:78 技能执行模式 / 4:104 工具懒加载 / 5:133 安装流 / 6:229 信任门控 / 7:276 文件系统 / 8:307 调用路由 / 9:346 自动化 / 10:424 跨代理协作 / 11:450 学习技能归并 / 12:464 表引用 -->
+<!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:40 扩展类型 / 3:77 技能执行模式 / 4:111 工具懒加载 / 5:140 安装流 / 6:228 信任门控 / 7:275 文件系统 / 8:303 调用路由 / 9:356 自动化 / 10:434 跨代理协作 / 11:460 学习技能归并 / 12:474 表引用 -->
 
 ---
 
@@ -336,6 +336,20 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
 LLM 侧的实际调用面不是直接调 `CallToolAsync()`，而是 MCP 工具注册时（`internal/extension/mcp/mcp_manager_tools.go` `registerTools`）为每个工具额外注册一个 `<原工具名>_async` 变体（如 `mcp__filesystem__read_file_async`），语义等价于该工具的"fire-and-forget"版本，返回 `{task_id, status}` 后立即结束；`get_task_result` 本身是一个独立的 builtin 工具（`internal/tool/builtin/get_task_result/`），供 LLM 用 task_id 轮询任意来源的异步任务结果。
 
 架构边界：`tool/builtin` 属 L1，`extension/mcp` 属 L2（见 CLAUDE.md 依赖分层），`get_task_result` 不直接依赖 `*mcp.MCPManager` 具体类型，而是依赖同包内定义的 `AsyncTaskProvider` 接口（consumer-side interface，HE-3），由 `cmd/polaris/adapters_mcp_async.go` 在 main 包完成对 `*mcp.MCPManager` 的适配桥接。
+
+### 8.5 MCP 客户端协议（2026-07-28 双纪元，ADR-0103 决策八）
+
+| 能力 | 实现（`internal/extension/mcp/`） | 要点 |
+|---|---|---|
+| 纪元探测 | `mcp_client_era.go` | 先 `server/discover`，失败回退 2025-11-25 `initialize`；新纪元每请求 `_meta`（protocolVersion / clientInfo / clientCapabilities，含 tasks 与 ui 扩展声明） |
+| 请求头 | `mcp_headers.go` | `MCP-Protocol-Version`；新纪元 `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*`（`x-mcp-header` 标注，非 ASCII 走 base64 哨兵）；旧纪元回传 `Mcp-Session-Id` |
+| 多轮输入 | `mcp_client_mrtr.go`、`elicitation.go` | `input_required` 统一输入处理器（sampling / elicitation / roots 空列表），最多 8 轮；HeaderMismatch(-32020) 刷新工具头后重试一次；elicitation 经网关 broker 与 `Elicitation` / `ElicitationResult` hooks |
+| Tasks 扩展 | `mcp_client_tasks.go` | 工具调用 `resultType:"task"` 转轮询（间隔 200ms~30s，TTL 兜底），`input_required` 同 key 只答一次，ctx 取消尽力发送取消；taskId 不持久化（调用方是同步 goroutine） |
+| 工具变更 | `mcp_manager_refresh.go`、`mcp_client_subscribe.go` | 旧纪元自发通知、新纪元 `subscriptions/listen`（HTTP 专用长连接，异常断开 1s~60s 退避，优雅关闭不重连）统一进 `refreshTools`；同服务器合并为至多补一轮 |
+| OAuth | `oauth_*.go` | 401/403 挑战 → PRM(RFC 9728) → AS 元数据(RFC 8414/OIDC)；注册：预注册 > CIMD(https 非回环) > DCR；PKCE S256 + `resource` + `iss` 校验；令牌 Vault 加密（`040_mcp_oauth.sql`），刷新同服务器串行化并携带客户端凭据 |
+| MCP Apps | `mcp_apps_*.go` | 工具 `_meta.ui`（兼容 `openai/outputTemplate`、`openai/widgetAccessible`）；app-only 工具只进注册表隐藏集合，View 调用经 `ExecuteAppTool` 与模型调用同一执行体；视图持久化 `chat_app_views`；沙箱代理独立端口异源 |
+
+网关侧：`/v1/elicitations`（待办与作答）、`/v1/mcp-servers/{id}/oauth*` 与 `/oauth/{mcp/callback,client-metadata.json}`、`/v1/mcp-apps/*`；路由清单见 M13 生成块。
 
 ---
 

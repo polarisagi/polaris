@@ -6,6 +6,15 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-29（ADR-0103 决策八：MCP 2026-07-28 客户端 — 含**契约变更**与 **DDL 变更**）
+
+- **[DDL] `015_mcp_servers.sql` 增 `oauth` 列；新增 `040_mcp_oauth.sql`（`mcp_oauth_clients` / `mcp_oauth_tokens`）；`013_chat.sql` 新增 `chat_app_views`、`chat_sessions.app_model_context`**：开发库需删除重建。
+- **[契约] mcp 包**：`RPCError`（-32020/-32021/-32022）；`MCPClient.SetInputHandler/SetTokenSource/CallToolTaintedRaw`；`MCPManager.SetElicitor/SetCredentialCipher/BeginAuthorization/CompleteAuthorization/ReadUIResource/CallToolAsApp`；`ToolRegistrar` 增 `RegisterAppOnly/ExecuteAppTool`（`InMemoryToolRegistry` 实现，app-only 工具不进 `Lookup/List`）；`protocol.MCPServerInfo.AuthRequired/AuthScopes`、`protocol.MCPTool.UI`。
+- **[契约] 其它**：`hook.Runner.FireElicitation/FireElicitationResult`；`ChatRepository.AppendMessage` 与 `session.Persistence.SaveMessage` 返回新消息 ID；`types.AgentStreamEvent.UI`、`types.ToolResult.MCPRaw`；`sandbox.PrincipalMCPApp`、`ExecRequest.AppViewID/AppSessionID`。
+- **[API]** `/v1/elicitations`；`/v1/mcp-servers/{id}/oauth{,/authorize,/token}`、`GET /oauth/mcp/callback`、`GET /oauth/client-metadata.json`（精确鉴权豁免）；`/v1/mcp-apps/{config,resource,views/{id}/rpc,views/{id}/state,views/{id}/model-context}`；`GET /v1/mcp-servers` 增 `auth_required/auth_scopes/oauth/oauth_authorized`。
+- **[配置]** `[interface] apps_enabled / apps_sandbox_port / apps_sandbox_origin / apps_host_origin`（MCP Apps 沙箱独立监听端口）。
+- **[修复]** 主密钥轮换此前只改写 providers 且逐条提交：改为 `repo.RekeyVaultCiphertexts` 单事务覆盖全部 Vault 密文列（新增密文列须登记）。
+
 ## 2026-09-27（ADR-0103：市场收尾 — 含**契约变更**）
 
 - **[契约] `POST /v1/plugins/create`、`/v1/skills/create` 改为 `{"name","source"}`**（删除 `manifest_url` / `repo_url` / `entrypoint`，此前只写实例行从不取回）；`pluginspec.ParseSourceSpec`、`CatalogInstaller.InstallFromSource/Prune`、API `POST /v1/plugins/prune`。

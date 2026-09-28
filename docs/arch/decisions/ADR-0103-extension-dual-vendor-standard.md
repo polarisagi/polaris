@@ -126,6 +126,12 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 
 `server/discover` 无状态握手 + 对 2025-11-25 服务器回退 `initialize`；`Mcp-Method`/`Mcp-Name` 头；`resultType` 与 `InputRequiredResult` 多轮；Tasks 扩展轮询；OAuth（CIMD、`iss` 校验、按授权服务器绑定凭据）；MCP Apps（`ui://`、`text/html;profile=mcp-app`）在 Web 聊天沙箱 iframe 渲染，UI 发起的调用走同一 ExecuteTool 审计路径。
 
+- 实现（2026-09-27 ~ 09-29，逐项见 M13-bis §8.5）：双纪元客户端、请求头与 `_meta`、MRTR 与 elicitation（网关 broker + hooks）、Tasks 扩展、工具列表变更（旧纪元通知 + `subscriptions/listen`）、OAuth 客户端与网关接线、MCP Apps 宿主后端与前端桥。
+- MCP Apps 沙箱异源采用**独立监听端口**（默认主端口 +1）：规范要求宿主与 Sandbox proxy 异源且 Sandbox 需 `allow-same-origin`，不带该权限的 opaque-origin iframe 不满足；端口不同即异源，自托管单实例无需第二个域名。沙箱源由前端按自身 hostname + 端口拼出，`frame-ancestors` 按请求 hostname 生成，反向代理部署用 `apps_sandbox_origin` / `apps_host_origin` 显式配置。
+- ChatGPT 兼容：`openai/outputTemplate`、`openai/widgetAccessible`、`openai/widgetCSP`、`text/html+skybridge` 作为别名输入归一到标准表示；`window.openai` 只提供可映射到标准桥的成员，结账/文件/模态等 ChatGPT 专属扩展不定义，交给组件的特性检测回退。
+- CIMD 仅在网关以 https 非回环地址对外可达时启用（授权服务器须能抓取文档）；其余情形走 DCR 或预注册。OAuth 流程状态（state / code_verifier）只驻留内存 10 分钟——一次性临时凭据落盘只扩大泄露面，进程重启后重新授权即可。
+- 主密钥轮换同步覆盖本决策新增的全部 Vault 密文（OAuth 令牌、客户端密钥、预注册密钥）与插件敏感配置，单事务改写（`repo.RekeyVaultCiphertexts`）；新增 Vault 密文列必须登记在其清单中。
+
 ## 后果
 
 - **正向**：两家与 agent-plugins 标准的插件可直接安装运行；删除约 1.5K 行空壳/自造格式代码；插件内技能、MCP 真正生效（修复现存静默丢失）。
@@ -148,7 +154,7 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 
 ## 引用代码
 
-`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/execute/orchestrator/subagent_runner.go`、`internal/agent/agent_skill_fork.go`、`internal/extension/lifecycle/channels*.go`、`internal/extension/mcp/mcp_manager_notify.go`、`internal/security/credential/vault.go`、`internal/protocol/schema/{008,015,018,019,020,021}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
+`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/execute/orchestrator/subagent_runner.go`、`internal/agent/agent_skill_fork.go`、`internal/extension/lifecycle/channels*.go`、`internal/extension/mcp/mcp_manager_notify.go`、`internal/security/credential/vault.go`、`internal/extension/mcp/{mcp_client_era,mcp_headers,mcp_client_mrtr,elicitation,mcp_client_tasks,mcp_client_subscribe,mcp_manager_refresh}.go`、`internal/extension/mcp/{oauth_*,mcp_apps_*}.go`、`internal/gateway/elicitation/`、`internal/gateway/server/{server_handlers_elicitation,oauth_mcp_handlers,server_handlers_mcp_apps,server_apps_sandbox}.go`、`internal/store/repo/repo_vault_rekey.go`、`internal/protocol/schema/{008,013,015,018,019,020,021,040}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
 
 ## 重新评估触发条件
 
@@ -170,3 +176,4 @@ Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅�
 | 2026-09-27 | 决策三补充：dependencies 加载期检查（安装停用、启用阻断、级联停用、启动检查）。 |
 | 2026-09-27 | 决策七：标准市场同步与来源取回落地（删除启发式爬虫与 catalog.json；MCP 市场改为 MCP Registry）；决策三补充 dependencies：自动安装落地。 |
 | 2026-09-27 | 决策七收尾：来源直装、远程 .mcpb、archive headers、添加市场规范化与授权；依赖范围交集重解析与 prune。 |
+| 2026-09-29 | 决策八：MCP 2026-07-28 客户端落地（双纪元、MRTR/elicitation、Tasks、工具变更订阅、OAuth、MCP Apps）；沙箱独立端口异源、ChatGPT 别名归一、CIMD 启用条件、主密钥轮换覆盖面。 |
