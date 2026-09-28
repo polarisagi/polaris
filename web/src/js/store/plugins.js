@@ -69,6 +69,37 @@ Alpine.store('plugins', {
     oauthHasClientSecret: false,
   },
 
+  // ── 窗口化渲染（性能）──────────────────────────────────────────────────
+  // 目录条目可达数千（如社区插件市场单市场 2000+，见 M13-bis §5.6）；filter/search
+  // 只是内存内过滤，真正的卡顿来自一次性把几千张卡片全部挂进 DOM（Alpine 每张卡片
+  // 还各自持有若干响应式绑定）。切一次 tab 就是一次同步的几千节点创建，这才是用户
+  // 感知到的"切换卡"。数据本身不分页取（一次性拉回全量、内存内过滤/搜索不受影响），
+  // 只是渲染层按页窗口化——比后端分页侵入小得多，且不影响搜索能搜到全量数据。
+  //
+  // 切窗口只在 setFilter()/resetVisible() 里显式重置（不放进 filtered/visibleFiltered
+  // 的 getter 里做隐式副作用）：Alpine 的响应式基于 @vue/reactivity，在一个被追踪读取
+  // 的 getter 内部写自身依赖的属性容易造成同一次求值里"读后又写"，不同 Alpine/Vue
+  // 版本下表现不一致（轻则多算一轮，重则触发递归更新告警）；显式调用没有这层不确定性。
+  pageSize: 60,
+  _visibleCount: 60,
+
+  get visibleFiltered() {
+    return this.filtered.slice(0, this._visibleCount)
+  },
+
+  resetVisible() {
+    this._visibleCount = this.pageSize
+  },
+
+  loadMoreVisible() {
+    this._visibleCount += this.pageSize
+  },
+
+  setFilter(f) {
+    this.filter = f
+    this.resetVisible()
+  },
+
   get filtered() {
     let list = this.catalog
     if (this.filter !== 'all') list = list.filter(e => (e.type || 'mcp') === this.filter)

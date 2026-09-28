@@ -8,6 +8,8 @@
 
 ## 2026-09-29（ADR-0103 决策八：MCP 2026-07-28 客户端 — 含**契约变更**与 **DDL 变更**）
 
+- **[前端]** 插件目录窗口化渲染：单个市场（如 `anthropic/claude-plugins-community`）可达 2000+ 条目，一次性全挂 DOM 是切 tab 卡顿的根因；`filtered` 仍在内存内跑全量过滤/搜索不变，`visibleFiltered` 只截取前 N 页渲染，切 tab / 搜索时自动回到第一页，「加载更多」按需展开。不引入虚拟滚动依赖。
+
 - **[修复]** `GET /v1/mcp-servers` 未回显 `headers` 列：编辑表单曾据此静默清空已设置的连接器请求头（PUT 为整列覆盖，非合并）；SELECT 补列 + 前端表单接线，新增回归用例 `TestMCPServerHeaders_RoundTripThroughList`。连接器创建表单补 `streamable_http` 传输选项（此前只有 stdio/sse，现代远程连接器无法从 UI 创建）。
 
 - **[前端]** 插件详情弹窗（`plugins.js`/`plugins.html`）：已安装插件卡片新增「详情」入口，覆盖 userConfig 表单（敏感项脱敏/清除）、应用绑定、依赖状态、子 Agent（`GET /v1/agents` 按 `plugin:<id>` 过滤）、hooks 信任（`GET/POST/DELETE /v1/hooks*`）、消息通道开关；目录条目 ID 与 `plugins.id` 命名空间不同（市场安装走 `catalog_id`，来源直装走 `ext_`/`pl_` 前缀互推），`installedIndex` 统一解析；工具栏新增「清理孤儿依赖」（`POST /v1/plugins/prune`）。全部为既有后端接口的前端接线，未新增路由。

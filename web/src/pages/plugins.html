@@ -20,16 +20,16 @@
 
       <div class="flex flex-wrap gap-4 items-center justify-between">
         <div role="tablist" class="tabs tabs-boxed">
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'plugin' }" @click="$store.plugins.filter = 'plugin'" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.filter = 'mcp'" x-text="'🔌 ' + $store.i18n.t('plugins_tab_mcp')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'skill' }" @click="$store.plugins.filter = 'skill'" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'marketplace' }" @click="$store.plugins.filter = 'marketplace'" x-text="'🛒 ' + $store.i18n.t('plugins_tab_marketplace')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'plugin' }" @click="$store.plugins.setFilter('plugin')" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.setFilter('mcp')" x-text="'🔌 ' + $store.i18n.t('plugins_tab_mcp')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'skill' }" @click="$store.plugins.setFilter('skill')" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'marketplace' }" @click="$store.plugins.setFilter('marketplace')" x-text="'🛒 ' + $store.i18n.t('plugins_tab_marketplace')"></a>
         </div>
 
         <div class="flex gap-2 w-full md:w-auto">
           <label for="store-plugins-search" class="input input-bordered input-sm flex items-center gap-2 w-full md:w-64">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 opacity-70"><path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" /></svg>
-            <input id="store-plugins-search" name="store-plugins-search" type="search" class="grow" :placeholder="$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_search_marketplace') : `${$store.i18n.t('plugins_search_prefix')}${$store.plugins.typeLabel($store.plugins.filter)}...`" x-model="$store.plugins.search" />
+            <input id="store-plugins-search" name="store-plugins-search" type="search" class="grow" :placeholder="$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_search_marketplace') : `${$store.i18n.t('plugins_search_prefix')}${$store.plugins.typeLabel($store.plugins.filter)}...`" x-model="$store.plugins.search" @input="$store.plugins.resetVisible()" />
           </label>
           <button class="btn btn-primary btn-sm" @click="$store.plugins.openCreateModal()" x-text="`+ ${$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_btn_add_market') : $store.i18n.t('plugins_btn_create')}`"></button>
           <button class="btn btn-outline btn-sm" @click="$store.plugins.syncMarketplaces($store.plugins.filter !== 'marketplace')" :disabled="$store.plugins.syncing">
@@ -63,7 +63,7 @@
 
       <!-- Plugin Grid -->
       <div x-show="!$store.plugins.loading && $store.plugins.filtered.length > 0 && $store.plugins.filter !== 'marketplace'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <template x-for="entry in $store.plugins.filtered" :key="entry.id">
+        <template x-for="entry in $store.plugins.visibleFiltered" :key="entry.id">
           <div class="card bg-base-200 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full flex flex-col" :style="`border-left-width:4px;border-left-color:${$store.plugins.typeColor(entry.type)}`">
             <div class="card-body p-5 flex flex-col h-full gap-4">
               
@@ -171,6 +171,13 @@
             </div>
           </div>
         </template>
+      </div>
+
+      <!-- Load More：目录条目可达数千，一次性全部挂 DOM 是切 tab 卡顿的根因（见 plugins.js
+           §窗口化渲染），按页展开而不是虚拟滚动——数据量在这个体量下够用，且不用引入新依赖 -->
+      <div x-show="!$store.plugins.loading && $store.plugins.filter !== 'marketplace' && $store.plugins.visibleFiltered.length < $store.plugins.filtered.length" class="flex flex-col items-center gap-2 py-6">
+        <div class="text-xs text-base-content/50" x-text="`${$store.plugins.visibleFiltered.length} / ${$store.plugins.filtered.length}`"></div>
+        <button class="btn btn-outline btn-sm" @click="$store.plugins.loadMoreVisible()" x-text="$store.i18n.t('plugins_load_more')"></button>
       </div>
 
       <!-- Marketplace Grid -->
