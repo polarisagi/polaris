@@ -257,6 +257,84 @@
           </div>
         </template>
 
+        <!-- Elicitation Cards：MCP 服务器发起的输入请求（ADR-0103 决策八），轮询 /v1/elicitations -->
+        <template x-for="el in $store.elicitations.list" :key="el.id">
+          <div class="chat chat-start">
+            <div class="chat-bubble bg-base-100 text-base-content border border-info shadow-sm w-full max-w-2xl">
+              <div class="font-medium text-sm mb-1">
+                <span x-text="$store.i18n.t('elicit_title').replace('{0}', el.server_name)"></span>
+              </div>
+              <div class="text-xs text-base-content/70 mb-2 whitespace-pre-wrap break-words" x-text="el.message"></div>
+
+              <!-- URL 模式：只展示目标域名 + 打开按钮，不预取、不渲染服务器给出的任意 HTML -->
+              <template x-if="el.mode === 'url'">
+                <div class="mb-2">
+                  <div class="text-xs text-base-content/60 mb-1" x-text="$store.i18n.t('elicit_url_hint')"></div>
+                  <div class="flex items-center gap-2 bg-base-200 rounded p-2">
+                    <code class="text-xs flex-1 truncate" x-text="$store.elicitations.urlHost(el.url)"></code>
+                    <a :href="el.url" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-info" x-text="$store.i18n.t('elicit_open_url')"></a>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Form 模式：按 requestedSchema 渲染的字段列表 -->
+              <template x-if="el.mode !== 'url'">
+                <div class="flex flex-col gap-2 mb-2">
+                  <template x-for="f in el.fields" :key="f.name">
+                    <div class="form-control">
+                      <label class="label py-1">
+                        <span class="label-text text-xs" x-text="f.title + (f.required ? ' *' : '')"></span>
+                      </label>
+                      <p class="text-xs text-base-content/50 -mt-1 mb-1" x-show="f.description" x-text="f.description"></p>
+
+                      <template x-if="f.kind === 'string'">
+                        <input class="input input-bordered input-sm w-full"
+                               :type="f.format === 'email' ? 'email' : f.format === 'uri' ? 'url' : f.format === 'date' ? 'date' : f.format === 'date-time' ? 'datetime-local' : 'text'"
+                               :maxlength="f.maxLength || null" x-model="el.values[f.name]" />
+                      </template>
+                      <template x-if="f.kind === 'number'">
+                        <input type="number" class="input input-bordered input-sm w-full"
+                               :step="f.integer ? 1 : 'any'" :min="f.minimum ?? null" :max="f.maximum ?? null"
+                               x-model="el.values[f.name]" />
+                      </template>
+                      <template x-if="f.kind === 'boolean'">
+                        <input type="checkbox" class="toggle toggle-sm" x-model="el.values[f.name]" />
+                      </template>
+                      <template x-if="f.kind === 'select'">
+                        <select class="select select-bordered select-sm w-full" x-model="el.values[f.name]">
+                          <option value="" x-show="!f.required"></option>
+                          <template x-for="opt in f.options" :key="opt.value">
+                            <option :value="opt.value" x-text="opt.title"></option>
+                          </template>
+                        </select>
+                      </template>
+                      <template x-if="f.kind === 'multiselect'">
+                        <div class="flex flex-col gap-1">
+                          <template x-for="opt in f.options" :key="opt.value">
+                            <label class="label cursor-pointer justify-start gap-2 py-0.5">
+                              <input type="checkbox" class="checkbox checkbox-sm"
+                                     :checked="(el.values[f.name] || []).includes(opt.value)"
+                                     @change="$store.elicitations.toggleMulti(el, f.name, opt.value)" />
+                              <span class="label-text text-xs" x-text="opt.title"></span>
+                            </label>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <div class="text-xs text-error mb-1" x-show="el.error" x-text="el.error"></div>
+              <div class="flex gap-2 justify-end mt-2">
+                <button class="btn btn-sm btn-ghost" :disabled="el.busy" @click="$store.elicitations.respond(el, 'cancel')" x-text="$store.i18n.t('elicit_cancel')"></button>
+                <button class="btn btn-sm btn-ghost" :disabled="el.busy" @click="$store.elicitations.respond(el, 'decline')" x-text="$store.i18n.t('elicit_decline')"></button>
+                <button class="btn btn-sm btn-info" :disabled="el.busy" @click="$store.elicitations.respond(el, 'accept')" x-text="$store.i18n.t('elicit_accept')"></button>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <!-- Thinking Bubble -->
         <div class="chat chat-start" x-show="$store.chat.state === 'SUBMITTING' || $store.chat.state === 'THINKING'" x-cloak>
           <div class="chat-bubble bg-base-100/50 text-base-content border border-base-200 flex items-center gap-2">
