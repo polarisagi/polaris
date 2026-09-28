@@ -2,15 +2,296 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-u02GVf74918lSlsv+23CfG9kRMVkPQWbhVJcOR6Ylk4='; frame-src 'self' about:; base-uri 'none'; form-action 'none'">
 <title>MCP Apps Sandbox</title>
 </head>
 <body>
-<!--
-  占位页面（M8f-1）：MCP Apps Sandbox proxy 骨架，托管于与宿主页面异源的独立监听器
-  （GET /sandbox.html，见 internal/gateway/server/server_apps_sandbox.go）。
+<script>
+(function () {
+  'use strict';
+  // ============================================================================
+  // MCP Apps Sandbox proxy（M8f-2，apps_spec.mdx "Sandbox proxy"）。
+  //
+  // 与宿主页面异源（由 internal/gateway/server/server_apps_sandbox.go 的独立监听器
+  // 托管），职责只有三件事：
+  //   1. 校验自己是被声明的宿主源嵌入的（host= 参数 == document.referrer 的 origin），
+  //      不一致直接拒绝工作（不发 proxy-ready，不注册任何转发）——这是本代理页对
+  //      "谁能指挥我加载什么内容" 的唯一身份判据，比 CSP frame-ancestors（谁能嵌入
+  //      这个 iframe）更进一步，防的是同一 frame-ancestors 允许列表内的其它页面
+  //      冒充宿主发 sandbox-resource-ready。
+  //   2. 收到宿主的 HTML 负载后，按 apps_spec.mdx §UIResourceMeta.csp 规则拼出内层
+  //      View 的 CSP，注入 <meta> 与 window.openai 兼容垫片脚本，用 srcdoc 加载。
+  //   3. 双向透传宿主 <-> View 的消息（方法名不以 "ui/notifications/sandbox-" 开头者），
+  //      不合成任何新请求（apps_spec.mdx 第 7 条 SHOULD NOT）。
+  //
+  // 本页自身的 CSP（见上方 <meta>）：default-src 'none' + 仅放行本段内联脚本的
+  // sha256 hash + frame-src 'self'（放行 srcdoc 内层 iframe）+ base-uri/form-action
+  // 'none'。不加载任何外部资源，不发起任何网络请求。
+  // ============================================================================
 
-  真正的双 iframe 沙箱代理逻辑（接收宿主 HTML 负载、加载内层 iframe、转发
-  postMessage）由 8f-2 实现，本任务只提供监听器与路由骨架、返回本占位文件。
--->
+  document.documentElement.style.cssText = 'margin:0;height:100%;';
+  document.body.style.cssText = 'margin:0;height:100%;overflow:hidden;background:transparent;';
+
+  var params = new URLSearchParams(location.search);
+  var hostOrigin = params.get('host') || '';
+  var referrerOrigin = '';
+  try {
+    referrerOrigin = document.referrer ? new URL(document.referrer).origin : '';
+  } catch (e) {
+    referrerOrigin = '';
+  }
+
+  var hostOriginValid = false;
+  try {
+    hostOriginValid = !!hostOrigin && new URL(hostOrigin).origin === hostOrigin && hostOrigin === referrerOrigin;
+  } catch (e) {
+    hostOriginValid = false;
+  }
+
+  // host= 与 document.referrer 的源不一致：拒绝工作。不发送 proxy-ready、不注册任何
+  // 转发监听器——宿主侧会因为等不到 proxy-ready 而在 mount 超时兜底提示加载失败。
+  if (!hostOriginValid) {
+    return;
+  }
+
+  // ── window.openai 兼容垫片源码（作为字符串注入 View 文档的 <head>，在 View 自身
+  //    脚本之前执行；只实现 openai_mcp_apps.md 表格列出的、能映射到标准桥的子集，
+  //    未实现的扩展 (requestCheckout/uploadFile/selectFiles/getFileDownloadUrl/
+  //    requestModal) 故意不定义，让组件的特性检测走回退分支。
+  //    垫片运行在 View 自己的文档/window 内（同源 srcdoc + allow-same-origin），
+  //    不是跨 frame 转发；它对宿主的请求使用独立 id 空间前缀 "openai-shim-"，
+  //    与 View 自身若也实现标准桥时各自的 id 空间互不相交，不会互相截获响应。 ──
+  var OPENAI_SHIM_SOURCE = [
+    '(function () {',
+    '  \'use strict\';',
+    '  var PROTOCOL_VERSION = \'2026-01-26\';',
+    '  var pending = Object.create(null);',
+    '  var seq = 0;',
+    '  function nextId() { seq += 1; return \'openai-shim-\' + seq; }',
+    '  function post(msg) { window.parent.postMessage(msg, location.origin); }',
+    '  function notify(method, params) { post({ jsonrpc: \'2.0\', method: method, params: params || {} }); }',
+    '  function call(method, params) {',
+    '    var id = nextId();',
+    '    return new Promise(function (resolve, reject) {',
+    '      pending[id] = { resolve: resolve, reject: reject };',
+    '      post({ jsonrpc: \'2.0\', id: id, method: method, params: params || {} });',
+    '    });',
+    '  }',
+    '  function setGlobals(patch) {',
+    '    var keys = Object.keys(patch);',
+    '    for (var i = 0; i < keys.length; i++) { openai[keys[i]] = patch[keys[i]]; }',
+    '    try {',
+    '      window.dispatchEvent(new CustomEvent(\'openai:set_globals\', { detail: { globals: patch } }));',
+    '    } catch (e) { /* CustomEvent 构造失败的极端环境：忽略，属性已更新 */ }',
+    '  }',
+    '  function applyHostContext(ctx) {',
+    '    if (!ctx || typeof ctx !== \'object\') return;',
+    '    var patch = {};',
+    '    if (ctx.theme !== undefined) patch.theme = ctx.theme;',
+    '    if (ctx.displayMode !== undefined) patch.displayMode = ctx.displayMode;',
+    '    if (ctx.locale !== undefined) patch.locale = ctx.locale;',
+    '    if (ctx.userAgent !== undefined) patch.userAgent = ctx.userAgent;',
+    '    if (ctx.containerDimensions && ctx.containerDimensions.maxHeight !== undefined) {',
+    '      patch.maxHeight = ctx.containerDimensions.maxHeight;',
+    '    }',
+    '    if (ctx.safeAreaInsets !== undefined) patch.safeArea = ctx.safeAreaInsets;',
+    '    if (Object.keys(patch).length > 0) setGlobals(patch);',
+    '  }',
+    '  var openai = {',
+    '    toolInput: undefined,',
+    '    toolOutput: undefined,',
+    '    toolResponseMetadata: undefined,',
+    '    widgetState: undefined,',
+    '    theme: undefined,',
+    '    locale: undefined,',
+    '    displayMode: \'inline\',',
+    '    maxHeight: undefined,',
+    '    safeArea: undefined,',
+    '    userAgent: undefined,',
+    '    callTool: function (name, args) { return call(\'tools/call\', { name: name, arguments: args || {} }); },',
+    '    sendFollowUpMessage: function (opts) {',
+    '      opts = opts || {};',
+    '      return call(\'ui/message\', { role: \'user\', content: { type: \'text\', text: String(opts.prompt || \'\') } });',
+    '    },',
+    '    openExternal: function (opts) { opts = opts || {}; return call(\'ui/open-link\', { url: String(opts.href || \'\') }); },',
+    '    requestDisplayMode: function (opts) { opts = opts || {}; return call(\'ui/request-display-mode\', { mode: opts.mode }); },',
+    '    setWidgetState: function (state) { openai.widgetState = state; notify(\'polaris/widget-state\', { state: state }); },',
+    '    notifyIntrinsicHeight: function (height) {',
+    '      notify(\'ui/notifications/size-changed\', {',
+    '        width: document.documentElement ? document.documentElement.scrollWidth : 0,',
+    '        height: height,',
+    '      });',
+    '    },',
+    '  };',
+    '  window.openai = openai;',
+    '  window.addEventListener(\'message\', function (event) {',
+    '    if (event.source !== window.parent) return;',
+    '    if (event.origin !== location.origin) return;',
+    '    var msg = event.data;',
+    '    if (!msg || msg.jsonrpc !== \'2.0\') return;',
+    '    if (msg.id !== undefined && pending[msg.id]) {',
+    '      var p = pending[msg.id];',
+    '      delete pending[msg.id];',
+    '      if (msg.error) p.reject(msg.error); else p.resolve(msg.result);',
+    '      return;',
+    '    }',
+    '    if (msg.method === \'ui/notifications/tool-input\') {',
+    '      setGlobals({ toolInput: (msg.params || {}).arguments });',
+    '    } else if (msg.method === \'ui/notifications/tool-result\') {',
+    '      var r = msg.params || {};',
+    '      setGlobals({ toolOutput: r.structuredContent, toolResponseMetadata: r._meta });',
+    '    } else if (msg.method === \'ui/notifications/host-context-changed\') {',
+    '      applyHostContext(msg.params);',
+    '    }',
+    '  });',
+    '  call(\'ui/initialize\', {',
+    '    capabilities: {},',
+    '    clientInfo: { name: \'polaris-openai-compat-shim\', version: \'1.0.0\' },',
+    '    protocolVersion: PROTOCOL_VERSION,',
+    '    appCapabilities: { availableDisplayModes: [\'inline\', \'fullscreen\'] },',
+    '  }).then(function (result) {',
+    '    if (result && result.hostContext) applyHostContext(result.hostContext);',
+    '    if (result && result._meta && result._meta[\'polaris/widgetState\'] !== undefined) {',
+    '      setGlobals({ widgetState: result._meta[\'polaris/widgetState\'] });',
+    '    }',
+    '    notify(\'ui/notifications/initialized\', {});',
+    '  }).catch(function () {',
+    '    /* 握手失败：window.openai 保持初始空值，组件应做特性检测/空值回退 */',
+    '  });',
+    '})();',
+  ].join('\n');
+
+  var innerFrame = null;
+
+  function isSandboxMethod(method) {
+    return typeof method === 'string' && method.indexOf('ui/notifications/sandbox-') === 0;
+  }
+
+  function sanitizeDomainList(list) {
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    var re = /^https:\/\/(\*\.)?[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]{1,5})?\/?$/;
+    for (var i = 0; i < list.length; i++) {
+      if (typeof list[i] === 'string' && re.test(list[i])) out.push(list[i]);
+    }
+    return out;
+  }
+
+  // buildCSP 按 apps_spec.mdx §Security Implications "CSP Construction from Metadata"
+  // 与本任务说明合并的规则构造：connectDomains 缺省时 connect-src 'none'（规范
+  // §Host Behavior restrictive default 明文给出的值，比通用模板更保守，予以保留）；
+  // resourceDomains 追加进 script/style/img/font/media-src；frameDomains 缺省
+  // frame-src 'none'；baseUriDomains 缺省 base-uri 'self'；object-src 恒 'none'。
+  // 未声明的域一律不放开（No Loosening）。
+  function buildCSP(csp) {
+    csp = csp || {};
+    var resourceDomains = sanitizeDomainList(csp.resourceDomains);
+    var connectDomains = sanitizeDomainList(csp.connectDomains);
+    var frameDomains = sanitizeDomainList(csp.frameDomains);
+    var baseUriDomains = sanitizeDomainList(csp.baseUriDomains);
+
+    var resourcePart = resourceDomains.length ? (' ' + resourceDomains.join(' ')) : '';
+    var connectSrc = connectDomains.length ? ('\'self\' ' + connectDomains.join(' ')) : '\'none\'';
+    var frameSrc = frameDomains.length ? frameDomains.join(' ') : '\'none\'';
+    var baseUri = baseUriDomains.length ? baseUriDomains.join(' ') : '\'self\'';
+
+    return [
+      'default-src \'none\'',
+      'script-src \'self\' \'unsafe-inline\'' + resourcePart,
+      'style-src \'self\' \'unsafe-inline\'' + resourcePart,
+      'img-src \'self\' data:' + resourcePart,
+      'font-src \'self\'' + resourcePart,
+      'media-src \'self\' data:' + resourcePart,
+      'connect-src ' + connectSrc,
+      'frame-src ' + frameSrc,
+      'object-src \'none\'',
+      'base-uri ' + baseUri,
+    ].join('; ') + ';';
+  }
+
+  function buildAllowAttribute(permissions) {
+    permissions = permissions || {};
+    var feats = [];
+    if (permissions.camera) feats.push('camera');
+    if (permissions.microphone) feats.push('microphone');
+    if (permissions.geolocation) feats.push('geolocation');
+    if (permissions.clipboardWrite) feats.push('clipboard-write');
+    return feats.join('; ');
+  }
+
+  function escapeHtmlAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // buildDocument 把 CSP <meta> 与 window.openai 垫片脚本注入到 View 文档 <head>
+  // 最前面（垫片先于 View 自身脚本执行）。View 的 HTML 内容整体来自 MCP 服务器
+  // （不可信），这里只做结构定位（正则匹配标签名），不解析/不信任其内容语义；
+  // 服务器提供的字符串本身原封不动地随 html 传入，本函数不对其做任何文本抽取
+  // 展示（不违反"来自 MCP 服务器的字符串一律 textContent"——这里根本不展示
+  // 任何服务器字符串，只是把 host 生成的可信 meta/script 前缀拼接进去）。
+  function buildDocument(html, csp, permissions) {
+    var cspValue = buildCSP(csp);
+    var metaTag = '<meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttr(cspValue) + '">';
+    var shim = '<script>' + OPENAI_SHIM_SOURCE + '<' + '/script>';
+    var injected = metaTag + shim;
+
+    var headOpenMatch = /<head[^>]*>/i.exec(html);
+    if (headOpenMatch) {
+      var idx = headOpenMatch.index + headOpenMatch[0].length;
+      return html.slice(0, idx) + injected + html.slice(idx);
+    }
+    var htmlOpenMatch = /<html[^>]*>/i.exec(html);
+    if (htmlOpenMatch) {
+      var idx2 = htmlOpenMatch.index + htmlOpenMatch[0].length;
+      return html.slice(0, idx2) + '<head>' + injected + '</head>' + html.slice(idx2);
+    }
+    return injected + html;
+  }
+
+  function handleResourceReady(p) {
+    if (innerFrame) return; // 宿主至多发送一份 HTML，重复到达时忽略
+    var doc = buildDocument(String(p.html || ''), p.csp, p.permissions);
+
+    innerFrame = document.createElement('iframe');
+    innerFrame.setAttribute('sandbox', p.sandbox || 'allow-scripts allow-same-origin allow-forms');
+    var allow = buildAllowAttribute(p.permissions);
+    if (allow) innerFrame.setAttribute('allow', allow);
+    innerFrame.setAttribute('title', 'MCP App View');
+    innerFrame.style.cssText = 'display:block;width:100%;height:100%;border:0;';
+    innerFrame.srcdoc = doc;
+
+    // View -> 宿主：只信任 innerFrame.contentWindow 且 origin 为本页自身源
+    // （srcdoc + allow-same-origin 令内层文档继承本页 origin）。
+    window.addEventListener('message', function (event) {
+      if (!innerFrame || event.source !== innerFrame.contentWindow || event.origin !== location.origin) return;
+      var msg = event.data;
+      if (!msg || msg.jsonrpc !== '2.0') return;
+      if (isSandboxMethod(msg.method)) return; // View 不应发送 sandbox-* 保留方法，静默丢弃
+      window.parent.postMessage(msg, hostOrigin);
+    });
+
+    document.body.appendChild(innerFrame);
+  }
+
+  // 宿主 -> 代理：只信任 window.parent 且 origin 等于已校验的 hostOrigin。
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent || event.origin !== hostOrigin) return;
+    var data = event.data;
+    if (!data || data.jsonrpc !== '2.0') return;
+
+    if (data.method === 'ui/notifications/sandbox-resource-ready') {
+      handleResourceReady(data.params || {});
+      return;
+    }
+    if (isSandboxMethod(data.method)) return; // 其余 sandbox-* 保留方法不转发
+
+    if (innerFrame && innerFrame.contentWindow) {
+      innerFrame.contentWindow.postMessage(data, location.origin);
+    }
+  });
+
+  window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready', params: {} }, hostOrigin);
+})();
+</script>
 </body>
 </html>

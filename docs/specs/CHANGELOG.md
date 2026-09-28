@@ -13,6 +13,7 @@
 - **[契约] 其它**：`hook.Runner.FireElicitation/FireElicitationResult`；`ChatRepository.AppendMessage` 与 `session.Persistence.SaveMessage` 返回新消息 ID；`types.AgentStreamEvent.UI`、`types.ToolResult.MCPRaw`；`sandbox.PrincipalMCPApp`、`ExecRequest.AppViewID/AppSessionID`。
 - **[API]** `/v1/elicitations`；`/v1/mcp-servers/{id}/oauth{,/authorize,/token}`、`GET /oauth/mcp/callback`、`GET /oauth/client-metadata.json`（精确鉴权豁免）；`/v1/mcp-apps/{config,resource,views/{id}/rpc,views/{id}/state,views/{id}/model-context}`；`GET /v1/mcp-servers` 增 `auth_required/auth_scopes/oauth/oauth_authorized`。
 - **[配置]** `[interface] apps_enabled / apps_sandbox_port / apps_sandbox_origin / apps_host_origin`（MCP Apps 沙箱独立监听端口）。
+- **[前端]** MCP Apps 宿主桥 `web/src/js/mcp_apps.js` 与沙箱代理页 `web/src/mcp-apps/sandbox.html`（CSP 以 sha256 锁定唯一内联脚本，改脚本须重算，`TestMCPAppsSandboxHTML_CSPHashMatchesInlineScript` 兜底）；`window.openai` 垫片只含可映射到标准桥的成员，widgetState 经 `ui/initialize` 结果 `_meta["polaris/widgetState"]` 回放。
 - **[修复]** 主密钥轮换此前只改写 providers 且逐条提交：改为 `repo.RekeyVaultCiphertexts` 单事务覆盖全部 Vault 密文列（新增密文列须登记）。
 
 ## 2026-09-27（ADR-0103：市场收尾 — 含**契约变更**）

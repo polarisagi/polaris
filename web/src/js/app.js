@@ -28,6 +28,7 @@ import './store/components.js'
 import './store/computer.js'
 import './store/plugins.js'
 import './store/update.js'
+import './mcp_apps.js'
 
 // ── Markdown 渲染配置 ──────────────────────────────────────────────────────
 // marked v5+ 移除了 setOptions()，改用 marked.use()

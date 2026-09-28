@@ -1,6 +1,7 @@
 import Alpine from 'alpinejs'
 import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
 import { SSEClient, dedupeRunID } from '../sse.js'
+import { mcpAppsHost } from '../mcp_apps.js'
 // ══════════════════════════════════════════════════════════════════════════
 // store: chat（主对话状态机）
 // ══════════════════════════════════════════════════════════════════════════
@@ -339,6 +340,12 @@ Alpine.store('chat', {
   // recallMessage 将指定的消息撤回并填入输入框，同时截断后面的对话
   recallMessage(idx, content) {
     if (this.isActive) return; // 如果正在生成中，不允许撤回
+    // 撤回会截断这之后的消息，先给被截断消息里挂着的视图发 teardown 再移除
+    // （view 的 iframe DOM 随 Alpine x-for 一起消失，不主动 teardown 会跳过
+    // ui/resource-teardown 通知，违反"移除前发通知"的约定）。
+    for (const m of this.messages.slice(idx)) {
+      for (const v of (m.views || [])) mcpAppsHost.teardown(v.view_id, 'message_removed')
+    }
     this.messages.splice(idx);
     window.dispatchEvent(new CustomEvent('restore-input', { detail: content }));
     this.lastAbortedInput = null;
@@ -541,6 +548,25 @@ Alpine.store('chat', {
           if (this.messages.length > 0) {
             this.messages[this.messages.length - 1].compactionAfter = true
           }
+        } else if (data.type === 'tool_ui') {
+          // MCP Apps 视图快照（M8f-2）：挂到当前 assistant 消息，交给
+          // mcp_apps.js 在对应 DOM 节点创建时挂载（见 chat.html x-init）。
+          const viewRef = {
+            view_id: data.view_id,
+            server_id: data.server_id,
+            resource_uri: data.resource_uri,
+            tool_name: data.tool_name,
+            tool_input: data.tool_input,
+            tool_result: data.tool_result,
+            cancelled: !!data.cancelled,
+          }
+          let last = this.messages[this.messages.length - 1]
+          if (!last || last.role !== 'assistant') {
+            last = { role: 'assistant', content: '', reasoningContent: '', toolCalls: [], views: [], aborted: false }
+            this.messages.push(last)
+          }
+          if (!last.views) last.views = []
+          last.views.push(viewRef)
         }
         break
     }
@@ -618,6 +644,7 @@ Alpine.store('chat', {
   },
 
   clearView() {
+    mcpAppsHost.teardownAll('session_changed')
     this.messages = []
     this.currentTokens = ''
     this.thinkingText = ''
@@ -666,6 +693,14 @@ Alpine.store('chat', {
         content: sanitizeContent(m.content),
         reasoningContent: sanitizeContent(m.reasoning_content || ''),
         toolCalls: m.tool_calls || [],
+        // views: 历史回放的 MCP Apps 视图（M8f-2），字段名与 SSE tool_ui 载荷对齐，
+        // 供 chat.html 用同一套渲染/挂载逻辑处理（见 mcp_apps.js McpAppsHost.mount）。
+        views: (m.views || []).map(v => ({
+          view_id: v.view_id, server_id: v.server_id, resource_uri: v.resource_uri,
+          tool_name: v.tool_name, tool_input: v.tool_input, tool_result: v.tool_result,
+          widget_state: v.widget_state,
+          cancelled: false,
+        })),
         taskDuration: m.task_duration || 0,
         aborted: m.aborted || false,
         compactionAfter: d.compaction_events?.some(e => e.at_message_id === m.id) || false,

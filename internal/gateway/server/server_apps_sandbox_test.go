@@ -1,13 +1,18 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/config"
+
+	webui "github.com/polarisagi/polaris/web"
 )
 
 func TestNewMCPAppsSandboxConfig_Ports(t *testing.T) {
@@ -81,6 +86,47 @@ func TestHandleMCPAppsSandboxPage_ServesOnlySandboxPathWithHeaders(t *testing.T)
 	// 上面的请求本就没有携带任何令牌）。
 }
 
+// TestHandleMCPAppsSandboxPage_BodyImplementsProxyProtocol 确认 8f-2 的真实双 iframe
+// 代理实现（而非 8f-1 占位页）被正确嵌入并served：必须发送
+// ui/notifications/sandbox-proxy-ready、必须校验 host= 参数与 document.referrer 的
+// origin 一致、必须只信任 window.parent 且 origin 匹配的消息、必须处理
+// sandbox-resource-ready 通知。字符串断言直接对被 served 的响应体做，避免与
+// webui.MCPAppsSandboxHTML 实现细节（go:embed 路径）耦合。
+func TestHandleMCPAppsSandboxPage_BodyImplementsProxyProtocol(t *testing.T) {
+	s := &Server{appsSandboxCfg: MCPAppsSandboxConfig{MainPort: 28888}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /sandbox.html", s.handleMCPAppsSandboxPage)
+
+	req := httptest.NewRequest(http.MethodGet, "/sandbox.html", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	mustContain := []string{
+		// 占位页（8f-1）不含这些标记；真实实现必须都在。
+		"ui/notifications/sandbox-proxy-ready",    // 就绪通知：代理必须主动通知宿主
+		"ui/notifications/sandbox-resource-ready", // 处理宿主下发的 HTML 负载
+		"document.referrer",                       // host= 参数需与 referrer 的 origin 比对
+		"event.origin !== hostOrigin",             // 宿主消息只信任匹配 origin 的来源
+		"event.source !== window.parent",          // 宿主消息只信任 window.parent
+		"window.openai",                           // window.openai 兼容垫片已注入
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(body, s) {
+			t.Errorf("sandbox.html body missing expected marker %q", s)
+		}
+	}
+
+	// 8f-1 占位页的注释标记不应再存在（证明确实被 8f-2 替换而非叠加）。
+	if strings.Contains(body, "真正的双 iframe 沙箱代理逻辑") {
+		t.Error("sandbox.html still contains the 8f-1 placeholder comment; expected the real proxy implementation")
+	}
+}
+
 // TestStartAppsSandboxListener_ReportsBoundPort 配置端口为 0 时由系统分配，配置接口必须报告实际端口，
 // 否则前端拼出的沙箱源不可达。
 func TestStartAppsSandboxListener_ReportsBoundPort(t *testing.T) {
@@ -101,5 +147,31 @@ func TestStartAppsSandboxListener_ReportsBoundPort(t *testing.T) {
 	s.handleGetMCPAppsConfig(rec, httptest.NewRequest(http.MethodGet, "/v1/mcp-apps/config", nil))
 	if !strings.Contains(rec.Body.String(), fmt.Sprintf(`"sandbox_port":%d`, port)) {
 		t.Fatalf("config endpoint must report bound port %d: %s", port, rec.Body.String())
+	}
+}
+
+// TestMCPAppsSandboxHTML_CSPHashMatchesInlineScript 沙箱页 CSP 以 sha256 锁定唯一内联脚本；
+// 改脚本忘了重算哈希时浏览器会静默拒绝执行，沙箱整体失效——由本测试兜住。
+func TestMCPAppsSandboxHTML_CSPHashMatchesInlineScript(t *testing.T) {
+	page := webui.MCPAppsSandboxHTML
+	// 取第一个 <script> 到其后第一个 </script>：脚本体内以字符串形式含有注入 View 的
+	// "<script>" 片段（闭合标签写作 <\/script>，不会提前截断）。
+	open := strings.Index(page, "<script>")
+	if open < 0 {
+		t.Fatal("sandbox page must contain an inline script")
+	}
+	start := open + len("<script>")
+	end := strings.Index(page[start:], "</script>")
+	if end < 0 {
+		t.Fatal("unterminated inline script")
+	}
+	script := page[start : start+end]
+	declared := regexp.MustCompile(`'sha256-([A-Za-z0-9+/=]+)'`).FindStringSubmatch(page)
+	if declared == nil {
+		t.Fatal("sandbox page CSP must pin the inline script by sha256")
+	}
+	sum := sha256.Sum256([]byte(script))
+	if got := base64.StdEncoding.EncodeToString(sum[:]); got != declared[1] {
+		t.Fatalf("CSP hash stale: declared %s, script hashes to %s", declared[1], got)
 	}
 }
