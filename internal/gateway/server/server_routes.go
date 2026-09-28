@@ -31,6 +31,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/elicitations", s.handleGetElicitations)          // MCP elicitation 待办列表（ADR-0103 决策八）
 	mux.HandleFunc("POST /v1/elicitations/{id}", s.handleRespondElicitation) // 用户作答
 
+	// MCP Apps（M8f-1，io.modelcontextprotocol/ui）宿主后端 API。
+	mux.HandleFunc("GET /v1/mcp-apps/config", s.handleGetMCPAppsConfig)
+	mux.HandleFunc("GET /v1/mcp-apps/resource", s.handleGetMCPAppsResource)
+	mux.HandleFunc("POST /v1/mcp-apps/views/{viewID}/rpc", s.handleMCPAppsViewRPC)
+	mux.HandleFunc("PUT /v1/mcp-apps/views/{viewID}/state", s.handleMCPAppsViewState)
+	mux.HandleFunc("PUT /v1/mcp-apps/views/{viewID}/model-context", s.handleMCPAppsViewModelContext)
+
 	// A2A v0.3 Endpoints
 	mux.HandleFunc("GET /.well-known/agent-card.json", a2a.AgentCardHandler(s.a2aCfg))
 	mux.HandleFunc("POST /v1/a2a/tasks", a2a.TaskSubmitHandler(s.blackboard))

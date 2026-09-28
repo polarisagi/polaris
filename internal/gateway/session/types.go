@@ -15,6 +15,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 
 	gwtypes "github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -179,10 +180,36 @@ type Persistence interface {
 	// 项目不存在返回错误；projectID 为空等价 EnsureSession（默认项目）。
 	EnsureSessionInProject(ctx context.Context, sessionID, projectID string) error
 	ListMessages(ctx context.Context, sessionID string) ([]types.Message, error)
-	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) error
+	// SaveMessage 返回新插入行的 chat_messages.id（M8f-1：assistant 消息落库后
+	// 回填本轮产生的 MCP Apps 视图关联，见 LinkAppViewsToMessage）；写入失败降级
+	// 到 outbox 异步兜底或彻底失败时返回 0，调用方据此跳过回填（非致命）。
+	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) (int64, error)
 	UpdateSessionTitle(ctx context.Context, sessionID, firstInput string) error
 	TouchSession(ctx context.Context, sessionID string) error
 	SampleAndScoreReply(sessionID, query, response string)
+
+	// MCP Apps（M8f-1，io.modelcontextprotocol/ui）─────────────────────────
+
+	// SaveAppView 落库一次工具调用产生的 UI 视图快照（tool_ui 事件时机，早于
+	// assistant 消息落库，message 关联留待 LinkAppViewsToMessage 回填）。
+	SaveAppView(ctx context.Context, v AppView) error
+	// LinkAppViewsToMessage 把本轮产生的全部视图关联到刚落库的 assistant 消息。
+	LinkAppViewsToMessage(ctx context.Context, sessionID string, viewIDs []string, messageID int64) error
+	// ConsumeSessionModelContext 读取并清空该会话全部待注入的模型上下文更新内容
+	// （每 server_id 一份，注入后即清空）。
+	ConsumeSessionModelContext(ctx context.Context, sessionID string) (map[string]json.RawMessage, error)
+}
+
+// AppView 一次 MCP App 工具调用产生的 UI 视图快照（session.Persistence.SaveAppView
+// 的输入形状；与 types.ToolUIRef 字段对应，但独立声明——本包零 net/http/协议依赖，
+// 不直接复用 pkg/types 里可能演进的事件载荷类型，见文件头 HE-3 说明）。
+type AppView struct {
+	ViewID      string
+	ServerID    string
+	ResourceURI string
+	ToolName    string
+	ToolInput   json.RawMessage
+	ToolResult  json.RawMessage
 }
 
 // PromptAssembler 会话编排对系统提示词组装的消费端接口。

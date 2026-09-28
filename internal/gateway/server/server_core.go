@@ -136,6 +136,14 @@ type Server struct {
 	// elicitationBroker MCP elicitation 网关侧 broker（ADR-0103 决策八）：nil 表示未接入
 	// hooks.json/HTTP 交互能力，handleGetElicitations/handleRespondElicitation 均降级 501。
 	elicitationBroker *elicitation.Broker
+
+	// appsSandboxCfg / appsSandboxSrv：MCP Apps Sandbox proxy 监听器（M8f-1，见
+	// server_apps_sandbox.go）。appsSandboxSrv 仅 appsSandboxCfg.Enabled=true 时
+	// 由 Start() 赋值；Shutdown() 据其是否为 nil 决定是否需要关停。
+	appsSandboxCfg MCPAppsSandboxConfig
+	appsSandboxSrv *http.Server
+	// appsSandboxBoundPort 沙箱监听器实际绑定端口（配置端口为 0 时由操作系统分配）。
+	appsSandboxBoundPort atomic.Int32
 }
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }

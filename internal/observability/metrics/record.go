@@ -220,6 +220,17 @@ func RecordToolOutcomeDecodeFailure(ctx context.Context, toolName string) {
 	}
 }
 
+// RecordMCPAppToolCall 记录一次 MCP Apps View 发起的工具调用（M8f-1，
+// POST /v1/mcp-apps/views/{id}/rpc）。outcome 固定枚举 "success"/"error"。
+func RecordMCPAppToolCall(ctx context.Context, serverName, outcome string) {
+	if InstrMCPAppToolCallsTotal != nil {
+		InstrMCPAppToolCallsTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("mcp_server", serverName),
+			attribute.String("outcome", outcome),
+		))
+	}
+}
+
 // RecordPIIMappingEviction 记录一次 PIIDesensitizer 分区内映射 LRU 淘汰。
 // 不带 label（分区键=SessionID 通常无界基数，禁止进指标维度，阶段03 R-02）。
 func RecordPIIMappingEviction() {

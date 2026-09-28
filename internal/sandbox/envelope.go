@@ -25,6 +25,10 @@ const (
 const (
 	PrincipalAgent  = protocol.PolicyPrincipalAgent
 	PrincipalMCPMgr = "mcp_mgr"
+	// PrincipalMCPApp MCP Apps View 经 /v1/mcp-apps/views/{id}/rpc 发起的工具调用
+	// （HE-3：与模型发起的调用走同一 Execute 入口，靠 Principal 区分供 PolicyGate/
+	// 审计判别来源，而非另开一条旁路）。
+	PrincipalMCPApp = "mcp_app"
 )
 
 // ExecRequest 一次执行请求的完整上下文。调用方负责填充 TrustTier（来自 DB 中对应扩展记录）。
@@ -60,6 +64,12 @@ type ExecRequest struct {
 	SessionID       string
 	Language        string
 	StatefulSession bool
+
+	// AppViewID / AppSessionID：Principal=PrincipalMCPApp 时标注发起调用的 MCP Apps
+	// View/会话，供审计日志与 PolicyGate evalCtx 区分"App 发起"与"模型发起"
+	// （M8f-1，HE-3）。模型发起的调用两者均为空。
+	AppViewID    string
+	AppSessionID string
 }
 
 type ExecResult struct {
@@ -70,6 +80,9 @@ type ExecResult struct {
 	TaintLevel  types.TaintLevel
 	SandboxTier types.SandboxTier
 	ImageParts  []types.ImagePart
+	// MCPRaw 透传自 types.ToolResult.MCPRaw（MCP 工具的原始 CallToolResult JSON），
+	// 供上层（InMemoryToolRegistry.ExecuteTool）继续透传给调用方。
+	MCPRaw json.RawMessage
 }
 
 // PreToolUseResult PreToolUse 分发结果。
@@ -168,6 +181,12 @@ func (e *ExecEnvelope) authorize(ctx context.Context, req ExecRequest, start tim
 		"allow_net":              req.AllowNet,
 		"capability_token_valid": validToken,
 	}
+	if req.Principal == PrincipalMCPApp {
+		// MCP Apps View 发起的调用：PolicyGate 可据此单独收紧（如禁止 app-only
+		// 工具触碰高危 Capability），审计日志（下方 slog）同样需要这两个字段。
+		evalCtx["app_view_id"] = req.AppViewID
+		evalCtx["app_session_id"] = req.AppSessionID
+	}
 	allowed, pErr := e.policy.IsAuthorized(ctx, req.Principal, string(req.Kind), req.Resource, evalCtx)
 	if pErr == nil && allowed {
 		return nil
@@ -263,9 +282,16 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		outTaint = types.TaintHigh
 	}
 
-	slog.InfoContext(ctx, "exec_envelope: executed",
-		"kind", req.Kind, "resource", req.Resource, "trust_tier", int(req.TrustTier),
-		"actual_tier", int(actualTier), "taint", int(outTaint), "latency_ms", time.Since(start).Milliseconds())
+	if req.Principal == PrincipalMCPApp {
+		slog.InfoContext(ctx, "exec_envelope: executed (mcp-app)",
+			"kind", req.Kind, "resource", req.Resource, "trust_tier", int(req.TrustTier),
+			"actual_tier", int(actualTier), "taint", int(outTaint), "latency_ms", time.Since(start).Milliseconds(),
+			"app_view_id", req.AppViewID, "app_session_id", req.AppSessionID)
+	} else {
+		slog.InfoContext(ctx, "exec_envelope: executed",
+			"kind", req.Kind, "resource", req.Resource, "trust_tier", int(req.TrustTier),
+			"actual_tier", int(actualTier), "taint", int(outTaint), "latency_ms", time.Since(start).Milliseconds())
+	}
 
 	// PostToolUse Hook：同步执行，反馈追加在输出之后并强制 TaintHigh（hook 输出不可信，
 	// ADR-0103 决策六修订原"不回写"约束：两家标准中 PostToolUse 的反馈必须到达模型）。
@@ -281,7 +307,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	return &ExecResult{
 		Success: toolResult.Success, Output: output, Error: toolResult.Error,
 		LatencyMs: time.Since(start).Milliseconds(), TaintLevel: outTaint,
-		SandboxTier: actualTier, ImageParts: toolResult.ImageParts,
+		SandboxTier: actualTier, ImageParts: toolResult.ImageParts, MCPRaw: toolResult.MCPRaw,
 	}, nil
 }
 

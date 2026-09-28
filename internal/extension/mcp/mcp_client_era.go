@@ -129,7 +129,15 @@ func (c *MCPClient) withMeta(params any, protoVersion string) map[string]any {
 	meta[metaProtocolVersion] = protoVersion
 	meta[metaClientInfo] = map[string]string{"name": "polaris", "version": version.Version}
 	caps := c.clientCapabilities()
-	caps["extensions"] = map[string]any{extensionTasks: map[string]any{}}
+	// 与 clientCapabilities() 已声明的 io.modelcontextprotocol/ui 合并（而非覆盖）：
+	// 两个扩展互不冲突，同属一个 extensions 对象（8c tasks 扩展仅新纪元声明，
+	// 理由见函数顶部注释；ui 扩展两纪元均声明，在 clientCapabilities() 里）。
+	exts, _ := caps["extensions"].(map[string]any)
+	if exts == nil {
+		exts = map[string]any{}
+	}
+	exts[extensionTasks] = map[string]any{}
+	caps["extensions"] = exts
 	meta[metaClientCapabilities] = caps
 	m["_meta"] = meta
 	return m
@@ -137,8 +145,16 @@ func (c *MCPClient) withMeta(params any, protoVersion string) map[string]any {
 
 // clientCapabilities 客户端能力：只声明实际能处理的输入请求类型（MRTR：服务器不得请求未声明的能力）。
 // 新旧两个纪元的 initialize/_meta 共用本函数（initializeLegacy 见 mcp_client_protocol.go）。
+//
+// extensions.io.modelcontextprotocol/ui 两个纪元都声明（apps_spec.mdx 的能力声明
+// 示例即在 initialize 请求中给出，未区分纪元）：mimeTypes 告知服务器本客户端能
+// 渲染的 UI 资源 MIME type 子集，供服务器决定是否在工具 _meta.ui 里关联 UI 资源。
 func (c *MCPClient) clientCapabilities() map[string]any {
-	caps := map[string]any{}
+	caps := map[string]any{
+		"extensions": map[string]any{
+			extensionUI: map[string]any{"mimeTypes": []string{mimeTypeMCPApp}},
+		},
+	}
 	c.mu.Lock()
 	hasSampling, hasElicitation := c.hasSampling, c.hasElicitation
 	c.mu.Unlock()

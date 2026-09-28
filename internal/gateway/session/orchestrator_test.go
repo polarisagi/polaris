@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -63,13 +64,17 @@ func (h *fakeHooks) StopFailure(context.Context, string, string) { h.record("Sto
 func (h *fakeHooks) SessionEnd(context.Context, string, string)  { h.record("SessionEnd") }
 
 type fakePersistence struct {
-	mu       sync.Mutex
-	sessions map[string]bool
-	history  []types.Message
-	saved    []savedMessage
-	titled   string
-	touched  bool
-	projects map[string]string // sessionID → 首次绑定的 projectID（ADR-0097）
+	mu        sync.Mutex
+	sessions  map[string]bool
+	history   []types.Message
+	saved     []savedMessage
+	titled    string
+	touched   bool
+	projects  map[string]string // sessionID → 首次绑定的 projectID（ADR-0097）
+	nextMsgID int64
+	appViews  []AppView
+	linkedTo  map[string]int64 // viewID → messageID（LinkAppViewsToMessage 断言用）
+	modelCtx  map[string]map[string]json.RawMessage
 }
 
 type savedMessage struct {
@@ -104,11 +109,41 @@ func (p *fakePersistence) ListMessages(ctx context.Context, sessionID string) ([
 	return p.history, nil
 }
 
-func (p *fakePersistence) SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) error {
+func (p *fakePersistence) SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) (int64, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.saved = append(p.saved, savedMessage{sessionID, role, content})
+	p.nextMsgID++
+	return p.nextMsgID, nil
+}
+
+func (p *fakePersistence) SaveAppView(ctx context.Context, v AppView) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.appViews = append(p.appViews, v)
 	return nil
+}
+
+func (p *fakePersistence) LinkAppViewsToMessage(ctx context.Context, sessionID string, viewIDs []string, messageID int64) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.linkedTo == nil {
+		p.linkedTo = map[string]int64{}
+	}
+	for _, id := range viewIDs {
+		p.linkedTo[id] = messageID
+	}
+	return nil
+}
+
+func (p *fakePersistence) ConsumeSessionModelContext(ctx context.Context, sessionID string) (map[string]json.RawMessage, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m := p.modelCtx[sessionID]
+	if p.modelCtx != nil {
+		delete(p.modelCtx, sessionID)
+	}
+	return m, nil
 }
 
 func (p *fakePersistence) UpdateSessionTitle(ctx context.Context, sessionID, firstInput string) error {
@@ -607,5 +642,67 @@ func TestRunTurn_Interactive_StopHookContinuesAndInjectsContext(t *testing.T) {
 	}
 	if replies := persistence.savedAssistantReplies(); len(replies) != 2 || replies[0] != "draft" || replies[1] != "final" {
 		t.Fatalf("saved replies = %v", replies)
+	}
+}
+
+// TestRunTurn_Interactive_InjectsAndConsumesMCPAppModelContext 验证 M8f-1：会话
+// 待注入的模型上下文更新内容随任务意图以 <mcp-app-context> 块下发
+// （外部不可信内容标注，见 withMCPAppContext），且读取后立即清空（regulation：
+// 只把最后一次更新送给模型）。
+func TestRunTurn_Interactive_InjectsAndConsumesMCPAppModelContext(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "ok"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	persistence := newFakePersistence()
+	persistence.modelCtx = map[string]map[string]json.RawMessage{
+		"s1": {"srv1": json.RawMessage(`{"structuredContent":{"selected":"row-1"}}`)},
+	}
+	orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{ctrl: ctrl})
+
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s1", Input: "check the table", Channel: "web"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ctrl.intents) != 1 || !strings.Contains(ctrl.intents[0], "<mcp-app-context>") ||
+		!strings.Contains(ctrl.intents[0], `"row-1"`) {
+		t.Fatalf("expected mcp-app-context block injected into task intent, got %q", ctrl.intents)
+	}
+
+	// 已消费：会话的待注入内容被清空，不会在假设的下一轮重复下发。
+	if persistence.modelCtx["s1"] != nil {
+		t.Fatalf("expected model context cleared after consumption, got %+v", persistence.modelCtx["s1"])
+	}
+}
+
+// TestRunTurn_Interactive_LinksAppViewsToAssistantMessage 验证 M8f-1：FSM 本轮
+// 产出的 tool_ui 视图 ID 在 assistant 消息落库后被关联到该消息（见
+// orchestrator_fsm.go linkAppViews），供会话历史接口按消息取回视图。
+func TestRunTurn_Interactive_LinksAppViewsToAssistantMessage(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{
+			Type: types.AgentStreamEventToolResult, Content: "refreshed",
+			UI: &types.ToolUIRef{ViewID: "view-1", ServerID: "srv1", ResourceURI: "ui://srv1/dash", ToolName: "dash"},
+		}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "done"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	persistence := newFakePersistence()
+	orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{ctrl: ctrl})
+
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s1", Input: "refresh", Channel: "web"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(persistence.appViews) != 1 || persistence.appViews[0].ViewID != "view-1" {
+		t.Fatalf("expected view-1 saved, got %+v", persistence.appViews)
+	}
+	// assistant 消息是本轮第二次 SaveMessage 调用（第一次是用户消息本身）。
+	replies := persistence.savedAssistantReplies()
+	if len(replies) != 1 || replies[0] != "done" {
+		t.Fatalf("expected assistant reply 'done' saved, got %v", replies)
+	}
+	if persistence.linkedTo["view-1"] == 0 {
+		t.Fatalf("expected view-1 linked to a real message id, got %+v", persistence.linkedTo)
 	}
 }

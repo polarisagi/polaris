@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -71,7 +72,12 @@ func (s *ChatPersistenceService) ListMessages(ctx context.Context, sessionID str
 	return msgs, nil
 }
 
-func (s *ChatPersistenceService) SaveMessage(ctx context.Context, sessionID, role, content string, toolCalls string, reasoningContent string, durationMs int64) error {
+// SaveMessage 返回新插入行的 chat_messages.id；outbox 兜底路径（直接写入重试耗尽后
+// 转异步）与直接写入本身失败（重试+outbox 均失败）两种情况下 messageID 为 0——
+// 调用方（session.orchestrator）据此判断是否跳过 MCP Apps 视图关联回填
+// （M8f-1，LinkAppViewsToMessage），这是可接受的降级：消息本身仍已持久化或已入队，
+// 只是视图与消息的关联在这一次不成立，不是致命错误。
+func (s *ChatPersistenceService) SaveMessage(ctx context.Context, sessionID, role, content string, toolCalls string, reasoningContent string, durationMs int64) (int64, error) {
 	now := time.Now().UTC()
 	createdAt := now.Format(time.RFC3339)
 	if durationMs > 0 {
@@ -102,12 +108,13 @@ retryLoop:
 				break retryLoop
 			}
 		}
-		if err := s.ChatRepo.AppendMessage(ctx, row); err != nil {
+		id, err := s.ChatRepo.AppendMessage(ctx, row)
+		if err != nil {
 			lastErr = err
 			slog.Warn("server: saveMessage attempt failed, will retry", "session", sessionID, "role", role, "attempt", attempt+1, "err", err)
 			continue
 		}
-		return nil
+		return id, nil
 	}
 
 	if s.OutboxWriter != nil {
@@ -135,7 +142,7 @@ retryLoop:
 			obCancel()
 			if writeErr == nil {
 				slog.Warn("server: saveMessage direct write failed, enqueued outbox fallback", "session", sessionID, "role", role, "err", lastErr)
-				return nil
+				return 0, nil
 			}
 			slog.Error("server: saveMessage outbox fallback enqueue failed", "session", sessionID, "role", role, "err", writeErr)
 		} else {
@@ -143,7 +150,59 @@ retryLoop:
 		}
 	}
 
-	return apperr.Wrap(apperr.CodeInternal, "Server.saveMessage", lastErr)
+	return 0, apperr.Wrap(apperr.CodeInternal, "Server.saveMessage", lastErr)
+}
+
+// SaveAppView 见 session.Persistence 接口注释（M8f-1）。
+func (s *ChatPersistenceService) SaveAppView(ctx context.Context, v session.AppView) error {
+	err := s.ChatRepo.SaveAppView(ctx, types.ChatAppViewRow{
+		ViewID:      v.ViewID,
+		ServerID:    v.ServerID,
+		ResourceURI: v.ResourceURI,
+		ToolName:    v.ToolName,
+		ToolInput:   rawOrEmptyObject(v.ToolInput),
+		ToolResult:  rawOrEmptyObject(v.ToolResult),
+		WidgetState: "{}",
+	})
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Server.saveAppView", err)
+	}
+	return nil
+}
+
+// rawOrEmptyObject json.RawMessage 为空时落 "{}"（chat_app_views 对应列 NOT NULL）。
+func rawOrEmptyObject(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
+}
+
+// LinkAppViewsToMessage 见 session.Persistence 接口注释（M8f-1）。SessionID 由
+// SaveAppView 写入时已经确定（chat_app_views.session_id 是外部字段，本方法未
+// 直接持有，故经参数下发——与 SQLiteChatRepository.LinkAppViewsToMessage 签名一致，
+// 避免仓储层再反查一次 view 归属）。
+func (s *ChatPersistenceService) LinkAppViewsToMessage(ctx context.Context, sessionID string, viewIDs []string, messageID int64) error {
+	if err := s.ChatRepo.LinkAppViewsToMessage(ctx, sessionID, viewIDs, messageID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Server.linkAppViewsToMessage", err)
+	}
+	return nil
+}
+
+// ConsumeSessionModelContext 见 session.Persistence 接口注释（M8f-1）。
+func (s *ChatPersistenceService) ConsumeSessionModelContext(ctx context.Context, sessionID string) (map[string]json.RawMessage, error) {
+	raw, err := s.ChatRepo.ConsumeSessionModelContext(ctx, sessionID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.consumeSessionModelContext", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		// 列内容理论上恒由本包自身通过 json_set 写入，不应出现非法 JSON；出现时
+		// 视为无待注入内容而非阻断整轮推理（防御性降级，记录 Warn 供排查）。
+		slog.Warn("server: app_model_context column contains invalid JSON, treating as empty", "session", sessionID, "err", err)
+		return nil, nil
+	}
+	return m, nil
 }
 
 func (s *ChatPersistenceService) SampleAndScoreReply(sessionID, query, response string) {

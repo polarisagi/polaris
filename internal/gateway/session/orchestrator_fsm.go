@@ -18,14 +18,15 @@ import (
 
 // runFSMTurn 驱动一轮 FSM 推理并把事件流转译为领域事件推送给 sink（原
 // chat/sse.go handleAgentStreamFSM 迁入，行为不变）。返回值：聚合回复文本、
-// 推理错误信息（如有）、是否因客户端中止而提前返回。
+// 推理错误信息（如有）、是否因客户端中止而提前返回、本轮产生的 MCP Apps
+// 视图 ID 列表（M8f-1，供调用方在 assistant 消息落库后回填关联）。
 func (o *orchestrator) runFSMTurn(
 	ctx context.Context,
 	sink Sink,
 	sessionID string,
 	agentCtrl protocol.AgentController,
 	input string,
-) (reply string, inferErr string, aborted bool) {
+) (reply string, inferErr string, aborted bool, viewIDs []string) {
 	// [W-2-A] 接入 SystemPromptGuard——同时注册 FSM 内核阶段模板（静态指令主体）
 	// 与 ActivatedSystemPrompt（M9 GEPA 动态激活提示词，可能为空），覆盖两类
 	// "系统提示词"来源，不只挡后者。
@@ -42,7 +43,7 @@ func (o *orchestrator) runFSMTurn(
 	agentCtrl.SetTaskIntent(userTS)
 	if err := agentCtrl.SendIntent(types.TriggerIntentReceived); err != nil {
 		slog.Warn("session: fsm advance failed or timeout", "err", err)
-		return "", "Agent 状态机未能接收本轮输入，请稍后重试", false
+		return "", "Agent 状态机未能接收本轮输入，请稍后重试", false, nil
 	}
 
 	var replyBuilder []byte
@@ -64,21 +65,21 @@ func (o *orchestrator) runFSMTurn(
 			if !ok {
 				slog.WarnContext(ctx, "session: fsm stream closed without task_done",
 					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_err", errBuilder)
-				return string(replyBuilder), errBuilder, false
+				return string(replyBuilder), errBuilder, false, viewIDs
 			}
 			evCount++
-			stop := o.handleFSMEvent(sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &leakWindow, windowSize)
+			stop := o.handleFSMEvent(ctx, sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
 			if stop {
 				slog.InfoContext(ctx, "session: fsm turn done",
 					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_err", errBuilder)
-				return string(replyBuilder), errBuilder, false
+				return string(replyBuilder), errBuilder, false, viewIDs
 			}
 		case <-ctx.Done():
 			// [GD-13-002] 客户端断连时通知 Agent Kernel 强制中止，避免后台无感空跑
 			if agentCtrl != nil {
 				agentCtrl.Interrupt(types.InterruptRequest{Action: types.InterruptAbort})
 			}
-			return string(replyBuilder), ctx.Err().Error(), true
+			return string(replyBuilder), ctx.Err().Error(), true, viewIDs
 		}
 	}
 }
@@ -87,6 +88,7 @@ func (o *orchestrator) runFSMTurn(
 // （原 chat/sse_stream_helpers.go handleStreamFSMEvent 迁入，行为不变）。
 // 返回 stop=true 时调用方应结束事件循环（task_done 状态事件）。
 func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
+	ctx context.Context,
 	sink Sink,
 	sessionID string,
 	ev types.AgentStreamEvent,
@@ -95,6 +97,7 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 	inferErr *string,
 	leakWindow *[]byte,
 	windowSize int,
+	viewIDs *[]string,
 ) (stop bool) {
 	// GD-13-001：处理子 Agent 嵌套事件，添加角色前缀
 	prefix := ""
@@ -129,6 +132,9 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "tool_call", "message": msg}})
 	case types.AgentStreamEventToolResult:
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "tool_result", "message": ev.Content}})
+		if ev.UI != nil {
+			o.handleToolUIEvent(ctx, sink, sessionID, ev.UI, viewIDs)
+		}
 	case types.AgentStreamEventError:
 		if *inferErr == "" {
 			*inferErr = ev.Content
@@ -159,4 +165,47 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "info", "message": ev.Content}})
 	}
 	return false
+}
+
+// linkAppViews 把本轮产生的视图关联到刚落库的 assistant 消息（M8f-1）。
+// messageID<=0（写入失败/降级到 outbox 异步兜底，见 Persistence.SaveMessage 注释）
+// 或 viewIDs 为空时跳过——都不是错误，只是本轮没有可关联的东西。
+func (o *orchestrator) linkAppViews(ctx context.Context, sessionID string, viewIDs []string, messageID int64) {
+	if len(viewIDs) == 0 || messageID <= 0 {
+		return
+	}
+	if err := o.persistence.LinkAppViewsToMessage(ctx, sessionID, viewIDs, messageID); err != nil {
+		slog.Error("session: link app views to message failed", "session", sessionID, "message_id", messageID, "err", err)
+	}
+}
+
+// handleToolUIEvent 落库一次 MCP Apps 视图快照并推送 KindStatus "tool_ui"
+// 事件（M8f-1）。落库失败只记 Warn 不阻断本轮——前端仍能实时渲染视图，只是
+// 刷新页面后这一条可能取不到历史记录，比整轮失败更符合"能用先用"的降级原则。
+// viewIDs 只在落库成功时追加：LinkAppViewsToMessage 按 view_id 匹配回填，
+// 数据库里不存在的 id 回填是无意义的空操作。
+func (o *orchestrator) handleToolUIEvent(ctx context.Context, sink Sink, sessionID string, ui *types.ToolUIRef, viewIDs *[]string) {
+	err := o.persistence.SaveAppView(ctx, AppView{
+		ViewID:      ui.ViewID,
+		ServerID:    ui.ServerID,
+		ResourceURI: ui.ResourceURI,
+		ToolName:    ui.ToolName,
+		ToolInput:   ui.ToolInput,
+		ToolResult:  ui.ToolResult,
+	})
+	if err != nil {
+		slog.Warn("session: save app view failed", "session", sessionID, "view_id", ui.ViewID, "err", err)
+	} else {
+		*viewIDs = append(*viewIDs, ui.ViewID)
+	}
+	_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{
+		"type":         "tool_ui",
+		"view_id":      ui.ViewID,
+		"server_id":    ui.ServerID,
+		"resource_uri": ui.ResourceURI,
+		"tool_name":    ui.ToolName,
+		"tool_input":   ui.ToolInput,
+		"tool_result":  ui.ToolResult,
+		"cancelled":    ui.Cancelled,
+	}})
 }

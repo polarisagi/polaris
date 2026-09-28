@@ -342,6 +342,15 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("M9 Reflexion 反思并发信号量满时丢弃的失败任务事件数（无 label）"),
 	)
 	ie.capture("polaris.learning.reflection_dropped_total", err)
+
+	// [M8f-1] MCP Apps App 发起工具调用（POST /v1/mcp-apps/views/{id}/rpc 的工具
+	// 调用方法）：与模型发起的调用走同一 ExecuteTool 入口，靠 Principal 区分来源，
+	// 本计数器单独统计 App 侧调用量与成功率，便于识别异常高频/失败率的 View。
+	InstrMCPAppToolCallsTotal, err = meter.Int64Counter(
+		"polaris.mcp_apps.tool_calls_total",
+		metric.WithDescription("MCP Apps View 发起的工具调用次数 (label: mcp_server, outcome: success/error)"),
+	)
+	ie.capture("polaris.mcp_apps.tool_calls_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {

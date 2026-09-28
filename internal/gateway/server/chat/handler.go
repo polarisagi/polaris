@@ -204,7 +204,8 @@ func (h *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 }
 
 func (h *ChatHandler) SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, toolCount int64) error {
-	return h.PersistenceService.SaveMessage(ctx, sessionID, role, content, toolCalls, reasoningContent, toolCount)
+	_, err := h.PersistenceService.SaveMessage(ctx, sessionID, role, content, toolCalls, reasoningContent, toolCount)
+	return err
 }
 
 func (h *ChatHandler) UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error {

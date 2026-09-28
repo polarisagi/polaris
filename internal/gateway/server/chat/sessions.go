@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -103,7 +105,11 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		ReasoningContent string          `json:"reasoning_content,omitempty"`
 		ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 		TaskDuration     int64           `json:"task_duration,omitempty"` // in ms
+		// Views 本条助手消息关联的 MCP Apps UI 视图（M8f-1），刷新页面后前端
+		// 据此重新渲染。只有 role="assistant" 且本轮产生过 tool_ui 事件的消息非空。
+		Views []mcpAppViewDTO `json:"views,omitempty"`
 	}
+	viewsByMessage := h.appViewsByMessageID(r.Context(), messages)
 	msgs := make([]msgRow, 0, len(messages))
 	total := 0
 	for _, row := range messages {
@@ -112,6 +118,7 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 			Content:          row.Content,
 			ReasoningContent: row.ReasoningContent,
 			TaskDuration:     parseTaskDuration(row.CreatedAt, row.UpdatedAt),
+			Views:            viewsByMessage[row.ID],
 		}
 		if row.ToolCalls != "" {
 			m.ToolCalls = json.RawMessage(row.ToolCalls)
@@ -132,6 +139,44 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		resp["project_id"] = row.ProjectID
 	}
 	httputil.WriteJSON(w, resp)
+}
+
+// mcpAppViewDTO 会话历史接口暴露的 MCP Apps UI 视图快照（M8f-1）。
+type mcpAppViewDTO struct {
+	ViewID      string          `json:"view_id"`
+	ServerID    string          `json:"server_id"`
+	ResourceURI string          `json:"resource_uri"`
+	ToolName    string          `json:"tool_name"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult  json.RawMessage `json:"tool_result,omitempty"`
+	WidgetState json.RawMessage `json:"widget_state,omitempty"`
+}
+
+// appViewsByMessageID 批量查询本次返回的消息集合关联的全部视图，按
+// chat_messages.id 分组（M8f-1）。查询失败按无视图处理（记 Warn，不阻断历史加载——
+// 会话历史的核心是文本消息本身，视图渲染是增强能力）。
+func (h *ChatHandler) appViewsByMessageID(ctx context.Context, messages []apptypes.ChatMessageRow) map[int64][]mcpAppViewDTO {
+	ids := make([]int64, 0, len(messages))
+	for _, m := range messages {
+		ids = append(ids, m.ID)
+	}
+	views, err := h.PersistenceService.ChatRepo.ListAppViewsByMessageIDs(ctx, ids)
+	if err != nil {
+		slog.Warn("chat: list app views by message ids failed", "err", err)
+		return nil
+	}
+	byMsg := make(map[int64][]mcpAppViewDTO, len(views))
+	for _, v := range views {
+		if v.MessageID == nil {
+			continue
+		}
+		byMsg[*v.MessageID] = append(byMsg[*v.MessageID], mcpAppViewDTO{
+			ViewID: v.ViewID, ServerID: v.ServerID, ResourceURI: v.ResourceURI, ToolName: v.ToolName,
+			ToolInput: json.RawMessage(v.ToolInput), ToolResult: json.RawMessage(v.ToolResult),
+			WidgetState: json.RawMessage(v.WidgetState),
+		})
+	}
+	return byMsg
 }
 
 func parseTaskDuration(createdStr, updatedStr string) int64 {

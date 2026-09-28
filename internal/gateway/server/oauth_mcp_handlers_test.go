@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -43,6 +44,16 @@ func (m *mockOAuthCallbackMCPManager) CompleteAuthorization(_ context.Context, q
 	m.completeCalled = true
 	m.completeQuery = query
 	return m.completeServerID, m.completeErr
+}
+func (m *mockOAuthCallbackMCPManager) IsServerConnected(string) bool { return false }
+func (m *mockOAuthCallbackMCPManager) ReadUIResource(context.Context, string, string) (protocol.UIResource, error) {
+	return protocol.UIResource{}, apperr.New(apperr.CodeNotFound, "not implemented in mock")
+}
+func (m *mockOAuthCallbackMCPManager) CallToolAsApp(context.Context, string, string, map[string]any, string, string) (json.RawMessage, error) {
+	return nil, apperr.New(apperr.CodeNotFound, "not implemented in mock")
+}
+func (m *mockOAuthCallbackMCPManager) ReadResourceAsApp(context.Context, string, string) ([]protocol.MCPResourceContent, error) {
+	return nil, apperr.New(apperr.CodeNotFound, "not implemented in mock")
 }
 
 func TestHandleMCPOAuthCallback(t *testing.T) {

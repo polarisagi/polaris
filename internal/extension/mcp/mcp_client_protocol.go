@@ -126,6 +126,11 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]MCPTool, error) {
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: tools/list parse: %v", err), err)
 	}
+	// MCP Apps UI 元数据解析（apps_spec.mdx §Resource Discovery）：单一choke point，
+	// 所有传输/纪元共用同一份 tools/list 解析结果，见 mcp_apps_tool_meta.go。
+	for i := range resp.Tools {
+		resp.Tools[i].UI = ParseToolUI(resp.Tools[i].Meta, resp.Tools[i].Name, c.cfg.ServerName)
+	}
 	return c.filterHeaderAnnotatedTools(resp.Tools), nil
 }
 
@@ -232,6 +237,43 @@ func (c *MCPClient) CallToolTainted(ctx context.Context, name string, arguments 
 		return "", nil, maxTaint, apperr.New(apperr.CodeInternal, fmt.Sprintf("mcp: tool error: %s", text))
 	}
 	return text, imgs, maxTaint, nil
+}
+
+// CallToolTaintedRaw 与 CallToolTainted 等价，额外返回服务器应答的原始
+// CallToolResult JSON（result 字段原文：content/structuredContent/_meta/isError）。
+//
+// 不改 CallToolTainted 本身签名——它是 protocol.MCPClient 接口方法，四处调用点
+// （async_tasks.go/mcp_client_tasks.go/knowledge/connector 等）都不需要原始 JSON；
+// 本方法只服务 makeMCPToolFn 一个调用点（M8f-1：MCP Apps 工具结果需要把原始
+// CallToolResult 透传给前端宿主渲染 UI，是"找最小改动点"的结果，而非扩大公共接口）。
+func (c *MCPClient) CallToolTaintedRaw(ctx context.Context, name string, arguments map[string]any) (text string, imgs []types.ImagePart, raw json.RawMessage, taintLevel types.TaintLevel, err error) {
+	result, err := c.request(ctx, methodToolsCall, map[string]any{
+		"name":      name,
+		"arguments": arguments,
+	})
+	if err != nil {
+		return "", nil, nil, types.TaintHigh, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: tools/call %q", name), err)
+	}
+
+	dec := NewTaintPreservingDecoder(c.cfg.ServerName, c.cfg.Trusted)
+	node := dec.Decode(result, "")
+	maxTaint := node.MaxTaint()
+	if maxTaint < dec.Taint() {
+		maxTaint = dec.Taint()
+	}
+
+	var resp struct {
+		Content []mcpContentBlock `json:"content"`
+		IsError bool              `json:"isError"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return "", nil, nil, maxTaint, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: tools/call parse: %v", err), err)
+	}
+	text, imgs = parseMCPContent(resp.Content)
+	if resp.IsError {
+		return "", nil, result, maxTaint, apperr.New(apperr.CodeInternal, fmt.Sprintf("mcp: tool error: %s", text))
+	}
+	return text, imgs, result, maxTaint, nil
 }
 
 // Close 关闭连接并释放资源。

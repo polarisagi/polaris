@@ -36,6 +36,10 @@ type mcpEntry struct {
 type ToolRegistrar interface {
 	Register(tool types.Tool) error
 	Unregister(name string)
+	// RegisterAppOnly / ExecuteAppTool：MCP Apps app-only 工具不进模型目录，但 View 的调用仍须走
+	// 注册表同一执行体（HE-3）。
+	RegisterAppOnly(tool types.Tool) error
+	ExecuteAppTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel, viewID, sessionID string) (*types.ToolResult, error)
 }
 
 // NetApprovalStore MCP 网络访问审批持久化存储（consumer-side 定义）。
@@ -97,6 +101,11 @@ type MCPManager struct {
 	// 见 mcp_manager_refresh.go。生命周期独立于 entries，用 sync.Map 而非受 m.mu
 	// 保护的 map。
 	refreshing sync.Map
+
+	// uiResourceCache MCP Apps UI 资源缓存（uiResourceCacheKey -> protocol.UIResource），
+	// 见 mcp_apps_resource.go ReadUIResource/clearUIResourceCache。与 refreshing 同理，
+	// 生命周期独立于 entries，用 sync.Map。
+	uiResourceCache sync.Map
 }
 
 // IsPluginConnected 判断给定 plugin_id 是否有至少一个已连接的 MCP Server。
@@ -259,6 +268,9 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	if old != nil {
 		m.unregisterTools(old.name, old.tools)
 	}
+	// 重连清空该 server 的 UI 资源缓存（apps_spec.mdx 未强制，但资源内容可能随
+	// 服务器重启而变化，缓存陈旧模板会让前端宿主渲染过期 UI）。
+	m.clearUIResourceCache(serverID)
 
 	storeFailed := func(err error) error {
 		entry := &mcpEntry{name: name, cfg: cfg, errMsg: err.Error()}
@@ -342,6 +354,16 @@ func (m *MCPManager) Remove(serverID string) {
 		m.unregisterTools(e.name, e.tools)
 		delete(m.entries, serverID)
 	}
+	m.clearUIResourceCache(serverID)
+}
+
+// IsServerConnected 判断给定 server 当前是否有活跃连接（M8f-1：View rpc/state/
+// model-context 网关 handler 的通用前置校验）。
+func (m *MCPManager) IsServerConnected(serverID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e, ok := m.entries[serverID]
+	return ok && e.client != nil
 }
 
 func (m *MCPManager) GetClient(serverID string) protocol.MCPClient {

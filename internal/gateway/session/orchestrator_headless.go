@@ -107,7 +107,7 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 	if req.WorkingDir != "" {
 		userMessage = "[工作目录: " + req.WorkingDir + "]\n\n" + req.Input
 	}
-	if err := o.persistence.SaveMessage(ctx, sessionID, "user", userMessage, "", "", 0); err != nil {
+	if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", userMessage, "", "", 0); err != nil {
 		slog.Warn("session: headless saveMessage user failed", "session", sessionID, "err", err)
 	}
 
@@ -126,7 +126,10 @@ func (o *orchestrator) finishHeadlessTurn(ctx context.Context, req Request, sess
 	reply := res.Output
 
 	if reply != "" {
-		if err := o.persistence.SaveMessage(ctx, sessionID, "assistant", reply, "", "", res.LatencyMs); err != nil {
+		// Headless 路径（Cron/Workflow/Webhook）不经 runFSMTurn 流式事件循环
+		// （AcquireHeadless 同步返回最终 Output），不产生 tool_ui 事件，故不涉及
+		// MCP Apps 视图关联（M8f-1 范围限定见 orchestrator_fsm.go 顶部注释）。
+		if _, err := o.persistence.SaveMessage(ctx, sessionID, "assistant", reply, "", "", res.LatencyMs); err != nil {
 			slog.Warn("session: headless saveMessage assistant failed", "session", sessionID, "err", err)
 		}
 	}

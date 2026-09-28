@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     title           TEXT NOT NULL DEFAULT '',
     project_id      TEXT NOT NULL DEFAULT 'default' REFERENCES projects(id),
     thrashing_index REAL NOT NULL DEFAULT 0.0,
+    -- app_model_context: MCP Apps（apps_spec.mdx）View 模型上下文更新按
+    -- server_id 为键的最新一份未消费内容，JSON 对象 {server_id: {content?, structuredContent?}}。
+    -- 规范要求"只把最后一次更新送给模型"——每个 (session, server) 只保留最新一份，
+    -- 下一轮提示词装配注入后清空该 server_id 对应键（M8f-1）。
+    app_model_context TEXT NOT NULL DEFAULT '{}',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
@@ -53,6 +58,30 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_msg_dedupe_key ON chat_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+-- chat_app_views: MCP Apps（io.modelcontextprotocol/ui）工具调用产生的 UI 视图
+-- 快照（M8f-1，HE-6 State-in-DB）。view_id 由网关侧 crypto/rand 生成
+-- （types.NewToolUIViewID）。message_id 关联到触发本次视图的 assistant 消息——
+-- tool_ui 事件产生于 FSM 工具执行期，早于本轮 assistant 消息落库（chat_messages.id
+-- 是 AUTOINCREMENT，写入前不可知），故允许为 NULL，由 session 编排层在 assistant
+-- 消息落库后用 LinkAppViewsToMessage 回填（最稳定的现成关联键：真实 chat_messages
+-- 主键，而非另造一个弱关联字段）。widget_state 是 ChatGPT window.openai.widgetState
+-- 兼容持久化（PUT /v1/mcp-apps/views/{id}/state）。
+CREATE TABLE IF NOT EXISTS chat_app_views (
+    view_id      TEXT PRIMARY KEY,
+    session_id   TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    message_id   INTEGER REFERENCES chat_messages(id) ON DELETE CASCADE,
+    server_id    TEXT NOT NULL,
+    resource_uri TEXT NOT NULL,
+    tool_name    TEXT NOT NULL,
+    tool_input   TEXT NOT NULL DEFAULT '{}',
+    tool_result  TEXT NOT NULL DEFAULT '{}',
+    widget_state TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_app_views_session ON chat_app_views(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_app_views_message ON chat_app_views(message_id);
 
 -- FTS5 全文检索（content= 模式，实体内容读取走 chat_messages）
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

@@ -96,66 +96,20 @@ func (m *MCPManager) registerTools(serverID, serverName string, client *MCPClien
 			continue
 		}
 		fn := makeMCPToolFn(m, serverID, serverName, client, t.Name)
-		// RegisterRich 将 MCP 工具注册到富工具路径（支持 ImageParts 回传）
+		// RegisterRich 无条件注册到进程内沙箱执行表：MCP Apps app-only 工具
+		// （visibility 不含 "model"）虽不进模型工具目录，但仍须经 View RPC 走
+		// 同一 ExecuteTool 入口调用（HE-3，见 CallToolAsApp）。
 		m.sandbox.RegisterRich(llmName, fn, taint)
-		// 同步到 InMemoryToolRegistry (逐步废弃)
-		if m.toolReg != nil {
-			riskLevel := types.RiskHigh
-			if client.cfg.Trusted {
-				riskLevel = types.RiskMedium
-			}
-			regErr := m.toolReg.Register(types.Tool{
-				Name:        llmName,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
-				Source:      types.ToolMCP,
-				RiskLevel:   riskLevel,
-				TrustTier:   types.TrustTier(client.cfg.TrustTier),
-				Timeout:     toolTimeout,
-			})
-			if regErr != nil {
-				slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
-			}
-		}
 
-		// 注册到统一工具目录 Catalog
-		if m.catalog != nil {
-			m.catalog.Register(protocol.CatalogEntry{
-				Name:        llmName,
-				Description: t.Description,
-				Parameters:  t.InputSchema,
-				Source:      types.ToolMCP,
-				TrustTier:   types.TrustTier(client.cfg.TrustTier),
-				TaintLevel:  taint,
-				Timeout:     toolTimeout,
-				MCPServerID: client.cfg.ServerName,
-				MCPToolName: t.Name,
-			})
-		}
-
-		// GD-08-001: 注册对应的异步变体（M13-bis §8.4），LLM 对预估耗时较长的调用
-		// 可主动选择 *_async 变体立即拿回 task_id，再用 get_task_result 轮询，
-		// 避免同步阻塞。异步变体名超长时静默跳过（不影响同步变体本身可用性）。
-		asyncLLMName := llmName + asyncToolSuffix
-		if len(asyncLLMName) <= maxLLMToolNameLen {
-			asyncFn := makeMCPToolAsyncFn(m, serverID, serverName, client, t.Name)
-			m.sandbox.RegisterRich(asyncLLMName, asyncFn, taint)
-			if m.catalog != nil {
-				m.catalog.Register(protocol.CatalogEntry{
-					Name: asyncLLMName,
-					Description: "[async variant] " + t.Description +
-						" Returns {task_id, status:pending} immediately; poll with get_task_result.",
-					Parameters:  t.InputSchema,
-					Source:      types.ToolMCP,
-					TrustTier:   types.TrustTier(client.cfg.TrustTier),
-					TaintLevel:  taint,
-					Timeout:     toolTimeout,
-					MCPServerID: client.cfg.ServerName,
-					MCPToolName: t.Name,
-				})
-			}
+		// modelVisible=false（visibility 显式排除 "model"）时不同步到
+		// InMemoryToolRegistry / Catalog——两者都是"模型可见工具目录"的数据源，
+		// 纳入 app-only 工具会使其出现在 LLM 的工具列表里（apps_spec.mdx
+		// §Visibility "tools/list behavior"：host MUST NOT 将其纳入）。
+		modelVisible := ToolUIVisibleTo(t.UI, "model")
+		if modelVisible {
+			m.registerModelVisibleTool(serverID, client, serverName, llmName, t, taint, toolTimeout)
 		} else {
-			slog.Warn("mcp: async tool LLM name too long, async variant skipped", "server", serverName, "tool", t.Name, "llm_name", asyncLLMName, "max", maxLLMToolNameLen)
+			m.registerAppOnlyTool(client, serverName, llmName, t, toolTimeout)
 		}
 
 		valid = append(valid, t)
@@ -180,7 +134,7 @@ func makeMCPToolFn(m *MCPManager, serverID, serverName string, client *MCPClient
 		// 永远视为 TaintNone——外部/不可信响应内容完全没有参与污点升级判断。
 		callCtx, cancel := context.WithTimeout(ctx, client.cfg.Timeout)
 		defer cancel()
-		text, imgs, taintLevel, err := client.CallToolTainted(callCtx, mcpName, args)
+		text, imgs, raw, taintLevel, err := client.CallToolTaintedRaw(callCtx, mcpName, args)
 		if err != nil {
 			// OAuth 挑战（401 刷新已失败 / 403 insufficient_scope）：置 AuthRequired，
 			// 返回面向 LLM 的可读错误，而不是透传底层传输错误（basic_authorization.md）。
@@ -194,6 +148,10 @@ func makeMCPToolFn(m *MCPManager, serverID, serverName string, client *MCPClient
 			Output:     []byte(text),
 			ImageParts: imgs, // MCP type="image" content block 解析结果
 			TaintLevel: taintLevel,
+			// MCPRaw 原始 CallToolResult JSON：不改变上方 Output（模型看到的文本）本身，
+			// 只在结果对象上附加一份原文，供 agent_execute_dag.go 判定该工具是否关联
+			// MCP Apps UI 视图时透传给前端宿主（M8f-1）。
+			MCPRaw: raw,
 		}, nil
 	}
 }
@@ -216,6 +174,92 @@ func makeMCPToolAsyncFn(m *MCPManager, serverID, serverName string, client *MCPC
 		taskID := m.runAsyncCall(ctx, serverID, serverName, client, mcpName, args)
 		out, _ := json.Marshal(map[string]string{"task_id": taskID, "status": string(AsyncTaskPending)}) //nolint:errchkjson // 固定字段结构体，Marshal 不会失败
 		return &types.ToolResult{Success: true, Output: out}, nil
+	}
+}
+
+// registryTool 注册表中的工具定义（模型可见与 app-only 共用同一风险/信任口径）。
+func registryTool(client *MCPClient, llmName string, t MCPTool, toolTimeout time.Duration) types.Tool {
+	riskLevel := types.RiskHigh
+	if client.cfg.Trusted {
+		riskLevel = types.RiskMedium
+	}
+	return types.Tool{
+		Name:        llmName,
+		Description: t.Description,
+		InputSchema: t.InputSchema,
+		Source:      types.ToolMCP,
+		RiskLevel:   riskLevel,
+		TrustTier:   types.TrustTier(client.cfg.TrustTier),
+		Timeout:     toolTimeout,
+	}
+}
+
+// registerAppOnlyTool app-only 工具只进注册表的隐藏集合（不进 Catalog、不注册异步变体）：
+// 模型看不到也调不到，View 调用经 ExecuteAppTool 走同一执行体。
+func (m *MCPManager) registerAppOnlyTool(client *MCPClient, serverName, llmName string, t MCPTool, toolTimeout time.Duration) {
+	slog.Info("mcp: tool is app-only, excluded from model tool directory", "server", serverName, "tool", t.Name)
+	if m.toolReg == nil {
+		return
+	}
+	if err := m.toolReg.RegisterAppOnly(registryTool(client, llmName, t, toolTimeout)); err != nil {
+		slog.Warn("mcp: failed to register app-only tool", "server", serverName, "tool", llmName, "err", err)
+	}
+}
+
+// registerModelVisibleTool 同步一个模型可见工具（visibility 含 "model"）到
+// InMemoryToolRegistry + 统一 Catalog，并注册其 GD-08-001 异步变体。从
+// registerTools 拆出：app-only 工具跳过本函数整体（≤60 行治理 + 职责分离）。
+func (m *MCPManager) registerModelVisibleTool(serverID string, client *MCPClient, serverName, llmName string, t MCPTool, taint types.TaintLevel, toolTimeout time.Duration) {
+	if m.toolReg != nil {
+		if regErr := m.toolReg.Register(registryTool(client, llmName, t, toolTimeout)); regErr != nil {
+			slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
+		}
+	}
+
+	var resourceURI string
+	var visibility []string
+	if t.UI != nil {
+		resourceURI, visibility = t.UI.ResourceURI, t.UI.Visibility
+	}
+	if m.catalog != nil {
+		m.catalog.Register(protocol.CatalogEntry{
+			Name:        llmName,
+			Description: t.Description,
+			Parameters:  t.InputSchema,
+			Source:      types.ToolMCP,
+			TrustTier:   types.TrustTier(client.cfg.TrustTier),
+			TaintLevel:  taint,
+			Timeout:     toolTimeout,
+			MCPServerID: client.cfg.ServerName,
+			MCPToolName: t.Name,
+			ResourceURI: resourceURI,
+			Visibility:  visibility,
+		})
+	}
+
+	// GD-08-001: 注册对应的异步变体（M13-bis §8.4），LLM 对预估耗时较长的调用
+	// 可主动选择 *_async 变体立即拿回 task_id，再用 get_task_result 轮询，
+	// 避免同步阻塞。异步变体名超长时静默跳过（不影响同步变体本身可用性）。
+	asyncLLMName := llmName + asyncToolSuffix
+	if len(asyncLLMName) > maxLLMToolNameLen {
+		slog.Warn("mcp: async tool LLM name too long, async variant skipped", "server", serverName, "tool", t.Name, "llm_name", asyncLLMName, "max", maxLLMToolNameLen)
+		return
+	}
+	asyncFn := makeMCPToolAsyncFn(m, serverID, serverName, client, t.Name)
+	m.sandbox.RegisterRich(asyncLLMName, asyncFn, taint)
+	if m.catalog != nil {
+		m.catalog.Register(protocol.CatalogEntry{
+			Name: asyncLLMName,
+			Description: "[async variant] " + t.Description +
+				" Returns {task_id, status:pending} immediately; poll with get_task_result.",
+			Parameters:  t.InputSchema,
+			Source:      types.ToolMCP,
+			TrustTier:   types.TrustTier(client.cfg.TrustTier),
+			TaintLevel:  taint,
+			Timeout:     toolTimeout,
+			MCPServerID: client.cfg.ServerName,
+			MCPToolName: t.Name,
+		})
 	}
 }
 

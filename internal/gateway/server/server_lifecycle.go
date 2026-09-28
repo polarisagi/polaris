@@ -300,6 +300,16 @@ func (s *Server) Start() error {
 		s.bootMarketplaceInit(ctx)
 	})
 
+	// MCP Apps Sandbox proxy 监听器（M8f-1）：AppsEnabled=false 时不启动，
+	// GET /v1/mcp-apps/config 相应返回 enabled=false（见 server_handlers_mcp_apps.go）。
+	// 绑定失败不阻断主服务启动——沙箱是 MCP Apps 专属能力，不是核心路径
+	// （Tier-0 可用性优先，与 Cron/Workflow Worker 缺失时的降级原则一致）。
+	if s.appsSandboxCfg.Enabled {
+		if err := s.startAppsSandboxListener(); err != nil {
+			slog.Error("polaris-server: mcp apps sandbox listener failed to start", "err", err)
+		}
+	}
+
 	s.isReady.Store(true)
 	return nil
 }
@@ -314,6 +324,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.workflowStepWorkerCancel()
 	}
 	s.channelMgr.StopAll()
+	if s.appsSandboxSrv != nil {
+		if err := s.appsSandboxSrv.Shutdown(ctx); err != nil {
+			slog.Warn("mcp apps: sandbox listener shutdown failed", "err", err)
+		}
+	}
 	if s.srv != nil {
 		// [修复] 原 fmt.Errorf("...: %w", s.srv.Shutdown(ctx)) 无论 Shutdown 是否成功
 		// 都会返回非 nil error（%w 包裹 nil 仍构造出非 nil *errors.errorString 对象）——

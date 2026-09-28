@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -190,33 +191,37 @@ func (r *SQLiteChatRepository) DeleteSession(ctx context.Context, id string) err
 // 时刻而非推理起始时刻。现在用 COALESCE + NULLIF 判空字符串回退 strftime(now)：
 // 调用方未设置（如 durationMs<=0 场景）时保持原有写入即当前时间行为，
 // 非空时采用调用方回算值。
-func (r *SQLiteChatRepository) AppendMessage(ctx context.Context, row types.ChatMessageRow) error {
-	if err := r.appendMessage(ctx, "INSERT", row); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.AppendMessage", err)
+// AppendMessage 返回新插入行的 chat_messages.id（AUTOINCREMENT），供调用方
+// （SaveMessage）在需要时回填 MCP Apps 视图关联（M8f-1，见 LinkAppViewsToMessage）。
+func (r *SQLiteChatRepository) AppendMessage(ctx context.Context, row types.ChatMessageRow) (int64, error) {
+	id, err := r.appendMessage(ctx, "INSERT", row)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.AppendMessage", err)
 	}
-	return nil
+	return id, nil
 }
 
 // AppendMessageIdempotent 与 AppendMessage 相同，但使用 INSERT OR IGNORE 并要求
 // row.DedupeKey 非空（GD-13-004 复核修复：outbox 重试兜底路径专用，OutboxWorker
 // at-least-once 语义下可能对同一条记录多次调用 handler，dedupe_key 唯一索引
-// 保证重复调用不会插入重复消息行）。
+// 保证重复调用不会插入重复消息行）。该路径不需要消息 ID（调用方是异步 worker，
+// 与"本轮产生的视图"这个上下文早已脱节），保持原 error-only 签名。
 func (r *SQLiteChatRepository) AppendMessageIdempotent(ctx context.Context, row types.ChatMessageRow) error {
 	if row.DedupeKey == "" {
 		return apperr.New(apperr.CodeInvalidInput, "SQLiteChatRepository.AppendMessageIdempotent: dedupe_key required")
 	}
-	if err := r.appendMessage(ctx, "INSERT OR IGNORE", row); err != nil {
+	if _, err := r.appendMessage(ctx, "INSERT OR IGNORE", row); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.AppendMessageIdempotent", err)
 	}
 	return nil
 }
 
-func (r *SQLiteChatRepository) appendMessage(ctx context.Context, verb string, row types.ChatMessageRow) error {
+func (r *SQLiteChatRepository) appendMessage(ctx context.Context, verb string, row types.ChatMessageRow) (int64, error) {
 	var dedupeKey any
 	if row.DedupeKey != "" {
 		dedupeKey = row.DedupeKey
 	}
-	_, err := r.db.ExecContext(ctx,
+	res, err := r.db.ExecContext(ctx,
 		verb+` INTO chat_messages(session_id, role, content, reasoning_content, tool_calls, file_offset, file_length, dedupe_key, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?,
 			COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -224,9 +229,15 @@ func (r *SQLiteChatRepository) appendMessage(ctx context.Context, verb string, r
 		row.SessionID, row.Role, row.Content, row.ReasoningContent, row.ToolCalls, row.FileOffset, row.FileLength, dedupeKey,
 		row.CreatedAt, row.UpdatedAt)
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.appendMessage", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.appendMessage", err)
 	}
-	return nil
+	// INSERT OR IGNORE 因 dedupe_key 冲突未插入行时 LastInsertId 返回 0（RowsAffected
+	// 亦为 0），调用方（LinkAppViewsToMessage 场景）据此判断跳过回填，不是错误路径。
+	id, idErr := res.LastInsertId()
+	if idErr != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.appendMessage: last_insert_id", idErr)
+	}
+	return id, nil
 }
 
 // ListMessages 列出指定会话的消息。limit<=0 表示不限行数（SQLite LIMIT -1）。
@@ -323,6 +334,167 @@ func (r *SQLiteChatRepository) ClearNonSystemMessages(ctx context.Context, sessi
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
+}
+
+// ── MCP Apps（M8f-1）: chat_app_views + chat_sessions.app_model_context ──────
+
+// SaveAppView 落库一次工具调用产生的 UI 视图快照。message_id 落 NULL——tool_ui
+// 事件产生于 FSM 工具执行期，早于本轮 assistant 消息落库，见 LinkAppViewsToMessage。
+func (r *SQLiteChatRepository) SaveAppView(ctx context.Context, v types.ChatAppViewRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO chat_app_views(view_id, session_id, server_id, resource_uri, tool_name, tool_input, tool_result, widget_state)
+		 VALUES(?,?,?,?,?,?,?,?)`,
+		v.ViewID, v.SessionID, v.ServerID, v.ResourceURI, v.ToolName, v.ToolInput, v.ToolResult, v.WidgetState)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.SaveAppView", err)
+	}
+	return nil
+}
+
+// LinkAppViewsToMessage 把本轮产生的全部视图关联到刚落库的 assistant 消息（同一
+// sessionID 二次校验，防止极端时序下把视图错误关联到并发的另一会话消息）。
+func (r *SQLiteChatRepository) LinkAppViewsToMessage(ctx context.Context, sessionID string, viewIDs []string, messageID int64) error {
+	if len(viewIDs) == 0 {
+		return nil
+	}
+	placeholders := strings.Repeat("?,", len(viewIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, 0, len(viewIDs)+2)
+	args = append(args, messageID, sessionID)
+	for _, id := range viewIDs {
+		args = append(args, id)
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE chat_app_views SET message_id=? WHERE session_id=? AND view_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.LinkAppViewsToMessage", err)
+	}
+	return nil
+}
+
+// GetAppView 按 view_id 查询单条视图；不存在返回 (nil, nil)（与 GetSession 同一约定）。
+func (r *SQLiteChatRepository) GetAppView(ctx context.Context, viewID string) (*types.ChatAppViewRow, error) {
+	var v types.ChatAppViewRow
+	var messageID sql.NullInt64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT view_id, session_id, message_id, server_id, resource_uri, tool_name, tool_input, tool_result, widget_state, created_at
+		 FROM chat_app_views WHERE view_id=?`, viewID,
+	).Scan(&v.ViewID, &v.SessionID, &messageID, &v.ServerID, &v.ResourceURI, &v.ToolName, &v.ToolInput, &v.ToolResult, &v.WidgetState, &v.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.GetAppView", err)
+	}
+	if messageID.Valid {
+		v.MessageID = &messageID.Int64
+	}
+	return &v, nil
+}
+
+// ListAppViewsByMessageIDs 批量查询一组 assistant 消息关联的视图（会话历史接口，
+// 每条助手消息渲染其关联的全部视图）。messageIDs 为空返回空切片。
+func (r *SQLiteChatRepository) ListAppViewsByMessageIDs(ctx context.Context, messageIDs []int64) ([]types.ChatAppViewRow, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(messageIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		args = append(args, id)
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT view_id, session_id, message_id, server_id, resource_uri, tool_name, tool_input, tool_result, widget_state, created_at
+		 FROM chat_app_views WHERE message_id IN (`+placeholders+`) ORDER BY created_at ASC`, args...)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListAppViewsByMessageIDs", err)
+	}
+	defer rows.Close()
+
+	var result []types.ChatAppViewRow
+	for rows.Next() {
+		var v types.ChatAppViewRow
+		var messageID sql.NullInt64
+		if err := rows.Scan(&v.ViewID, &v.SessionID, &messageID, &v.ServerID, &v.ResourceURI, &v.ToolName, &v.ToolInput, &v.ToolResult, &v.WidgetState, &v.CreatedAt); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListAppViewsByMessageIDs scan", err)
+		}
+		if messageID.Valid {
+			v.MessageID = &messageID.Int64
+		}
+		result = append(result, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListAppViewsByMessageIDs rows", err)
+	}
+	return result, nil
+}
+
+// UpdateAppViewWidgetState 持久化 ChatGPT widgetState 兼容字段（大小上限由调用方
+// 网关 handler 校验，仓储层不重复判断）。
+func (r *SQLiteChatRepository) UpdateAppViewWidgetState(ctx context.Context, viewID, widgetState string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE chat_app_views SET widget_state=? WHERE view_id=?`, widgetState, viewID)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.UpdateAppViewWidgetState", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.New(apperr.CodeNotFound, "mcp apps view not found: "+viewID)
+	}
+	return nil
+}
+
+// appModelContextPath SQLite JSON path，按 server_id 为键定位 app_model_context
+// 顶层对象的一个字段。作为绑定参数传给 json_set（而非拼进 SQL 文本），
+// server_id 中的双引号转义后即为安全的 JSON path 片段。
+func appModelContextPath(serverID string) string {
+	return `$."` + strings.ReplaceAll(serverID, `"`, `\"`) + `"`
+}
+
+// UpsertSessionModelContextServer 按 server_id 为键合并一份内容到
+// chat_sessions.app_model_context（每 (session, server) 只保留最新一份，
+// apps_spec.mdx §MCP Apps Specific Messages："Each request overwrites the
+// previous context sent by the View"）。
+func (r *SQLiteChatRepository) UpsertSessionModelContextServer(ctx context.Context, sessionID, serverID, payloadJSON string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE chat_sessions SET app_model_context = json_set(app_model_context, ?, json(?)) WHERE id=?`,
+		appModelContextPath(serverID), payloadJSON, sessionID)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.UpsertSessionModelContextServer", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.New(apperr.CodeNotFound, "session not found: "+sessionID)
+	}
+	return nil
+}
+
+// ConsumeSessionModelContext 读取并清空该会话全部待注入的 model-context（规范
+// 要求注入后清空，"只把最后一次更新送给模型"）。会话不存在返回 ("{}", nil)——
+// 由调用方（PromptAssembler）决定是否是错误，本层只负责数据存在性事实。
+func (r *SQLiteChatRepository) ConsumeSessionModelContext(ctx context.Context, sessionID string) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ConsumeSessionModelContext begin", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var content string
+	err = tx.QueryRowContext(ctx, `SELECT app_model_context FROM chat_sessions WHERE id=?`, sessionID).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "{}", nil
+	}
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ConsumeSessionModelContext select", err)
+	}
+	if content == "" || content == "{}" {
+		return "{}", nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_sessions SET app_model_context='{}' WHERE id=?`, sessionID); err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ConsumeSessionModelContext clear", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ConsumeSessionModelContext commit", err)
+	}
+	return content, nil
 }
 
 func (r *SQLiteChatRepository) ReplaceSessionMessages(ctx context.Context, sessionID string, msgs []types.ChatMessageRow) error {

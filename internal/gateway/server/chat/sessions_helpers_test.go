@@ -23,10 +23,10 @@ type flakyChatRepo struct {
 	calls     int
 }
 
-func (f *flakyChatRepo) AppendMessage(ctx context.Context, row types.ChatMessageRow) error {
+func (f *flakyChatRepo) AppendMessage(ctx context.Context, row types.ChatMessageRow) (int64, error) {
 	f.calls++
 	if f.calls <= f.failCount {
-		return apperr.New(apperr.CodeInternal, "flaky: simulated failure")
+		return 0, apperr.New(apperr.CodeInternal, "flaky: simulated failure")
 	}
 	return f.ChatRepository.AppendMessage(ctx, row)
 }
@@ -83,7 +83,7 @@ func TestSaveMessage_SucceedsWithoutRetry(t *testing.T) {
 	h := &ChatHandler{PersistenceService: &ChatPersistenceService{ChatRepo: repo.NewSQLiteChatRepository(db)}}
 	ctx := context.Background()
 
-	if err := h.PersistenceService.SaveMessage(ctx, "sess-1", "user", "hello", "", "", 0); err != nil {
+	if _, err := h.PersistenceService.SaveMessage(ctx, "sess-1", "user", "hello", "", "", 0); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	msgs, err := h.PersistenceService.ListMessages(ctx, "sess-1")
@@ -104,7 +104,7 @@ func TestSaveMessage_RetriesThenSucceeds(t *testing.T) {
 	h := &ChatHandler{PersistenceService: &ChatPersistenceService{ChatRepo: flaky, OutboxWriter: outbox}}
 	ctx := context.Background()
 
-	if err := h.PersistenceService.SaveMessage(ctx, "sess-1", "assistant", "reply", "", "", 0); err != nil {
+	if _, err := h.PersistenceService.SaveMessage(ctx, "sess-1", "assistant", "reply", "", "", 0); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if flaky.calls != saveMessageRetryAttempts {
@@ -133,7 +133,7 @@ func TestSaveMessage_RetriesExhausted_FallsBackToOutbox(t *testing.T) {
 	h := &ChatHandler{PersistenceService: &ChatPersistenceService{ChatRepo: flaky, OutboxWriter: outbox}}
 	ctx := context.Background()
 
-	err := h.PersistenceService.SaveMessage(ctx, "sess-1", "assistant", "永久失败重试后的回复", "", "", 0)
+	_, err := h.PersistenceService.SaveMessage(ctx, "sess-1", "assistant", "永久失败重试后的回复", "", "", 0)
 	if err != nil {
 		t.Fatalf("expected nil error when outbox fallback succeeds, got: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestSaveMessage_RetriesExhausted_NoOutboxWriter(t *testing.T) {
 	flaky := &flakyChatRepo{ChatRepository: repo.NewSQLiteChatRepository(db), failCount: 100}
 	h := &ChatHandler{PersistenceService: &ChatPersistenceService{ChatRepo: flaky}} // OutboxWriter 未注入
 
-	if err := h.PersistenceService.SaveMessage(context.Background(), "sess-1", "user", "hi", "", "", 0); err == nil {
+	if _, err := h.PersistenceService.SaveMessage(context.Background(), "sess-1", "user", "hi", "", "", 0); err == nil {
 		t.Fatal("expected error when both direct write and outbox fallback are unavailable")
 	}
 }
@@ -184,7 +184,7 @@ func TestChatMessagePersistHandler_Handle(t *testing.T) {
 	flaky := &flakyChatRepo{ChatRepository: chatRepo, failCount: 100}
 	outbox := &stubOutboxWriter{}
 	h := &ChatHandler{PersistenceService: &ChatPersistenceService{ChatRepo: flaky, OutboxWriter: outbox}}
-	if err := h.PersistenceService.SaveMessage(context.Background(), "sess-1", "assistant", "outbox兜底内容", "", "", 0); err != nil {
+	if _, err := h.PersistenceService.SaveMessage(context.Background(), "sess-1", "assistant", "outbox兜底内容", "", "", 0); err != nil {
 		t.Fatalf("SaveMessage failed: %v", err)
 	}
 	if len(outbox.entries) != 1 {

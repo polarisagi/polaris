@@ -51,6 +51,27 @@ ChatMessageRow struct {
 
 type
 
+// ChatAppViewRow 对应 chat_app_views 表一行（M8f-1，MCP Apps
+// io.modelcontextprotocol/ui 工具调用产生的 UI 视图快照）。ToolInput/ToolResult/
+// WidgetState 均为 JSON 文本（DB 列本身是 TEXT，不在 Go 层强类型化，避免每次
+// 读写都要编解码——消费方按需自行 json.Unmarshal）。
+ChatAppViewRow struct {
+	ViewID    string
+	SessionID string
+	// MessageID 为 nil 表示尚未关联到某条 assistant 消息（tool_ui 事件产生于
+	// FSM 工具执行期，早于本轮消息落库，见 013_chat.sql 表注释）。
+	MessageID   *int64
+	ServerID    string
+	ResourceURI string
+	ToolName    string
+	ToolInput   string
+	ToolResult  string
+	WidgetState string
+	CreatedAt   string
+}
+
+type
+
 // ProviderRow 对应 providers 表一行。
 ProviderRow struct {
 	ID        string

@@ -202,6 +202,12 @@ cli = true
 http = true
 grpc = false
 websocket = false
+# MCP Apps（io.modelcontextprotocol/ui）沙箱代理监听器（M8f-1）。0 = port+1；
+# apps_sandbox_origin / apps_host_origin 仅反向代理部署需要显式配置（沙箱与 Web UI 的对外源）。
+apps_sandbox_port = 0
+apps_sandbox_origin = ""
+apps_host_origin = ""
+apps_enabled = true
 
 [security]
 # Tier 3（≥64GB）本地大模型专用的出站网络彻底隔离模式：为真时启用 NetworkSandbox

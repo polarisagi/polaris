@@ -24,6 +24,24 @@ type MCPTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema"`
+	// Meta 原始 _meta 字段（MCP Apps io.modelcontextprotocol/ui 元数据的解析输入）。
+	// 仅用于承载 tools/list 响应原文，解析结果落 UI 字段；toolEqual 据此判定
+	// 刷新前后定义是否变化（含 UI 元数据变化）。
+	Meta json.RawMessage `json:"_meta,omitempty"`
+	// UI 解析后的 MCP Apps 工具级 UI 元数据；nil 表示该工具无 UI 关联
+	// （既非声明 resourceUri，也未偏离默认可见性）。解析逻辑见
+	// extension/mcp.ParseToolUI（标准/废弃别名/ChatGPT 别名归一化）。
+	UI *ToolUI `json:"-"`
+}
+
+// ToolUI MCP Apps 工具级 UI 元数据（_meta.ui，apps_spec.mdx §Resource Discovery）。
+// @canonical: 此处为唯一定义，extension/mcp 包以 type alias 引用。
+type ToolUI struct {
+	// ResourceURI 关联的 UI 资源 URI，必须以 "ui://" 开头（校验见 ParseToolUI）。
+	ResourceURI string
+	// Visibility 取值子集 {"model","app"}；nil/空表示未显式声明，按规范默认
+	// 视为 ["model","app"]（两端均可见），判定逻辑见 mcp.ToolUIVisibleTo。
+	Visibility []string
 }
 
 // MCPServerInfo MCP Server 运行时状态快照。
@@ -106,6 +124,44 @@ type MCPResourceContent struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	Text     string `json:"text,omitempty"`
 	Blob     string `json:"blob,omitempty"`
+	// Meta 内容级 _meta 原文，MCP Apps UI 资源的 csp/permissions/domain/prefersBorder
+	// 均由此解析（apps_spec.mdx §UI Resource Format），见 extension/mcp.ReadUIResource。
+	Meta json.RawMessage `json:"_meta,omitempty"`
+}
+
+// UICSP MCP Apps UI 资源声明的 CSP 域名白名单（apps_spec.mdx §UI Resource Format
+// McpUiResourceCsp）。仅接受 https 源（含 "*." 前缀通配子域），解析时过滤非法项，
+// 见 extension/mcp 包内校验逻辑。
+// @canonical: 此处为唯一定义，extension/mcp 包以 type alias 引用。
+type UICSP struct {
+	ConnectDomains  []string // fetch/XHR/WebSocket，映射 connect-src
+	ResourceDomains []string // 静态资源（图片/脚本/样式/字体/媒体），映射 img-src/script-src/style-src/font-src/media-src
+	FrameDomains    []string // 嵌套 iframe，映射 frame-src
+	BaseURIDomains  []string // 映射 base-uri
+}
+
+// UIPermissions MCP Apps UI 资源请求的沙箱权限（Permission Policy 特性子集）。
+// @canonical: 此处为唯一定义，extension/mcp 包以 type alias 引用。
+type UIPermissions struct {
+	Camera         bool
+	Microphone     bool
+	Geolocation    bool
+	ClipboardWrite bool
+}
+
+// UIResource 资源读取返回的 MCP Apps UI 内容（HTML 正文 + 安全配置）。
+// @canonical: 此处为唯一定义，extension/mcp 包以 type alias 引用。
+type UIResource struct {
+	HTML        string
+	MimeType    string
+	CSP         UICSP
+	Permissions UIPermissions
+	// Domain 宿主相关的专属沙箱子域（host-dependent，Polaris 当前不解释此字段，
+	// 原样透传给前端宿主）。
+	Domain string
+	// PrefersBorder nil=宿主自行决定；非 nil 时为服务器显式偏好（apps_spec.mdx
+	// §UIResourceMeta prefersBorder）。
+	PrefersBorder *bool
 }
 
 // MCPClient 表示 MCP 客户端的通用接口。

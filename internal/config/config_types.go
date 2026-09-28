@@ -257,6 +257,20 @@ type InterfaceConfig struct {
 	HTTP      bool   `toml:"http"`
 	GRPC      bool   `toml:"grpc"`
 	WebSocket bool   `toml:"websocket"`
+	// AppsSandboxPort MCP Apps（io.modelcontextprotocol/ui）沙箱代理专用监听端口
+	// （M8f-1）。规范要求宿主页面与 Sandbox proxy 必须异源（apps_spec.mdx
+	// "Sandbox proxy" 第 1 条），故网关另开一个监听器只托管沙箱代理页。
+	// 0 = Port+1；Port 也为 0 时由操作系统分配（见 server.NewMCPAppsSandboxConfig）。
+	AppsSandboxPort int `toml:"apps_sandbox_port"`
+	// AppsSandboxOrigin 反向代理部署时对外可见的沙箱源（如 TLS 终结在代理层，
+	// 内部端口不等于外部可见地址）；空 = 前端按自身 hostname + 沙箱端口推导。
+	AppsSandboxOrigin string `toml:"apps_sandbox_origin"`
+	// AppsHostOrigin 反向代理部署时宿主页面（Web UI）对外可见的源，加入沙箱页
+	// frame-ancestors；直连部署留空（按浏览器访问的 hostname 自动放行）。
+	AppsHostOrigin string `toml:"apps_host_origin"`
+	// AppsEnabled 控制 MCP Apps 能力总开关（含沙箱监听器是否启动、
+	// GET /v1/mcp-apps/config 的 enabled 字段）。默认 true。
+	AppsEnabled bool `toml:"apps_enabled"`
 }
 
 type SecurityConfig struct {

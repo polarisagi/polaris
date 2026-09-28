@@ -30,8 +30,11 @@ import (
 //   - 分源 Rate Limiter（builtin/mcp/shell 独立限速）
 //   - Taint 传播：ExecuteTool 结果继承输入 TaintLevel（max 传播规则）
 type InMemoryToolRegistry struct {
-	mu         sync.RWMutex
-	tools      map[string]types.Tool
+	mu    sync.RWMutex
+	tools map[string]types.Tool
+	// appOnly MCP Apps 中 visibility 不含 "model" 的工具：不进 Lookup/List（模型既看不到也调不到，
+	// apps_spec.mdx §Visibility），只能经 ExecuteAppTool 由同服务器的 View 调用。
+	appOnly    map[string]types.Tool
 	envelope   *sandbox.ExecEnvelope
 	limiters   map[string]*rateLimiter
 	blackboard SideEffectChecker
@@ -94,6 +97,7 @@ var _ protocol.ToolRegistry = (*InMemoryToolRegistry)(nil)
 func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope, cfg config.M7ToolThresholds) *InMemoryToolRegistry {
 	return &InMemoryToolRegistry{
 		tools:            make(map[string]types.Tool),
+		appOnly:          make(map[string]types.Tool),
 		envelope:         envelope,
 		blackboard:       nil,
 		idempotencyCache: newLRUCache(cfg.IdempotencyCacheSize, time.Duration(cfg.IdempotencyCacheTTLSeconds)*time.Second),
@@ -113,6 +117,19 @@ func (r *InMemoryToolRegistry) Register(tool types.Tool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[tool.Name] = tool
+	delete(r.appOnly, tool.Name) // 工具刷新后可见性可能改变，同名只保留一处
+	return nil
+}
+
+// RegisterAppOnly 注册仅供 MCP Apps View 调用的工具（不进模型工具目录）。
+func (r *InMemoryToolRegistry) RegisterAppOnly(tool types.Tool) error {
+	if tool.Name == "" {
+		return apperr.New(apperr.CodeInternal, "tool_registry: tool name is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appOnly[tool.Name] = tool
+	delete(r.tools, tool.Name)
 	return nil
 }
 
@@ -122,6 +139,7 @@ func (r *InMemoryToolRegistry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.tools, name)
+	delete(r.appOnly, name)
 }
 
 // Lookup 按名称查找工具。未找到返回 ErrToolNotFound。
@@ -153,7 +171,33 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		// 此前恒被 CodeInternal 覆盖成 500，本应是 404。
 		return nil, apperr.Wrap(apperr.CodeOf(err), "InMemoryToolRegistry.ExecuteTool", err)
 	}
+	return r.execute(ctx, tool, input, taintLevel, execOrigin{principal: sandbox.PrincipalAgent})
+}
 
+// ExecuteAppTool MCP Apps View 发起的工具调用。与 ExecuteTool 走同一执行体（污点出口、限流、
+// 幂等、PII 还原、异常检测、Envelope/PolicyGate、TOCTOU 复核，HE-3），仅来源标注不同；
+// 查找范围含 app-only 工具——可见性（visibility 含 "app"）由调用方按工具元数据校验。
+func (r *InMemoryToolRegistry) ExecuteAppTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel, viewID, sessionID string) (*types.ToolResult, error) {
+	r.mu.RLock()
+	tool, ok := r.tools[name]
+	if !ok {
+		tool, ok = r.appOnly[name]
+	}
+	r.mu.RUnlock()
+	if !ok {
+		return nil, apperr.Wrap(apperr.CodeNotFound, fmt.Sprintf("tool_registry: tool %q not found", name), ErrToolNotFound)
+	}
+	return r.execute(ctx, tool, input, taintLevel, execOrigin{principal: sandbox.PrincipalMCPApp, appViewID: viewID, appSessionID: sessionID})
+}
+
+// execOrigin 调用来源：供 PolicyGate 评估上下文与审计区分模型调用和 MCP Apps View 调用。
+type execOrigin struct {
+	principal               string
+	appViewID, appSessionID string
+}
+
+func (r *InMemoryToolRegistry) execute(ctx context.Context, tool types.Tool, input []byte, taintLevel types.TaintLevel, origin execOrigin) (*types.ToolResult, error) {
+	name := tool.Name
 	cached, ok, idempotencyKey := r.checkIdempotency(ctx, name)
 	if ok {
 		return cached, nil
@@ -202,15 +246,17 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 
 	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
 	execRes, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
-		Principal:  sandbox.PrincipalAgent,
-		Kind:       sandbox.KindToolExecute,
-		Resource:   name,
-		TrustTier:  tool.TrustTier,
-		Tool:       tool,
-		Input:      execInput,
-		CapToken:   capTok,
-		TaintLevel: taintLevel, // Envelope 将在执行后计算新的 TaintLevel
-		CPUQuotaMs: int(tool.Timeout.Milliseconds()),
+		Principal:    origin.principal,
+		Kind:         sandbox.KindToolExecute,
+		Resource:     name,
+		TrustTier:    tool.TrustTier,
+		Tool:         tool,
+		Input:        execInput,
+		CapToken:     capTok,
+		TaintLevel:   taintLevel, // Envelope 将在执行后计算新的 TaintLevel
+		CPUQuotaMs:   int(tool.Timeout.Milliseconds()),
+		AppViewID:    origin.appViewID,
+		AppSessionID: origin.appSessionID,
 	})
 
 	// PostCheck: 防止 TOCTOU 导致已取消任务的副作用不被感知（重用 SideEffectPreCheck 接口）
@@ -229,6 +275,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		LatencyMs:  execRes.LatencyMs,
 		TaintLevel: execRes.TaintLevel,
 		ImageParts: execRes.ImageParts,
+		MCPRaw:     execRes.MCPRaw,
 	}
 
 	// 用成功执行的调用训练 AnomalyDistanceFilter 的正常分布基线（M11 §2.2）。

@@ -101,10 +101,14 @@ ChatRepository interface {
 	DeleteSession(ctx context.Context, id string) error
 
 	// Messages
-	AppendMessage(ctx context.Context, row types.ChatMessageRow) error
+	// AppendMessage 返回新插入行的 chat_messages.id（AUTOINCREMENT 主键）——M8f-1：
+	// MCP Apps 视图（chat_app_views）需要在 assistant 消息落库后回填关联，是这个
+	// 返回值存在的唯一原因，见 LinkAppViewsToMessage。
+	AppendMessage(ctx context.Context, row types.ChatMessageRow) (int64, error)
 	// AppendMessageIdempotent 与 AppendMessage 语义相同，但要求 row.DedupeKey
 	// 非空并据此做 INSERT OR IGNORE（GD-13-004 复核修复：outbox 重试兜底路径
 	// 专用，供 ChatMessagePersistHandler 在 at-least-once 重投下避免重复插入）。
+	// 该路径写入时机与调用方（异步 outbox worker）脱节，不提供消息 ID 回填。
 	AppendMessageIdempotent(ctx context.Context, row types.ChatMessageRow) error
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]types.ChatMessageRow, error)
 	SearchMessages(ctx context.Context, query string, limit int) ([]types.ChatMessageRow, error)
@@ -115,6 +119,29 @@ ChatRepository interface {
 	TouchSession(ctx context.Context, id string) error
 	ClearNonSystemMessages(ctx context.Context, sessionID string) error
 	ReplaceSessionMessages(ctx context.Context, sessionID string, msgs []types.ChatMessageRow) error
+
+	// MCP Apps（M8f-1，io.modelcontextprotocol/ui）：chat_app_views 表读写 +
+	// chat_sessions.app_model_context 列读写。@producer 同上（repo_chat.go）。
+
+	// SaveAppView 落库一次工具调用产生的 UI 视图快照（HE-6 State-in-DB）。
+	SaveAppView(ctx context.Context, v types.ChatAppViewRow) error
+	// LinkAppViewsToMessage 把本轮产生的全部视图关联到刚落库的 assistant 消息
+	// （tool_ui 事件早于消息落库，见 ChatAppViewRow.MessageID 注释）。
+	LinkAppViewsToMessage(ctx context.Context, sessionID string, viewIDs []string, messageID int64) error
+	// GetAppView 按 view_id 查询单条视图（视图归属/存在性校验的唯一数据源，
+	// 供网关 view rpc/state/model-context 三个 handler 复用）。
+	GetAppView(ctx context.Context, viewID string) (*types.ChatAppViewRow, error)
+	// ListAppViewsByMessageIDs 批量查询一组 assistant 消息关联的视图（会话历史接口）。
+	ListAppViewsByMessageIDs(ctx context.Context, messageIDs []int64) ([]types.ChatAppViewRow, error)
+	// UpdateAppViewWidgetState 持久化 ChatGPT widgetState 兼容字段（≤64 KiB 由调用方校验）。
+	UpdateAppViewWidgetState(ctx context.Context, viewID, widgetState string) error
+	// UpsertSessionModelContextServer 按 server_id 为键合并一份 View 模型上下文
+	// 更新内容到 chat_sessions.app_model_context（每 (session, server) 只保留最新一份）。
+	UpsertSessionModelContextServer(ctx context.Context, sessionID, serverID, payloadJSON string) error
+	// ConsumeSessionModelContext 读取并清空该会话全部待注入的 model-context
+	// （regulation: 只把最后一次更新送给模型，注入后即清空），返回原始 JSON
+	// 对象文本 {server_id: {...}}；空/无更新时返回 "{}"。
+	ConsumeSessionModelContext(ctx context.Context, sessionID string) (string, error)
 }
 
 type

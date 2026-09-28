@@ -82,12 +82,20 @@ func (m *MCPManager) doRefreshTools(ctx context.Context, serverID string) error 
 	if len(toUnregister) > 0 {
 		m.unregisterTools(name, toUnregister)
 	}
+	// 定义变化的工具先注销旧版本：可见性可能由模型可见变为 app-only，旧的 Catalog 条目与
+	// 异步变体不会被新注册覆盖，残留即违反"模型不得看到 app-only 工具"。
+	if replaced := replacedTools(oldTools, toRegister); len(replaced) > 0 {
+		m.unregisterTools(name, replaced)
+	}
 	var validNew []MCPTool
 	if len(toRegister) > 0 {
 		validNew = m.registerTools(serverID, name, client, toRegister)
 	}
 
 	added := m.commitRefreshedTools(serverID, client, oldTools, changed, validNew)
+	// 工具列表刷新清空该 server 的 UI 资源缓存：resourceUri 关联关系或资源内容
+	// 本身可能随刷新变化（见 mcp_apps_resource.go ReadUIResource 顶部注释）。
+	m.clearUIResourceCache(serverID)
 	slog.Info("mcp: tools refreshed", "server", serverID, "added", added, "removed", len(toUnregister))
 	return nil
 }
@@ -131,6 +139,21 @@ func (m *MCPManager) commitRefreshedTools(serverID string, client *MCPClient, ol
 	return len(validNew)
 }
 
+// replacedTools 旧列表中被 toRegister 同名替换（定义变化）的工具。
+func replacedTools(old, toRegister []MCPTool) []MCPTool {
+	incoming := make(map[string]bool, len(toRegister))
+	for _, t := range toRegister {
+		incoming[t.Name] = true
+	}
+	var out []MCPTool
+	for _, t := range old {
+		if incoming[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // diffTools 比较刷新前后的工具集合（按 Name 做 key）：toRegister 为新增或定义变化的
 // 工具（RegisterRich/Register 对同名 key 直接覆盖，见 internal/sandbox 的注册表实现，
 // 不需要先注销旧定义）；toUnregister 为消失的工具；changed 记录所有名称有变化的
@@ -158,7 +181,9 @@ func diffTools(old, latest []MCPTool) (toRegister, toUnregister []MCPTool, chang
 	return toRegister, toUnregister, changed
 }
 
-// toolEqual 判断两个同名工具的定义是否一致（描述 + inputSchema 字节相等）。
+// toolEqual 判断两个同名工具的定义是否一致（描述 + inputSchema + _meta 字节相等）。
+// _meta 纳入比较：MCP Apps UI 元数据变化（如 visibility 从 app-only 改为 model 可见）
+// 必须触发 toRegister 重新走 registerTools，否则 app-only 工具集合会与最新声明脱节。
 func toolEqual(a, b MCPTool) bool {
-	return a.Description == b.Description && bytes.Equal(a.InputSchema, b.InputSchema)
+	return a.Description == b.Description && bytes.Equal(a.InputSchema, b.InputSchema) && bytes.Equal(a.Meta, b.Meta)
 }

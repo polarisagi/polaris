@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
@@ -40,33 +41,54 @@ func withHookContext(input, hookContext string) string {
 	return input + "\n\n<hook-context>\n" + hookContext + "\n</hook-context>"
 }
 
+// withMCPAppContext 把 MCP Apps View 提交的模型上下文更新待注入内容以显式标记
+// 块拼入任务意图（M8f-1），与 withHookContext 同一处理原则：
+// 外部/不可信内容显式标记，模型可区分用户原文与 View 注入内容。序列化失败
+// （理论不会发生，ConsumeSessionModelContext 返回值恒为合法 JSON 反序列化产物）
+// 按原样跳过，不阻断本轮。
+func withMCPAppContext(input string, mcpAppContext map[string]json.RawMessage) string {
+	if len(mcpAppContext) == 0 {
+		return input
+	}
+	payload, err := json.Marshal(mcpAppContext)
+	if err != nil {
+		slog.Warn("session: encode mcp app model context failed", "err", err)
+		return input
+	}
+	return input + "\n\n<mcp-app-context>\n" + string(payload) + "\n</mcp-app-context>"
+}
+
 // continueOnStopHooks Stop hook 以 decision:block 要求继续时，先持久化当前回复，再以 hook 给出的
-// 原因作为续跑指令重跑一轮内核；返回最终回复。
+// 原因作为续跑指令重跑一轮内核；返回最终回复与全部续跑轮次累计产生的 MCP Apps
+// 视图 ID（M8f-1，供调用方与初次推理的视图一并关联到本轮最终落库的 assistant
+// 消息；中间轮次各自 SaveMessage 落的那条消息不参与关联，见调用方注释）。
 func (o *orchestrator) continueOnStopHooks(
 	ctx context.Context, sink Sink, sessionID string, agentCtrl protocol.AgentController,
 	history []types.Message, reply string,
-) (string, string, bool) {
+) (string, string, bool, []string) {
+	var allViewIDs []string
 	for i := 0; i < maxStopContinuations; i++ {
 		v := o.hooks.Stop(ctx, sessionID, reply, i > 0)
 		if v.StopTurn || !v.Blocked || strings.TrimSpace(v.Reason) == "" {
-			return reply, "", false
+			return reply, "", false, allViewIDs
 		}
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
+		if _, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
 			slog.Error("session: saveMessage assistant before stop-hook continuation", "session", sessionID, "err", err)
 		}
 		cancel()
 		history = append(history, types.Message{Role: "assistant", Content: reply})
 		agentCtrl.SetConversationHistory(history)
 		slog.Info("session: Stop hook requested continuation", "session", sessionID, "round", i+1)
-		next, inferErr, aborted := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
+		next, inferErr, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
 			"<stop-hook>\n"+v.Reason+"\n</stop-hook>")
+		allViewIDs = append(allViewIDs, viewIDs...)
 		if aborted || inferErr != "" || next == "" {
-			return next, inferErr, aborted
+			return next, inferErr, aborted, allViewIDs
 		}
 		reply = next
 	}
-	return reply, "", false
+	return reply, "", false, allViewIDs
 }
 
 func appendNonEmpty(parts []string, s string) []string {

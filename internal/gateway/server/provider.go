@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 
@@ -63,6 +64,19 @@ type MCPManager interface {
 	// 加密落库、重连。返回值第一个字段始终是 ServerID，供 GET /oauth/mcp/callback
 	// 在失败时仍能定位是哪个服务器（但不得回显 err 本身给浏览器，见该 handler 注释）。
 	CompleteAuthorization(ctx context.Context, query url.Values) (string, error)
+
+	// MCP Apps（M8f-1，io.modelcontextprotocol/ui）─────────────────────────
+
+	// IsServerConnected 判断给定 server 当前是否有活跃连接（view rpc/state/
+	// model-context 三个 handler 的通用前置校验：服务器断开则 404）。
+	IsServerConnected(serverID string) bool
+	// ReadUIResource 读取一个 MCP Apps UI 资源（GET /v1/mcp-apps/resource）。
+	ReadUIResource(ctx context.Context, serverID, uri string) (protocol.UIResource, error)
+	// CallToolAsApp 执行 View 发起的工具调用（POST .../rpc 的工具调用方法），返回
+	// 原始 CallToolResult JSON；权限校验（visibility 含 "app"、跨服务器拒绝）见实现。
+	CallToolAsApp(ctx context.Context, serverID, toolName string, args map[string]any, sessionID, viewID string) (json.RawMessage, error)
+	// ReadResourceAsApp 执行 View 发起的资源读取（POST .../rpc 的资源读取方法）。
+	ReadResourceAsApp(ctx context.Context, serverID, uri string) ([]protocol.MCPResourceContent, error)
 }
 
 // ExtensionInstaller server 包对扩展安装管理器的消费端接口（超集，覆盖所有子 handler 调用点）。

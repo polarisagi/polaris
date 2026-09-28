@@ -368,6 +368,11 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/import/backup` | `sysadminHandler.HandleImportBackup` |
 | GET | `/v1/insights` | `sysadminHandler.HandleInsights` |
 | GET | `/v1/logs/stream` | `handleLogStream` |
+| GET | `/v1/mcp-apps/config` | `handleGetMCPAppsConfig` |
+| GET | `/v1/mcp-apps/resource` | `handleGetMCPAppsResource` |
+| PUT | `/v1/mcp-apps/views/{viewID}/model-context` | `handleMCPAppsViewModelContext` |
+| POST | `/v1/mcp-apps/views/{viewID}/rpc` | `handleMCPAppsViewRPC` |
+| PUT | `/v1/mcp-apps/views/{viewID}/state` | `handleMCPAppsViewState` |
 | GET | `/v1/mcp-servers` | `sysadminHandler.MCP.HandleListMCPServers` |
 | POST | `/v1/mcp-servers` | `sysadminHandler.MCP.HandleCreateMCPServer` |
 | DELETE | `/v1/mcp-servers/{serverID}` | `sysadminHandler.MCP.HandleDeleteMCPServer` |
@@ -448,7 +453,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 141 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 146 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]

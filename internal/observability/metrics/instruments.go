@@ -112,6 +112,11 @@ var (
 	// 偏高（分母隐性丢了失败样本）。无 label（单一事件类型，不构成基数问题）。
 	InstrLearningReflectionDroppedTotal metric.Int64Counter
 
+	// [M8f-1] MCP Apps（io.modelcontextprotocol/ui）App 发起工具调用可观测性。
+	// mcp_server 取值为已连接 server 的用户配置名（数量有界，随服务器连接数增长，
+	// 非任意外部输入）；outcome 固定枚举 "success"/"error"。
+	InstrMCPAppToolCallsTotal metric.Int64Counter // labels: mcp_server, outcome
+
 	instrOnce sync.Once
 )
 

@@ -255,7 +255,9 @@ func TestTasksCapability_ModernRequestDeclaresExtension(t *testing.T) {
 }
 
 // TestTasksCapability_LegacyInitializeExcludesExtension 旧纪元 initialize 的
-// capabilities 不得声明 tasks 扩展（旧纪元 core tasks 语义不同，本任务不实现）。
+// capabilities 不得声明 tasks 扩展（旧纪元 core tasks 语义不同，本任务不实现），
+// 但必须声明 MCP Apps ui 扩展（M8f-1：apps_spec.mdx 的能力声明示例即在 initialize
+// 请求中给出，未区分纪元，与 tasks 扩展的纪元限定范围不同）。
 func TestTasksCapability_LegacyInitializeExcludesExtension(t *testing.T) {
 	srv := newScripted(func(method string, _ map[string]any, _ http.Header) (int, http.Header, string) {
 		switch method {
@@ -275,7 +277,11 @@ func TestTasksCapability_LegacyInitializeExcludesExtension(t *testing.T) {
 		t.Fatalf("expected legacy era, got %v", c.protocolEra())
 	}
 	caps, _ := srv.params["initialize"]["capabilities"].(map[string]any)
-	if _, ok := caps["extensions"]; ok {
-		t.Fatalf("legacy initialize must not declare extensions, got %v", caps)
+	exts, _ := caps["extensions"].(map[string]any)
+	if _, ok := exts["io.modelcontextprotocol/tasks"]; ok {
+		t.Fatalf("legacy initialize must not declare tasks extension, got %v", caps)
+	}
+	if _, ok := exts["io.modelcontextprotocol/ui"]; !ok {
+		t.Fatalf("legacy initialize must declare ui extension, got %v", caps)
 	}
 }

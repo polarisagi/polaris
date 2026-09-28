@@ -82,7 +82,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	finalInput, userMsg := o.buildUserMessage(req)
 
 	history = append(history, userMsg)
-	if err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+	if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
 		slog.Error("session: saveMessage user", "session", sessionID, "err", err)
 	}
 	if tw != nil {
@@ -123,6 +123,16 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		taskInput = req.Input
 	}
 	taskInput = withHookContext(taskInput, hookContext)
+	// M8f-1：View 经 PUT /v1/mcp-apps/views/{id}/model-context 发起的模型
+	// 上下文更新注入——ConsumeSessionModelContext 读取即清空
+	// （规范：只把最后一次更新送给模型），随 taskInput 整体经下方 runFSMTurn 内
+	// taint.NewTaintedString 打 TaintHigh，与工具输出注入用户消息同一污点处理
+	// 路径（HE-2），不单独二次标注。
+	if mcpAppCtx, mcErr := o.persistence.ConsumeSessionModelContext(ctx, sessionID); mcErr != nil {
+		slog.Warn("session: consume mcp app model context failed", "session", sessionID, "err", mcErr)
+	} else {
+		taskInput = withMCPAppContext(taskInput, mcpAppCtx)
+	}
 
 	// ── 上下文使用率评估（警告 + 防抖动告警 + 自动压缩）────────────────────────
 	ctxStats := o.compression.Stats(history)
@@ -165,6 +175,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	var reply string
 	var inferErr string
 	var aborted bool
+	var viewIDs []string
 
 	if agentCtrl == nil {
 		o.emitError(sink, "no_agent", "系统错误：未找到当前会话的 Agent 控制器", sessionID, nil)
@@ -173,17 +184,25 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// 内核按回合新建 Agent，对上文一无所知；历史须随每轮显式注入（ADR-0098 决策四）。
 	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
 	agentCtrl.SetConversationHistory(history[:len(history)-1])
-	reply, inferErr, aborted = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput)
+	reply, inferErr, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput)
 	if !aborted && inferErr == "" && reply != "" {
-		reply, inferErr, aborted = o.continueOnStopHooks(ctx, sink, sessionID, agentCtrl, history, reply)
+		var stopViewIDs []string
+		reply, inferErr, aborted, stopViewIDs = o.continueOnStopHooks(ctx, sink, sessionID, agentCtrl, history, reply)
+		// M8f-1：Stop hook 续跑轮次产生的视图与初次推理产生的视图一并关联到
+		// 本轮最终落库的 assistant 消息（continueOnStopHooks 内部对续跑之前的
+		// 中间回复各自 SaveMessage，那些中间消息的视图关联不在本次范围内，
+		// 是可接受的降级——见该函数注释）。
+		viewIDs = append(viewIDs, stopViewIDs...)
 	}
 	if aborted {
 		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。
 		if reply != "" {
 			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
+			messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0)
+			if err != nil {
 				slog.Error("session: saveMessage assistant (aborted turn)", "session", sessionID, "err", err)
 			}
+			o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
 			saveCancel()
 		}
 		return &Result{SessionID: sessionID, Reply: reply, Aborted: true}, nil
@@ -208,9 +227,11 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	defer saveCancel()
 
 	if reply != "" {
-		if err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs); err != nil {
+		messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs)
+		if err != nil {
 			slog.Error("session: saveMessage assistant", "session", sessionID, "err", err)
 		}
+		o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
 		o.persistence.SampleAndScoreReply(sessionID, req.Input, reply)
 		if tw != nil {
 			tw.WriteTurn("assistant", reply, inferLatencyMs, 0)
@@ -264,7 +285,7 @@ func (o *orchestrator) tryDispatchSlash(
 	}
 	if cmdResult.Response != "" {
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
+		if _, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
 			slog.Error("session: saveMessage slash response", "session", sessionID, "err", err)
 		}
 		cancel()

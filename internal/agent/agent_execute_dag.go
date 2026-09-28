@@ -500,6 +500,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			ToolName:   toolName,
 			Content:    outputContent,
 			TaintLevel: taintLevel,
+			UI:         a.buildToolUIRef(toolName, args, res),
 		})
 
 		if a.memory != nil {
@@ -602,4 +603,27 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	span.AddEvent("dag_execute_done")
 	a.asyncIntent(types.TriggerExecuteDone)
 	return nil
+}
+
+// buildToolUIRef 判定本次工具调用是否关联 MCP Apps UI 视图（M8f-1，
+// io.modelcontextprotocol/ui）：仅当 Catalog 记录了该工具的 ResourceURI 且本次
+// 调用产出了 MCPRaw（MCP 原始 CallToolResult JSON）时才构造非 nil 引用——两个
+// 条件确保只有"MCP 来源 + 声明了 UI 资源 + 调用成功"的工具才触发，不改变
+// outputContent（模型可见文本）本身。ViewID 每次调用用 crypto/rand 重新生成。
+func (a *Agent) buildToolUIRef(toolName string, args []byte, res *types.ToolResult) *types.ToolUIRef {
+	if res == nil || !res.Success || len(res.MCPRaw) == 0 || a.catalog == nil {
+		return nil
+	}
+	entry, ok := a.catalog.Lookup(toolName)
+	if !ok || entry.ResourceURI == "" {
+		return nil
+	}
+	return &types.ToolUIRef{
+		ViewID:      types.NewToolUIViewID(),
+		ServerID:    entry.MCPServerID,
+		ResourceURI: entry.ResourceURI,
+		ToolName:    entry.MCPToolName,
+		ToolInput:   args,
+		ToolResult:  res.MCPRaw,
+	}
 }

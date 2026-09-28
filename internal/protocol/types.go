@@ -66,6 +66,12 @@ type CatalogEntry struct {
 	MCPServerID string // Source==ToolMCP 时有效
 	MCPToolName string // MCP 协议原始工具名（非 LLM 调用名）
 	SkillName   string // Source==ToolSkill 时有效（"skill:xxx" 格式）
+	// ResourceURI / Visibility：MCP Apps 工具级 UI 元数据（ToolUI，见 mcp.go），
+	// 由 registerTools 从 MCPTool.UI 同步写入。ResourceURI 为空表示该工具无关联
+	// UI 视图；Agent Kernel（agent_execute_dag.go）据此判定是否随工具结果发布
+	// tool_ui 事件（AgentStreamEvent.UI）。
+	ResourceURI string
+	Visibility  []string
 }
 
 // MockResponse 表示 032_mock_response_cache 表中的一条记录。

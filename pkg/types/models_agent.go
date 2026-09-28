@@ -1,5 +1,7 @@
 package types
 
+import "encoding/json"
+
 type
 
 // StepContext 单步执行上下文（供 StepScorer 打分，Best-of-N 剪枝）。
@@ -283,4 +285,22 @@ type AgentStreamEvent struct {
 	ParentTaskID   string               `json:"parent_task_id,omitempty"`   // 父任务 ID（委派场景嵌套事件）
 	IsNested       bool                 `json:"is_nested,omitempty"`        // 是否为子 Agent 嵌套事件
 	DeadlineNs     int64                `json:"deadline_ns,omitempty"`      // 仅 AgentStreamEventApproval：审批截止（绝对 Unix 纳秒）
+	// UI 仅 Type==AgentStreamEventToolResult 且该工具关联 MCP Apps UI 视图时非空
+	// （M8f-1）。session 编排层据此额外发一条 KindStatus "tool_ui" 事件并落库
+	// chat_app_views，不影响本事件本身承载的模型可见文本（Content 字段不变）。
+	UI *ToolUIRef `json:"ui,omitempty"`
+}
+
+// ToolUIRef 描述一次 MCP 工具调用关联的 MCP Apps UI 视图（io.modelcontextprotocol/ui，
+// apps_spec.mdx）。ToolResult 是 MCP 原始 CallToolResult JSON（content/structuredContent/
+// _meta/isError），供前端宿主重放工具结果通知使用——与模型看到的
+// 精简文本（AgentStreamEvent.Content）是两条独立数据，互不影响。
+type ToolUIRef struct {
+	ViewID      string          `json:"view_id"`
+	ServerID    string          `json:"server_id"`
+	ResourceURI string          `json:"resource_uri"`
+	ToolName    string          `json:"tool_name"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult  json.RawMessage `json:"tool_result,omitempty"`
+	Cancelled   bool            `json:"cancelled,omitempty"`
 }

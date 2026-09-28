@@ -98,7 +98,7 @@
 <!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `M13-Interface-Scheduler.md` | L3 接口 | 37K | 见下方 [M13 补充](#m13-补充) |
+| `M13-Interface-Scheduler.md` | L3 接口 | 38K | 见下方 [M13 补充](#m13-补充) |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 32K | 见下方 [M07 补充](#m07-补充) |
 | `M05-Memory-System.md` | L1 记忆 | 27K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
 | `M11-Policy-Safety.md` | L0 策略 | 26K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
