@@ -2,6 +2,7 @@ package config
 
 import (
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/offpeak"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -67,6 +68,14 @@ type M1RouterThresholds struct {
 	EmbedLowMaxBatchSize    int `toml:"embed.low_max_batch_size"`  // 8
 	EmbedCallTimeoutSeconds int `toml:"embed.call_timeout_s"`      // 30
 
+	// 错峰调度（ADR-0105 决策七）：可延迟后台任务（GraphRAG 建图/社区摘要、合成评测/技能、课程生成、
+	// prompt 优化器、rag_summary_tree）只在这些 UTC 窗口内执行，窗口外推迟到下一个窗口起点。
+	// 格式 "HH:MM-HH:MM"（可跨零点，终点可写 24:00），空 = 不错峰。窗口来自配置，不硬编码任何厂商时刻表。
+	OffpeakWindows []string `toml:"offpeak.windows"` // 默认空
+
+	// llm_calls 保留期（ADR-0105 决策八）：按 created_at 随既有 6h 周期清理，0 = 不清理。
+	UsageRetentionDays int `toml:"usage.retention_days"` // 90
+
 	// Provider 缓存接线（ADR-0105 决策三）。
 	// AnthropicCacheTTL: cache_control.ttl，"5m"|"1h"；"5m" 为 API 默认，不显式下发。
 	AnthropicCacheTTL string `toml:"anthropic.cache_ttl"` // "5m"
@@ -89,6 +98,12 @@ func (t M1RouterThresholds) Validate() error {
 	case "", "in_memory", "24h":
 	default:
 		return apperr.New(apperr.CodeInvalidInput, "m1_router.openai.prompt_cache_retention: invalid "+t.OpenAIPromptCacheRetention+" (want in_memory|24h or empty)")
+	}
+	if err := offpeak.Validate(t.OffpeakWindows); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "m1_router.offpeak.windows", err)
+	}
+	if t.UsageRetentionDays < 0 {
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.usage.retention_days: must be >= 0 (0 = keep forever)")
 	}
 	return nil
 }
@@ -427,6 +442,7 @@ func DefaultThresholds() Thresholds {
 			SemanticCacheMaxEntries:       10000,
 			SemanticCacheSimilarity:       0.95,
 			SemanticCacheTTLHours:         24,
+			UsageRetentionDays:            90,
 			ResponseCacheEnabled:          true,
 			ResponseCacheTTLHours:         168,
 			ResponseCacheMaxEntries:       20000,

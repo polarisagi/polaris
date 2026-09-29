@@ -119,6 +119,7 @@ GET    /v1/sessions/{id}/context           上下文诊断（token 用量 + 压�
 ─── 搜索与洞察 ─────────────────────────────────────────
 GET  /v1/search                            全文搜索
 GET  /v1/insights                          系统洞察报告
+GET  /v1/usage                             LLM 用量聚合（?since=24h&until=&group_by=purpose|model|provider|day；请求数/输入·缓存命中·输出·推理 token/命中率/估算费用；ADR-0105 决策八，CLI: polaris usage）
 
 ─── Provider 与模型 ────────────────────────────────────
 GET    /v1/providers                       列出 Provider
@@ -441,6 +442,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | GET | `/v1/system/version` | `sysadminHandler.HandleGetVersion` |
 | GET | `/v1/tools` | `sysadminHandler.HandleListTools` |
 | POST | `/v1/tools/{name}/execute` | `sysadminHandler.HandleExecuteTool` |
+| GET | `/v1/usage` | `sysadminHandler.HandleGetUsage` |
 | POST | `/v1/vault/rotate-master-key` | `sysadminHandler.HandleVaultRotateMasterKey` |
 | GET | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |
 | POST | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |

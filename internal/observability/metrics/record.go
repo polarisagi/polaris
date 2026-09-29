@@ -42,6 +42,23 @@ func RecordLLMCacheHit(provider, model string, hit bool) {
 	)
 }
 
+// RecordLLMPromptTokens 按 purpose/provider 累计输入 token 与其中的缓存命中 token（ADR-0105 决策八）。
+// inputTokens 必须是"全部输入（含命中）"口径，否则查询侧 cache_hit/input 会 >1。
+// purpose 取自 types.Purpose* 常量（有限集合），provider 是注册名（用户配置，量级有限），
+// 基数可控，无需 CardinalityGuard。instrument 为 nil 时静默跳过（Tier-0 无 OTel 场景）。
+func RecordLLMPromptTokens(ctx context.Context, purpose, provider string, inputTokens, cacheHitTokens int) {
+	if inputTokens <= 0 {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("purpose", purpose), AttrProvider(provider))
+	if InstrLLMInputTokens != nil {
+		InstrLLMInputTokens.Add(ctx, int64(inputTokens), attrs)
+	}
+	if InstrLLMCacheHitTokens != nil && cacheHitTokens > 0 {
+		InstrLLMCacheHitTokens.Add(ctx, int64(cacheHitTokens), attrs)
+	}
+}
+
 // RecordEmbeddingCall 记录一次 embedding 调用的延迟与失败情况。
 // 2026-07-04 审计修复（Task 14）：InstrEmbeddingLatencyMs/InstrEmbeddingErrorTotal
 // 此前已定义但从未被任何调用方记录，embedding 调用健康度完全不可观测；

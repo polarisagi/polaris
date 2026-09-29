@@ -37,6 +37,20 @@ type DefaultIngestionPipeline struct {
 	searchEngine       *search.HybridSearchEngine
 	summaryInferSem    chan struct{}                  // 限制并发摘要 Infer 调用数（H1）
 	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不计算/校验 taint_hmac（inv_M11_02）
+	offPeak            offPeakWaiter                  // 可选；非 nil 时降级 goroutine 路径的摘要树等到错峰窗口再建（ADR-0105 决策七）
+}
+
+// offPeakWaiter 是错峰窗口的消费端接口（由 pkg/offpeak.Gate 满足，nil 指针安全）。
+type offPeakWaiter interface {
+	Wait(ctx context.Context) error
+}
+
+// WithOffPeak 启用错峰：outboxWriter 未注入时，摘要树（rag_summary_tree）在后台 goroutine 里构建，
+// 窗口外该 goroutine 先等到窗口起点。文档摄取本身（切块/入库/检索可用）不受影响——只推迟摘要的 LLM 调用。
+// outbox 路径（生产默认）的摘要/建图推迟由 outbox 的 OffPeakDeferral 处理，见 cmd/polaris/boot_offpeak.go。
+func (p *DefaultIngestionPipeline) WithOffPeak(w offPeakWaiter) *DefaultIngestionPipeline {
+	p.offPeak = w
+	return p
 }
 
 func NewDefaultIngestionPipeline(router *store.StorageRouter, provider protocol.Provider, outboxWriter protocol.OutboxWriter, searchEngine *search.HybridSearchEngine, boundarySerializer *taint.TaintBoundarySerializer) *DefaultIngestionPipeline {
@@ -214,12 +228,23 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 			return tree, apperr.Wrap(apperr.CodeInternal, "ingestion: outbox 投递失败", errors.Join(outboxErrs...))
 		}
 	} else {
-		concurrent.SafeGo(trace.DetachedWithLink(ctx), "knowledge.rag.build_summary_tree", func(ctx context.Context) {
-			p.buildSummaryTree(ctx, docNode, db)
-		})
+		p.buildSummaryTreeAsync(ctx, docNode, db)
 	}
 
 	return tree, nil
+}
+
+// buildSummaryTreeAsync 在后台 goroutine 里构建摘要树（outboxWriter 未注入时的降级路径）。
+// 配置了错峰窗口时先等到窗口起点（ADR-0105 决策七）。
+func (p *DefaultIngestionPipeline) buildSummaryTreeAsync(ctx context.Context, docNode *DocNode, db *sql.DB) {
+	concurrent.SafeGo(trace.DetachedWithLink(ctx), "knowledge.rag.build_summary_tree", func(ctx context.Context) {
+		if p.offPeak != nil {
+			if err := p.offPeak.Wait(ctx); err != nil {
+				return
+			}
+		}
+		p.buildSummaryTree(ctx, docNode, db)
+	})
 }
 
 // buildSummaryTree 见 rag_summary_tree.go（R7 拆分）。

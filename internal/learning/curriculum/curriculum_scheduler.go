@@ -136,7 +136,16 @@ type BackgroundTaskScheduler struct {
 	surpriseReader SurpriseReader
 	redTeam        RedTeamRunner        // 可选；nil 时跳过 24h 红队探测
 	auditLogger    protocol.AuditLogger // 可 nil，nil 时降级为 slog.Error
+	offPeak        offPeakGate          // 可 nil；非 nil 时课程生成只在错峰窗口内进行（ADR-0105 决策七）
 }
+
+// offPeakGate 是错峰窗口的消费端接口（由 pkg/offpeak.Gate 满足，nil 指针安全）。
+type offPeakGate interface{ Allow() bool }
+
+// InjectOffPeak 注入错峰窗口。窗口外的 2 分钟 tick 直接跳过——课程生成是周期性产出，
+// 跳过的 tick 不会积压，窗口一开下一个 tick 就恢复，等价于"推迟到下一窗口起点"且没有任何待办可丢。
+// 红队探测（24h 安全探针）不受此限：它验证安全边界是否退化，不属于可延迟的批处理。
+func (b *BackgroundTaskScheduler) InjectOffPeak(g offPeakGate) { b.offPeak = g }
 
 // SurpriseReader 读取当前系统 SurpriseIndex。
 type SurpriseReader interface {
@@ -205,6 +214,9 @@ func (b *BackgroundTaskScheduler) startCurriculumLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if b.offPeak != nil && !b.offPeak.Allow() {
+					continue
+				}
 				si := b.readSurprise()
 				b.generator.Generate(ctx, b.bb, si)
 			}

@@ -871,6 +871,8 @@ thresholds:
     response_cache_ttl_hours: 168     # toml:"response_cache.ttl_hours"
     response_cache_max_entries: 20000 # toml:"response_cache.max_entries"，写入后淘汰最旧
     response_cache_purposes: [graphrag_extract, graphrag_summary, graphrag_community, graphrag_concept, rag_summary_tree, rag_query_rewrite, memory_write_filter]  # toml:"response_cache.purposes"；内核阶段 purpose 硬排除
+    offpeak_windows: []               # toml:"offpeak.windows"，ADR-0105 决策七：UTC "HH:MM-HH:MM" 列表（可跨零点/24:00 终点），空=不错峰
+    usage_retention_days: 90          # toml:"usage.retention_days"，ADR-0105 决策八：llm_calls 按 created_at 清理，0=不清理
     l1_target_hit_rate: 0.90
     window_breaker_window_secs: 60
     window_breaker_min_samples: 20

@@ -151,6 +151,7 @@
 | 2026-09-29 | 初稿（Proposed） |
 | 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
 | 2026-09-30 | WP6 落地（决策一/三，Anthropic/Gemini 适配器）：新增 `m1_router.anthropic.inline_nonleading_system` / `m1_router.google.inline_nonleading_system`（默认 true）。开启时仅**开头连续**的 system 消息进 `system`/`systemInstruction`，其后的 system（L3 阶段层）原位转 user 角色 `<system_instruction>\n…\n</system_instruction>` 文本块，与相邻 user 内容合并以满足 user/assistant（Gemini：user/model）交替；tool_result/functionResponse 块前置于合并后的 user 轮首，不破坏与 tool_use/functionCall 的相邻关系；`CacheBreakpoint` 落在被合并消息对应的内容块上（末条与层断点同处一条消息时占两个名额，总数仍 ≤4）。适配器对所有非内联来源的 user 文本/tool_result 字符串无条件转义 `<system_instruction>` 标签字面（全角＜）——`taint.Spotlighting` 仅对 TaintMedium+ 生效，TaintLow/None 的 user 输入与 Parts 不经围栏。关闭时请求体与改动前字节一致（有回归测试）。实现见 `internal/llm/adapter/{inline_system,anthropic_inline}.go`、`google_request.go` |
+| 2026-09-30 | WP5 落地（决策七、八）：`GET /v1/usage` + `polaris usage`；`pkg/offpeak` 错峰窗口；llm_calls 保留期。见下「WP5 实施追记」 |
 
 ### WP4 实施追记（2026-09-30）
 
@@ -160,3 +161,11 @@
 - **缓存命中不经路由健康统计的隔离**：命中发生在 Provider 记录包装内，路由的 recordAttempt 仍会把它记成一次成功；半开熔断探测恰好命中缓存时会被误判恢复（后续真实调用失败会重新打开熔断，代价有界）。若 `llm_calls` 显示该场景实际出现，再把命中判定上移到路由选中 Provider 之后、recordAttempt 之前。
 - **`agent_execute_effect.go` 的 `plan_prm_candidate` 字面量未改常量**（属 WP2 范围，避免并行改动冲突），值与 `types.PurposePlanPRMCandidate` 相同；WP2 合入后应顺手替换。
 
+### WP5 实施追记（2026-09-30）
+
+- **路径为 `/v1/usage` 而非 `/api/v1/usage`**：仓库全部 HTTP 路由在 `/v1/` 下（`/api/` 前缀仅被 SPA 回退当作"API 不回退"，未注册任何路由），沿用现有约定。
+- **`llm_calls.input_tokens` 口径归一**（决策八的"缓存命中率"前提）：OpenAI/DeepSeek/Google 的 `toUsage` 给出含命中的 prompt_tokens；**Anthropic 的 `input_tokens` 不含 cache_read/cache_creation**。此前直接落库，导致 Anthropic 行 cache_hit > input、输入费用被 `max(input-hit,0)` 夹成 0 漏算。`usageRecordingProvider.fillUsage` 现在对 Anthropic（按适配器类型名识别，`CacheCreationTokens>0` 兜底）把 cache_read/cache_creation 加回 input，creation 按输入费率计（实际 1.25x，估算取下界）。归一落地前的历史 Anthropic 行仍是旧口径，API 层把比率夹到 1。适配器（`internal/llm/adapter/`）未改。
+- **Prometheus**：导出 `polaris_llm_input_tokens_total` / `polaris_llm_cache_hit_tokens_total{purpose,provider}` 两个 counter（沿用 `polaris_` 前缀，非 `llm_` 前缀），在 usage sink `push` 处打点（终态行，流式不重复计数）。不导出 ratio gauge。
+- **配置键落在 `m1_router` 段**（与 `response_cache.*` 同处）：`offpeak.windows`（默认空）、`usage.retention_days`（默认 90，0=不清理）。保留期清理挂在既有 6h 周期，并在启动时先跑一次；分批 DELETE（5000 行/批）避免长时间独占单写连接。`llm_response_cache` 过期清理已在同一周期内（WP4）。
+- **错峰接入点**：outbox 类（新增 `protocol.OffPeakDeferral`，outbox 直接把 `next_retry_at` 置为窗口起点，不计失败/死信）——`graph_build`、`rag_doc_ingested`、`rag_doc_summary_needed`（graphrag_*）、`m9_capability_gap`（synthetic_skill_gen）；周期循环类（窗口外跳过 tick，不积压）——synthetic-eval-gen、`curriculum` 后台调度、learning.Engine 中环；`PromptOptimizer.OptimizeTask`（窗口外登记待办并合并同 taskType，到窗口起点执行）；`DefaultIngestionPipeline` 降级 goroutine 的 rag_summary_tree（等窗口）。
+- **未接入**：交互路径与 `consolidate_summary`（决策明文排除）；`TriggerCurriculum`（安全冻结/管理员显式触发，是响应事件）；红队 24h 探针（安全边界退化检测，非批处理）；`logic_collapse_codegen`（不在决策七清单，且由工具成功阈值事件触发）；`memory_write_filter`/`rag_query_rewrite`（在交互路径上）；`internal/prompt` 的 `Manager.Optimize` 未改（按任务约束），错峰在其下游 `PromptOptimizer.OptimizeTask` 生效。
