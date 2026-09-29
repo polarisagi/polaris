@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,11 +44,11 @@ func TestCSVFanout_LargeFile_StreamsInBoundedBatches(t *testing.T) {
 	for i := 0; i < rowCount; i++ {
 		fmt.Fprintf(&sb, "%d,item%d,%d\n", i, i, i*10)
 	}
-	path := "test_fanout_large.csv"
+	// 写进源码目录会与并行的 internal/lint 全仓库遍历竞态（lstat 撞上刚删的文件）。
+	path := filepath.Join(t.TempDir(), "test_fanout_large.csv")
 	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(path)
 
 	job := CSVFanoutJob{
 		CSVPath:        path,
@@ -89,11 +90,11 @@ func TestCSVFanout_ContextCanceled_ReturnsPromptly(t *testing.T) {
 	for i := 0; i < rowCount; i++ {
 		fmt.Fprintf(&sb, "%d,item%d\n", i, i)
 	}
-	path := "test_fanout_cancel.csv"
+	// 写进源码目录会与并行的 internal/lint 全仓库遍历竞态（lstat 撞上刚删的文件）。
+	path := filepath.Join(t.TempDir(), "test_fanout_cancel.csv")
 	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(path)
 
 	job := CSVFanoutJob{
 		CSVPath:        path,
