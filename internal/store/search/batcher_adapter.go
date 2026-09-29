@@ -16,15 +16,26 @@ const syncEmbedTimeout = 30 * time.Second
 // using the asynchronous EmbeddingBatcher.
 type SyncBatcherAdapter struct {
 	batcher *EmbeddingBatcher
+	// cache 交互路径的短时有界查询向量缓存（embed_cache.go）；nil 表示不缓存。
+	cache *queryEmbedCache
 }
 
 func NewSyncBatcherAdapter(batcher *EmbeddingBatcher) *SyncBatcherAdapter {
-	return &SyncBatcherAdapter{batcher: batcher}
+	return &SyncBatcherAdapter{batcher: batcher, cache: newQueryEmbedCache()}
 }
 
-// Embed implements search.Embedder.
+// Embed implements search.Embedder。高优先级交互路径：同一文本在 TTL 内只算一次。
 func (a *SyncBatcherAdapter) Embed(ctx context.Context, text string) []float32 {
-	return a.embedWithPriority(ctx, text, PriorityHigh, "SyncBatcherAdapter")
+	if a.cache != nil && text != "" {
+		if vec, ok := a.cache.get(text); ok {
+			return vec
+		}
+	}
+	vec := a.embedWithPriority(ctx, text, PriorityHigh, "SyncBatcherAdapter")
+	if a.cache != nil && text != "" {
+		a.cache.put(text, vec)
+	}
+	return vec
 }
 
 // BackgroundEmbedder 与 SyncBatcherAdapter 共用同一个 EmbeddingBatcher，

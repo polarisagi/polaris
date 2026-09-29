@@ -62,11 +62,12 @@ func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
 	sCtx.Mu.RLock()
 	rawIntent := sCtx.RawIntentTS
 	taskModel := sCtx.TaskModel
-	result := sCtx.ExecuteResult
 	images := sCtx.ExecuteImageParts
 	reflection := sCtx.Reflection
 	globalTaint := sCtx.GlobalTaintLevel
 	sCtx.Mu.RUnlock()
+	// 无观察时（如崩溃恢复后）才会用到单轮结果；同样受观察上限约束（ADR-0105 决策四）。
+	result := ExecuteResultForPrompt(sCtx)
 
 	// L4 回合层。本轮意图放最后：它是回合内最易变、最靠近生成点的内容。
 	// 被拒/失败的尝试也要让回复阶段看到：否则无工具可用而直答时，回复会像什么都没

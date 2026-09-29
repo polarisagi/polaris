@@ -175,6 +175,18 @@ type M4KernelThresholds struct {
 	// CacheUniformTools 实验开关（ADR-0105 决策三，默认 false）：true 时 Perceive/Reflect/Respond
 	// 也下发与 Plan 相同的 tools 并要求 Provider 不调用工具（tool_choice=none），四阶段 tools 前缀一致。
 	CacheUniformTools bool `toml:"cache.uniform_tools"` // false
+
+	// 记忆召回预算（ADR-0105 决策四）。召回段位于 L4，每回合都按未命中价计费，必须有上限。
+	// RecallItemMaxChars 单条召回（情景/反思/L2 语义/RAG/画像）渲染后的字符（rune）上限，超出截断。
+	RecallItemMaxChars int `toml:"recall.item_max_chars"` // 400
+	// RecallMaxTokens 召回段总 token 上限；按段优先级（反思>情景>L2>RAG>画像）逐条装入，装不下即止。
+	RecallMaxTokens int `toml:"recall.max_tokens"` // 1200
+	// RecallMinScore L2 语义/RAG 命中的绝对分下限（低于丢弃）。0 = 关闭。L2 分是 SurrealDB BM25 原始分
+	// （无界、随语料与查询漂移），RAG 分当前恒为 1.0，二者都不是归一化相似度，故默认不设绝对下限。
+	RecallMinScore float64 `toml:"recall.min_score"` // 0
+	// RecallMinScoreRatio L2 语义/RAG 命中相对本次最高分的比例下限（低于 ratio×top 丢弃，最高分命中恒保留）。
+	// 尺度无关，对 BM25 这类无界分数成立；0 = 关闭。
+	RecallMinScoreRatio float64 `toml:"recall.min_score_ratio"` // 0.2
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -197,6 +209,23 @@ func (t M4KernelThresholds) Validate() error {
 		default:
 			return apperr.New(apperr.CodeInvalidInput, "m4_kernel."+key+": invalid model pool "+v+" (want default|general|reasoning|budget)")
 		}
+	}
+	return t.validateRecall()
+}
+
+// validateRecall 召回预算阈值校验：非正的上限会让召回段恒为空或不设防，配置错误在加载时失败。
+func (t M4KernelThresholds) validateRecall() error {
+	if t.RecallItemMaxChars < 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.item_max_chars: must be >= 1")
+	}
+	if t.RecallMaxTokens < 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.max_tokens: must be >= 1")
+	}
+	if t.RecallMinScore < 0 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.min_score: must be >= 0")
+	}
+	if t.RecallMinScoreRatio < 0 || t.RecallMinScoreRatio > 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.min_score_ratio: must be within [0,1]")
 	}
 	return nil
 }
@@ -473,6 +502,10 @@ func DefaultThresholds() Thresholds {
 			ModelPoolValidate:              "default",
 			PlanReasoningComplexity:        0.7,
 			ReflectSkipComplexity:          0.4,
+			RecallItemMaxChars:             400,
+			RecallMaxTokens:                1200,
+			RecallMinScore:                 0,
+			RecallMinScoreRatio:            0.2,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

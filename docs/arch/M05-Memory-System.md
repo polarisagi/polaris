@@ -219,7 +219,7 @@ RetrieveWithDurative:
 **读取** (M5 HybridRetriever 第 4 路召回，权重 0.15):
 - `HybridRetrieverImpl.reflectionMem` 非 nil 时，第 4 路通过 `ReflectionMemory.QueryReflections(Topic=query)` 走 SQL 索引查询
 - `reflectionMem` 为 nil 时降级为 KV 前缀 `reflection:` 扫描（旧部署兼容）
-- S_PERCEIVE / S_REPLAN 阶段：`buildPerceiveContext` / `buildPlanContext` 额外直接调用 `QueryReflections(Topic=TaskModel.Goal, K=3)` 注入 system prompt（非 ZoneImmutable——反思为 Agent 自生成，TaintLow，但不走 PromptBuilder 写入门控）
+- S_PLAN 阶段（ADR-0105 决策四）：`BuildPlanContext` 用本回合 `TaskModel.Goal` 调用 `ListReflections(Topic=Goal, K=3)`，结果与情景/L2/RAG 一并按 `m4_kernel.recall.*` 预算渲染并写入 L4 数据区（Perceive 不再查反思：其时 TaskModel 为上一回合遗留；召回在回合内经 `StateContext.TurnRecall` 复用），原描述为 system prompt 注入（非 ZoneImmutable——反思为 Agent 自生成，TaintLow，但不走 PromptBuilder 写入门控）
 - 与 [HeuristicsMemory] (M9 §2.1) 互补——后者是 task_type→prompt 模板，前者是 task_type→经验摘要
 
 **HT0 限制**: 表大小硬上限 5MB（约 5000 条 reflection），LRU 淘汰最久未访问。得益于 DeepSeek 的极低 API 成本，LLM 提取不再受严苛的财务配额约束，仅受 CPU/内存空闲资源控制（M9 BackgroundTaskScheduler [Priority-2]）。

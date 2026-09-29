@@ -48,29 +48,24 @@ func BuildPerceiveContext( //nolint:gocyclo
 	}
 
 	intent := sCtx.RawIntentTS.UnsafeContent()
-	var goal string
-	if sCtx.TaskModel != nil {
-		goal = sCtx.TaskModel.Goal
-	}
 	// ADR-0102 决策一：短确认（好的/ok/同意）的语义完全在对话历史里，长期记忆
-	// 召回对它零信息增益，却要付一轮 episodic/反思/语义/RAG 检索（含 embedding）
-	// 以及随之膨胀的 prompt。只保留画像与下方的对话历史。
+	// 召回对它零信息增益，却要付一轮 episodic 检索（含 embedding）以及随之膨胀的 prompt。
+	// 只保留画像与下方的对话历史。
 	leanAck := fsm.ClassifyIntentWeight(intent) == fsm.IntentAck
-	if leanAck {
-		goal = ""
+	// 回合内只召一次（ADR-0105 决策四）：结果写入 sCtx.TurnRecall，Plan 只补缺口。
+	// 反思/L2/RAG 以 Goal 为查询词，而本阶段正是产出本回合 Goal 的阶段：此刻 sCtx.TaskModel
+	// 是上一回合遗留（回合起点不清），拿它查既是错主题，又会让 Plan 误判"已覆盖"而不用真正的
+	// Goal 补查。故这三段一律留给 Plan；本阶段只查 episodic（按本轮原话）与画像。
+	episodicQuery := ""
+	if sCtx.TaskID != "" && intent != "" && !leanAck {
+		episodicQuery = intent
 	}
-	recalled, err := recallWithin(ctx, memory, cognitive, recallSpec{
-		episodic:         sCtx.TaskID != "" && intent != "" && !leanAck,
-		episodicQuery:    intent,
-		episodicK:        3,
-		episodicHeader:   "Relevant Historical Episodic Memories:\n",
-		goal:             goal,
-		reflectionHeader: "Cross-Session Reflections (past experience for similar tasks):\n",
-		withProfile:      true,
-		projectID:        scopeProjectID(sCtx), // P1/P3
-		knowledge:        sCtx.KnowledgeSearcher,
-	})
-	if err := degradeOnRecallTimeout("BuildPerceiveContext", err); err != nil {
+	recalled, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
+		episodicQuery: episodicQuery,
+		episodicK:     perceiveEpisodicK,
+		withProfile:   true,
+	}, "BuildPerceiveContext")
+	if err != nil {
 		return nil, err
 	}
 	var retrieved strings.Builder
@@ -193,17 +188,14 @@ func writePlanRecall(
 	if sCtx.TaskModel != nil {
 		queryStr = sCtx.TaskModel.Goal
 	}
-	recalled, err := recallWithin(ctx, memory, cognitive, recallSpec{
-		episodic:         true,
-		episodicQuery:    queryStr,
-		episodicK:        5,
-		episodicHeader:   "Historical execution experiences for reference:\n",
-		goal:             queryStr,
-		reflectionHeader: "Cross-Session Reflections (execution patterns for similar tasks):\n",
-		projectID:        scopeProjectID(sCtx), // P2/P4
-		knowledge:        sCtx.KnowledgeSearcher,
-	})
-	if err := degradeOnRecallTimeout("BuildPlanContext", err); err != nil {
+	// 复用本回合 Perceive 的召回：情景记忆已查过则不再查，只用已解析的 Goal 补 反思/L2/RAG；
+	// Perceive 被跳过或召回被放弃、且 Goal 非空时才补查情景（ADR-0105 决策四）。
+	recalled, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
+		episodicQuery: queryStr,
+		episodicK:     planEpisodicK,
+		goal:          queryStr,
+	}, "BuildPlanContext")
+	if err != nil {
 		return err
 	}
 	var retrieved strings.Builder
@@ -244,9 +236,11 @@ func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"m4_task_model"))
 	}
-	if len(sCtx.ExecuteResult) > 0 {
+	// 执行结果按观察上限投影（≤ObservationMaxBytes，带 read_tool_ref 取回提示），
+	// 不再全文注入 8KB 的 ExecuteResult（ADR-0105 决策四，与 Plan/Respond 同口径）。
+	if execResult := fsm.ExecuteResultForPrompt(sCtx); len(execResult) > 0 {
 		b.WriteUserData(taint.NewTaintedString(
-			"Execution Result Summary:\n"+string(sCtx.ExecuteResult)+"\n\n",
+			"Execution Result Summary:\n"+string(execResult)+"\n\n",
 			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"execute_result"))
 	}
