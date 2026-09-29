@@ -141,6 +141,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// 用量洞察 & 会话回顾
 	mux.HandleFunc("GET /v1/insights", s.sysadminHandler.HandleInsights)
+	// LLM 用量聚合（ADR-0105 决策八）：按 purpose/model/provider/day 汇总请求数、token、缓存命中率与估算费用。
+	mux.HandleFunc("GET /v1/usage", s.sysadminHandler.HandleGetUsage)
 	mux.HandleFunc("POST /v1/sessions/{sessionID}/recap", s.chatHandler.HandleSessionRecap)
 
 	// Trajectory 导出（自演化训练数据）

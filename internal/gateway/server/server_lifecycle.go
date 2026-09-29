@@ -31,6 +31,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
+	protorepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -160,10 +161,16 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		// 早已能拿到 s.dataDir，此处透传而非发明新配置源。
 		ContextRefExpander: authcontext.NewContextRefExpander(httpClient, authcontext.WithWorkDir(s.dataDir)),
 	})
+	// 用量聚合只读，走读连接 db；db 为 nil 时保持接口 nil（避免"非 nil 接口包 nil 指针"绕过 503 判空）。
+	var usageRepo protorepo.LLMUsageQueryRepository
+	if db != nil {
+		usageRepo = repo.NewSQLiteLLMUsageQuery(db)
+	}
 	s.sysadminHandler = sysadmin.NewSysAdminHandler(sysadmin.Dependencies{
 		ProjectRepo:    s.projectRepo,
 		SystemRepo:     s.systemRepo,
 		BudgetRepo:     s.budgetRepo,
+		UsageRepo:      usageRepo,
 		WorkflowRepo:   s.workflowRepo,
 		ExtRepo:        s.extRepo,
 		ChannelRepo:    s.channelRepo,

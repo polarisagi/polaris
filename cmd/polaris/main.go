@@ -44,6 +44,8 @@ func run() error { //nolint:gocyclo
 			return runProjectCmd(os.Args[2:])
 		case "status":
 			return runCLIStatus()
+		case "usage":
+			return runUsageCmd(os.Args[2:])
 		case "export":
 			return runExport(os.Args[2:])
 		case "import":
