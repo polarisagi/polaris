@@ -867,6 +867,10 @@ thresholds:
     semantic_cache_max_entries: 10000
     semantic_cache_similarity_threshold: 0.95
     semantic_cache_ttl_hours: 24
+    response_cache_enabled: true      # toml:"response_cache.enabled"，ADR-0105 决策六：确定性后台调用精确匹配缓存
+    response_cache_ttl_hours: 168     # toml:"response_cache.ttl_hours"
+    response_cache_max_entries: 20000 # toml:"response_cache.max_entries"，写入后淘汰最旧
+    response_cache_purposes: [graphrag_extract, graphrag_summary, graphrag_community, graphrag_concept, rag_summary_tree, rag_query_rewrite, memory_write_filter]  # toml:"response_cache.purposes"；内核阶段 purpose 硬排除
     l1_target_hit_rate: 0.90
     window_breaker_window_secs: 60
     window_breaker_min_samples: 20

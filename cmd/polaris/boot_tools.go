@@ -686,6 +686,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 				if err := eventArchiver.Archive(context.Background()); err != nil {
 					slog.Warn("polaris: event archiver failed", "err", err)
 				}
+				// LLM 精确响应缓存的过期行清理（ADR-0105 决策六）；条数上限由写入时的淘汰保证，这里只回收 TTL 过期行。
+				if sb.InfReg != nil {
+					if n, err := sb.InfReg.PruneResponseCache(ctx); err != nil {
+						slog.Warn("polaris: llm response cache prune failed", "err", err)
+					} else if n > 0 {
+						slog.Info("polaris: llm response cache pruned", "expired_rows", n)
+					}
+				}
 			}
 		}
 	})

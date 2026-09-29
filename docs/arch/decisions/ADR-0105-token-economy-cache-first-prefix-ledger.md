@@ -149,3 +149,13 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-09-29 | 初稿（Proposed） |
+| 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
+
+### WP4 实施追记（2026-09-30）
+
+- **判官 `MaxTokens` 同步放宽**：推理 token 计入 max_tokens，ThinkingLow 下 8/64/128 仍会被耗尽。factuality 64→512、curriculum SIC/安全判官 8→256、PRM 打分 128→512；判定按前缀解析，放宽上限不改判定逻辑。
+- **三处不按决策五表降档**（理由写在各调用点注释）：`agent/step_scorer_prm.go`（本地 GBNF 模型，上限 4 token / 100ms 硬超时）与 `learning/synthetic/synthetic_eval_gen.go`（已固定 budget 层 deepseek-chat，512 上限）取 Disabled；`knowledge/rag_retrieval.go` 查询分解取 **Disabled 而非 Low**——决策六缓存白名单含 `rag_query_rewrite`，而缓存只对 Disabled + T=0 生效，定为 Low 则该白名单项永远不可命中。
+- **缓存键加入 `max_tokens` 与 `top_p`**（决策六原五要素之外）：二者改变输出，不纳入则小上限调用会复用大上限的结果。仅缓存 finish_reason 为完整结束、非空、无 tool_calls 的响应。
+- **缓存命中不经路由健康统计的隔离**：命中发生在 Provider 记录包装内，路由的 recordAttempt 仍会把它记成一次成功；半开熔断探测恰好命中缓存时会被误判恢复（后续真实调用失败会重新打开熔断，代价有界）。若 `llm_calls` 显示该场景实际出现，再把命中判定上移到路由选中 Provider 之后、recordAttempt 之前。
+- **`agent_execute_effect.go` 的 `plan_prm_candidate` 字面量未改常量**（属 WP2 范围，避免并行改动冲突），值与 `types.PurposePlanPRMCandidate` 相同；WP2 合入后应顺手替换。
+
