@@ -17,6 +17,24 @@ const (
 	zoneCount           = 5
 )
 
+// 五层前缀账本（ADR-0105 决策一）：内核各阶段消息按"变化频率"由低到高排列，
+// 使同一回合的全部阶段与相邻回合共享最长的字节一致前缀。层与 Zone 正交：
+// Zone 决定信任级别与围栏，Layer 只决定输出次序。
+const (
+	// LayerStable L0 稳定核：ImmutableCore 稳定层（部署/配置变更才变）。
+	LayerStable = 0
+	// LayerSession L1 会话层：核心记忆、子 Agent 画像、工作区上下文、扩展目录（会话内低频）。
+	LayerSession = 1
+	// LayerHistory L2 历史层：对话历史，逐条真实消息，只追加（TaintHigh 围栏逐条）。
+	LayerHistory = 2
+	// LayerPhase L3 阶段层：阶段契约模板 + 易变层（日期/AmbientContext/压力提示/预算约束/ToolHints）。
+	LayerPhase = 3
+	// LayerTurn L4 回合层：召回、TaskModel、GroundingGap、观测、重规划反馈、执行结果、本轮意图。
+	LayerTurn = 4
+	// LayerCount 层数。
+	LayerCount = 5
+)
+
 // PromptBuilder 是系统内唯一合法的 LLM Prompt 组装构造器。
 // 它通过 Go 语言类型系统强制实现指令数据隔离（M11 §3 规定）。
 type PromptBuilder interface {
