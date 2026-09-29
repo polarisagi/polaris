@@ -146,13 +146,15 @@ func (ic *ImmutableCore) renderUserPreferencesBlock() string {
 // ambient skill 全文注入有独立的 maxFullTextChars 预算，两者各自独立保护。
 const maxSystemPromptBytes = 32_000
 
-// PrependToMessages 在 msgs 前插入系统提示词：第一条 system 消息只含稳定层，易变层
-// （日期 VolatileBlock、按本轮问题挑选的 AmbientContext）单独作为紧随其后的第二条。
+// StableMessage 渲染 L0 稳定核：单条只含稳定层的 system 消息（含 maxSystemPromptBytes 截断）。
+//
+// 内核四阶段（agent/context 与 agent/fsm 的 prompt 构造）把它放在整个前缀账本的最前面
+// （ADR-0105 决策一 L0），易变层不再紧随其后——见 VolatileContent。
 //
 // DeepSeek 前缀缓存以消息为单元整块匹配（api-docs guides/kv_cache："只有完整匹配一个
-// 缓存前缀单元才会命中"）：易变内容与稳定层同处一条消息时，问题一变整条系统提示词
-// 就不命中，Perceive/Plan/Reflect/Respond 每次调用都按未命中价重算（ADR-0101 决策四）。
-func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message {
+// 缓存前缀单元才会命中"）：稳定层任何字节变化都会使其后全部内容失配，因此本函数的输入
+// 必须是确定的（集合有序、无时间/连接状态，见 chat/system_prompt.go）。
+func (ic *ImmutableCore) StableMessage() types.Message {
 	stable := *ic
 	stable.VolatileBlock = ""
 	stable.AmbientContext = ""
@@ -166,7 +168,7 @@ func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message
 		content = "你是 Polaris AI Agent。"
 	}
 
-	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限 stable+volatile 层）
+	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限 stable 层）
 	if len(content) > maxSystemPromptBytes {
 		originalBytes := len(content)
 		truncated := content[:maxSystemPromptBytes]
@@ -178,12 +180,36 @@ func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message
 		slog.Warn("system prompt truncated",
 			"original_bytes", originalBytes, "cap_bytes", maxSystemPromptBytes)
 	}
+	return types.Message{Role: "system", Content: content}
+}
 
-	head := []types.Message{{Role: "system", Content: content}}
-	if v := ic.volatileSystemContent(); v != "" {
-		head = append(head, types.Message{Role: "system", Content: v})
+// VolatileContent 返回易变层文本（日期 VolatileBlock、扩展连接状态、按本轮问题挑选的
+// AmbientContext）；无易变内容时返回空串。调用方负责把它放进 L3 阶段层（历史之后）。
+func (ic *ImmutableCore) VolatileContent() string {
+	return ic.volatileSystemContent()
+}
+
+// PrependToMessages 供不经内核前缀账本的调用方（网关直连 LLM、cron/workflow 等）使用：
+// 在 msgs 前插入稳定层 system 消息，易变层作为 system 消息插在**最后一条消息之前**
+// （即历史之后、本轮输入之前），保证 [稳定层 + 历史] 前缀跨请求字节一致。
+// msgs 为空时易变层紧随稳定层。
+//
+// 注意：orchestrator 依赖"返回值末条是本轮用户消息"（history[:len-1]），所以易变层
+// 不能追加在最末尾。
+func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message {
+	out := make([]types.Message, 0, len(msgs)+2)
+	out = append(out, ic.StableMessage())
+	volatile := ic.VolatileContent()
+	if volatile == "" {
+		return append(out, msgs...)
 	}
-	return append(head, msgs...)
+	vmsg := types.Message{Role: "system", Content: volatile}
+	if len(msgs) == 0 {
+		return append(out, vmsg)
+	}
+	out = append(out, msgs[:len(msgs)-1]...)
+	out = append(out, vmsg)
+	return append(out, msgs[len(msgs)-1])
 }
 
 // volatileSystemContent 渲染易变层。AmbientContext 不经过 Go template 解析器——skill

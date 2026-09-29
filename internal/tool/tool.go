@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -153,7 +154,11 @@ func (r *InMemoryToolRegistry) Lookup(name string) (types.Tool, error) {
 	return t, nil
 }
 
-// List 返回所有已注册工具的快照。
+// List 返回所有已注册工具的快照，按名称升序。
+//
+// 为什么必须有序：工具名列表会渲染进系统提示词稳定层（L0）与 tools 数组，map 遍历序
+// 每次随机会让前缀字节逐请求变化，DeepSeek/OpenAI 前缀缓存永不命中（ADR-0105 决策一
+// 字节稳定规则 1）。
 func (r *InMemoryToolRegistry) List() []types.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -161,6 +166,7 @@ func (r *InMemoryToolRegistry) List() []types.Tool {
 	for _, t := range r.tools {
 		result = append(result, t)
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
 }
 

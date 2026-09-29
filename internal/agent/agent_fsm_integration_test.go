@@ -241,6 +241,12 @@ func (m *mockImmutableCoreForIntegration) Load(ctx context.Context, userID, sess
 func (m *mockImmutableCoreForIntegration) PrependToMessages(msgs []types.Message) []types.Message {
 	return append([]types.Message{{Role: "system", Content: "[Immutable Core Rule: NO HARMFUL ACT]"}}, msgs...)
 }
+func (m *mockImmutableCoreForIntegration) StableMessage() types.Message {
+	return types.Message{Role: "system", Content: "[Immutable Core Rule: NO HARMFUL ACT]"}
+}
+
+func (m *mockImmutableCoreForIntegration) VolatileContent() string { return "" }
+
 func (m *mockImmutableCoreForIntegration) Fields() *protocol.ImmutableCoreFields {
 	return &protocol.ImmutableCoreFields{}
 }

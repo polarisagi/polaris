@@ -989,8 +989,8 @@ thresholds:
     prm_complexity_gate: 0.5 # toml:"prm.complexity_gate"
     prm_max_candidates: 3 # toml:"prm.max_candidates"
     prm_min_threshold: 0.4 # toml:"prm.min_threshold"
-    conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
-    conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
+    conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四；ADR-0105 决策二改为分块跳窗
+    conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，分块跳窗（ADR-0105 决策二）：越界时按 max_messages/2 步长一次丢前若干块
     thinking_perceive: low # toml:"thinking.perceive"，ADR-0101 决策三；"" = Provider 默认（DeepSeek 省略即 high）
     thinking_plan_initial: high # toml:"thinking.plan_initial"，规划阶梯 level 0 档位；升档见 plan_reasoning_complexity（ADR-0102 决策六）
     thinking_reflect: low # toml:"thinking.reflect"

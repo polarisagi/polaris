@@ -25,56 +25,26 @@ import (
 // M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
 func BuildPerceiveContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	// 五层前缀账本（ADR-0105 决策一）：L1 会话层 → L2 历史 → L3 阶段模板 → L4 回合内容。
+	// L1/L2 由四个阶段共用同一写入器，字节一致；写入顺序与层无关，最终由 BuildLayered 排序。
 	b := prompt.NewPromptBuilder()
 
-	// 1. 可信系统指令：阶段契约唯一来源 kernel/perceive.md（ADR-0098 决策三）
+	// L1：核心记忆、子 Agent 画像、工作区上下文（可信→指令区/不可信→TaintHigh 围栏）、扩展目录。
+	if err := fsm.WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext", err)
+	}
+	// L2：对话历史逐条写入，Perceive 据此消解指代、产出自包含 Goal（ADR-0098）。
+	fsm.WriteConversationHistory(b, sCtx)
+	// L3：阶段契约唯一来源 kernel/perceive.md（ADR-0098 决策三）+ 上下文压力提示。
 	if err := writePhaseInstruction(b, sCtx, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object."); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext", err)
 	}
-	fsm.WriteAgentProfile(b, sCtx)
-
-	// GD-14-005：用户显式声明信任的工作区约束文档，作为项目级系统指令写入
-	// ZoneImmutable。只有 WorkspaceContextLoader 判定 Trusted 的内容才会到这里
-	// ——默认路径下本字段恒为空，AGENTS.md 走下方不可信通道。
-	if sCtx.WorkspaceContextTrusted != "" {
-		trustedSafe, tErr := taint.SanitizeToSafe(taint.NewTaintedString(
-			sCtx.WorkspaceContextTrusted,
-			taint.TaintSource{Module: "workspace", OriginTaintLevel: types.TaintNone},
-			"workspace_context_trusted"))
-		if tErr != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext: sanitize trusted workspace context", tErr)
-		}
-		b.WriteInstruction(trustedSafe)
-	}
-
-	// S-02：已安装扩展的自述信息来源不可信（第三方可控），单独进入
-	// ZoneExternalCatalog 并按 TaintHigh 打标，禁止混入 ZoneImmutable。
-	if sCtx.InstalledExtensionsInfo != "" {
-		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
-			sCtx.InstalledExtensionsInfo,
-			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
-			"extension_catalog"))
-	}
-
-	// GD-14-005：工作区上下文的默认通道。AGENTS.md/CLAUDE.md 在 clone 来的仓库中
-	// 完全是攻击者可控的，威胁模型与第三方扩展自述一致，故同样只进
-	// ZoneExternalCatalog 并按 TaintHigh 围栏——绝不因"文件名恰好是约定名字"
-	// 而推定信任。
-	if sCtx.WorkspaceContextUntrusted != "" {
-		b.WriteExternalCatalog("workspace_context", taint.NewTaintedString(
-			sCtx.WorkspaceContextUntrusted,
-			taint.TaintSource{Module: "workspace", OriginTaintLevel: types.TaintHigh},
-			"workspace_context"))
-	}
 
 	if memory == nil {
-		return b.Build(), nil
-	}
-
-	// [UP-03] 注入核心工作记忆（ZoneCoreMemory）：LLM 经 core_memory_edit 显式维护的
-	// 任务核心状态，每轮感知均需可见；读取失败按无核心记忆降级，不阻断组装。
-	if blocks, cmErr := memory.ListCoreMemory(ctx, sCtx.AgentID, sCtx.SessionID); cmErr == nil && len(blocks) > 0 {
-		b.WriteCoreMemory(blocks)
+		if !sCtx.RawIntentTS.IsEmpty() {
+			b.WriteUserData(sCtx.RawIntentTS)
+		}
+		return fsm.FinishLayered(b, nil), nil
 	}
 
 	intent := sCtx.RawIntentTS.UnsafeContent()
@@ -138,13 +108,12 @@ func BuildPerceiveContext( //nolint:gocyclo
 			"retrieved_memory"))
 	}
 
-	// 对话历史紧贴本轮意图之前：Perceive 需据此消解指代、产出自包含 Goal（ADR-0098）。
-	fsm.WriteConversationHistory(b, sCtx)
+	// L4：召回在前，本轮意图压轴（历史已在 L2，不再夹在召回与意图之间）。
 	if !sCtx.RawIntentTS.IsEmpty() {
 		b.WriteUserData(sCtx.RawIntentTS)
 	}
 
-	return memory.ImmutableCore().PrependToMessages(b.Build()), nil
+	return fsm.FinishLayered(b, memory), nil
 }
 
 // BuildPlanContext 基于已解析的 fsm.TaskModel 和可用工具列表
@@ -154,14 +123,46 @@ func BuildPlanContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
-	// 系统指令区只放进程内常量（TaintNone）。TaskModel 由 LLM 从外部意图解析而来、
+	// L1/L2 与 Perceive/Reflect/Respond 共用写入器，前缀字节一致（ADR-0105 决策一/二）。
+	if err := fsm.WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext", err)
+	}
+	fsm.WriteConversationHistory(b, sCtx)
+
+	// L3：系统指令区只放进程内常量（TaintNone）。TaskModel 由 LLM 从外部意图解析而来、
 	// GroundingGap 来自外部知识评估，二者都属数据而非指令：此前拼进 sysPrompt 并以
 	// TaintNone 写入 ZoneImmutable，等于把外部可控文本提权为系统指令（GR-4.1-003）。
 	if err := writePhaseInstruction(b, sCtx, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section."); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext", err)
 	}
-	fsm.WriteAgentProfile(b, sCtx)
 
+	// Build Tools List (M2.c/f) —— 按来源分级写入 ZoneExternalCatalog，禁止与内核指令混入
+	// 同一 TaintNone 区（S-02，间接 Prompt Injection 防护）。工具目录只有 Plan 需要，
+	// 且随懒加载激活而变，属 L3 而非 L1（否则 Plan 的 L1 与其它阶段失配）。
+	if cata != nil {
+		// TaskID 激活作用域必须与 internal/execute/dag/executor.go 的 Execute()
+		// 注入值一致——生产路径用 a.sCtx.SessionID 作为 taskID（见 agent_execute.go
+		// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)），此处保持同源。
+		toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, sCtx.SessionID)
+		toolSec, toolTaint := BuildToolListSection(toolCtx, cata)
+		if toolSec != "" {
+			b.SetLayer(protocol.LayerPhase)
+			b.WriteExternalCatalog("tools", taint.NewTaintedString(
+				toolSec,
+				taint.TaintSource{Module: "tool_catalog", OriginTaintLevel: toolTaint},
+				"tool_catalog"))
+			b.ResetLayer()
+		}
+	}
+	// 重规划新增工具 / <tool-hints>（状态机刷新到 sCtx.PlanHintBlocks），同属 L3。
+	fsm.WritePlanHints(b, sCtx)
+
+	// L4 回合层从这里开始：召回（需要 memory）→ TaskModel → GroundingGap → 观测 → 重规划反馈。
+	if memory != nil {
+		if err := writePlanRecall(ctx, b, memory, sCtx, cognitive); err != nil {
+			return nil, err
+		}
+	}
 	if sCtx.TaskModel != nil {
 		taskJSON, _ := json.Marshal(sCtx.TaskModel)
 		b.WriteUserData(taint.NewTaintedString(
@@ -176,40 +177,18 @@ func BuildPlanContext( //nolint:gocyclo
 			taint.TaintSource{Module: "world_model", OriginTaintLevel: types.PropagateTaint(types.TaintHigh, sCtx.GlobalTaintLevel)},
 			"grounding_gap"))
 	}
+	// 观察—再规划（决策八）：已执行轮次的结果，规划下一步而非重复。
+	// 重规划闭环（决策六）：告诉模型上一版为何被拒 / 为何未达成，避免原样重来。
+	fsm.WriteObservations(b, sCtx)
+	fsm.WriteReplanFeedback(b, sCtx)
 
-	// S-02：已安装扩展自述信息来源不可信，单独进入 ZoneExternalCatalog。
-	if sCtx.InstalledExtensionsInfo != "" {
-		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
-			sCtx.InstalledExtensionsInfo,
-			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
-			"extension_catalog"))
-	}
+	return fsm.FinishLayered(b, memory), nil
+}
 
-	// 5. Build Tools List (M2.c/f) —— 按来源分级写入 ZoneExternalCatalog，禁止与
-	// 内核指令混入同一 TaintNone 区（S-02，间接 Prompt Injection 防护）。
-	if cata != nil {
-		// TaskID 激活作用域必须与 internal/execute/dag/executor.go 的 Execute()
-		// 注入值一致——生产路径用 a.sCtx.SessionID 作为 taskID（见 agent_execute.go
-		// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)），此处保持同源。
-		toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, sCtx.SessionID)
-		toolSec, toolTaint := BuildToolListSection(toolCtx, cata)
-		if toolSec != "" {
-			b.WriteExternalCatalog("tools", taint.NewTaintedString(
-				toolSec,
-				taint.TaintSource{Module: "tool_catalog", OriginTaintLevel: toolTaint},
-				"tool_catalog"))
-		}
-	}
-
-	if memory == nil {
-		return b.Build(), nil
-	}
-
-	// [UP-03] 规划阶段同样注入核心工作记忆，保证 DAG 生成可见任务核心状态。
-	if blocks, cmErr := memory.ListCoreMemory(ctx, sCtx.AgentID, sCtx.SessionID); cmErr == nil && len(blocks) > 0 {
-		b.WriteCoreMemory(blocks)
-	}
-
+// writePlanRecall 规划阶段的记忆召回（从 BuildPlanContext 拆出以控制圈复杂度，语义不变）：
+// 召回段落入 L4 首位。
+func writePlanRecall(
+	ctx context.Context, b *prompt.PromptBuilder, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) error {
 	var queryStr string
 	if sCtx.TaskModel != nil {
 		queryStr = sCtx.TaskModel.Goal
@@ -225,7 +204,7 @@ func BuildPlanContext( //nolint:gocyclo
 		knowledge:        sCtx.KnowledgeSearcher,
 	})
 	if err := degradeOnRecallTimeout("BuildPlanContext", err); err != nil {
-		return nil, err
+		return err
 	}
 	var retrieved strings.Builder
 	retrieved.WriteString(recalled)
@@ -240,18 +219,7 @@ func BuildPlanContext( //nolint:gocyclo
 			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"retrieved_memory"))
 	}
-	// 观察—再规划（决策八）：已执行轮次的结果，规划下一步而非重复。
-	// 重规划闭环（决策六）：告诉模型上一版为何被拒 / 为何未达成，避免原样重来。
-	fsm.WriteObservations(b, sCtx)
-	fsm.WriteReplanFeedback(b, sCtx)
-
-	msgs := b.Build()
-
-	if memory != nil {
-		msgs = memory.ImmutableCore().PrependToMessages(msgs)
-	}
-
-	return msgs, nil
+	return nil
 }
 
 // BuildToolListSection 已迁移至 tool_list_section.go（R7 文件行数治理，S-02/S-03
@@ -261,9 +229,16 @@ func BuildPlanContext( //nolint:gocyclo
 func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
+	// L1/L2 与其它阶段共用（此前 Reflect 不带核心记忆与历史，前缀与 Perceive/Plan 完全不同）。
+	if err := fsm.WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "BuildReflectContext", err)
+	}
+	fsm.WriteConversationHistory(b, sCtx)
+
+	// L3：阶段契约。
 	fsm.WriteKernelInstruction(b, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
 
-	// 没有目标就无从判定 GoalAchieved：此前反思只看到执行结果。
+	// L4：没有目标就无从判定 GoalAchieved：此前反思只看到执行结果。
 	if sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
 		b.WriteUserData(taint.NewTaintedString("Task Goal: "+sCtx.TaskModel.Goal,
 			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
@@ -279,9 +254,5 @@ func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 		b.WriteUserImages(sCtx.ExecuteImageParts)
 	}
 
-	msgs := b.Build()
-	if memory != nil {
-		msgs = memory.ImmutableCore().PrependToMessages(msgs)
-	}
-	return msgs, nil
+	return fsm.FinishLayered(b, memory), nil
 }

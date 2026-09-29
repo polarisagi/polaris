@@ -1,7 +1,9 @@
 package fsm
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/polarisagi/polaris/configs"
@@ -26,30 +28,36 @@ func WriteKernelInstruction(b *prompt.PromptBuilder, name, fallback string) {
 	b.WriteInstruction(safe)
 }
 
-// WriteConversationHistory 写入有界对话历史（ADR-0098 决策四）。历史里既有用户
-// 原话也有此前的模型输出，一律按 TaintHigh 进数据区围栏，不得提升为指令。
+// WriteConversationHistory 把对话历史逐条写入 L2 历史层（ADR-0105 决策二，取代 ADR-0098
+// 决策四的单条 <conversation_history> 滑窗消息）。
+//
+// 历史里既有用户原话也有此前的模型输出，一律按 TaintHigh 进数据区围栏、不得提升为指令：
+// 每条消息保持真实 user/assistant 角色，各自独立 Spotlighting（标记只取决于该条内容），
+// 因此旧消息字节不随新消息变化，L2 在两次跳窗之间纯追加，可被 Provider 前缀缓存命中。
+// 四个阶段调用同一函数、读同一份 ConversationHistory，得到字节相同的 L2。
 func WriteConversationHistory(b *prompt.PromptBuilder, sCtx *StateContext) {
 	sCtx.Mu.RLock()
 	history := sCtx.ConversationHistory
 	sCtx.Mu.RUnlock()
 
 	th := config.CurrentThresholds().M4Kernel
-	rendered := RenderConversationHistory(history, th.ConversationHistoryMaxMessages, th.ConversationHistoryMaxBytes)
-	if rendered == "" {
-		return
+	anchor, kept := WindowConversationHistory(history, th.ConversationHistoryMaxMessages, th.ConversationHistoryMaxBytes)
+	src := taint.TaintSource{Module: "session", OriginTaintLevel: types.TaintHigh}
+	if anchor != "" {
+		// 锚定摘要由被丢弃的不可信历史派生，同样是数据：user 角色 + TaintHigh 围栏。
+		b.WriteHistoryMessage("user", taint.NewTaintedString(
+			"<conversation_summary>\n"+anchor+"\n</conversation_summary>", src, "conversation_summary"))
 	}
-	b.WriteUserData(taint.NewTaintedString(
-		"<conversation_history>\n"+rendered+"\n</conversation_history>",
-		taint.TaintSource{Module: "session", OriginTaintLevel: types.TaintHigh},
-		"conversation_history"))
+	for _, m := range kept {
+		b.WriteHistoryMessage(m.Role, taint.NewTaintedString(m.Content, src, "conversation_history"))
+	}
 }
 
-// WriteRespondSections 组装 S_RESPOND 的指令与数据区。记忆路径
-// （agent/context.BuildRespondContext）与无记忆降级路径共用，两条路径 prompt 同构。
+// WriteRespondSections 组装 S_RESPOND 的 L2/L3/L4 内容（L1 会话层由 WriteSessionLayer 写入）。
+// 记忆路径（agent/context.BuildRespondContext）与无记忆降级路径共用，两条路径 prompt 同构。
 func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
+	WriteConversationHistory(b, sCtx) // L2
 	WriteKernelInstruction(b, "kernel/respond.md", "Reply to the user's latest message in natural language.")
-	WriteAgentProfile(b, sCtx)
-	WriteConversationHistory(b, sCtx)
 
 	sCtx.Mu.RLock()
 	rawIntent := sCtx.RawIntentTS
@@ -60,34 +68,33 @@ func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
 	globalTaint := sCtx.GlobalTaintLevel
 	sCtx.Mu.RUnlock()
 
-	if !rawIntent.IsEmpty() {
-		b.WriteUserData(rawIntent)
-	}
+	// L4 回合层。本轮意图放最后：它是回合内最易变、最靠近生成点的内容。
 	// 被拒/失败的尝试也要让回复阶段看到：否则无工具可用而直答时，回复会像什么都没
 	// 发生过，甚至声称已完成（ADR-0098 决策六）。
 	WriteReplanFeedback(b, sCtx)
 	// 观察—再规划（决策八）：多轮执行时据全部观察作答；观察含最后一轮，不再重复单轮结果。
 	hasObservations := WriteObservations(b, sCtx)
-	if len(result) == 0 && reflection == nil {
-		return
+	if len(result) > 0 || reflection != nil {
+		// 执行结果来自工具输出，至少 TaintMedium 且不低于会话已累积污点（L-03）。
+		dataTaint := types.PropagateTaint(types.TaintMedium, globalTaint)
+		var sb strings.Builder
+		if taskModel != nil && taskModel.Goal != "" {
+			sb.WriteString("<task_goal>\n" + taskModel.Goal + "\n</task_goal>\n")
+		}
+		if len(result) > 0 && !hasObservations {
+			sb.WriteString("<execution_result>\n" + string(result) + "\n</execution_result>\n")
+		}
+		if reflection != nil {
+			fmt.Fprintf(&sb, "<reflection>\nGoalAchieved: %t\nErrors: %s\n</reflection>\n",
+				reflection.GoalAchieved, strings.Join(reflection.Errors, "; "))
+		}
+		b.WriteUserData(taint.NewTaintedString(sb.String(),
+			taint.TaintSource{Module: "execute", OriginTaintLevel: dataTaint}, "execute_result"))
+		b.WriteUserImages(images)
 	}
-
-	// 执行结果来自工具输出，至少 TaintMedium 且不低于会话已累积污点（L-03）。
-	dataTaint := types.PropagateTaint(types.TaintMedium, globalTaint)
-	var sb strings.Builder
-	if taskModel != nil && taskModel.Goal != "" {
-		sb.WriteString("<task_goal>\n" + taskModel.Goal + "\n</task_goal>\n")
+	if !rawIntent.IsEmpty() {
+		b.WriteUserData(rawIntent)
 	}
-	if len(result) > 0 && !hasObservations {
-		sb.WriteString("<execution_result>\n" + string(result) + "\n</execution_result>\n")
-	}
-	if reflection != nil {
-		fmt.Fprintf(&sb, "<reflection>\nGoalAchieved: %t\nErrors: %s\n</reflection>\n",
-			reflection.GoalAchieved, strings.Join(reflection.Errors, "; "))
-	}
-	b.WriteUserData(taint.NewTaintedString(sb.String(),
-		taint.TaintSource{Module: "execute", OriginTaintLevel: dataTaint}, "execute_result"))
-	b.WriteUserImages(images)
 }
 
 // AppendRespondReminder 在回复 prompt 最末追加收尾提醒（kernel/respond_reminder.md）。
@@ -115,11 +122,11 @@ func (sm *StateMachine) promptRespond(sCtx *StateContext, pCtx protocol.StateCon
 	}
 
 	b := prompt.NewPromptBuilder()
-	if sCtx.SysEnvSnapshot != "" {
-		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("respond: session layer failed, continuing without it", "err", err)
 	}
 	WriteRespondSections(b, sCtx)
-	msgs := AppendRespondReminder(b.Build())
+	msgs := AppendRespondReminder(FinishLayered(b, nil))
 	if sCtx.EpochTracker != nil {
 		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 	}
