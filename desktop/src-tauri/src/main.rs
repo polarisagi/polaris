@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod discovery;
+mod external;
 mod probe;
 mod startup;
 mod tray;
@@ -22,7 +23,8 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::webview::NewWindowResponse;
+use tauri::{AppHandle, Manager, WebviewWindowBuilder, WindowEvent};
 
 use startup::{Mode, Outcome};
 
@@ -67,6 +69,22 @@ fn main() {
         .invoke_handler(tauri::generate_handler![])
         .setup(|app| {
             app.manage(ShellState::default());
+            // 主窗口由此处手建（tauri.conf.json 里 create=false）：声明式窗口挂不上
+            // on_new_window，而没有它 target=_blank 会被 WebView 静默吞掉。
+            // 必须先于 tray/connect：二者都按 label 取 main 窗口。
+            let cfg = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|w| w.label == "main")
+                .ok_or("tauri.conf.json 缺少 label=main 的窗口")?;
+            WebviewWindowBuilder::from_config(app.handle(), cfg)?
+                .on_new_window(|url, _features| {
+                    external::open(&url);
+                    NewWindowResponse::Deny
+                })
+                .build()?;
             tray::install(app.handle())?;
             // 启动判定放到后台线程：宿主模式要等守护进程完成整套装配（最长 60 秒），
             // 在 setup 里同步等待会卡住事件循环，启动页根本画不出来——用户看到的是
