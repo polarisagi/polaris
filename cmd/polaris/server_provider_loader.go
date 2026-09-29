@@ -130,12 +130,15 @@ func buildProviderAdapter(typ, baseURL, modelID, projectID, location string, cre
 		// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
 		// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现
 		// 但从未有调用方传入该 Option，一直处于未激活状态。
+		m1 := config.CurrentThresholds().M1Router
 		return llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching(),
-			llmadapter.WithAnthropicCacheTTL(config.CurrentThresholds().M1Router.AnthropicCacheTTL))
+			llmadapter.WithAnthropicCacheTTL(m1.AnthropicCacheTTL),
+			llmadapter.WithAnthropicInlineNonLeadingSystem(m1.AnthropicInlineNonLeadingSystem))
 	case "deepseek":
 		return llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr)
 	case "google_agent_platform":
-		return llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr)
+		return llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr,
+			llmadapter.WithGoogleInlineNonLeadingSystem(config.CurrentThresholds().M1Router.GoogleInlineNonLeadingSystem))
 	case "ollama":
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"

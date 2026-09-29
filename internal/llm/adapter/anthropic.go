@@ -30,8 +30,11 @@ type AnthropicAdapter struct {
 	caps                types.ProviderCapabilities
 	enablePromptCaching bool   // 注入 cache_control 标记以激活 prompt caching
 	cacheTTL            string // cache_control.ttl：""|"5m"=API 默认不显式下发，"1h"=长 TTL（写入 2×）
-	baseURL             string // 空值 → "https://api.anthropic.com"（测试可覆盖）
-	tbr                 *metrics.TokenBurnRate
+	// inlineNonLeadingSystem 开启时只有开头连续的 system 消息进 system 参数，其后的 system 转 user 角色
+	// <system_instruction> 块留在原位（ADR-0105 决策一，配置 m1_router.anthropic.inline_nonleading_system）。
+	inlineNonLeadingSystem bool
+	baseURL                string // 空值 → "https://api.anthropic.com"（测试可覆盖）
+	tbr                    *metrics.TokenBurnRate
 }
 
 var _ protocol.Provider = (*AnthropicAdapter)(nil)
@@ -57,6 +60,13 @@ func WithAnthropicCacheTTL(ttl string) AnthropicOption {
 			a.cacheTTL = ttl
 		}
 	}
+}
+
+// WithAnthropicInlineNonLeadingSystem 控制非首部 system 消息的处理（ADR-0105 决策一）：
+// true=原位内联为 user 角色 <system_instruction> 块，使 L3 阶段层位于 L2 历史之后、
+// 缓存断点与五层账本对齐；false=全部提到 system 参数（旧行为，请求体字节不变）。
+func WithAnthropicInlineNonLeadingSystem(on bool) AnthropicOption {
+	return func(a *AnthropicAdapter) { a.inlineNonLeadingSystem = on }
 }
 
 // NewAnthropicAdapter 构造 Anthropic 适配器。
