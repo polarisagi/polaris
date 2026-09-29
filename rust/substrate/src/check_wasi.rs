@@ -9,7 +9,7 @@
 use std::path::Path;
 use wasmtime::*;
 use wasmtime_wasi::p1::{add_to_linker_sync, WasiP1Ctx};
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 struct CheckState {
     wasi: WasiP1Ctx,
@@ -47,12 +47,7 @@ pub fn check() -> Result<()> {
     add_to_linker_sync(&mut linker, |s| &mut s.wasi)?;
 
     let mut builder = WasiCtxBuilder::new();
-    builder.preopened_dir(
-        Path::new("/tmp"),
-        "/workspace",
-        DirPerms::all(),
-        FilePerms::all(),
-    )?;
+    builder.preopened_dir(Path::new("/tmp"), "/workspace", FsPerms::ReadWrite)?;
 
     let wasi = builder.build_p1();
     let state = CheckState {

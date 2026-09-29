@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 use wasmtime::*;
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 // ─── Wall-clock 超时（epoch interruption） ─────────────────────────────────────
 //
@@ -314,12 +314,9 @@ pub unsafe extern "C" fn wasmtime_execute(
                 && !host_path_str.is_empty()
             {
                 let host_path = Path::new(host_path_str);
-                if let Err(e) = builder.preopened_dir(
-                    host_path,
-                    "/workspace",
-                    DirPerms::all(),
-                    FilePerms::all(),
-                ) {
+                // wasmtime-wasi 48 起目录/文件权限合并为 FsPerms；ReadWrite 等价于原
+                // DirPerms::all() + FilePerms::all()。
+                if let Err(e) = builder.preopened_dir(host_path, "/workspace", FsPerms::ReadWrite) {
                     write_err(out_err, &format!("Failed to preopen directory: {}", e));
                     return WASMTIME_ERR_INTERNAL;
                 }
