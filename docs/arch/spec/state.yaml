@@ -876,6 +876,8 @@ thresholds:
     embed_high_max_batch_size: 100   # toml:"embed.high_max_batch_size"
     embed_low_max_batch_size: 8      # toml:"embed.low_max_batch_size"，约束后台批在串行后端上的占用（实测 ~0.12s/条 → ≈1s）
     embed_call_timeout_seconds: 30   # toml:"embed.call_timeout_s"，单次下游调用上限
+    anthropic_cache_ttl: 5m          # toml:"anthropic.cache_ttl"，ADR-0105 决策三；5m|1h（写入 1.25×/2×，读 0.1×）；1h 仅在会话间隔常超 5 分钟时划算
+    openai_prompt_cache_retention: "" # toml:"openai.prompt_cache_retention"，ADR-0105 决策三；""=不发送（服务端决定），in_memory|24h；仅对声明 SupportsPromptCacheKey 的 Provider 生效
     re_eval_when:
       - embed_low_max_batch_size: ["backend_parallel_embed_supported", "backfill_backlog>1h"]
       - circuit_breaker_failure_count: ["false_open_rate>0.05", "miss_open_drift_p95"]
@@ -996,6 +998,7 @@ thresholds:
     model_pool_respond: default # toml:"model_pool.respond"
     model_pool_validate: default # toml:"model_pool.validate"，L3 看门狗 fail-open
     plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0102 决策六：LLM 判定 complexity ≥ 此值时规划阶梯起点为 level 2（plan_replan 池 + high）
+    cache_uniform_tools: false # toml:"cache.uniform_tools"，ADR-0105 决策三实验开关：true 时 Perceive/Reflect/Respond 也下发 Plan 的 tools 并设 tool_choice=none，使四阶段 tools 前缀一致；须以 llm_calls 实测命中/未命中 token 决定是否默认开启（HE-4）
     reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0102 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
