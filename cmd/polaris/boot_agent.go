@@ -966,17 +966,24 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	if sb.ResourceGov != nil && sb.AutoConf != nil && tb.ConsolidationPipeline != nil && tb.ForgettingManager != nil {
+		// 不再注入 WithConsolidate：此前以伪会话 ID "idle-evolution" 调 Run，episodic 查询按
+		// TaskID==SessionID 过滤，永远 0 事件即返回 nil，是空转。巩固由 S_REFLECT 后的
+		// TopicMemoryConsolidate outbox 事件按会话驱动（boot_tools.go §6.6）。
 		idleScheduler := automation.NewIdleEvolutionScheduler(sb.ResourceGov, sb.AutoConf.Probe).
-			WithConsolidate(func(ctx context.Context) error {
-				return tb.ConsolidationPipeline.Run(ctx, "idle-evolution")
-			}).
 			WithForgetting(func(_ context.Context) error {
 				return tb.ForgettingManager.PeriodicCleanup()
 			}).
+			WithForgettingProbe(tb.ForgettingManager.HasCandidates).
 			WithGraphPrune(func(ctx context.Context) error {
 				fac := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
 				return fac.PruneMemoryGraph(ctx)
-			})
+			}).
+			WithGraphPruneProbe(func(ctx context.Context) (bool, error) {
+				fac := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
+				return fac.HasPrunableGraphEdges(ctx)
+			}).
+			// 041_background_job_state：任务"上次跑完"落库，重启后不重复评估（HE-6）。
+			WithStateRepo(repo.NewSQLiteBackgroundJobStateRepository(sb.Store.DB()))
 		// [复核修复] IdleEvolutionScheduler 的空闲判定依赖 ResourceGovernor.Admit/AdmitLLM
 		// 每次被调用时回传"有前台活动"信号——ResourceGovernor 已预留 OnActivity(cb) 挂载点
 		// 但此前从未接线，导致 lastActivityAt 永远停留在构造时刻，isIdle() 恒真，调度器会

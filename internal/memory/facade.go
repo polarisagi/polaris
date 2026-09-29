@@ -194,6 +194,18 @@ func (f *MemoryFacadeImpl) PruneMemoryGraph(ctx context.Context) error {
 	return nil
 }
 
+// HasPrunableGraphEdges 只读探测图中是否有可剪枝的边；无 edgeMgr 视为无活。
+func (f *MemoryFacadeImpl) HasPrunableGraphEdges(ctx context.Context) (bool, error) {
+	if f.edgeMgr == nil {
+		return false, nil
+	}
+	has, err := f.edgeMgr.HasPrunable(ctx)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "memory_facade: HasPrunableGraphEdges 失败", err)
+	}
+	return has, nil
+}
+
 // TrackToolCall 调用（M05 §11.3），委托给底层 MemorySystem 共享单实例。
 func (f *MemoryFacadeImpl) TrackToolCall(toolUseID, toolName string) {
 	f.sys.Mem().TrackToolCall(toolUseID, toolName)

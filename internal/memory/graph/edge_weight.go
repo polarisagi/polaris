@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"math"
@@ -96,6 +97,22 @@ func (ewm *EdgeWeightManager) FeedbackCalibrate(ctx context.Context, successPath
 			"EdgeWeightManager.FeedbackCalibrate: partial calibration failure", errors.Join(errs...))
 	}
 	return nil
+}
+
+// HasPrunable 只读探测：是否存在会被 PeriodicPrune 删除的边。
+// 判据与 PeriodicPrune 的 WHERE 完全一致，供空闲调度器在无边可剪时跳过启动。
+func (ewm *EdgeWeightManager) HasPrunable(ctx context.Context) (bool, error) {
+	var one int
+	err := ewm.db.QueryRowContext(ctx,
+		`SELECT 1 FROM world_model_edges WHERE (storage_strength * retrieval_strength) < ? LIMIT 1`,
+		ewm.pruneThreshold).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "EdgeWeightManager: probe prunable edges", err)
+	}
+	return true, nil
 }
 
 // PeriodicPrune 每日凌晨触发的清理任务，删除 storage_strength * retrieval_strength < pruneThreshold 的边。

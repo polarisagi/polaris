@@ -98,6 +98,20 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 	return fm.cleanupWithKV(ctx)
 }
 
+// HasCandidates 只读探测：当前是否有会被 PeriodicCleanup 处理的条目（衰减到阈值以下）。
+// 复用 queryDecayCandidates，判据与实际清理一致。非 SQL 存储无法廉价探测，按"有活"处理。
+func (fm *ForgettingManager) HasCandidates(ctx context.Context) (bool, error) {
+	sqlStore, ok := fm.store.(protocol.SQLQuerier)
+	if !ok {
+		return true, nil
+	}
+	toUpdate, toArchive, err := fm.queryDecayCandidates(ctx, sqlStore, time.Now().UnixMilli())
+	if err != nil {
+		return true, err
+	}
+	return len(toUpdate)+len(toArchive) > 0, nil
+}
+
 // decayUpdateItem 是 cleanupWithSQL 分流出的"需更新 decay_weight"条目。
 type decayUpdateItem struct {
 	ID          int64
