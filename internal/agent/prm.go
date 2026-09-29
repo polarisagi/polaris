@@ -128,7 +128,10 @@ func (p *DefaultPRM) scoreCandidate(ctx context.Context, goal string, plan *type
 
 	messages := []types.Message{{Role: "user", Content: prompt}}
 	opts := []types.InferOption{
-		types.WithMaxTokens(128),
+		// 上限 512：判官走 ThinkingLow，推理 token 计入 max_tokens；原 128 在开启推理时会被耗尽，
+		// score/reason 的 JSON 输出为空，解析失败即该候选整体作废。
+		types.WithMaxTokens(512),
+		types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposePlanPRMScore),
 		types.WithTemperature(0), // 打分需要确定性
 		types.WithResponseFormat(responseFormat),
 	}

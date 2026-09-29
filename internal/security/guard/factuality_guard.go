@@ -121,11 +121,15 @@ func (fg *FactualityGuard) semanticJudge(ctx context.Context, content, contextDo
 		"CLAIM:\n" + truncate(content, 500) + "\n\n" +
 		"Reply with one word only: PASS, UNCERTAIN, or FAIL. Then optionally one sentence reason."
 	req := &types.InferRequest{
-		Messages:    []types.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   64,
+		Messages: []types.Message{{Role: "user", Content: prompt}},
+		// 上限 512：判官走 ThinkingLow，推理 token 计入 max_tokens；原 64 在开启推理时会被推理耗尽，
+		// 输出为空即静默降级为 Uncertain（付了推理费却拿不到裁决）。前缀判定不受上限放宽影响。
+		MaxTokens:   512,
 		Temperature: 0,
 	}
-	resp, err := safecall.Infer(judgeCtx, fg.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 判官/分类类降到 ThinkingLow（ADR-0105 决策五，须以 Eval 确认，见该 ADR 重新评估触发条件 3）。
+	resp, err := safecall.Infer(judgeCtx, fg.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens),
+		types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeFactualityJudge))
 	if err != nil || resp == nil {
 		// L3 Judge 不可用：计数告警，不阻断（FactualityUncertain）
 		// 监控指标: polaris.factuality.judge_unavailable_total

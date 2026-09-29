@@ -179,7 +179,7 @@ func (p *GraphBuildPipeline) synthesizeOneCluster(ctx context.Context, entities 
 			inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 			defer inferCancel()
 			start := time.Now()
-			resp, err := safecall.Infer(inferCtx, providerClient.provider, conceptMsgs, types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("graphrag_concept"))
+			resp, err := safecall.Infer(inferCtx, providerClient.provider, conceptMsgs, types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposeGraphRAGConcept))
 			latencyMs := time.Since(start).Milliseconds()
 			if err == nil && resp != nil && resp.Content != "" {
 				conceptLabel = strings.Split(strings.TrimSpace(resp.Content), "\n")[0]

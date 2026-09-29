@@ -64,6 +64,7 @@ func (m *ContinuousSamplingMonitor) MaybeSampleAndScore(provider protocol.Provid
 // 的判定场景；这里服务于"退化趋势"场景，需要的是连续可比较的数值而非布尔值，
 // 因此走独立的极简数字解析，不复用 judge_schema.go 的结构化 schema。
 func judgeReplyQuality(ctx context.Context, provider protocol.Provider, query, response string) (float64, error) {
+	// 判官类：ThinkingLow 打分（ADR-0105 决策五，须以 Eval 确认）。未设 MaxTokens，推理不会被小上限截断。
 	resp, err := safecall.Infer(ctx, provider, []types.Message{
 		{
 			Role: "system",
@@ -72,7 +73,7 @@ func judgeReplyQuality(ctx context.Context, provider protocol.Provider, query, r
 				"不要输出任何其它文字或符号。",
 		},
 		{Role: "user", Content: "用户问题：\n" + query + "\n\nAI 回复：\n" + response},
-	}, types.WithModelPool(string(types.ModelPoolDefault)))
+	}, types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeSamplingScore))
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "sampling_monitor: judge inference failed", err)
 	}

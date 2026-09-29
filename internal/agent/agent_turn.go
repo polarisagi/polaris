@@ -36,12 +36,12 @@ func turnPhaseOf(s types.AgentState) types.TurnPhase {
 // S_VALIDATE 的 L3 看门狗不是回合阶段，单独命名。
 func llmPurposeOf(s types.AgentState) string {
 	if s == types.AgentStateValidate {
-		return "validate_watchdog"
+		return types.PurposeValidateWatchdog
 	}
 	if phase := turnPhaseOf(s); phase != "" {
 		return string(phase)
 	}
-	return "kernel"
+	return types.PurposeKernel
 }
 
 // publishTurnPhase 内部阶段不再推 token 后，用户在首个回复 token 前只能靠阶段

@@ -266,6 +266,10 @@ func (g *EvalGenerator) infer(ctx context.Context, prompt string, schema map[str
 	resp, err := safecall.Infer(ctx, g.provider, []types.Message{{Role: "user", Content: prompt}},
 		types.WithModel("deepseek-chat"), // budget 层：批量生成无需推理能力
 		types.WithMaxTokens(512),
+		// 显式关闭思考（ADR-0105 决策五，偏离「合成评测=创作类保持 high」）：本调用已固定走 budget 层
+		// deepseek-chat，且产出为 512 token 以内的 json_schema 结构化样本/groundedness 判定；
+		// 高档推理会耗尽 512 上限、输出被截断成非法 JSON。
+		types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposeSyntheticEvalGen),
 		types.WithResponseFormat(&types.ResponseFormat{
 			Type:       "json_schema",
 			JSONSchema: schema,

@@ -262,13 +262,16 @@ func (qp *QueryPlanner) Plan(ctx context.Context, query string) ([]SubQuery, err
 		return []SubQuery{{Text: query, Weight: 1.0}}, nil
 	}
 
+	// 查询分解是格式受限的纯变换（输出固定 JSON 数组）：关闭思考（偏离「查询改写=Low」）。
+	// 理由：rag_query_rewrite 在响应缓存白名单内（ADR-0105 决策六），而缓存只对 ThinkingDisabled + T=0 生效；
+	// 定为 Low 会让该白名单项永远不可命中。
 	resp, err := safecall.Infer(ctx, qp.provider, []types.Message{
 		{Role: "system", Content: `将用户查询分解为 2-5 个独立子查询以提升检索覆盖度。
 严格按以下 JSON 格式输出，不加任何额外文字：
 [{"text":"子查询1","scope":"","weight":0.6},{"text":"子查询2","scope":"","weight":0.4}]
 weight 之和必须为 1.0，scope 为空表示全局检索。`},
 		{Role: "user", Content: query},
-	}, types.WithModelPool(string(types.ModelPoolDefault)))
+	}, types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposeRAGQueryRewrite))
 	if err != nil || resp == nil {
 		return []SubQuery{{Text: query, Weight: 1.0}}, nil //nolint:nilerr // 失败降级单查询
 	}

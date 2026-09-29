@@ -42,7 +42,9 @@ func (ag *AutoCurriculumGenerator) sicDetectFn(ctx context.Context, text string)
 			"Reply with exactly one word: YES or NO.",
 		text,
 	)
-	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(8))
+	// 注入检测判官走 ThinkingLow；上限 256 而非 8：推理 token 计入 max_tokens，
+	// 8 会被推理耗尽使输出为空，而空输出在此按「非注入」放行（fail-open），必须给推理留足余量。
+	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256), types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeCurriculumSICDetect))
 	if err != nil || resp == nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "curriculum: sicDetectFn LLM call failed", err)
 	}
@@ -63,11 +65,14 @@ func (ag *AutoCurriculumGenerator) llmJudgeSafe(ctx context.Context, desc string
 		desc,
 	)
 	req := &types.InferRequest{
-		Messages:    []types.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   8,
+		Messages: []types.Message{{Role: "user", Content: prompt}},
+		// 256 而非 8：ThinkingLow 的推理 token 计入 max_tokens，8 会被耗尽致输出为空；
+		// 空输出走 fail-closed 拒绝样本，白白丢弃合法课程。
+		MaxTokens:   256,
 		Temperature: 0,
 	}
-	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 安全判官走 ThinkingLow；上限见 llmJudgeSafe 内 req.MaxTokens 注释。
+	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeCurriculumSafetyJudge))
 	if err != nil || resp == nil {
 		slog.Warn("curriculum: llm_judge_safe error, fail-closed",
 			"err", err,

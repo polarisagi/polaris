@@ -68,7 +68,7 @@ func (tgg *TextualGradientGenerator) Generate(ctx context.Context, failedPrompt,
 			"Output ONLY the improved prompt text, no explanation.",
 		trunc(failedPrompt, 500), trunc(succeededPrompt, 500),
 	)
-	resp, err := safecall.Infer(ctx, tgg.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(1024), types.WithThinkingMode(types.ThinkingHigh))
+	resp, err := safecall.Infer(ctx, tgg.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(1024), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposePromptOptimizerGradient))
 	if err != nil {
 		// LLM 失败回退规则模板，不阻断流程
 		return "Improve: " + trunc(failedPrompt, 200)
@@ -94,7 +94,7 @@ func (ca *ContrastiveAnalyzer) Analyze(ctx context.Context, successPrompt, faile
 			"Output only the avoid-rule sentence.",
 		trunc(successPrompt, 400), trunc(failedPrompt, 400),
 	)
-	resp, err := safecall.Infer(ctx, ca.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256), types.WithThinkingMode(types.ThinkingHigh))
+	resp, err := safecall.Infer(ctx, ca.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposePromptOptimizerContrastive))
 	if err != nil {
 		return ""
 	}

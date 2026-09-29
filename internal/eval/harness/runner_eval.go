@@ -152,7 +152,13 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed, safetyF
 		tCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		defer cancel()
 
-		var inferOpts []types.InferOption
+		// L4 判官降到 ThinkingLow 并显式声明用途（ADR-0105 决策五，须以 Eval 确认；判官一致性下降则调回，
+		// 见该 ADR 重新评估触发条件 3）。ThinkingLow 下适配器强制 Temperature=0，c.Config 的温度
+		// 覆盖对 OpenAI 兼容端点不再生效——对判官而言更确定，是有意的副作用。
+		inferOpts := []types.InferOption{
+			types.WithThinkingMode(types.ThinkingLow),
+			types.WithPurpose(types.PurposeEvalL4Judge),
+		}
 		if c.Config != nil {
 			if temp, ok := c.Config["Temperature"].(float64); ok {
 				inferOpts = append(inferOpts, types.WithTemperature(temp))
