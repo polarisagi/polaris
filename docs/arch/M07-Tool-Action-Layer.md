@@ -138,7 +138,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 - **数据/文本处理**：`csv_parse`（CSV 解析）、`diff_text`（文本差异）、`template_render`（模板渲染）
 - **多媒体**：`video_analysis`（视频内容分析）、`tts_edge`（Edge TTS 语音合成）
 - **系统**：`get_datetime`（当前时间）、`sys_probe`（硬件探针，M03 §5）
-- **辅助**：`todo_read`/`todo_write`（任务列表持久化）、`notebook_read`/`notebook_edit`（Jupyter Notebook）、`read_tool_ref`（工具定义自省）
+- **辅助**：`todo_read`/`todo_write`（任务列表按会话持久化于 `session_todos` 表，会话 ID 取 `CtxTaskIDKey`，缺失即报错；ADR-0104 决策三）、`notebook_read`/`notebook_edit`（Jupyter Notebook）、`read_tool_ref`（工具定义自省）
 - **Git**：`git_diff`、`git_commit`（`git_text_tools.go`，Agent 可直接调用无需 MCP 扩展）
 - **Cron**（条件注册，`cronRepo != nil` 时才注册；单元测试无 Repo 时跳过）：`cron_list`、`cron_create`、`cron_delete`
 - **Rich 工具**（`RegisterRich`，默认 `TaintHigh`）：`execute_wasm`（Wasm 沙箱执行）、`get_task_result`（异步任务结果回取，GD-08-001）

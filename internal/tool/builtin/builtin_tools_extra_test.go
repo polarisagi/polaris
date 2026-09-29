@@ -2,10 +2,8 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -13,43 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/grep"
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
 	"github.com/polarisagi/polaris/internal/tool/builtin/str_replace_editor"
-	"github.com/polarisagi/polaris/internal/tool/builtin/todo_read"
-	"github.com/polarisagi/polaris/internal/tool/builtin/todo_write"
 )
-
-func TestBuiltinTools_Todo(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mu := &sync.Mutex{}
-	writeFn := todo_write.MakeTodoWriteFn([]string{tmpDir}, mu)
-	readFn := todo_read.MakeTodoReadFn([]string{tmpDir}, mu)
-	ctx := context.Background()
-
-	// Write
-	writeArgs := `{"todos": ["Task 1", "Task 2"]}`
-	writeRes, err := writeFn(ctx, []byte(writeArgs))
-	if err != nil {
-		t.Fatalf("todo_write unexpected err: %v", err)
-	}
-	if string(writeRes) != `{"status":"success"}` {
-		t.Fatalf("unexpected write output: %s", writeRes)
-	}
-
-	// Read
-	readRes, err := readFn(ctx, nil)
-	if err != nil {
-		t.Fatalf("todo_read unexpected err: %v", err)
-	}
-	var readOut struct {
-		Todos []string `json:"todos"`
-	}
-	if err := json.Unmarshal(readRes, &readOut); err != nil {
-		t.Fatalf("read json err: %v", err)
-	}
-	if len(readOut.Todos) != 2 || readOut.Todos[0] != "Task 1" {
-		t.Fatalf("unexpected read output: %v", readOut.Todos)
-	}
-}
 
 func TestBuiltinTools_Grep(t *testing.T) {
 	tmpDir := t.TempDir()

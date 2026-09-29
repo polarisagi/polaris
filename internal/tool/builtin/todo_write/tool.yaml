@@ -1,6 +1,5 @@
 name: todo_write
-description: Write or update the agent's todo list. Will persist to the current session workspace.
+description: Replace the current session's todo list (full-list replacement, persisted per session in the database). Items are strings (status pending) or {content, status} objects with status pending|in_progress|completed.
 capability: write-local
 side_effects:
-  - file-write
   - state-mutate

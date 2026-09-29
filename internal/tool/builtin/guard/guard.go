@@ -211,9 +211,13 @@ func IsPathAllowed(path string, allowedPaths []string) bool {
 	return false
 }
 
-func GetTodoPath(allowedPaths []string) (string, error) {
-	if len(allowedPaths) == 0 {
-		return "", apperr.New(apperr.CodeInternal, "todo: no workspace configured")
+// SessionIDFromCtx 取工具执行 ctx 中的会话 ID（protocol.CtxTaskIDKey，与
+// llm_calls.session_id 同源）。为空返回 CodeInvalidInput——会话级状态工具
+// 必须 fail-closed，禁止回落到共享存储把不同会话的数据混在一起。
+func SessionIDFromCtx(ctx context.Context) (string, error) {
+	sid, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	if sid == "" {
+		return "", apperr.New(apperr.CodeInvalidInput, "缺少会话 ID（ctx 未携带 CtxTaskIDKey），拒绝访问会话级状态")
 	}
-	return filepath.Join(allowedPaths[0], ".polaris_todo.json"), nil
+	return sid, nil
 }

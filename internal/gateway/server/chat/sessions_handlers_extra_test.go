@@ -59,6 +59,14 @@ func TestSessionsHandlersExtra(t *testing.T) {
 			file_name TEXT,
 			created_at DATETIME
 		);
+		CREATE TABLE IF NOT EXISTS session_todos (
+			session_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			content TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(session_id, seq)
+		);
 		INSERT INTO chat_sessions (id, title, status, metadata, task_type, created_at, updated_at) VALUES ('session-1', 'Test', 'active', '{}', 'chat', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 		INSERT INTO chat_messages (session_id, role, content, metadata, created_at) VALUES ('session-1', 'user', 'hello', '{}', CURRENT_TIMESTAMP);
 	`)

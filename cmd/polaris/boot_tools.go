@@ -352,6 +352,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		sb.Layout.Workspace,
 		&mcpAsyncTaskAdapter{inner: mcpMgr},
 		hitlGateway,
+		repo.NewSQLiteTodoRepository(sb.Store.DB()),
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

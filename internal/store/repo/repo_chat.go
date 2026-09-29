@@ -175,9 +175,21 @@ func (r *SQLiteChatRepository) UpdateSessionThrashingIndex(ctx context.Context, 
 
 // DeleteSession 删除会话及其消息
 func (r *SQLiteChatRepository) DeleteSession(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE id=?`, id)
+	// session_todos 无指向 chat_sessions 的外键（子 Agent 会话没有该行），
+	// 不会随级联删除，需同事务显式清理（ADR-0104 决策三）。
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.DeleteSession", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_todos WHERE session_id=?`, id); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.DeleteSession todos", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_sessions WHERE id=?`, id); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.DeleteSession", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.DeleteSession commit", err)
 	}
 	return nil
 }

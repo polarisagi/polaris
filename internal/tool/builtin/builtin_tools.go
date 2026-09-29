@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"github.com/polarisagi/polaris/internal/tool"
 
@@ -12,6 +11,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 	"github.com/polarisagi/polaris/internal/tool/builtin/csv_parse"
@@ -59,11 +59,8 @@ func RegisterBuiltinTools(
 	vfsRoot string, // WorkspaceManager 的根目录
 	asyncTaskProvider get_task_result.AsyncTaskProvider, // get_task_result 工具依赖（GD-08-001）；nil 时该工具始终降级返回 expired_or_not_found
 	hitlGateway HITLGateway,
+	todoRepo repo.TodoRepository, // todo_write/todo_read 按会话落库（ADR-0104 决策三）；nil 时两工具调用即报错
 ) error {
-	// todoMu 保护 todo 文件的并发读写，防止多 Agent 同时写入导致数据丢失。
-	// 与 todo_write.MakeTodoWriteFn / todo_read.MakeTodoReadFn 共享，通过参数传递而非全局变量。
-	todoMu := new(sync.Mutex)
-
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
 	defs := []struct {
@@ -86,8 +83,8 @@ func RegisterBuiltinTools(
 		{"read_tool_ref", read_tool_ref.MakeReadToolRefFn(vfsRoot)},
 		{"glob", glob.MakeGlobFn(allowedPaths)},
 		{"web_search", web_search.MakeWebSearchFn(cfg, dialer)},
-		{"todo_write", todo_write.MakeTodoWriteFn(allowedPaths, todoMu)},
-		{"todo_read", todo_read.MakeTodoReadFn(allowedPaths, todoMu)},
+		{"todo_write", todo_write.MakeTodoWriteFn(todoRepo)},
+		{"todo_read", todo_read.MakeTodoReadFn(todoRepo)},
 		{"multi_edit", multi_edit.MakeMultiEditFn(allowedPaths)},
 		{"notebook_read", notebook_read.MakeNotebookReadFn(allowedPaths)},
 		{"notebook_edit", notebook_edit.MakeNotebookEditFn(allowedPaths)},
