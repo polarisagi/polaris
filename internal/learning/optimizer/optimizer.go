@@ -29,6 +29,27 @@ type PromptOptimizer struct {
 	promptMem       *PromptMemory
 	errorMem        *ErrorPatternMemory
 	maxBudget       int // 软上限 30K tokens/周期
+
+	// 错峰调度（ADR-0105 决策七）。offPeak 为 nil 时不错峰。OptimizeTask 是本优化器唯一的外部触发入口，
+	// 窗口外不同步执行，而是登记为待办、到窗口起点再跑；同一 taskType 等待期间的重复触发合并为一次
+	// （优化以 DB 近期版本为样本，合并不丢信息）。
+	offPeak       offPeakGate
+	offPeakCtx    context.Context //nolint:containedctx // 进程级生命周期 ctx：让等待窗口的协程随进程退出而取消
+	offPeakMu     sync.Mutex
+	offPeakQueued map[string]struct{}
+}
+
+// offPeakGate 是错峰窗口的消费端接口（由 pkg/offpeak.Gate 满足，nil 指针安全）。
+type offPeakGate interface {
+	Allow() bool
+	Wait(ctx context.Context) error
+}
+
+// WithOffPeak 启用错峰：ctx 为进程级生命周期上下文（取消后等待窗口的协程退出，待办随之丢弃，
+// 下次触发会重新登记）。g 为 nil 等价于不错峰。
+func (po *PromptOptimizer) WithOffPeak(ctx context.Context, g offPeakGate) *PromptOptimizer {
+	po.offPeak, po.offPeakCtx = g, ctx
+	return po
 }
 
 // NewPromptOptimizer 构造 PromptOptimizer，provider 和 versionStore 必须非 nil。
@@ -220,8 +241,46 @@ func (gps *GeneticPromptSearch) GetParetoFront() []*PromptVersion {
 // OptimizeTask 为 prompt.Manager 等解耦接口提供的入口，等价于 Optimize(ctx, taskType, nil)；
 // recent 为空时 Optimize 自行以 DB 近期版本为样本（GR-7.1-003）。
 func (po *PromptOptimizer) OptimizeTask(ctx context.Context, taskType string) error {
+	if po.deferToOffPeak(taskType) {
+		return nil
+	}
 	po.Optimize(ctx, taskType, nil)
 	return nil
+}
+
+// deferToOffPeak 在窗口外把 taskType 的优化登记为待办并返回 true（调用方随即返回，不阻塞）；
+// 窗口内 / 未启用错峰返回 false，调用方照常同步执行。
+func (po *PromptOptimizer) deferToOffPeak(taskType string) bool {
+	if po.offPeak == nil || po.offPeak.Allow() {
+		return false
+	}
+	po.offPeakMu.Lock()
+	if po.offPeakQueued == nil {
+		po.offPeakQueued = make(map[string]struct{})
+	}
+	if _, dup := po.offPeakQueued[taskType]; dup {
+		po.offPeakMu.Unlock()
+		return true
+	}
+	po.offPeakQueued[taskType] = struct{}{}
+	po.offPeakMu.Unlock()
+
+	bg := po.offPeakCtx
+	if bg == nil {
+		bg = context.Background()
+	}
+	concurrent.SafeGo(bg, "optimizer.offpeak_optimize", func(ctx context.Context) {
+		defer func() {
+			po.offPeakMu.Lock()
+			delete(po.offPeakQueued, taskType)
+			po.offPeakMu.Unlock()
+		}()
+		if err := po.offPeak.Wait(ctx); err != nil {
+			return // 进程退出：待办丢弃，下次触发重新登记
+		}
+		po.Optimize(ctx, taskType, nil)
+	})
+	return true
 }
 
 // Optimize 执行 prompt 优化周期，持久化候选到 prompt_versions 表。

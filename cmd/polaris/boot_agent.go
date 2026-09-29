@@ -392,6 +392,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// 合成评测生成是可延迟批处理：错峰窗口外跳过本轮，窗口内的下一个 tick 恢复（ADR-0105 决策七）。
+				if !sb.OffPeak.Allow() {
+					continue
+				}
 				chunks, err := kb.Ingester.GetRecentChunks(ctx, 100)
 				if err != nil || len(chunks) == 0 {
 					continue
@@ -817,6 +821,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	m9Engine.SetDB(sb.Store.DB())
 	m9Engine.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
 	m9Engine.SetOptimizer(promptOptimizer)
+	m9Engine.WithOffPeak(sb.OffPeak)
+	promptOptimizer.WithOffPeak(ctx, sb.OffPeak)
 	m9Engine.SetVersionStore(versionStore)
 	if rolloutStore != nil {
 		m9Engine.SetStagingPipeline(rolloutStore)
@@ -1025,6 +1031,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 内定义），把调度器的 action/meta 形式审计事件转换为 AuditTrail.RecordAudit
 	// 所需的 toolName/payload 形式，两者语义等价（都是"记录一条带元数据的审计事件"）。
 	bgTaskScheduler.InjectAuditLogger(auditTrailLogAdapter{at: sb.AuditTrail})
+	bgTaskScheduler.InjectOffPeak(sb.OffPeak)
 
 	// [W-1-B] 接入 SurpriseReader
 	bgTaskScheduler.InjectSurpriseReader(&simpleSurpriseReader{})

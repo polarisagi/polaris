@@ -559,3 +559,44 @@ func TestProcessAndMark_BackgroundDeferred_NotCountedAsFailure(t *testing.T) {
 		t.Fatalf("推迟一条不得阻塞同批其后的记录，interrupt handled=%d", handled)
 	}
 }
+
+// TestProcessAndMark_OffPeakDeferred_UntilWindowStart 错峰推迟（ADR-0105 决策七）：不计失败次数，
+// next_retry_at 直接落在窗口起点而不是 30s 后——否则等几小时的窗口会让 outbox 空转轮询。
+func TestProcessAndMark_OffPeakDeferred_UntilWindowStart(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+
+	until := time.Now().Add(5 * time.Hour).Truncate(time.Millisecond)
+	w := NewOutboxWorker(db, 5, 3, 100, 500)
+	w.RegisterHandler("graph", func(ctx context.Context, rec *OutboxRecord) error {
+		// 经一层 Wrap 仍须识别（errors.As 沿链查找）。
+		return apperr.Wrap(apperr.CodeInternal, "graph build", &protocol.OffPeakDeferral{Until: until})
+	})
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status)
+		VALUES (1, ?, 'graph', 'g', 'system', X'00', 'k1', 'pending')`, now); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for range 5 { // 超过 maxRetries=3：失败语义下早已进死信
+		if _, err := db.Exec(`UPDATE outbox SET status='pending' WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.processAndMark(ctx, &OutboxRecord{ID: 1, TargetEngine: "graph"}); err != nil {
+			t.Fatalf("错峰推迟不应作为错误上报: %v", err)
+		}
+	}
+	var status string
+	var attempts, crash int
+	var nextRetry int64
+	if err := db.QueryRow(`SELECT status, attempts, crash_recovery_count, next_retry_at FROM outbox WHERE id=1`).
+		Scan(&status, &attempts, &crash, &nextRetry); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || attempts != 0 || crash != 0 {
+		t.Fatalf("got status=%s attempts=%d crash=%d", status, attempts, crash)
+	}
+	if nextRetry != until.UnixMilli() {
+		t.Fatalf("next_retry_at=%d want window start %d", nextRetry, until.UnixMilli())
+	}
+}

@@ -52,6 +52,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/offpeak"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -64,6 +65,10 @@ type SubstrateBundle struct {
 	Layout    config.DataLayout
 	Vault     *credential.Vault
 	PromptMgr protocol.PromptFacade
+
+	// OffPeak 错峰窗口（ADR-0105 决策七），未配置 m1_router.offpeak.windows 时为 nil（不错峰）。
+	// 可延迟后台任务的触发点（建图/摘要、合成评测与技能、课程生成、prompt 优化）共用这一份。
+	OffPeak *offpeak.Gate
 
 	// RAGChunksTaintSerializer 是 rag_chunks 表跨 SQL 持久化边界的 HMAC-SHA256
 	// 校验器（M11-Policy-Safety.md §2.1 第三重防护，inv_M11_02）。key 从 Vault
@@ -709,6 +714,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		LogFile:                  logFile,
 		LogStore:                 logStore,
 		PromptMgr:                promptMgr,
+		OffPeak:                  newOffpeakGate(cfg.Thresholds.M1Router),
 		Store:                    store,
 		SurrealStore:             surrealStore,
 		StorageRouter:            storageRouter,

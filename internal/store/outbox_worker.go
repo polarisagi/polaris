@@ -308,7 +308,15 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 func (w *OutboxWorker) markNonFailure(ctx context.Context, record *OutboxRecord, now int64, err error) (handled bool, markErr error) {
 	var q, what string
 	var args []any
+	var offPeak *protocol.OffPeakDeferral
 	switch {
+	case errors.As(err, &offPeak):
+		// 错峰推迟（ADR-0105 决策七）：与资源压力推迟同为"非失败"——不累加 attempts，否则等窗口的
+		// 几小时里记录会被当作反复失败送进死信。next_retry_at 直接设为窗口起点，避免 30s 空转轮询。
+		q, what = "UPDATE outbox SET status='failed', next_retry_at=?, updated_at=? WHERE id=?", "off-peak deferred"
+		args = []any{max(offPeak.Until.UnixMilli(), now+outboxDeferDelay.Milliseconds()), now, record.ID}
+		metrics.RecordOutboxDeferred(ctx, record.TargetEngine)
+		slog.DebugContext(ctx, "store/outbox: 错峰推迟处理", "outbox_id", record.ID, "target_engine", record.TargetEngine, "until", offPeak.Until)
 	case errors.Is(err, protocol.ErrBackgroundDeferred):
 		// 资源压力下推迟不是失败：不累加 attempts / crash_recovery_count，否则压力持续几轮
 		// 记录就会进死信、投影永久丢失（inv_M2_05）。置 failed 以便补充查询在游标之后仍能捡回。

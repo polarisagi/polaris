@@ -73,6 +73,8 @@ Session Span
 | `polaris_llm_calls_total` | CounterVec | model, tier, status |
 | `polaris_llm_call_latency_ms` | HistogramVec | model (ExponentialBuckets 100ms→51.2s) |
 | `polaris_tokens_consumed_total` | CounterVec | type (input/output/cache_hit/cache_miss) |
+| `polaris_llm_input_tokens_total` | CounterVec | purpose, provider（全部输入 token，含缓存命中；ADR-0105 决策八） |
+| `polaris_llm_cache_hit_tokens_total` | CounterVec | purpose, provider（其中命中前缀缓存的部分）。命中率由查询侧算 `rate(cache_hit)/rate(input)`，不导出 ratio gauge（ratio 不可跨实例/时间窗聚合） |
 | `polaris_kv_cache_hit_ratio` | GaugeVec | model, provider |
 | `polaris_api_cost_usd_total` | CounterVec | provider, model, call_type (llm/embedding) |
 | `polaris_llm_cache_hit_rate` | GaugeVec | provider, model | EMA（Exponential Moving Average，指数移动平均） 滑动窗口缓存命中率（进程内指导自适应） |
