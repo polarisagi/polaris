@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:489 对内调度 / 3:611 MCP / 6:629 (SOFT)降级 / 6-bis:642 已知Bug修复记录 / 7:654 跨模块契约 / 8:671 Web UI 规约 / 8.6:817 插件聚合市场DB+流 / 8.7:853 自动化中心DB+流+工作流 / 8.8:970 电脑操控权限+Preferences / 8.9:1010 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:489 对内调度 / 3:612 MCP / 6:630 (SOFT)降级 / 6-bis:643 已知Bug修复记录 / 7:655 跨模块契约 / 8:672 Web UI 规约 / 8.6:818 插件聚合市场DB+流 / 8.7:854 自动化中心DB+流+工作流 / 8.8:971 电脑操控权限+Preferences / 8.9:1011 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -559,7 +559,8 @@ TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatch
 - **重试**: 3次(100ms→500ms→2s); 失败→回退 Slack→Email; Email→本地(chat:stderr+BEL; serve:syslog CRITICAL+Web UI /_admin/alerts)
 - **上限**: min(HITL timeout×10%, 2min); 确定性失败不重试
 
-**HITLStore**: KV prefix scan 实现（`internal/automation/hitl/`，GatewayImpl）。`Put(hitl:pending:{id}) / Delete(hitl:pending:{id}) / Scan(hitl:pending: 前缀) / Put(hitl:archive:{id}:{ts})`。内存 waiters map 分发审批响应，不依赖 SQL 行状态机。
+**HITLStore**: `hitl_requests` 表（`044_hitl_requests.sql`，ADR-0104 决策五）；`internal/automation/hitl/`（GatewayImpl）经消费端接口 `RequestStore` 读写，实现 `internal/store/repo.SQLiteHITLRequestRepository`。一行一审批：`status ∈ pending|approved|denied|timeout|orphaned`，`decided_by ∈ human|auto_approve|auto_deny|trust_downgrade|timeout_kill|l3_gate`。`Respond` 用 `UPDATE … WHERE id=? AND status='pending'` 条件更新（未命中即拒绝，二次裁决幂等）；kill_pause 超时落 `timeout`；信任降级放行与 L3 门禁 P0 自动拒绝直接落终态行；启动期孤儿对账把遗留 pending 置 `orphaned`（`cmd/polaris/boot_orphan_reconciler.go`）。内存 waiters map 仍负责把裁决分发给阻塞中的 `Prompt`（channel 随进程消失，故重启后 pending 必为孤儿）。历史上的 KV `hitl:pending:*` / `hitl:archive:*` 已删除，不迁移。
+**TrustScorer**（GD-14-004）: 无内存状态，`ShouldDowngrade` 查 `hitl_requests`——同 `(checkpoint_type, agent_id)`、`decided_by='human'`、`decided_at` 在 Window 内且晚于最近一次人工 denied 的 approved 行数 ≥ MinApprovals；硬地板（TaintLevel≥Medium / RiskLevel≥3 / 设备操控 / l4_multi_sig / 无 AgentID）不参与，查表失败不降级（fail-closed）。
 
 **ApprovalRequest**:
 - `ID / AgentID / Action(string) / Detail(string) / RiskLevel(string) / CreatedAt / Timeout`（默认值见 `spec/state.yaml §m13_interface.hitl_default_deadline_minutes_normal`，紧急/长程档见同节 `_urgent` / `_long`，Per-TaskType 可覆盖）

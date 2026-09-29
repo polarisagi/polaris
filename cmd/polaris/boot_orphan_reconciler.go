@@ -20,7 +20,7 @@ const interruptedByRestart = "interrupted by restart"
 //
 // automations/workflows 的 last_run_status 改为 error 但不增加 failure_count、不动 circuit_open：
 // 重启不是业务失败，不能推动熔断；而调度查询 `last_run_status != 'running'` 依赖此处解除阻断。
-// 六条 UPDATE 同一事务，避免对账中途崩溃留下"run 已中断而父行仍 running"的半态。
+// 七条 UPDATE 同一事务，避免对账中途崩溃留下"run 已中断而父行仍 running"的半态。
 func reconcileOrphanRuns(ctx context.Context, db *sql.DB, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -53,6 +53,11 @@ func reconcileOrphanRuns(ctx context.Context, db *sql.DB, now time.Time) error {
 		{"planner_sessions",
 			`UPDATE planner_sessions SET status='failed', completed_at=? WHERE status='running'`,
 			[]any{nowMs}},
+		// HITL 待审的 waiter channel 随进程消失，遗留 pending 再也无法被裁决，
+		// 不置终态就是幽灵待审（Respond 只会得到 "not pending"）。
+		{"hitl_requests",
+			`UPDATE hitl_requests SET status='orphaned', decided_at=?, reason=? WHERE status='pending'`,
+			[]any{nowMs, interruptedByRestart}},
 	}
 	counts := make([]any, 0, len(steps)*2)
 	for _, st := range steps {

@@ -6,15 +6,17 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // 批准路径的前置校验与豁免令牌铸造（R7 拆分自 gateway.go）。
+// 令牌铸造由 respond 在条件更新抢占成功后调用，校验则在抢占之前。
 // Respond 主流程见 gateway.go；L3 回归门禁见 gateway_l3gate.go。
 
-// applyApprovalGuards 批准路径的前置校验：强制冷却期 + TaintExemptionToken 铸造。
+// applyApprovalGuards 批准路径的前置校验：待审行必须存在且仍为 pending + 强制冷却期；返回解析出的 prompt 供后续铸造令牌。
 //
 // **读取/解析失败一律 fail-closed 拒绝批准**（2026-08-06 修复）：
 // 此前是 `if err == nil { if json.Unmarshal(...) == nil { ... } }`，两层条件把
@@ -28,31 +30,33 @@ import (
 // 当作未满足处理。若确因超时导致 pending 已被清理，调用方会在后续
 // "no active waiter" 分支得到明确错误，而不是拿到一个绕过冷却的批准。
 func (g *GatewayImpl) applyApprovalGuards(
-	ctx context.Context, key []byte, checkpointID string, response types.HITLResponse,
-) error {
-	data, err := g.store.Get(ctx, key)
+	ctx context.Context, checkpointID string,
+) (types.HITLPrompt, error) {
+	row, err := g.store.Get(ctx, checkpointID)
 	if err != nil {
 		slog.ErrorContext(ctx, "hitl_gateway: cannot read pending record, refusing approval (fail-closed)",
 			"checkpoint", checkpointID, "err", err)
-		return apperr.Wrap(apperr.CodeForbidden,
+		return types.HITLPrompt{}, apperr.Wrap(apperr.CodeForbidden,
 			"hitl_gateway: cannot verify approval preconditions (pending record unreadable)", err)
 	}
+	if row.Status != repo.HITLStatusPending {
+		return types.HITLPrompt{}, apperr.New(apperr.CodeConflict,
+			"hitl_gateway: "+checkpointID+" is not pending (status="+row.Status+")")
+	}
 	var p types.HITLPrompt
-	if umErr := json.Unmarshal(data, &p); umErr != nil {
+	if umErr := json.Unmarshal([]byte(row.PromptJSON), &p); umErr != nil {
 		slog.ErrorContext(ctx, "hitl_gateway: pending record corrupted, refusing approval (fail-closed)",
 			"checkpoint", checkpointID, "err", umErr)
-		return apperr.Wrap(apperr.CodeForbidden,
+		return types.HITLPrompt{}, apperr.Wrap(apperr.CodeForbidden,
 			"hitl_gateway: cannot verify approval preconditions (pending record corrupted)", umErr)
 	}
 
 	// Task 21: 强制冷却期——未到 EligibleApproveTime 一律拒绝。
 	if p.EligibleApproveTime > 0 && time.Now().Unix() < p.EligibleApproveTime {
-		return apperr.New(apperr.CodeForbidden,
+		return types.HITLPrompt{}, apperr.New(apperr.CodeForbidden,
 			"hitl_gateway: mandatory cooldown active, please carefully read the shadow regression report before approving")
 	}
-
-	g.mintExemptionToken(ctx, p, checkpointID, response)
-	return nil
+	return p, nil
 }
 
 // mintExemptionToken 人工批准出口污点拦截后铸造 TaintExemptionToken（M04 §3 转义路径）。

@@ -268,7 +268,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	mktClient, _ := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTPClient)
 
-	hitlGateway := hitl.NewGateway(sb.Store)
+	hitlRequests := repo.NewSQLiteHITLRequestRepository(sb.Store.DB())
+	hitlGateway := hitl.NewGateway(hitlRequests)
 	hitlGateway.SetNotifier(hitl.NewChannelNotifier())
 	// 与上方 toolReg.WithExemptionVault 共享同一个 exemptionVault 实例：
 	// 铸造方（hitlGateway.Respond 审批通过时）与查询方（toolReg 下一次
@@ -281,7 +282,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	hitlGateway.SetTrustScorer(hitl.NewTrustScorer(hitl.TrustPolicy{
 		MinApprovals: sb.Cfg.Agent.HITLTrustMinApprovals,
 		Window:       time.Duration(sb.Cfg.Agent.HITLTrustWindowHours) * time.Hour,
-	}))
+	}, hitlRequests))
 
 	// V-4 核实：解决启动期循环依赖，在 hitlGateway 初始化后通过 SetOnKillSwitch
 	// 注入回 boot_substrate 阶段已实例化的 sb.Gate。

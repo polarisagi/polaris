@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -29,7 +30,8 @@ type Notifier interface {
 }
 
 type GatewayImpl struct {
-	store    protocol.Store
+	// store hitl_requests 账本（044）；待审/归档/信任历史同源，不再用 KV。
+	store    RequestStore
 	notifier Notifier
 	// hooks hooks.json 的 PermissionRequest / Notification（可为 nil）。
 	hooks PermissionHooks
@@ -77,7 +79,7 @@ func (g *GatewayImpl) SetL3RegressionDeps(runner protocol.EvalRunner, r Regressi
 	g.l3Cooldown = cooldown
 }
 
-func NewGateway(store protocol.Store) *GatewayImpl {
+func NewGateway(store RequestStore) *GatewayImpl {
 	return &GatewayImpl{
 		store:   store,
 		waiters: make(map[string]chan types.HITLResponse),
@@ -126,12 +128,19 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	// 批准达阈值后，降级为"通知"而非阻塞式审批，缓解审批疲劳。
 	// 默认关闭（未注入 trustScorer 或 MinApprovals<=0）；启用后也只降到通知，
 	// 且污点/高风险/设备操控/L4 晋升一律不参与（见 downgradeEligible）。
-	if g.trustScorer.ShouldDowngrade(p) {
-		slog.InfoContext(ctx, "hitl_gateway: downgraded to notification by trust score",
-			"checkpoint", p.ID, "checkpoint_type", p.CheckpointType, "agent_id", p.AgentID)
-		metrics.RecordHITLDecision(ctx, p.CheckpointType, "approved", "trust_downgrade")
-		g.notifyDowngraded(ctx, p)
-		return &types.HITLResponse{Approved: true, Reason: "auto_approved_by_trust_score"}, nil
+	if g.trustScorer.ShouldDowngrade(ctx, p) {
+		resp := types.HITLResponse{Approved: true, Reason: "auto_approved_by_trust_score"}
+		// 降级放行必须先落账再放行：审计留痕写不进去就不降级，退回正常人工审批（fail-closed）。
+		if err := g.recordTerminal(ctx, p, resp, repo.HITLStatusApproved, repo.HITLByTrustDowngrade); err != nil {
+			slog.ErrorContext(ctx, "hitl_gateway: trust downgrade audit write failed, falling back to human review",
+				"checkpoint", p.ID, "err", err)
+		} else {
+			slog.InfoContext(ctx, "hitl_gateway: downgraded to notification by trust score",
+				"checkpoint", p.ID, "checkpoint_type", p.CheckpointType, "agent_id", p.AgentID)
+			metrics.RecordHITLDecision(ctx, p.CheckpointType, "approved", "trust_downgrade")
+			g.notifyDowngraded(ctx, p)
+			return &resp, nil
+		}
 	}
 
 	// L3 全量回归门禁（仅 l4_multi_sig 候选触发，实现见 gateway_l3gate.go，R7 拆分）。
@@ -161,13 +170,12 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	}
 
 	// 1. 持久化 pending 状态
-	key := []byte("hitl:pending:" + p.ID)
-	data, err := json.Marshal(p)
+	row, err := newRequestRow(ctx, p)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "hitl_gateway: marshal failed", err)
+		return nil, err
 	}
-	if err := g.store.Put(ctx, key, data); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "hitl_gateway: put failed", err)
+	if err := g.store.Insert(ctx, row); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "hitl_gateway: insert failed", err)
 	}
 	if g.hooks != nil {
 		hooks, text := g.hooks, p.PromptText
@@ -221,19 +229,25 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 		case "auto_approve":
 			resp := types.HITLResponse{Approved: true, Reason: "auto_approved_on_timeout"}
 			metrics.RecordHITLDecision(ctx, p.CheckpointType, "approved", "auto_approve")
-			if err := g.Respond(context.Background(), p.ID, resp); err != nil {
+			if err := g.respond(context.Background(), p.ID, resp, repo.HITLByAutoApprove); err != nil {
 				slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
 			}
 			return &resp, nil
 		case "auto_deny":
 			resp := types.HITLResponse{Approved: false, Reason: "auto_denied_on_timeout"}
 			metrics.RecordHITLDecision(ctx, p.CheckpointType, "denied", "auto_deny")
-			if err := g.Respond(context.Background(), p.ID, resp); err != nil {
+			if err := g.respond(context.Background(), p.ID, resp, repo.HITLByAutoDeny); err != nil {
 				slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
 			}
 			return &resp, nil
 		default: // "kill_pause" 或未配置
 			metrics.RecordHITLDecision(ctx, p.CheckpointType, "denied", "timeout_kill_pause")
+			// 落 timeout 终态，否则该行永远停在 pending，成为 Pending() 里的幽灵待审。
+			// ctx 此刻已过期，须用独立 ctx；写失败只留痕（重启后由孤儿对账兜底）。
+			if _, dErr := g.store.Decide(context.WithoutCancel(ctx), p.ID, repo.HITLStatusTimeout,
+				repo.HITLByTimeoutKill, "timeout (kill_pause)", ""); dErr != nil {
+				slog.Error("hitl gateway: mark timeout failed", "pending_id", p.ID, "err", dErr)
+			}
 			return nil, ctx.Err() //nolint:wrapcheck // 调用方按 err == context.DeadlineExceeded 严格比较（见 hitl_test.go），须保留哨兵身份
 		}
 	case resp := <-ch:
@@ -244,9 +258,9 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 			decision = "approved"
 		}
 		metrics.RecordHITLDecision(ctx, p.CheckpointType, decision, "human")
-		// GD-14-004：只有**人工**决策参与信任累积。把自动放行也计入会形成
-		// 正反馈——降级产生的"通过"反过来加固降级依据，几轮后就没人在看了。
-		g.trustScorer.RecordDecision(p, resp.Approved)
+		// GD-14-004：信任累积直接从 hitl_requests 派生，且只认 decided_by='human'
+		// （Respond 已落账）。把自动放行也计入会形成正反馈——降级产生的"通过"反过来
+		// 加固降级依据，几轮后就没人在看了。
 		return &resp, nil
 	}
 }
@@ -343,32 +357,51 @@ func (g *GatewayImpl) SetPolicyEtag(etag string) {
 	g.mu.Unlock()
 }
 
-// Respond 提交人工审批决策。
+// Respond 提交人工审批决策（decided_by='human'）。
 func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response types.HITLResponse) error {
-	key := []byte("hitl:pending:" + checkpointID)
+	return g.respond(ctx, checkpointID, response, repo.HITLByHuman)
+}
+
+// respond 是裁决的唯一落账点。decidedBy 由调用方语义决定：人工接口=human，
+// 超时兜底=auto_approve/auto_deny——信任累积据此区分，不得混用。
+//
+// 顺序：批准前置校验（读行，fail-closed）→ 条件更新抢占 → 铸造豁免令牌 → 通知 waiter。
+// 条件更新未命中（已决/已超时/重启后被对账为 orphaned/不存在）即拒绝，
+// 令牌在抢占成功之后才铸造，避免"裁决没生效却已发出豁免"。
+func (g *GatewayImpl) respond(
+	ctx context.Context, checkpointID string, response types.HITLResponse, decidedBy string,
+) error {
+	var prompt types.HITLPrompt
+	status := repo.HITLStatusDenied
 	if response.Approved {
-		if err := g.applyApprovalGuards(ctx, key, checkpointID, response); err != nil {
+		status = repo.HITLStatusApproved
+		p, err := g.applyApprovalGuards(ctx, checkpointID)
+		if err != nil {
 			return err
 		}
+		prompt = p
 	}
 
-	// 1. 清理 pending
-	// （可选：可以验证记录是否存在）
-	if err := g.store.Delete(ctx, key); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "hitl_gateway: delete pending failed", err)
+	var respJSON string
+	if data, mErr := json.Marshal(response); mErr != nil {
+		slog.Error("hitl_gateway: response marshal failed, decision recorded without body",
+			"checkpoint", checkpointID, "err", mErr)
+	} else {
+		respJSON = string(data)
+	}
+	hit, err := g.store.Decide(ctx, checkpointID, status, decidedBy, response.Reason, respJSON)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "hitl_gateway: decide failed", err)
+	}
+	if !hit {
+		return apperr.New(apperr.CodeConflict,
+			fmt.Sprintf("hitl_gateway: %s is not pending (already decided, timed out or orphaned)", checkpointID))
+	}
+	if response.Approved {
+		g.mintExemptionToken(ctx, prompt, checkpointID, response)
 	}
 
-	// 2. 持久化归档记录 (audit)
-	archiveKey := []byte(fmt.Sprintf("hitl:archive:%s:%d", checkpointID, time.Now().UnixNano()))
-	archiveData, marshalErr := json.Marshal(response)
-	if marshalErr != nil {
-		slog.Error("hitl_gateway: archive marshal failed, skipping archive",
-			"checkpoint", checkpointID, "err", marshalErr)
-	} else if errArchive := g.store.Put(ctx, archiveKey, archiveData); errArchive != nil {
-		slog.Warn("hitl_gateway: archive record failed", "checkpoint", checkpointID, "err", errArchive)
-	}
-
-	// 3. 通知等待中的任务
+	// 通知等待中的任务
 	g.mu.Lock()
 	ch, ok := g.waiters[checkpointID]
 	if ok {
@@ -384,26 +417,21 @@ func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response
 	return nil
 }
 
-// Pending 返回当前所有待审批请求。
+// Pending 返回当前所有待审批请求（hitl_requests 中 status='pending'）。
 func (g *GatewayImpl) Pending(ctx context.Context) ([]types.HITLPrompt, error) {
-	iter, err := g.store.Scan(ctx, []byte("hitl:pending:"))
+	rows, err := g.store.ListPending(ctx)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "GatewayImpl.Pending", err)
 	}
-	defer iter.Close()
-
-	var prompts []types.HITLPrompt
-	for iter.Next() {
+	prompts := make([]types.HITLPrompt, 0, len(rows))
+	for _, row := range rows {
 		var p types.HITLPrompt
-		if err := json.Unmarshal(iter.Value(), &p); err != nil {
+		if err := json.Unmarshal([]byte(row.PromptJSON), &p); err != nil {
 			// L3：单条损坏的待审记录不应让其余待审请求不可见；留痕。
-			slog.WarnContext(ctx, "hitl_gateway: corrupt pending prompt skipped", "key", string(iter.Key()), "err", err)
+			slog.WarnContext(ctx, "hitl_gateway: corrupt pending prompt skipped", "id", row.ID, "err", err)
 			continue
 		}
 		prompts = append(prompts, p)
-	}
-	if err := iter.Err(); err != nil {
-		return prompts, apperr.Wrap(apperr.CodeInternal, "GatewayImpl.Pending: iterate", err)
 	}
 	return prompts, nil
 }

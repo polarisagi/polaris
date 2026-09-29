@@ -19,7 +19,7 @@ func newOrphanTestDB(t *testing.T) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
-	for _, f := range []string{"017_automations.sql", "029_workflows.sql", "031_planner_sessions.sql", "042_subagent_runs.sql"} {
+	for _, f := range []string{"017_automations.sql", "029_workflows.sql", "031_planner_sessions.sql", "042_subagent_runs.sql", "044_hitl_requests.sql"} {
 		ddl, err := schema.FS.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
@@ -57,6 +57,9 @@ func TestReconcileOrphanRuns(t *testing.T) {
 	mustExec(t, db, `INSERT INTO workflow_runs(id,workflow_id,status) VALUES('wr1','w1','running'),('wr2','w2','error')`)
 	mustExec(t, db, `INSERT INTO subagent_runs(id,entry,status,started_at) VALUES('s1','hook','running',1),('s2','hook','ok',1)`)
 	mustExec(t, db, `INSERT INTO planner_sessions(id,goal,task_type,status,created_at) VALUES('p1','g','general','running',1),('p2','g','general','done',1)`)
+
+	mustExec(t, db, `INSERT INTO hitl_requests(id,checkpoint_type,prompt_json,status,created_at) VALUES('h1','t','{}','pending',1),('h2','t','{}','pending',1)`)
+	mustExec(t, db, `INSERT INTO hitl_requests(id,checkpoint_type,prompt_json,status,decided_by,created_at,decided_at) VALUES('h3','t','{}','approved','human',1,2)`)
 
 	now := time.UnixMilli(1_800_000_000_000)
 	if err := reconcileOrphanRuns(ctx, db, now); err != nil {
@@ -98,6 +101,19 @@ func TestReconcileOrphanRuns(t *testing.T) {
 	}
 	if got := scalar[string](t, db, `SELECT status FROM planner_sessions WHERE id='p1'`); got != "failed" {
 		t.Errorf("planner_session: %s", got)
+	}
+
+	if got := scalar[string](t, db, `SELECT status FROM hitl_requests WHERE id='h1'`); got != "orphaned" {
+		t.Errorf("hitl pending 应转 orphaned: %s", got)
+	}
+	if got := scalar[string](t, db, `SELECT reason FROM hitl_requests WHERE id='h2'`); got != interruptedByRestart {
+		t.Errorf("hitl reason: %s", got)
+	}
+	if got := scalar[int64](t, db, `SELECT decided_at FROM hitl_requests WHERE id='h1'`); got != now.UnixMilli() {
+		t.Errorf("hitl decided_at: %d", got)
+	}
+	if got := scalar[string](t, db, `SELECT status FROM hitl_requests WHERE id='h3'`); got != "approved" {
+		t.Errorf("已决 hitl 行被误改: %s", got)
 	}
 
 	// 非 running 行不受影响。

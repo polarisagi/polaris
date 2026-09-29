@@ -2,152 +2,38 @@ package hitl
 
 import (
 	"context"
-	"strings"
-	"sync"
+	"database/sql"
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/apperr"
+	_ "modernc.org/sqlite"
+
+	"github.com/polarisagi/polaris/internal/protocol/schema"
+	storerepo "github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// mockStore 实现了 protocol.Store，用于单元测试
-type mockStore struct {
-	mu   sync.RWMutex
-	data map[string][]byte
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{data: make(map[string][]byte)}
-}
-
-func (m *mockStore) Get(ctx context.Context, key []byte) ([]byte, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if val, ok := m.data[string(key)]; ok {
-		return val, nil
+// newTestGateway 用真实 SQLite（内存库）+ 044 DDL 构造网关，测试与生产走同一条落账路径。
+func newTestGateway(t *testing.T) (*GatewayImpl, *sql.DB) {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return nil, apperr.New(apperr.CodeNotFound, "not found")
-}
-
-func (m *mockStore) Put(ctx context.Context, key, value []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.data[string(key)] = value
-	return nil
-}
-
-func (m *mockStore) Delete(ctx context.Context, key []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.data, string(key))
-	return nil
-}
-
-func (m *mockStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterator, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var keys []string
-	for k := range m.data {
-		if strings.HasPrefix(k, string(prefix)) {
-			keys = append(keys, k)
-		}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	ddl, err := schema.FS.ReadFile("044_hitl_requests.sql")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return &mockIterator{
-		store: m,
-		keys:  keys,
-		index: -1,
-	}, nil
-}
-
-func (m *mockStore) BatchWrite(ctx context.Context, ops []types.Op) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, op := range ops {
-		if op.Type == types.OpPut {
-			m.data[string(op.Key)] = op.Value
-		} else {
-			delete(m.data, string(op.Key))
-		}
+	if _, err := db.Exec(string(ddl)); err != nil {
+		t.Fatal(err)
 	}
-	return nil
+	return NewGateway(storerepo.NewSQLiteHITLRequestRepository(db)), db
 }
-
-func (m *mockStore) Txn(ctx context.Context, fn func(protocol.Transaction) error) error {
-	return fn(&mockTxn{store: m})
-}
-
-func (m *mockStore) Capabilities() types.StoreCapabilities {
-	return types.StoreCapabilities{}
-}
-
-func (m *mockStore) Close() error { return nil }
-
-type mockTxn struct {
-	store *mockStore
-}
-
-func (txn *mockTxn) Get(key []byte) ([]byte, error) {
-	txn.store.mu.RLock()
-	defer txn.store.mu.RUnlock()
-	if val, ok := txn.store.data[string(key)]; ok {
-		return val, nil
-	}
-	return nil, apperr.New(apperr.CodeNotFound, "not found")
-}
-
-func (txn *mockTxn) Put(key, value []byte) error {
-	txn.store.mu.Lock()
-	defer txn.store.mu.Unlock()
-	txn.store.data[string(key)] = value
-	return nil
-}
-
-func (txn *mockTxn) Delete(key []byte) error {
-	txn.store.mu.Lock()
-	defer txn.store.mu.Unlock()
-	delete(txn.store.data, string(key))
-	return nil
-}
-
-func (txn *mockTxn) Scan(prefix []byte) (protocol.Iterator, error) {
-	return txn.store.Scan(context.Background(), prefix)
-}
-
-type mockIterator struct {
-	store *mockStore
-	keys  []string
-	index int
-}
-
-func (it *mockIterator) Next() bool {
-	it.index++
-	return it.index < len(it.keys)
-}
-
-func (it *mockIterator) Key() []byte {
-	if it.index >= 0 && it.index < len(it.keys) {
-		return []byte(it.keys[it.index])
-	}
-	return nil
-}
-
-func (it *mockIterator) Value() []byte {
-	if it.index >= 0 && it.index < len(it.keys) {
-		it.store.mu.RLock()
-		defer it.store.mu.RUnlock()
-		return it.store.data[it.keys[it.index]]
-	}
-	return nil
-}
-
-func (it *mockIterator) Err() error   { return nil }
-func (it *mockIterator) Close() error { return nil }
 
 func TestGatewayImpl_PromptAndRespond(t *testing.T) {
-	store := newMockStore()
-	gw := NewGateway(store)
+	gw, _ := newTestGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -179,8 +65,7 @@ func TestGatewayImpl_PromptAndRespond(t *testing.T) {
 }
 
 func TestGatewayImpl_PromptTimeout(t *testing.T) {
-	store := newMockStore()
-	gw := NewGateway(store)
+	gw, _ := newTestGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -195,8 +80,7 @@ func TestGatewayImpl_PromptTimeout(t *testing.T) {
 // 电脑操控 checkpoint 在 full_access 权限模式下超时应兜底为 auto_approve，
 // 与"设置 → 设备操控 → 完全访问(上帝模式)"的产品承诺一致。
 func TestGatewayImpl_PromptTimeout_DeviceControlFullAccess(t *testing.T) {
-	store := newMockStore()
-	gw := NewGateway(store)
+	gw, _ := newTestGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -218,8 +102,7 @@ func TestGatewayImpl_PromptTimeout_DeviceControlFullAccess(t *testing.T) {
 // 模式下电脑操控 checkpoint 超时不受权限模式影响，维持既有 kill_pause 行为——
 // 这两个模式的产品语义是"高危操作需要人审"，超时不应被自动放行。
 func TestGatewayImpl_PromptTimeout_DeviceControlAutoReview(t *testing.T) {
-	store := newMockStore()
-	gw := NewGateway(store)
+	gw, _ := newTestGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -241,8 +124,7 @@ func TestGatewayImpl_PromptTimeout_DeviceControlAutoReview(t *testing.T) {
 // 完全依赖 DeadlineNs 自己建立截止时间，验证 Prompt() 确实会在 DeadlineNs
 // 指定的绝对时间点附近返回，而不是永久阻塞。
 func TestGatewayImpl_PromptTimeout_DeadlineNsIsAbsolute(t *testing.T) {
-	store := newMockStore()
-	gw := NewGateway(store)
+	gw, _ := newTestGateway(t)
 
 	done := make(chan struct{})
 	go func() {
@@ -265,8 +147,7 @@ func TestGatewayImpl_PromptTimeout_DeadlineNsIsAbsolute(t *testing.T) {
 // TaintLevel 硬地板优先级高于权限模式：即使 full_access，TaintLevel>=Medium
 // 时超时仍必须 auto_deny，防止被污染的 Agent 拿设备操控设置当挡箭牌。
 func TestGatewayImpl_PromptTimeout_DeviceControlFullAccessButTainted(t *testing.T) {
-	store := newMockStore()
-	gw := NewGateway(store)
+	gw, _ := newTestGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

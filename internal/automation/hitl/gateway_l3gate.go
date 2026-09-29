@@ -2,12 +2,11 @@ package hitl
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -61,7 +60,7 @@ func (g *GatewayImpl) applyL3RegressionGate(ctx context.Context, p *types.HITLPr
 
 // autoDenyOnP0Regression P0 回归失败时就地拒绝并归档。
 //
-// 刻意不经过 Respond（GR-10-001 修复）：此刻 pending 尚未写入 store、waiter
+// 刻意不经过 Respond（GR-10-001 修复）：此刻 pending 尚未写入账本、waiter
 // 尚未注册，Respond 会因 "no active waiter" 报错，归档与清理都不会发生。
 // 归档记录仍需落盘以保留审计轨迹。
 func (g *GatewayImpl) autoDenyOnP0Regression(ctx context.Context, p *types.HITLPrompt) *types.HITLResponse {
@@ -69,14 +68,8 @@ func (g *GatewayImpl) autoDenyOnP0Regression(ctx context.Context, p *types.HITLP
 	resp := types.HITLResponse{Approved: false, Reason: "auto_denied_p0_regression_failed"}
 	metrics.RecordHITLDecision(ctx, p.CheckpointType, "denied", "auto_denied_p0_regression")
 
-	archiveKey := []byte(fmt.Sprintf("hitl:archive:%s:%d", p.ID, time.Now().UnixNano()))
-	if archiveData, mErr := json.Marshal(resp); mErr == nil {
-		if aErr := g.store.Put(ctx, archiveKey, archiveData); aErr != nil {
-			slog.Warn("hitl_gateway: auto-deny archive failed", "checkpoint", p.ID, "err", aErr)
-		}
-	} else {
-		slog.Error("hitl_gateway: auto-deny archive marshal failed, skipping archive",
-			"checkpoint", p.ID, "err", mErr)
+	if aErr := g.recordTerminal(ctx, *p, resp, repo.HITLStatusDenied, repo.HITLByL3Gate); aErr != nil {
+		slog.Error("hitl_gateway: auto-deny archive failed", "checkpoint", p.ID, "err", aErr)
 	}
 	return &resp
 }

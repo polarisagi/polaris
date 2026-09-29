@@ -1,7 +1,8 @@
 package hitl
 
 import (
-	"sync"
+	"context"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -25,6 +26,8 @@ import (
 //     resolveTimeoutAction 中的既有地板保持同一组条件，不新增例外。
 //  4. 信任只在"同一 (checkpoint_type, agent) 且近期人工批准率 100%"时累积；
 //     出现任何一次人工拒绝立即清零，重新开始累积。
+//  5. 信任是 hitl_requests 的派生视图（ADR-0104 决策五）：不持内存计数，重启不归零，
+//     且与审计记录同源；查表失败不降级（fail-closed）。
 //
 // 观测先行的关系：polaris.hitl.decisions_total 提供的是**是否需要**开启
 // 降级的判断依据（哪些 checkpoint_type 的 human 批准率长期接近 100%），
@@ -40,85 +43,57 @@ type TrustPolicy struct {
 	Window time.Duration
 }
 
-// trustKey 信任累积的粒度：同一 Agent 对同一类 checkpoint 的历史。
-// 刻意不含具体目标资源——粒度过细会导致信任永远累积不起来，
-// 粒度过粗（只按 checkpoint_type）又会让 A Agent 的批准记录惠及 B Agent。
-type trustKey struct {
-	checkpointType string
-	agentID        string
+// TrustHistory 信任累积的查询契约（消费端声明，HE-3）。
+// 信任不再持内存计数：它是 hitl_requests 的派生视图，与审计记录同源，重启不归零。
+type TrustHistory interface {
+	// CountHumanApprovals 返回 (checkpoint_type, agent_id) 在 sinceMs 之后、
+	// 且晚于最近一次**人工拒绝**的人工批准行数（decided_by='human' 才计）。
+	// 粒度刻意不含具体目标资源：过细则信任永远累积不起来，过粗（只按 checkpoint_type）
+	// 又会让 A Agent 的批准记录惠及 B Agent。
+	CountHumanApprovals(ctx context.Context, checkpointType, agentID string, sinceMs int64) (int, error)
 }
 
-type trustEntry struct {
-	approvals int
-	updatedAt time.Time
-}
-
-// TrustScorer 累积人工批准记录并判定是否可降级为通知。
+// TrustScorer 基于 hitl_requests 判定是否可降级为通知。
 // 所有方法 nil-safe：未注入时 ShouldDowngrade 恒返回 false（等价于机制关闭）。
 type TrustScorer struct {
-	policy TrustPolicy
-
-	mu      sync.Mutex
-	entries map[trustKey]*trustEntry
+	policy  TrustPolicy
+	history TrustHistory
 }
 
-// NewTrustScorer 构造信任评分器。policy.MinApprovals<=0 时机制关闭。
-func NewTrustScorer(policy TrustPolicy) *TrustScorer {
+// NewTrustScorer 构造信任评分器。policy.MinApprovals<=0 或 history==nil 时机制关闭。
+func NewTrustScorer(policy TrustPolicy, history TrustHistory) *TrustScorer {
 	if policy.Window <= 0 {
 		policy.Window = 24 * time.Hour
 	}
-	return &TrustScorer{policy: policy, entries: make(map[trustKey]*trustEntry)}
+	return &TrustScorer{policy: policy, history: history}
 }
 
 // Enabled 报告机制是否启用。
 func (s *TrustScorer) Enabled() bool {
-	return s != nil && s.policy.MinApprovals > 0
-}
-
-// RecordDecision 记录一次**人工**审批结果。
-// 只接受人工决策——把自动放行/自动拒绝计入信任累积会形成正反馈：
-// 降级产生的"通过"又反过来加固降级依据，几轮之后就没人在看了。
-func (s *TrustScorer) RecordDecision(p types.HITLPrompt, approved bool) {
-	if !s.Enabled() {
-		return
-	}
-	k := trustKey{checkpointType: p.CheckpointType, agentID: p.AgentID}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !approved {
-		// 任何一次人工拒绝都意味着"这类请求仍需人看"，信任立即清零。
-		delete(s.entries, k)
-		return
-	}
-	e, ok := s.entries[k]
-	if !ok || time.Since(e.updatedAt) > s.policy.Window {
-		s.entries[k] = &trustEntry{approvals: 1, updatedAt: time.Now()}
-		return
-	}
-	e.approvals++
-	e.updatedAt = time.Now()
+	return s != nil && s.policy.MinApprovals > 0 && s.history != nil
 }
 
 // ShouldDowngrade 判定本次审批可否降级为通知（不阻塞、只告知）。
 //
 // 返回 true 仅表示"降级为通知"，绝不表示"静默放行"——调用方仍须把这次
-// 操作以通知形式告知用户，并记入审计。
-func (s *TrustScorer) ShouldDowngrade(p types.HITLPrompt) bool {
+// 操作以通知形式告知用户，并落账 decided_by='trust_downgrade'。
+//
+// 查表失败一律不降级（fail-closed）：这是安全边界，无法确认信任历史时必须回到人工审批。
+func (s *TrustScorer) ShouldDowngrade(ctx context.Context, p types.HITLPrompt) bool {
 	if !s.Enabled() {
 		return false
 	}
 	if !downgradeEligible(p) {
 		return false
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.entries[trustKey{checkpointType: p.CheckpointType, agentID: p.AgentID}]
-	if !ok || time.Since(e.updatedAt) > s.policy.Window {
+	since := time.Now().Add(-s.policy.Window).UnixMilli()
+	n, err := s.history.CountHumanApprovals(ctx, p.CheckpointType, p.AgentID, since)
+	if err != nil {
+		slog.ErrorContext(ctx, "hitl_trust: history query failed, not downgrading (fail-closed)",
+			"checkpoint_type", p.CheckpointType, "agent_id", p.AgentID, "err", err)
 		return false
 	}
-	return e.approvals >= s.policy.MinApprovals
+	return n >= s.policy.MinApprovals
 }
 
 // downgradeEligible 硬地板：哪些审批**永远**不参与自适应降级。

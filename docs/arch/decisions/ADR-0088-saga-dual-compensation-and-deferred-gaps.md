@@ -111,6 +111,8 @@ B 之所以删除而非接线补活：`UndoFn` 是挂在**工具定义**上的�
 
 不可放宽的设计约束：默认 `MinApprovals=0` 即完全关闭；启用后**只降级为通知**，永不静默放行；污点 ≥ TaintMedium / RiskLevel ≥ 3 / 设备操控 / L4 晋升 / 无法归因到具体 Agent 一律不参与（`downgradeEligible`，与 `resolveTimeoutAction` 的地板保持同一组条件）；任何一次人工拒绝立即清零信任；只有**人工**决策参与累积——把自动放行计入会形成正反馈，几轮后就没人在看了。
 
+> 2026-09-29 追记（事实订正，ADR-0104 决策五）：上文"任何一次人工拒绝立即清零信任 / 只有人工决策参与累积"的约束不变，但**实现载体已变**——`TrustScorer` 不再持内存 map（原实现重启归零、且与审计记录不同源），改为直接查 `hitl_requests`（`044_hitl_requests.sql`）：同 `(checkpoint_type, agent_id)`、`decided_by='human'`、Window 内且晚于最近一次人工拒绝的批准行数 ≥ `MinApprovals`。`RecordDecision` 随之删除（落账由 `Respond` 完成）；降级放行现在落 `decided_by='trust_downgrade'` 行；查表失败不降级（fail-closed）。
+
 ### 新增决策五：跨 Agent Saga 协调补齐并发扇出路径
 
 `StateGraphExecutor`（Parallel / MapReduce / Sequential 的共同底座）一直声明并校验 `WorkflowNodeSpec.Compensation`，却从未在任何失败路径上执行过补偿——节点失败时只返回错误，已成功兄弟节点的副作用无人回滚。而"部分成功部分失败"恰是并发扇出的常态，不是边界情况。
