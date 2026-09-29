@@ -28,7 +28,7 @@ add | F-12 | tools/panic_lint.go | internal/tool/sandbox/zz_selftest_panic.go | 
 
 # ── patch 模式：盯住特定位置的规则 ───────────────────────────────────────────
 # F-2：把 Capability Token 校验收窄回「仅 Privileged」，即 inv_M7_01 的后门形态。
-patch | F-2 | tools/no_backdoor_lint.go | internal/sandbox/envelope.go | if RequiresCapabilityToken(req.Tool.Capability) && req.Kind != KindHookExecute { | if req.Tool.Capability >= types.CapPrivileged {
+patch | F-2 | tools/no_backdoor_lint.go | internal/sandbox/envelope.go | if RequiresCapabilityToken(req.Tool.Capability) { | if req.Tool.Capability >= types.CapPrivileged {
 
 # L-17：拆掉 Authorize 里的 PolicyGate fail-closed 判定。
 # 2026-08-17 从 Makefile 的恒绿 policy-gate-check 目标搬进 no_backdoor_lint 后补的负向用例——
