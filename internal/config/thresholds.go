@@ -72,6 +72,10 @@ type M1RouterThresholds struct {
 	AnthropicCacheTTL string `toml:"anthropic.cache_ttl"` // "5m"
 	// OpenAIPromptCacheRetention: prompt_cache_retention，""=不发送，"in_memory"|"24h"。
 	OpenAIPromptCacheRetention string `toml:"openai.prompt_cache_retention"` // ""
+	// 非首部 system 消息内联（ADR-0105 决策一）：true=只有开头连续的 system 进 system/systemInstruction 参数，
+	// 其后的 system（L3 阶段层）原位转 user 角色 <system_instruction> 块，使阶段模板落在 L2 历史之后。
+	AnthropicInlineNonLeadingSystem bool `toml:"anthropic.inline_nonleading_system"` // true
+	GoogleInlineNonLeadingSystem    bool `toml:"google.inline_nonleading_system"`    // true
 }
 
 // Validate 校验 M1 中的缓存枚举字段，错误在加载时失败而非运行时被上游拒绝。
@@ -439,6 +443,9 @@ func DefaultThresholds() Thresholds {
 			EmbedLowMaxBatchSize:     8,
 			EmbedCallTimeoutSeconds:  30,
 			AnthropicCacheTTL:        "5m",
+
+			AnthropicInlineNonLeadingSystem: true,
+			GoogleInlineNonLeadingSystem:    true,
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,

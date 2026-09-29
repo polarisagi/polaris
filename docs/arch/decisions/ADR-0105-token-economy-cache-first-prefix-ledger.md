@@ -150,6 +150,7 @@
 |------|------|
 | 2026-09-29 | 初稿（Proposed） |
 | 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
+| 2026-09-30 | WP6 落地（决策一/三，Anthropic/Gemini 适配器）：新增 `m1_router.anthropic.inline_nonleading_system` / `m1_router.google.inline_nonleading_system`（默认 true）。开启时仅**开头连续**的 system 消息进 `system`/`systemInstruction`，其后的 system（L3 阶段层）原位转 user 角色 `<system_instruction>\n…\n</system_instruction>` 文本块，与相邻 user 内容合并以满足 user/assistant（Gemini：user/model）交替；tool_result/functionResponse 块前置于合并后的 user 轮首，不破坏与 tool_use/functionCall 的相邻关系；`CacheBreakpoint` 落在被合并消息对应的内容块上（末条与层断点同处一条消息时占两个名额，总数仍 ≤4）。适配器对所有非内联来源的 user 文本/tool_result 字符串无条件转义 `<system_instruction>` 标签字面（全角＜）——`taint.Spotlighting` 仅对 TaintMedium+ 生效，TaintLow/None 的 user 输入与 Parts 不经围栏。关闭时请求体与改动前字节一致（有回归测试）。实现见 `internal/llm/adapter/{inline_system,anthropic_inline}.go`、`google_request.go` |
 
 ### WP4 实施追记（2026-09-30）
 

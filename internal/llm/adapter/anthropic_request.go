@@ -29,8 +29,13 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 	// 记录其在 systemParts / msgs 中的下标；无任何置位时走下方内置启发式。
 	flagSys := map[int]bool{}
 	flagMsg := map[int]bool{}
+	// flagBlk 仅内联模式使用：被置位消息中断点应落的 content block 下标（合并后块级定位）。
+	flagBlk := map[int][]int{}
+	var ents []anthropicEntry
+	leading := true
 	for _, m := range req.Messages {
-		if m.Role == "system" {
+		// 关闭内联：所有 system 都进 system 参数（旧行为）；开启：只有开头连续的 system 进入。
+		if m.Role == "system" && (leading || !a.inlineNonLeadingSystem) {
 			system += m.Content + "\n"
 			if t := strings.TrimSpace(m.Content); t != "" {
 				systemParts = append(systemParts, t)
@@ -40,30 +45,22 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 			}
 			continue
 		}
+		leading = false
+		if a.inlineNonLeadingSystem {
+			ents = appendAnthropicEntry(ents, m)
+			continue
+		}
 		if m.CacheBreakpoint {
 			flagMsg[len(msgs)] = true
 		}
 		if len(m.Parts) > 0 {
-			var contentBlocks []any
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case types.ImagePart:
-					contentBlocks = append(contentBlocks, map[string]any{
-						"type": "image",
-						"source": map[string]any{
-							"type":       "base64",
-							"media_type": v.MediaType,
-							"data":       base64.StdEncoding.EncodeToString(v.Data),
-						},
-					})
-				default:
-					contentBlocks = append(contentBlocks, v)
-				}
-			}
-			msgs = append(msgs, map[string]any{"role": m.Role, "content": contentBlocks})
+			msgs = append(msgs, map[string]any{"role": m.Role, "content": anthropicPartBlocks(m.Parts)})
 		} else {
 			msgs = append(msgs, map[string]any{"role": m.Role, "content": m.Content})
 		}
+	}
+	if a.inlineNonLeadingSystem {
+		msgs, flagMsg, flagBlk = renderAnthropicEntries(ents)
 	}
 
 	payload := map[string]any{
@@ -124,7 +121,7 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 	//   断点 3: 最后一条非 system 消息（本轮增量）。
 	// 无标记时回退旧启发式：末个 system block + 最近 2 条非 system 消息。
 	if a.enablePromptCaching {
-		a.applyPromptCaching(payload, msgs, systemParts, flagSys, flagMsg)
+		a.applyPromptCaching(payload, msgs, systemParts, flagSys, flagMsg, flagBlk)
 	}
 
 	b, err := json.Marshal(payload)
@@ -166,7 +163,7 @@ func (a *AnthropicAdapter) anthropicCacheMarker() map[string]string {
 const maxAnthropicBreakpoints = 4
 
 // applyPromptCaching 按 ADR-0105 决策一的层对齐向 payload 注入 cache_control 断点，总数不超过 4。
-func (a *AnthropicAdapter) applyPromptCaching(payload map[string]any, msgs []map[string]any, systemParts []string, flagSys, flagMsg map[int]bool) {
+func (a *AnthropicAdapter) applyPromptCaching(payload map[string]any, msgs []map[string]any, systemParts []string, flagSys, flagMsg map[int]bool, flagBlk map[int][]int) {
 	marker := a.anthropicCacheMarker()
 	used := 0
 	if len(systemParts) > 0 {
@@ -177,7 +174,11 @@ func (a *AnthropicAdapter) applyPromptCaching(payload map[string]any, msgs []map
 		used++
 	}
 
-	markSys, markMsg := pickBreakpoints(len(msgs), len(systemParts), flagSys, flagMsg, maxAnthropicBreakpoints-used)
+	budget := maxAnthropicBreakpoints - used
+	if lastMsgNeedsTwoBreakpoints(msgs, flagMsg, flagBlk) {
+		budget-- // 末条消息既是"最后一条"又带一个非末尾的层断点块：占两个名额
+	}
+	markSys, markMsg := pickBreakpoints(len(msgs), len(systemParts), flagSys, flagMsg, budget)
 	if len(systemParts) > 0 {
 		markSys[0] = true
 		blocks := make([]map[string]any, len(systemParts))
@@ -190,9 +191,51 @@ func (a *AnthropicAdapter) applyPromptCaching(payload map[string]any, msgs []map
 		payload["system"] = blocks
 	}
 	for i := range msgs {
-		if markMsg[i] {
-			applyMsgCacheControl(msgs[i], marker)
+		if !markMsg[i] {
+			continue
 		}
+		blks := flagBlk[i]
+		// 无块级定位（旧路径/未合并）或该条是"最后一条"或走旧启发式时，打在末块；
+		// 被置位且有块级定位的消息，断点落在其对应内容块上。
+		lastPick := len(blks) == 0 || i == len(msgs)-1 || len(flagMsg) == 0
+		markMsgBlocks(msgs[i], marker, blks, lastPick)
+	}
+}
+
+// lastMsgNeedsTwoBreakpoints 判断末条消息是否带有落在非末块上的层断点（内联合并后 L2 末的 user 块
+// 与 L3/L4 内联块同处一条 user 消息时出现）。
+func lastMsgNeedsTwoBreakpoints(msgs []map[string]any, flagMsg map[int]bool, flagBlk map[int][]int) bool {
+	n := len(msgs)
+	if n == 0 || !flagMsg[n-1] {
+		return false
+	}
+	blks := flagBlk[n-1]
+	content, ok := msgs[n-1]["content"].([]any)
+	return ok && len(blks) > 0 && blks[len(blks)-1] != len(content)-1
+}
+
+// markMsgBlocks 在 blks 指定的 content block 上写 cache_control；lastPick 时另在末块写。
+// 写入前复制被标记的 block map，避免污染调用方持有的 Parts。
+func markMsgBlocks(msg map[string]any, marker map[string]string, blks []int, lastPick bool) {
+	if content, ok := msg["content"].([]any); ok && len(blks) > 0 {
+		nc := append([]any(nil), content...)
+		for _, j := range blks {
+			if j < 0 || j >= len(nc) {
+				continue
+			}
+			if bm, ok := nc[j].(map[string]any); ok {
+				cp := make(map[string]any, len(bm)+1)
+				for k, v := range bm {
+					cp[k] = v
+				}
+				cp["cache_control"] = marker
+				nc[j] = cp
+			}
+		}
+		msg["content"] = nc
+	}
+	if lastPick {
+		applyMsgCacheControl(msg, marker)
 	}
 }
 
@@ -295,4 +338,26 @@ func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		cred.RecordResult(nil)
 	}
 	return resp, nil
+}
+
+// anthropicPartBlocks 把 Message.Parts 转成 Anthropic content blocks：ImagePart → base64 image，
+// 其余（text/tool_use/tool_result 的 map）原样透传。
+func anthropicPartBlocks(parts []any) []any {
+	var contentBlocks []any
+	for _, p := range parts {
+		switch v := p.(type) {
+		case types.ImagePart:
+			contentBlocks = append(contentBlocks, map[string]any{
+				"type": "image",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": v.MediaType,
+					"data":       base64.StdEncoding.EncodeToString(v.Data),
+				},
+			})
+		default:
+			contentBlocks = append(contentBlocks, v)
+		}
+	}
+	return contentBlocks
 }
