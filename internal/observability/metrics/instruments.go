@@ -16,9 +16,14 @@ import (
 
 var (
 	// M1 LLM 调用
-	InstrLLMCallsTotal       metric.Int64Counter
-	InstrLLMLatencyMs        metric.Float64Histogram
-	InstrTokensTotal         metric.Int64Counter
+	InstrLLMCallsTotal metric.Int64Counter
+	InstrLLMLatencyMs  metric.Float64Histogram
+	InstrTokensTotal   metric.Int64Counter
+	// InstrLLMInputTokens / InstrLLMCacheHitTokens（ADR-0105 决策八）：按 purpose+provider 切分的
+	// 输入 token 与其中的前缀缓存命中 token。命中率由查询侧算
+	// rate(cache_hit)/rate(input)——比导出 ratio gauge 正确（ratio 不可跨实例/时间窗聚合）。
+	InstrLLMInputTokens      metric.Int64Counter
+	InstrLLMCacheHitTokens   metric.Int64Counter
 	InstrAPIcostUSD          metric.Float64Counter
 	InstrBurnStage3Total     metric.Int64Counter
 	InstrLLMCacheHitRate     metric.Float64Histogram // (ISSUE-04)

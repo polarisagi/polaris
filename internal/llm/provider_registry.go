@@ -109,7 +109,7 @@ func (r *ProviderRegistry) Register(name, displayName string, p protocol.Provide
 
 // newEntry 构造条目并套上 llm_calls 记账包装。记账队列经原子指针读取，注入顺序无关。
 func (r *ProviderRegistry) newEntry(name, displayName, role string, p protocol.Provider) *providerEntry {
-	e := newProviderEntry(name, displayName, &usageRecordingProvider{Provider: p, name: name, sink: &r.usage, cache: &r.cache}, r.cfg)
+	e := newProviderEntry(name, displayName, &usageRecordingProvider{Provider: p, name: name, sink: &r.usage, cache: &r.cache, inputExcludesCache: usageExcludesCache(p)}, r.cfg)
 	e.raw = p
 	e.role = role
 	return e
