@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -120,14 +121,17 @@ func splitAPIKeys(raw string) []string {
 func buildProviderAdapter(typ, baseURL, modelID, projectID, location string, credPool *llm.CredentialPool, httpClient *http.Client, tbr *metrics.TokenBurnRate) protocol.Provider {
 	switch typ {
 	case "openai_compat":
-		return llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr)
+		m1 := config.CurrentThresholds().M1Router
+		return llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr,
+			llmadapter.WithOpenAIPromptCacheRetention(m1.OpenAIPromptCacheRetention))
 	case "anthropic":
 		// WithAnthropicPromptCaching：向首/末 system block + 最近
 		// 2 条非 system 消息注入 cache_control:{type:"ephemeral"} 断点，命中时
 		// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
 		// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现
 		// 但从未有调用方传入该 Option，一直处于未激活状态。
-		return llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching())
+		return llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching(),
+			llmadapter.WithAnthropicCacheTTL(config.CurrentThresholds().M1Router.AnthropicCacheTTL))
 	case "deepseek":
 		return llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr)
 	case "google_agent_platform":
