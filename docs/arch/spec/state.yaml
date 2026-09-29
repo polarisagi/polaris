@@ -882,6 +882,8 @@ thresholds:
     embed_call_timeout_seconds: 30   # toml:"embed.call_timeout_s"，单次下游调用上限
     anthropic_cache_ttl: 5m          # toml:"anthropic.cache_ttl"，ADR-0105 决策三；5m|1h（写入 1.25×/2×，读 0.1×）；1h 仅在会话间隔常超 5 分钟时划算
     openai_prompt_cache_retention: "" # toml:"openai.prompt_cache_retention"，ADR-0105 决策三；""=不发送（服务端决定），in_memory|24h；仅对声明 SupportsPromptCacheKey 的 Provider 生效
+    anthropic_inline_nonleading_system: true # toml:"anthropic.inline_nonleading_system"，ADR-0105 决策一；true=仅开头连续 system 进 system 参数，其后 system 转 user 角色 <system_instruction> 块留在原位（阶段层落在历史之后，断点与五层账本对齐）；false=全部提到 system 参数（旧行为）
+    google_inline_nonleading_system: true    # toml:"google.inline_nonleading_system"，同上，对应 systemInstruction
     re_eval_when:
       - embed_low_max_batch_size: ["backend_parallel_embed_supported", "backfill_backlog>1h"]
       - circuit_breaker_failure_count: ["false_open_rate>0.05", "miss_open_drift_p95"]

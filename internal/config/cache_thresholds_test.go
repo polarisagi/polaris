@@ -42,3 +42,15 @@ func TestM1CacheThresholds_DefaultsAndValidate(t *testing.T) {
 		t.Fatal("非法 retention 必须在加载期报错")
 	}
 }
+
+// ADR-0105 决策一：非首部 system 内联开关默认开启（内核主路径依赖 L3 阶段层位置），
+// bool 无非法取值，Validate 不需额外分支。
+func TestM1InlineNonLeadingSystem_DefaultsOn(t *testing.T) {
+	d := DefaultThresholds()
+	if !d.M1Router.AnthropicInlineNonLeadingSystem || !d.M1Router.GoogleInlineNonLeadingSystem {
+		t.Fatalf("anthropic/google.inline_nonleading_system 默认应为 true：%+v", d.M1Router)
+	}
+	if err := d.M1Router.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

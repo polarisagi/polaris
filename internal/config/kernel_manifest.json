@@ -85,7 +85,7 @@
   "internal/config/integrity_check.go": "887c7694dd34ec9eec2fd8d1e149219c70f80524169dafd90925a4f486f8914d",
   "internal/config/layout.go": "a87a9119ede8501fd20d2777dad0a2c5a4e09a5873ee75c3dc0add0d2e23a724",
   "internal/config/runtime.go": "25eec2bf54acae957d109fa49066373e1eab97bd8869b1d98a5601b0c1a05cb9",
-  "internal/config/thresholds.go": "41fb97745a6f894c8ca874641505f017055e878a7a3f712a51418cecf137cb37",
+  "internal/config/thresholds.go": "7f60b20abb1d837b04a8d13c077da2602cad0747c4fc0047767e98d1a27aadc9",
   "internal/config/trusted_publishers.go": "5c15ac406c5cc1911b63aa0f998db38a6fe8cea660e93b61747802316b37bd22",
   "internal/execute/dag/executor.go": "4d43c1bc7cc395273cddc9a18f68b8761dbf7d8ca9cd90a7fcb456485a463de6",
   "internal/execute/dag/executor_node.go": "000f3c101434c0c731503bb07a1f987392e306d4fa8d1b4556b2992eba43eab8",

@@ -30,3 +30,5 @@ window_breaker_cooldown_sec = 30
 'embed.call_timeout_s' = 30
 'anthropic.cache_ttl' = '5m'
 'openai.prompt_cache_retention' = ''
+'anthropic.inline_nonleading_system' = true
+'google.inline_nonleading_system' = true
