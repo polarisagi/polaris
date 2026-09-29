@@ -86,28 +86,22 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending
     ON outbox(id) WHERE status = 'pending';
 
 -- ----------------------------------------------------------------------------
--- inbox_cursors: Worker 消费游标 —— 单调性防护
+-- consumer_cursors: 统一消费游标表 —— 单调性防护（ADR-0104 决策九）
 -- ----------------------------------------------------------------------------
--- 架构角色: 记录每个消费者的消费进度。Worker 在消费后同事务推进游标，
---          通过 WHERE excluded.last_seq_id > inbox_cursors.last_seq_id 保证单调性。
--- 生产者:    M2 OutboxWorker（消费后更新）
--- 消费者:    M2 OutboxWorker（启动时读取恢复消费位置）
+-- 架构角色: 记录每个消费者的消费进度（高水位）。原 inbox_cursors（全仓零引用）与
+--          learning_cursors 并入本表，consumer_id 自由命名，合法值由各写入方
+--          在 Go 侧白名单校验。
+-- 已知 consumer_id: learning.task | learning.version | learning.heuristic |
+--                   learning.eval | memory_agent.whisper
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS inbox_cursors (
+CREATE TABLE IF NOT EXISTS consumer_cursors (
     consumer_id   TEXT PRIMARY KEY,
-    -- ↑ 消费者标识。如 'outbox_worker_main' | 'outbox_worker_pebble'。
+    -- ↑ 消费者标识，如 'learning.task' | 'memory_agent.whisper'。
 
-    last_seq_id   INTEGER NOT NULL,
-    -- ↑ 已消费的最后一条 outbox.id。重启时从此位置 + 1 继续消费。
+    last_seq      INTEGER NOT NULL,
+    -- ↑ 已消费的最后一条序号。重启时从此位置之后继续消费。
 
     updated_at    INTEGER NOT NULL
     -- ↑ 最后更新时间（Unix 毫秒）。
-);
-
--- 原子推进游标: 强制单调性——新 seq_id 必须大于旧 seq_id
--- INSERT INTO inbox_cursors (consumer_id, last_seq_id, updated_at) VALUES (?, ?, ?)
--- ON CONFLICT(consumer_id) DO UPDATE SET
---     last_seq_id = excluded.last_seq_id,
---     updated_at = excluded.updated_at
--- WHERE excluded.last_seq_id > inbox_cursors.last_seq_id;
+) STRICT;

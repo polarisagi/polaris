@@ -52,7 +52,6 @@ func (m *mockMemory) EpisodicProjectOf(ctx context.Context, id string) (string, 
 	return p, ok
 }
 func (m *mockMemory) AddWorkingContext(ctx context.Context, text string) error { return nil }
-func (m *mockMemory) SetWorkingScratch(key string, val []byte)                 {}
 func (m *mockMemory) ImmutableCore() protocol.ImmutableCore                    { return m.working.Immutable() }
 func (m *mockMemory) ListCoreMemory(ctx context.Context, agentID, sessionID string) ([]types.CoreMemoryBlock, error) {
 	return nil, nil

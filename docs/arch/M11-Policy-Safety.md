@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:233 Cedar / 4:301 KillSwitch / 5:379 隐私 / 6:450 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:477 Factuality / 7:503 审计 / 8:527 多Agent宪法 / 9:563 威胁监控 / 13:577 降级 / 14:609 跨模块契约 / 15:628 任意文件读 / 16:637 流式安全防护 -->
+<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:233 Cedar / 4:301 KillSwitch / 5:379 隐私 / 6:451 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:478 Factuality / 7:504 审计 / 8:528 多Agent宪法 / 9:564 威胁监控 / 13:578 降级 / 14:610 跨模块契约 / 15:629 任意文件读 / 16:638 流式安全防护 -->
 
 ---
 
@@ -397,12 +397,13 @@ approval:
 **PIIGuard 双向防护**: PIIGuard 同时在输入端（M4→M7 工具参数 SecureUnredact 之前）和输出端（M7 ToolResult→EventLog PostExecution Redact，M7 §4.3 Step 5）工作。输入端阻止 PII 进入 LLM Provider，输出端阻止 PII 进入不可变审计轨迹。Tier 0 仅保证结构化 PII 模式检测覆盖两端。
 
 **SessionPIIVault**（实现：`internal/agent/context/pii_vault.go`）:
-- `Snapshot(ctx, taskID, fields map[string]string)` → 逐字段 AES-256-GCM 加密写入 `preferences` 表（key=`pii_vault:{taskID}:{field}`，TTL=1h）
-- `RestoreFromSnapshot(ctx, taskID)` → 读 preferences 表解密，写回 WorkingMemory.Scratch
-- `SecureZero(ctx, taskID)` → `DELETE FROM preferences WHERE key LIKE 'pii_vault:{taskID}:%'`
+- `Snapshot(ctx, taskID, fields map[string]string)` → 逐字段 AES-256-GCM 加密写入 `task_pii_vault` 表（046，PK=(task_id, field)，TTL=1h）
+- `Load(ctx, taskID)` → 解密返回未过期字段
+- `RestoreFromSnapshot(ctx, taskID)` → 仅校验快照仍在（缺失告警）；恢复后的任务意图取自 tasks 表，全仓无消费方读取快照明文，不再写全局 Scratch
+- `SecureZero(ctx, taskID)` → `DELETE FROM task_pii_vault WHERE task_id = ?`
 
-  当前边界：PII 字段直接存入 preferences 表（持久化），TTL 1h 自动过期。
-  **文档纠正（原"VFS blob 路径存储已实现"为失实表述，已核实并移除死代码）**：此前本节声称 `internal/vfs/provider.go` 的 `BlobStore`（content-addressed `vfs://<hash>` blob 存储）"已作为通用基础设施完整实现"——经代码核实，该接口自始至终没有任何 producer 实现（`vfs.WorkspaceManager` 只有路径寻址的 `WriteFile`/`ReadFile`，没有 `WriteBlob`/`ReadBlob`），且全仓库零消费方，属于纯文档漂移（接口写了、代码从未做）。已删除 `protocol.BlobStore`/`COWProvider`/`VFSFacade`（`internal/protocol/interfaces_vfs.go`）与重复的 `memory.VFSProvider` 定义，不臆造实现（CLAUDE.md 禁止超前抽象）。MutationBus 落盘（`internal/protocol/schema/002_outbox.sql` + M2 §2.3 DatabaseWriter）核实属实、确已实现，与本条无关，PII 侧目前也未走这条路径。PII 字段当前用 AES-256-GCM 加密直接落 `preferences` 表 + TTL 1h 自动过期，规模和生命周期均可控，暂无 blob 存储的现实需求；若未来出现真实需求（如需要存储大体积 PII 相关附件）再按需设计，不预先搭好用不到的接口。
+  当前边界：PII 字段存入独立表 `task_pii_vault`（禁止进入 preferences/任何列表 API，ADR-0104 决策八），TTL 1h 过期行读取时忽略。2026-09-29 订正：此前落 `preferences` 表（key=`pii_vault:{taskID}:{field}`），密文经 `/preferences` 系 API 外露，已迁移。
+  **文档纠正（原"VFS blob 路径存储已实现"为失实表述，已核实并移除死代码）**：此前本节声称 `internal/vfs/provider.go` 的 `BlobStore`（content-addressed `vfs://<hash>` blob 存储）"已作为通用基础设施完整实现"——经代码核实，该接口自始至终没有任何 producer 实现（`vfs.WorkspaceManager` 只有路径寻址的 `WriteFile`/`ReadFile`，没有 `WriteBlob`/`ReadBlob`），且全仓库零消费方，属于纯文档漂移（接口写了、代码从未做）。已删除 `protocol.BlobStore`/`COWProvider`/`VFSFacade`（`internal/protocol/interfaces_vfs.go`）与重复的 `memory.VFSProvider` 定义，不臆造实现（CLAUDE.md 禁止超前抽象）。MutationBus 落盘（`internal/protocol/schema/002_outbox.sql` + M2 §2.3 DatabaseWriter）核实属实、确已实现，与本条无关，PII 侧目前也未走这条路径。PII 字段当前用 AES-256-GCM 加密落 `task_pii_vault` 表（原为 `preferences` 表，ADR-0104 决策八已迁出）+ TTL 1h 过期，规模和生命周期均可控，暂无 blob 存储的现实需求；若未来出现真实需求（如需要存储大体积 PII 相关附件）再按需设计，不预先搭好用不到的接口。
 
   **OpaqueToken 与 SessionPIIVault 的语义边界**：二者是强度不同的两套方案，不能互相等价代替：
   - **OpaqueToken**（把 PII 在进入 LLM prompt 前替换为占位符 token、模型只见占位符、事后按需把占位符换回原文、原文全程不落盘）——✅ **已完全闭环实现**。
@@ -410,7 +411,7 @@ approval:
     - **隔离与清理**：`guard.PIITokenVault` 内部为 `map[SessionID]map[token]真值` 二维结构，`TokenizeForTask`/`ResolveForTask`/`RestoreForTask` 均严格按 SessionID 命名空间隔离，**不做跨命名空间回退查找**——用错误的 SessionID 还原会 fail-closed 拒绝，而不是静默从其它会话的桶里读到值。`agent.go` 的 `handleTerminalState`（终态触发，`Run()` 即将返回前）调用 `ClearTask(a.sCtx.SessionID)`，与 `SecureZero` 协同执行，仅清理当前会话自己的命名空间，不影响进程内其它并发会话，避免内存泄漏。
     - **还原（输出端）**：在 `internal/tool/tool.go` 的 `InMemoryToolRegistry.ExecuteTool` 内，通过 `ctx.Value(protocol.CtxTaskIDKey{})` 提取同一 SessionID，并使用 `RestoreForTask` 安全精准还原真值，用后即焚。该 ctx 值与 `dag/executor.go` `DAGExecutor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)` 沿用同一仓库既有惯例，保证令牌化端与还原端使用同一 taskID 命名空间。
     - **已知局限**：目前只会针对 `Message.Content` 进行令牌化保护；`Message.Parts` 中因可能夹杂极其复杂多态的结构与多模态数据，强制文本替换具有高风险性，因此暂不纳入自动令牌化保护层。
-  - **`SessionPIIVault.RestoreFromSnapshot`**（`internal/agent/context/pii_vault.go`）解决的是另一个更弱隔离级别的问题：`Snapshot` 把字段**原文**（非占位符）AES-256-GCM 加密写入 `preferences` 表，`RestoreFromSnapshot` 解密后写回 `WorkingMemory.Scratch`；唯一调用点是 `internal/agent/recovery.go` 的 Agent 崩溃恢复（Suspended→Resume），本质是"同会话内原文加密落盘 + 按 taskID 解密回填"，不涉及跨调用边界的占位符替换/换回，也不阻止原文进入 LLM prompt。
+  - **`SessionPIIVault.RestoreFromSnapshot`**（`internal/agent/context/pii_vault.go`）解决的是另一个更弱隔离级别的问题：`Snapshot` 把字段**原文**（非占位符）AES-256-GCM 加密写入 `task_pii_vault` 表，`Load` 按 taskID 解密返回；`RestoreFromSnapshot` 唯一调用点是 `internal/agent/recovery.go` 的 Provider 熔断恢复（Suspended→Resume），现仅校验快照存在（不再写 Scratch，恢复后无消费方），本质是"同会话内原文加密落盘 + 按 taskID 解密"，不涉及跨调用边界的占位符替换/换回，也不阻止原文进入 LLM prompt。
 
 ### 5.2 Credential Vault [CredentialVault] 【已实现】
 

@@ -35,7 +35,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     result                   BLOB,
     error                    TEXT,
     suspend_reason           TEXT,
-    pii_vault_blob           TEXT,
     provider_suspended_count INTEGER NOT NULL DEFAULT 0,
     -- TaintLevel: 0=TaintNone, 1=TaintLow, 2=TaintMedium, 3=TaintHigh, 4=TaintUserReviewed
     -- 随 Intent/Result 跨 Agent 边界传递（inv_M8_05），只升不降

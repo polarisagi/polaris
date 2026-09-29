@@ -47,7 +47,7 @@
   "internal/agent/context/memory_context.go": "5c777e2f4f2a250e33d1d3597d8d2e68c5b82fd7e030af244e795d784b1d2fd6",
   "internal/agent/context/memory_project_scope.go": "ad09846fd9ac12d6c24796b92cc69f9d852cc29a75b63e39000a2126e101206e",
   "internal/agent/context/persona_refiner.go": "774ad745b341ad99eeeefacdc6c1f48706fe0b54bb8907a1355d8afa55bc324d",
-  "internal/agent/context/pii_vault.go": "32f657aa690b302cfd739d0cc9de4a6cac539cc0491b835c3d3070340f9ac5c9",
+  "internal/agent/context/pii_vault.go": "9fe5c9832b0a596a53e221ae0dc681d67180f6814e5185687be4d86c2709633d",
   "internal/agent/context/recall.go": "0001ae10b0f7a1a490b14b38278dae7cb59749b2634ce3cf244f62c72d376f38",
   "internal/agent/context/respond_context.go": "00656d838c3462c77956e34f49c383f879d0c212b25275a92e2bd380a1e4bc4d",
   "internal/agent/context/tool_list_section.go": "1eece5b213b2c2bb97457a063655f576000e06ea2a841da2bc8f7558c8a98259",

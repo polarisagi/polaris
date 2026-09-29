@@ -416,18 +416,18 @@ PII（Personally Identifiable Information，个人敏感信息）: 快照不含�
 **`ErrAllProvidersFailed` 专项处理（全 Provider 熔断）**:
 1. **确定性图剪枝后检查剩余 DAG 节点**:
    - (a) 有 System 1 可执行节点（SurpriseIndex <0.3，零 LLM，纯本地 Python/Go 技能）→ 继续执行，**不消耗 ReplanCount**；LLM 依赖节点等 Provider 恢复。
-   - (b) 全部需 LLM → **不消耗 ReplanCount**，转 `Suspended(suspend_reason=provider_exhausted, provider_suspended_count++)`；Blackboard 写标记；调 `SessionPIIVault.SuspendSnapshot(ctx, taskID)` 持久化 PII。
+   - (b) 全部需 LLM → **不消耗 ReplanCount**，转 `Suspended(suspend_reason=provider_exhausted, provider_suspended_count++)`；Blackboard 写标记；调 `SessionPIIVault.Snapshot(ctx, taskID, fields)` 把 PII 加密落 `task_pii_vault` 表（046，ADR-0104 决策八）。
 2. `provider_suspended_count > 5` → 终止自动唤醒，触发 `[ESCALATE]` + HITL。
 3. 剪枝后剩余 DAG 为空 → `[ESCALATE]` 人工审批。
 
 **Provider 恢复唤醒**: 
 M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_provider_recovery"` 事件。Handler 注册于 M2 全局 Outbox Worker（`internal/store/`），实现位于 `internal/agent/`——不在 M4 内独立 Worker（违反 M2 §2.3 单写者）。执行序列:
   1. 扫描 M8 Blackboard 全部 `suspend_reason=provider_exhausted` 任务。
-  2. 逐一 `M11.SessionPIIVault.RestoreFromSnapshot(ctx, taskID)` 解密恢复 PII token。
+  2. 逐一 `M11.SessionPIIVault.RestoreFromSnapshot(ctx, taskID)` 校验 `task_pii_vault` 快照仍在（缺失仅告警）。恢复后的任务经 Blackboard 重新领取，意图取自 tasks 表，无消费方读取快照明文；需要时用 `Load(ctx, taskID)` 取解密值。
   3. `M8.Blackboard.ResumeFromSuspended(taskID)` 重置 Suspended→Pending。
   4. 重新调度（M8 ListenLoop 扫描认领）。
 
-**FSM 终态 PII 清零**: M4 转 S_FAILED / S_COMPLETE 时，先于 WorkspaceManager GC 调 `SessionPIIVault.SecureZero(ctx, taskID)`，pii_vault_blob 先于 workspace 删除（GDPR 主动擦除）。无可执行节点 → `[ESCALATE]`。
+**FSM 终态 PII 清零**: M4 转 S_FAILED / S_COMPLETE 时，先于 WorkspaceManager GC 调 `SessionPIIVault.SecureZero(ctx, taskID)`，`task_pii_vault` 行先于 workspace 删除（GDPR 主动擦除）。无可执行节点 → `[ESCALATE]`。
 
 **Saga 补偿**: 确定性函数 + 预定义 HTTP（HyperText Transfer Protocol，超文本传输协议） 模板，禁止 LLM 参与。补偿前 M11 PolicyGate.Review 预检——FORBID → `[ESCALATE]` + `compensation_blocked_by_policy_revocation` 审计。非权限型失败重试 3 次（exponential backoff）。
 
@@ -488,9 +488,9 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 | M4→M6 | SkillLookup / SkillRegister | System 1 技能缓存 + Persona 兼容性。M6 §3, §4.3 |
 | M4→M7 | ToolRegistry.ExecuteTool | S_EXECUTE 节点调用 `[Wasm-Sandbox]`。M7 §3 |
 | M4→M11 | TaintGate / PolicyGate / KillSwitch | 查阅，仅响应不主动触发。M11 §2, §4 |
-| M4→M11 | SessionPIIVault | Suspend 时落 pii_vault_blob；Restore/SecureZero 跟随 FSM 终态。M11 §5.1 |
+| M4→M11 | SessionPIIVault | Suspend 时落 task_pii_vault 表；Restore/SecureZero 跟随 FSM 终态。M11 §5.1 |
 | M8→M4 | Blackboard.CAS Claim / LeaseHeartbeat | 多 Agent 调度入口。M8 §1 |
-| Schema | AgentState 枚举、DDL（Data Definition Language，数据定义语言） 001_events / 003_episodic_memory / 007_tasks（含 pii_vault_blob / suspend_reason / provider_suspended_count）| `pkg/types/enums_agent.go`, `internal/protocol/schema/` |
+| Schema | AgentState 枚举、DDL（Data Definition Language，数据定义语言） 001_events / 003_episodic_memory / 007_tasks（含 suspend_reason / provider_suspended_count）| `pkg/types/enums_agent.go`, `internal/protocol/schema/` |
 | 全局字典 | HE-Rule-5 状态机控制流、XR-01 | 00-Global-Dictionary §1-bis, §1-ter |
 | 时序图 | EventLog 回放、KillSwitch 响应链 | DIAGRAMS.md#eventlog, #killswitch |
 

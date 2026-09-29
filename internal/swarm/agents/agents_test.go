@@ -2,11 +2,14 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ── NewGovernanceAgent ──────────────────────────────────────────────────────
@@ -212,4 +215,77 @@ func TestMemoryAgent_Run_SkipsDistillUnderMemPressure(t *testing.T) {
 
 	// 高内存压力下跳过蒸馏（不调用 db），Run 应正常退出不 panic
 	ma.Run(ctx)
+}
+
+// ── MemoryAgent 耳语高水位持久化 ────────────────────────────────────────────
+
+type fakeWhisperFacade struct {
+	protocol.MemoryFacade
+	events []types.SalienceEvent
+}
+
+func (f *fakeWhisperFacade) ScanHighSalienceEvents(_ context.Context, sinceID int64, _ float64, _ int) ([]types.SalienceEvent, error) {
+	var out []types.SalienceEvent
+	for _, e := range f.events {
+		if e.ID > sinceID {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+type memCursorStore struct {
+	m       map[string]int64
+	saveErr error
+}
+
+func (s *memCursorStore) GetCursor(_ context.Context, id string) (int64, error) { return s.m[id], nil }
+func (s *memCursorStore) SaveCursor(_ context.Context, id string, seq int64) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	s.m[id] = seq
+	return nil
+}
+
+func TestMemoryAgent_CursorPersistence_ResumesAfterRebuild(t *testing.T) {
+	facade := &fakeWhisperFacade{events: []types.SalienceEvent{{ID: 1, Salience: 0.9}, {ID: 2, Salience: 0.9}}}
+	store := &memCursorStore{m: map[string]int64{}}
+	ctx := context.Background()
+
+	ch1 := make(chan MemoryWhisper, 10)
+	ma1 := NewMemoryAgent(facade, ch1, nil)
+	ma1.SetCursorStore(store)
+	if err := ma1.scanHighSalienceEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ch1) != 2 || store.m["memory_agent.whisper"] != 2 {
+		t.Fatalf("首次应推 2 条并持久化高水位 2: ch=%d cursor=%v", len(ch1), store.m)
+	}
+
+	// 重建实例（模拟重启）+ 新增事件 3：只应推新事件。
+	facade.events = append(facade.events, types.SalienceEvent{ID: 3, Salience: 0.9})
+	ch2 := make(chan MemoryWhisper, 10)
+	ma2 := NewMemoryAgent(facade, ch2, nil)
+	ma2.SetCursorStore(store)
+	if err := ma2.scanHighSalienceEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ch2) != 1 || store.m["memory_agent.whisper"] != 3 {
+		t.Fatalf("重建后应只推事件 3: ch=%d cursor=%v", len(ch2), store.m)
+	}
+}
+
+func TestMemoryAgent_CursorSaveFailure_DoesNotAbort(t *testing.T) {
+	facade := &fakeWhisperFacade{events: []types.SalienceEvent{{ID: 5, Salience: 0.9}}}
+	store := &memCursorStore{m: map[string]int64{}, saveErr: errors.New("disk full")}
+	ch := make(chan MemoryWhisper, 4)
+	ma := NewMemoryAgent(facade, ch, nil)
+	ma.SetCursorStore(store)
+	if err := ma.scanHighSalienceEvents(context.Background()); err != nil {
+		t.Fatalf("写游标失败不应中断扫描: %v", err)
+	}
+	if len(ch) != 1 {
+		t.Fatalf("耳语仍应推送: %d", len(ch))
+	}
 }

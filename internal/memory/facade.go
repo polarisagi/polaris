@@ -126,12 +126,6 @@ func (f *MemoryFacadeImpl) AddWorkingContext(_ context.Context, text string) err
 	return nil
 }
 
-func (f *MemoryFacadeImpl) SetWorkingScratch(key string, val []byte) {
-	if f.sys.Mem().Working() != nil && f.sys.Mem().Working().Scratch() != nil {
-		f.sys.Mem().Working().Scratch().Set(key, val)
-	}
-}
-
 func (f *MemoryFacadeImpl) ImmutableCore() protocol.ImmutableCore {
 	return f.sys.Mem().Working().Immutable()
 }
