@@ -52,7 +52,6 @@ MemoryFacade interface {
 
 	// Working 层调用
 	AddWorkingContext(ctx context.Context, text string) error
-	SetWorkingScratch(key string, val []byte)
 	ImmutableCore() ImmutableCore // 返回 *store.ImmutableCore 或其他不可变核心
 	// ListCoreMemory 读取核心工作记忆块（UP-03）：ZoneCoreMemory 注入的唯一数据源，
 	// 由 agentctx 在 Perceive/Plan 组装时调用。底层 CoreMemory 未配置时返回 (nil, nil)。

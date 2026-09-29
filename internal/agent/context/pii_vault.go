@@ -6,39 +6,39 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"io"
-	"strings"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+// piiVaultTTL 快照存活期：仅覆盖 provider 熔断恢复窗口，过期行由 Load/Restore 忽略。
+const piiVaultTTL = time.Hour
+
+// SessionPIIVault 崩溃/挂起恢复用的 PII 原文快照，落独立表 task_pii_vault（046），
+// 不得再挪用 preferences——后者经 /preferences 系 API 外露密文与 task_id（ADR-0104 决策八）。
 type SessionPIIVault struct {
 	db     protocol.SQLQuerier
 	encKey []byte
-	mem    protocol.MemoryFacade
 }
 
-func NewSessionPIIVault(db protocol.SQLQuerier, encKey []byte, mem protocol.MemoryFacade) *SessionPIIVault {
-	return &SessionPIIVault{
-		db:     db,
-		encKey: encKey,
-		mem:    mem,
-	}
+func NewSessionPIIVault(db protocol.SQLQuerier, encKey []byte) *SessionPIIVault {
+	return &SessionPIIVault{db: db, encKey: encKey}
 }
 
 func (v *SessionPIIVault) Snapshot(ctx context.Context, taskID string, fields map[string]string) error {
 	now := time.Now().UnixMilli()
-	expiredAt := now + 3600000 // + 1 hour
+	expiredAt := now + piiVaultTTL.Milliseconds()
 	for key, val := range fields {
-		dbKey := fmt.Sprintf("pii_vault:%s:%s", taskID, key)
 		encVal, err := encryptFieldVault(v.encKey, val)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Snapshot", err)
 		}
-		_, err = v.db.ExecContext(ctx, "INSERT OR REPLACE INTO preferences (key, value, expired_at) VALUES (?, ?, ?)", dbKey, encVal, expiredAt)
+		_, err = v.db.ExecContext(ctx,
+			"INSERT OR REPLACE INTO task_pii_vault (task_id, field, enc_value, expired_at, created_at) VALUES (?, ?, ?, ?, ?)",
+			taskID, key, encVal, expiredAt, now)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Snapshot", err)
 		}
@@ -46,35 +46,56 @@ func (v *SessionPIIVault) Snapshot(ctx context.Context, taskID string, fields ma
 	return nil
 }
 
-func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string) error {
-	now := time.Now().UnixMilli()
-	rows, err := v.db.QueryContext(ctx, "SELECT key, value FROM preferences WHERE key LIKE ? AND (expired_at IS NULL OR expired_at > ?)", fmt.Sprintf("pii_vault:%s:%%", taskID), now)
+// Load 解密并返回任务的未过期快照字段；无快照返回空 map。
+// 单行解密失败跳过并告警（密钥轮换后旧密文不可读不应阻断其余字段）。
+func (v *SessionPIIVault) Load(ctx context.Context, taskID string) (map[string]string, error) {
+	rows, err := v.db.QueryContext(ctx,
+		"SELECT field, enc_value FROM task_pii_vault WHERE task_id = ? AND (expired_at IS NULL OR expired_at > ?)",
+		taskID, time.Now().UnixMilli())
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.RestoreFromSnapshot", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Load", err)
 	}
 	defer rows.Close()
 
-	if v.mem == nil {
-		return apperr.New(apperr.CodeInternal, "pii_vault: memory not available")
-	}
-
+	out := map[string]string{}
 	for rows.Next() {
-		var k, val string
-		if err := rows.Scan(&k, &val); err != nil {
-			continue
+		var field, enc string
+		if err := rows.Scan(&field, &enc); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Load", err)
 		}
-		decVal, err := decryptFieldVault(v.encKey, val)
+		dec, err := decryptFieldVault(v.encKey, enc)
 		if err != nil {
+			slog.Warn("pii_vault: decrypt failed, skip field", "task_id", taskID, "field", field, "err", err)
 			continue
 		}
-		field := strings.TrimPrefix(k, fmt.Sprintf("pii_vault:%s:", taskID))
-		v.mem.SetWorkingScratch(field, []byte(decVal))
+		out[field] = dec
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Load", err)
+	}
+	return out, nil
+}
+
+// RestoreFromSnapshot 仅校验快照仍在。恢复后的任务经 Blackboard 重新领取，意图取自
+// tasks 表而非本快照，全仓无消费方需要 raw_intent/session_id 明文；此前写入进程级
+// 共享 Scratch 的路径无读取者且会跨任务串扰，已删除。快照缺失只告警：
+// 不阻断唤醒，过期清理由 SecureZero 在终态负责。
+func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string) error {
+	var n int
+	err := v.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM task_pii_vault WHERE task_id = ? AND (expired_at IS NULL OR expired_at > ?)",
+		taskID, time.Now().UnixMilli()).Scan(&n)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.RestoreFromSnapshot", err)
+	}
+	if n == 0 {
+		slog.Warn("pii_vault: no live snapshot for recovered task", "task_id", taskID)
 	}
 	return nil
 }
 
 func (v *SessionPIIVault) SecureZero(ctx context.Context, taskID string) error {
-	_, err := v.db.ExecContext(ctx, "DELETE FROM preferences WHERE key LIKE ?", fmt.Sprintf("pii_vault:%s:%%", taskID))
+	_, err := v.db.ExecContext(ctx, "DELETE FROM task_pii_vault WHERE task_id = ?", taskID)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.SecureZero", err)
 	}

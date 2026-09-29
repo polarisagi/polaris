@@ -26,6 +26,18 @@ type MemoryAgent struct {
 	scanInterval time.Duration
 	lastSeenID   int64 // 高水位标记：只推送新增事件，防止同批事件每轮重复刷爆耳语通道
 	schedulers   []SyncScheduler
+	cursors      WhisperCursorStore
+	cursorLoaded bool
+}
+
+// whisperCursorID 是耳语高水位在统一游标表 consumer_cursors 中的 consumer_id。
+const whisperCursorID = "memory_agent.whisper"
+
+// WhisperCursorStore 耳语高水位的持久化端口（消费端接口，nil 安全）。
+// 无持久化时高水位仅在内存，重启后会把全部高显著事件重推一遍耳语通道。
+type WhisperCursorStore interface {
+	GetCursor(ctx context.Context, consumerID string) (int64, error)
+	SaveCursor(ctx context.Context, consumerID string, seq int64) error
 }
 
 type SyncScheduler interface {
@@ -38,6 +50,28 @@ func NewMemoryAgent(mem protocol.MemoryFacade, whisperChan chan<- MemoryWhisper,
 		whisperChan:  whisperChan,
 		memPressure:  memPressure,
 		scanInterval: 60 * time.Second,
+	}
+}
+
+// SetCursorStore 注入高水位持久化；须在 Run 之前调用。
+func (ma *MemoryAgent) SetCursorStore(cs WhisperCursorStore) {
+	ma.cursors = cs
+}
+
+// loadCursor 首次扫描前从持久化恢复高水位（仅一次）。读失败告警后从 0 起，
+// 代价是重推旧耳语，好过启动失败。
+func (ma *MemoryAgent) loadCursor(ctx context.Context) {
+	if ma.cursorLoaded || ma.cursors == nil {
+		return
+	}
+	ma.cursorLoaded = true
+	seq, err := ma.cursors.GetCursor(ctx, whisperCursorID)
+	if err != nil {
+		slog.Warn("memory_agent: 读取耳语高水位失败，从 0 开始", "err", err)
+		return
+	}
+	if seq > ma.lastSeenID {
+		ma.lastSeenID = seq
 	}
 }
 
@@ -85,6 +119,7 @@ func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
 	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	ma.loadCursor(ctx)
 	// id > lastSeenID 高水位过滤：每个事件最多推送一次。
 	events, err := ma.mem.ScanHighSalienceEvents(scanCtx, ma.lastSeenID, 0.7, 20)
 	if err != nil {
@@ -106,6 +141,12 @@ func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
 		}:
 		default:
 			// 通道满：丢弃（耳语是尽力而为的辅助信号，不阻塞主流程）
+		}
+	}
+	// 每批推送后持久化；写失败仅告警，下次重启最多重推本批。
+	if len(events) > 0 && ma.cursors != nil {
+		if err := ma.cursors.SaveCursor(ctx, whisperCursorID, ma.lastSeenID); err != nil {
+			slog.Warn("memory_agent: 持久化耳语高水位失败", "err", err)
 		}
 	}
 	return nil

@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:178 tasks表 / 3:217 容量 / 4:266 Workspace / 5:308 SchemaManager / 6:322 Reindexer / 7:336 Go↔Rust FFI / 8:360 连接池 / 9:375 多写者 / 10:388 引擎速查 / 11:403 四层记忆映射 / 15:411 (SOFT)降级 / 16:425 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:178 tasks表 / 3:216 容量 / 4:265 Workspace / 5:307 SchemaManager / 6:321 Reindexer / 7:335 Go↔Rust FFI / 8:359 连接池 / 9:374 多写者 / 10:387 引擎速查 / 11:402 四层记忆映射 / 15:410 (SOFT)降级 / 16:424 依赖 -->
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）
@@ -197,7 +197,6 @@ DDL 权威定义见 `internal/protocol/schema/007_tasks.sql`。以下为文档�
 | `result` | BLOB (nullable) | CompleteTask 写入的任务产出（2026-07-26 补齐），供委派/编排子任务完成结果回读（transfer_to_agent 恢复分支、PatternDebate 辩论历史） |
 | `error` | TEXT (nullable) | 任务失败错误信息 |
 | `suspend_reason` | TEXT (nullable) | 挂起原因标记，枚举: `hitl` / `provider_exhausted` / `killswitch`（**added: #23 audit fix**） |
-| `pii_vault_blob` | TEXT (nullable) | SessionPIIVault.SuspendSnapshot 落盘的加密 blob（AES-256-GCM，key 由 M11 CredentialVault.persistent_key 派生）；恢复后由 RestoreFromSnapshot 消费并 SecureZero（**added: #23 audit fix**） |
 | `provider_suspended_count` | INTEGER DEFAULT 0 | provider_exhausted 自动唤醒计数；> 5 触发 [ESCALATE] + HITL（Human-in-the-loop，人机协同），转 HITL-Suspended TTL 管理（**added: #23 audit fix**） |
 | `intent_taint` / `result_taint` | INTEGER DEFAULT 0 | TaintLevel（0=None~4=UserReviewed），随 Intent/Result 跨 Agent 边界传递（inv_M8_05），只升不降 |
 | `pipeline_id` / `pipeline_stage` | TEXT (nullable) | 流水线阶段 handoff 字段（M08 §5 Pipeline Protocol）：所属流水线实例 ID / 阶段名称（research/plan/execute/verify） |
@@ -210,7 +209,7 @@ DDL 权威定义见 `internal/protocol/schema/007_tasks.sql`。以下为文档�
 | `created_at` | TEXT | 任务创建时间 UTC |
 | `updated_at` | TEXT | 最后状态变更时间 UTC |
 
-注：`pii_vault_blob`、`suspend_reason`、`provider_suspended_count` 三列在 #23 修复中引入，解决 SessionPIIVault 跨 Provider 熔断的状态持久化问题。实现细节见 M4 §8（ErrAllProvidersFailed 专项处理）和 M11 §5.1（SessionPIIVault）。
+注：`suspend_reason`、`provider_suspended_count` 两列在 #23 修复中引入（原 `pii_vault_blob` 死列已于 ADR-0104 决策八删除，PII 快照改存独立表 `task_pii_vault`，046_task_pii_vault.sql），解决 SessionPIIVault 跨 Provider 熔断的状态持久化问题。实现细节见 M4 §8（ErrAllProvidersFailed 专项处理）和 M11 §5.1（SessionPIIVault）。
 
 ---
 
@@ -283,7 +282,7 @@ D2 (性能) 触发: Hot 表行数 >100 万或空间 >500MB → 自动触发 Warm
 
 - **HITL-Suspended 超时** (`suspend_reason='hitl'`, 默认 TTL=30 天可配):
   - 提前 5 天: ResourceReaper 写 `hitl_suspension_expiry_warning` WARN 审计 + 操作员通知
-  - 到期: (a) 清零 pii_vault_blob（PII（Personally Identifiable Information，个人敏感信息） 先于一切删除）→ (b) MutationBus 置 S_FAILED + 写 `suspended_hitl_timeout_expired` → (c) HITL 通知（M13）→ (d) 之后 7 天走正常 GC
+  - 到期: (a) 清零 task_pii_vault 行（SecureZero；PII（Personally Identifiable Information，个人敏感信息） 先于一切删除）→ (b) MutationBus 置 S_FAILED + 写 `suspended_hitl_timeout_expired` → (c) HITL 通知（M13）→ (d) 之后 7 天走正常 GC
 - **KillSwitch-Suspended**: 无 TTL（等 unseal 自动恢复）。
   - 但磁盘 <100MB CRITICAL 且 workspace UpdatedAt >7 天 → 打包 `~/.polarisagi/polaris/archive/<task_id>_<timestamp>.tar.zst` 删原目录，保留 Blackboard 元数据。unseal 时 M13 检查 archive 存在 → 先解压再恢复任务。归档上限 10GB（LRU 删最老 + WARN）。
 - **Dead-letter Pending**: `status=Pending` 且 Outbox max_attempts 耗尽 (`status='dead'`) 且 UpdatedAt+7d>now → 直接 S_FAILED + GC workspace。
@@ -435,7 +434,7 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
 | 全局字典 | HE-Rule-6 State-in-DB、EventLog/MutationBus/Idempotency-Key 定义 | 00-Global-Dictionary §6 |
 | DDL | 全部 DDL（001_events 至 038_idempotent_cache，共 35 份（025~027 为刻意预留跳号），权威目录 `internal/protocol/schema/`） | internal/protocol/schema/ |
 | DDL 约束 (entities 表) | `UNIQUE(name, type)` 约束位于 `004_semantic_memory.sql`，支持 GraphWriter OpUpsert 的幂等 ON CONFLICT 语义（M10 §2.7） | internal/protocol/schema/004_semantic_memory.sql |
-| tasks 表新增列 | `pii_vault_blob TEXT`（nullable）—— SessionPIIVault.SuspendSnapshot 落盘字段（M11 §5.1）; `suspend_reason TEXT`（nullable）—— 区分 hitl / provider_exhausted / killswitch; `provider_suspended_count INTEGER DEFAULT 0` | M4 §8, M11 §5.1 |
+| tasks 表新增列 | `suspend_reason TEXT`（nullable）—— 区分 hitl / provider_exhausted / killswitch; `provider_suspended_count INTEGER DEFAULT 0` | M4 §8, M11 §5.1 |
 | 时序图 | EventLog 写入与崩溃恢复全流程 | DIAGRAMS.md#eventlog |
 
 ---

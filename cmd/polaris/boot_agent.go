@@ -472,7 +472,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// 热注入 blackboard 到 ProviderRecoveryHandler（bootTools 时尚未装配）
 	tb.RecoveryHandler.SetBlackboard(blackboard)
-	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey), memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
+	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey))
 	tb.RecoveryHandler.SetPIIVault(piiVault)
 
 	// Reaper（挂起任务超时唤醒）
@@ -1051,6 +1051,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 docs/specs/04-Module-Boundary.md §B2）
 	memoryFacadeForAgent := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
 	memoryAgent := agents.NewMemoryAgent(memoryFacadeForAgent, agent.GetWhisperChan(), nil)
+	memoryAgent.SetCursorStore(repo.NewSQLiteConsumerCursorRepository(sb.Store.DB()))
 
 	// 注入 PII OpaqueToken 检测器与令牌库（M11 §5.1 语义闭环）
 	agent.InjectPIITokenizer(tb.PIIDetector, tb.PIITokenVault)

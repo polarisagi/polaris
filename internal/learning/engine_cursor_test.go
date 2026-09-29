@@ -18,9 +18,9 @@ func TestConsumer_CursorPersistence(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS learning_cursors (
-		stream_name TEXT PRIMARY KEY CHECK(stream_name IN ('task', 'version', 'heuristic', 'eval')),
-		last_seq    INTEGER NOT NULL DEFAULT 0,
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS consumer_cursors (
+		consumer_id TEXT PRIMARY KEY,
+		last_seq    INTEGER NOT NULL,
 		updated_at  INTEGER NOT NULL
 	)`)
 	if err != nil {
@@ -28,7 +28,7 @@ func TestConsumer_CursorPersistence(t *testing.T) {
 	}
 
 	// Preset a cursor
-	_, err = db.Exec(`INSERT INTO learning_cursors (stream_name, last_seq, updated_at) VALUES ('task', 5, 0)`)
+	_, err = db.Exec(`INSERT INTO consumer_cursors (consumer_id, last_seq, updated_at) VALUES ('learning.task', 5, 0)`)
 	if err != nil {
 		t.Fatalf("failed to insert preset cursor: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestConsumer_CursorPersistence(t *testing.T) {
 
 	// Check cursor in DB
 	var lastSeq int64
-	err = db.QueryRow("SELECT last_seq FROM learning_cursors WHERE stream_name = 'task'").Scan(&lastSeq)
+	err = db.QueryRow("SELECT last_seq FROM consumer_cursors WHERE consumer_id = 'learning.task'").Scan(&lastSeq)
 	if err != nil {
 		t.Fatalf("failed to query last_seq: %v", err)
 	}

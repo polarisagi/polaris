@@ -95,9 +95,4 @@ CREATE TABLE IF NOT EXISTS capability_gap_log (
 
 CREATE INDEX IF NOT EXISTS idx_cap_gap_status ON capability_gap_log(status);
 
--- M9 四路事件流的消费游标
-CREATE TABLE IF NOT EXISTS learning_cursors (
-    stream_name TEXT PRIMARY KEY CHECK(stream_name IN ('task', 'version', 'heuristic', 'eval')),
-    last_seq    INTEGER NOT NULL DEFAULT 0,
-    updated_at  INTEGER NOT NULL
-) STRICT;
+-- M9 四路事件流的消费游标已并入 002_outbox.sql 的 consumer_cursors（learning.*）

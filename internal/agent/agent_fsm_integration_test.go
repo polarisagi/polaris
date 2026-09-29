@@ -182,7 +182,6 @@ func (m *mockMemoryForIntegration) ArchiveEpisodic(ctx context.Context, sessionI
 func (m *mockMemoryForIntegration) AddWorkingContext(ctx context.Context, text string) error {
 	return nil
 }
-func (m *mockMemoryForIntegration) SetWorkingScratch(key string, val []byte) {}
 func (m *mockMemoryForIntegration) ImmutableCore() protocol.ImmutableCore {
 	return m.working.Immutable()
 }

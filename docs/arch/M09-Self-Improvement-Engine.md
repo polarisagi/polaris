@@ -80,7 +80,7 @@
 **空闲门控**: L0/L1 级任务不受限制。L2+ 级任务需要同时满足: CPU 占用率低于 `spec/state.yaml §m9_self_improve.worker_cpu_pct_user_active` 持续超过 `worker_heartbeat_seconds`、空闲内存 >1.5GB、交流电源供电、无全屏应用——四项条件全部满足才允许入队。运行中的 L2+ 任务在条件破坏时被挂起（同步宽限期）。电池供电时仅允许 L0 级任务。`/config background_tasks off` 暂停所有后台任务。
 
 **事件消费（channel-based，HE-Rule-6）**: 
-`Engine`（`internal/learning/engine.go`）通过 `select` 循环消费四路只读 channel：`taskEvents`、`versionEvents`、`heuristicEvents`、`evalEvents`。✅ 已实现，`learning_cursors` 表持久化四路独立游标，配合 idempotency_key 双重去重。
+`Engine`（`internal/learning/engine.go`）通过 `select` 循环消费四路只读 channel：`taskEvents`、`versionEvents`、`heuristicEvents`、`evalEvents`。✅ 已实现，统一游标表 `consumer_cursors`（consumer_id=`learning.task|version|heuristic|eval`，Go 侧白名单校验，ADR-0104 决策九）持久化四路独立游标，配合 idempotency_key 双重去重。
 
 ### 1.3 Activation Steering（local_only + Tier 1+ 专属）
 

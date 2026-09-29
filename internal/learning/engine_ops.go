@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/learning/optimizer"
@@ -148,7 +149,7 @@ func (e *Engine) loadCursors(ctx context.Context) (map[string]int64, error) {
 	if e.db == nil {
 		return cursors, nil
 	}
-	rows, err := e.db.QueryContext(ctx, "SELECT stream_name, last_seq FROM learning_cursors")
+	rows, err := e.db.QueryContext(ctx, "SELECT consumer_id, last_seq FROM consumer_cursors WHERE consumer_id LIKE ?", learningCursorPrefix+"%")
 	if err != nil {
 		metrics.GlobalLearningCursorErrorsTotal.Add(1)
 		return nil, apperr.Wrap(apperr.CodeInternal, "learning: 游标查询失败", err)
@@ -161,7 +162,13 @@ func (e *Engine) loadCursors(ctx context.Context) (map[string]int64, error) {
 			metrics.GlobalLearningCursorErrorsTotal.Add(1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "learning: 游标 Scan 失败，中止加载防止部分游标丢失", err)
 		}
-		cursors[name] = seq
+		// 去前缀还原为流名；白名单外的行（历史脏数据）忽略，防止 Start() 按未知流重放。
+		stream := strings.TrimPrefix(name, learningCursorPrefix)
+		if _, err := learningCursorID(stream); err != nil {
+			slog.Warn("learning: 忽略未知游标流", "consumer_id", name)
+			continue
+		}
+		cursors[stream] = seq
 	}
 	if err := rows.Err(); err != nil {
 		metrics.GlobalLearningCursorErrorsTotal.Add(1)
@@ -199,11 +206,29 @@ func (e *Engine) flushCursors(ctx context.Context) {
 	e.cursorCache = make(map[string]int64)
 	e.cursorMu.Unlock()
 
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	for stream, seq := range batch {
-		_, err := e.db.ExecContext(ctx, "INSERT INTO learning_cursors(stream_name, last_seq, updated_at) VALUES(?, ?, ?) ON CONFLICT(stream_name) DO UPDATE SET last_seq=excluded.last_seq, updated_at=excluded.updated_at", stream, seq, now)
+		id, err := learningCursorID(stream)
+		if err != nil {
+			slog.Error("failed to save learning cursor", "stream", stream, "err", err)
+			continue
+		}
+		_, err = e.db.ExecContext(ctx, "INSERT INTO consumer_cursors(consumer_id, last_seq, updated_at) VALUES(?, ?, ?) ON CONFLICT(consumer_id) DO UPDATE SET last_seq=excluded.last_seq, updated_at=excluded.updated_at", id, seq, now)
 		if err != nil {
 			slog.Error("failed to save learning cursor", "stream", stream, "seq", seq, "err", err)
 		}
 	}
+}
+
+// learningCursorPrefix 是学习引擎在统一游标表 consumer_cursors 中的 consumer_id 前缀。
+const learningCursorPrefix = "learning."
+
+// learningCursorID 把流名映射为 consumer_id。原 learning_cursors 表靠 CHECK 限定四流，
+// 并表后 consumer_id 自由命名，约束改在此处以白名单保持。
+func learningCursorID(stream string) (string, error) {
+	switch stream {
+	case "task", "version", "heuristic", "eval":
+		return learningCursorPrefix + stream, nil
+	}
+	return "", apperr.New(apperr.CodeInvalidInput, "learning: 非法游标流 "+stream)
 }

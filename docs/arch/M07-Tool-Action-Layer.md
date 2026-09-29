@@ -220,7 +220,7 @@ Wasm 沙箱由 Rust Wasmtime 引擎驱动，通过 purego FFI 桥接至 Go 层�
 
 启动时 `WasmtimeInit()` 初始化引擎，`WasmtimePoolInit(5)` 预热 5 个实例。编译缓存与生命周期管理由 Rust Wasmtime 引擎内部处理，Go 层不自管缓存。
 
-**PII（Personally Identifiable Information，个人敏感信息） SecureUnredact：已实现**——`internal/agent/context/pii_vault.go` 的 `SessionPIIVault` 用 AES-256-GCM 加密存储 PII，提供 `RestoreFromSnapshot` 做按需还原，语义上等价于本节设想的 SecureUnredact（M11 §5.1 已同步标注）。**Host Functions FS/网络权限矩阵：已通过统一机制实现**，未采用独立 `WASIPermission`/`ResourceLimits` 结构体的形式，而是拆分承载在：`internal/security/token/capability_token.go`（Ed25519 能力令牌，鉴权层面）+ `internal/security/network/safe_dialer.go`（SafeDialer，网络出口约束）+ 下方 §4.4 WASI 权限矩阵表（FS 层面，已是具体接入值而非占位设计）。**PostExecution Redact**（执行结果输出后二次脱敏）暂未找到明确的接线证据，若 CodeAct/工具输出确实需要这一步兜底，建议列入待办核实。
+**PII（Personally Identifiable Information，个人敏感信息） SecureUnredact：已实现**——`internal/agent/context/pii_vault.go` 的 `SessionPIIVault` 用 AES-256-GCM 加密存储 PII，提供 `Snapshot`/`Load` 按需还原（存 `task_pii_vault` 表），语义上等价于本节设想的 SecureUnredact（M11 §5.1 已同步标注）。**Host Functions FS/网络权限矩阵：已通过统一机制实现**，未采用独立 `WASIPermission`/`ResourceLimits` 结构体的形式，而是拆分承载在：`internal/security/token/capability_token.go`（Ed25519 能力令牌，鉴权层面）+ `internal/security/network/safe_dialer.go`（SafeDialer，网络出口约束）+ 下方 §4.4 WASI 权限矩阵表（FS 层面，已是具体接入值而非占位设计）。**PostExecution Redact**（执行结果输出后二次脱敏）暂未找到明确的接线证据，若 CodeAct/工具输出确实需要这一步兜底，建议列入待办核实。
 
 资源硬限制（超限→ErrSandboxResourceExhausted，不重试）：
 

@@ -101,6 +101,7 @@
 - **机制**：agent 每轮解析项目（`refreshWorkspaceContext`，与上下文装载同一窗口），在 `withTaskScopeCtx` 以 `protocol.CtxProjectRootKey` 注入执行 ctx；`guard.ScopedPaths(ctx, allowedPaths)` 把项目目录**置首位追加**到进程级白名单（bash/run_command 以首项为默认工作目录，项目会话里命令在项目目录执行）；`guard.SearchRoots` 让 grep/glob 未指定路径时只搜项目目录。沙箱 `AllowedPaths` 同步带上项目目录（bwrap/Seatbelt 绑定）。
 - **为什么走 ctx**：内置工具是进程级共享闭包，调用签名不含会话；按调用传递会话域信息的既有通道就是 `protocol.Ctx*Key`（`CtxTaskIDKey`、`CtxAnomalyFilterKey` 同一注入点）。这与"被驳回的方案"里"用 ctx 隐式携带 project_id 进 `EnsureSession`"不矛盾：那条驳的是持久化写入走隐式通道；此处是单次调用的只读作用域，且键是强类型的。
 - **收窄不放宽**：只追加、不替换进程级白名单；默认项目 / 无目录项目行为完全不变；todo 文件位置不随项目变化（不往用户仓库里写 `.polaris_todo.json`）。
+  - 2026-09-29 追记（事实订正，见 ADR-0104）：todo 已改为按会话落库 `session_todos` 表（WP-B，1f6240a），不再存在 `.polaris_todo.json` 文件；月度预算以 `llm_calls` 账本为唯一来源（61cd7ca）。"todo 位置不随项目变化"的结论不变——表按 session_id 隔离，同样不往用户仓库写文件。
 - **三道校验**：（1）写入时 `normalizeProjectRoot` → `guard.CheckScopeRoot`（决策二位置约束）。根若是 `~`，读类工具只查白名单不查黑名单，`~/.ssh` 即可读——这是位置约束存在的原因；（2）agent 侧：存库规范路径现在若解析到别处（被换成软链），不授予（与信任撤销同一判据）；（3）工具侧 `ScopedPaths` 再跑一次 `CheckScopeRoot`，不满足即视为无项目根（纵深防御：规则收紧后存量数据不放大访问面）。写入类工具仍走 `CheckWritablePath` 黑名单与软链真实路径复核。
 - **不在本决策内**：子 Agent（swarm/委派）会话不在 `chat_sessions`，解析不到项目，拿不到项目根与项目指令；VFS 每任务沙箱根不变。
   - 2026-09-21 追记：子 Agent 部分已由"决策三补"解决（经共享记忆命名空间继承发起方项目，项目根与指令随之生效）。VFS 每任务沙箱根仍不变。
