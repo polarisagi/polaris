@@ -50,10 +50,12 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 	}
 
 	// [Task 11] 向 PolicyGate 填充 monthly_spend_usd 供 Cedar budget_cap 规则使用。
-	// MonthlyBudgetUSDConfig == 0 表示不限额，跳过注入避免销耗所有请求。
-	if a.sCtx.Budget != nil && a.sCtx.MonthlyBudgetUSDConfig > 0 {
-		vCtx.MonthlySpendUSD = a.sCtx.Budget.EstimatedSpendUSD()
-		vCtx.MonthlyBudgetUSD = a.sCtx.MonthlyBudgetUSDConfig
+	// 月度上限为 0 表示不限额，跳过注入避免销耗所有请求；上限与花费均实时读自账本/kv（ADR-0104 决策四）。
+	if a.sCtx.Budget != nil {
+		if limit := a.sCtx.Budget.MonthlyLimitUSD(ctx); limit > 0 {
+			vCtx.MonthlySpendUSD = a.sCtx.Budget.MonthlySpendUSD(ctx)
+			vCtx.MonthlyBudgetUSD = limit
+		}
 	}
 
 	if a.dagValidator == nil {

@@ -53,11 +53,7 @@ func (h *SysAdminHandler) HandleSetBudget(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	// 2026-07-04 审计修复（附录·任务11）：持久化后同步热更新运行中的 Agent，
-	// 否则新预算上限要等下次进程重启才对 Cedar budget_cap 生效。
-	if h.Agent != nil {
-		h.Agent.SetMonthlyBudgetUSD(req.MonthlyUSD)
-	}
+	// 月度上限由各 Agent 的 BudgetManager 按 TTL 从 BudgetRepository 读取，写库即生效（ADR-0104 决策四）。
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"monthly_usd": req.MonthlyUSD, "status": "ok"}) //nolint:errcheck
 }

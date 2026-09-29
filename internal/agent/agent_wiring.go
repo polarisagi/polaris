@@ -75,12 +75,6 @@ func (a *Agent) SetBudget(b fsm.BudgetController) {
 	a.sCtx.Budget = b
 }
 
-// SetMonthlyBudgetUSD 设置月度预算 USD 上限，供 Cedar budget_cap 规则使用。
-// 0 = 不限额（不向 Cedar 传入约束）。
-func (a *Agent) SetMonthlyBudgetUSD(budget float64) {
-	a.sCtx.MonthlyBudgetUSDConfig = budget
-}
-
 // SetSurpriseCalc 注入完整 SurpriseCalculator，替代 ComputeBasic 基础版路由。
 // nil-safe：不注入时降级为 ComputeBasic。
 func (a *Agent) SetSurpriseCalc(r SurpriseReader) {

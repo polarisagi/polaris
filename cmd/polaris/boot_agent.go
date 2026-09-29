@@ -156,6 +156,12 @@ func buildAgent(
 	// 任何工具 DAG 都过不了校验（2026-09-25 实测 `PolicyGate is nil (fail-closed)`；
 	// 此前 Plan 阶段本身恒解析失败，从未走到这里，缺陷被掩盖）。
 	a.InjectPolicyGate(sb.Gate)
+	// 预算以 llm_calls 为唯一账本（ADR-0104 决策四）：agent-0 与池化会话 Agent 各绑定自身
+	// sessionID；月度上限由 BudgetManager 按 TTL 从 BudgetRepository 读取，不再经 Set* 推送。
+	// 走读连接：预算查询是只读聚合，不占单写连接。
+	a.SetBudget(sysagent.NewBudgetManager().WithLedger(sessionID,
+		repo.NewSQLiteLLMSpendLedger(sb.Store.ReadDB()),
+		repo.NewSQLiteBudgetRepository(sb.Store.ReadDB())))
 	// 2026-08-02 补齐接线：InjectCatalog 此前全仓零调用点，导致
 	// a.catalog/fsm 上下文构建器的 cata 恒为 nil——BuildToolListSection
 	// （agent/context/tool_list_section.go）与 S_PLAN 原生 function-calling

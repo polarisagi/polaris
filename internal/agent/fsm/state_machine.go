@@ -161,9 +161,6 @@ type StateContext struct {
 	// 注入点: Agent.SetBudget() 在 Worker.tryClaimAndExecute 前调用。
 	Budget BudgetController
 
-	// MonthlyBudgetUSDConfig 来自配置项，0 = 不限额（不向 Cedar budget_cap 传入约束）。
-	MonthlyBudgetUSDConfig float64
-
 	// Token 分项记账（Gap-A, HE-Rule-1）。
 	// Worker.tryClaimAndExecute 在 Run 返回后读取这三个字段，写入 Blackboard。
 	// TokensUsed 保持不变（= TokensInput + TokensOutput），兼容现有预算逻辑。

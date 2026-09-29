@@ -264,10 +264,9 @@ func (a *fakeAgentController) Memory() protocol.MemoryFacade { return nil }
 func (a *fakeAgentController) Interrupt(req types.InterruptRequest) {
 	a.interrupted = true
 }
-func (a *fakeAgentController) SetPreferences(map[string]string)   {}
-func (a *fakeAgentController) CurrentState() types.AgentState     { return types.AgentStateIdle }
-func (a *fakeAgentController) ConfigInfo() map[string]any         { return nil }
-func (a *fakeAgentController) SetMonthlyBudgetUSD(budget float64) {}
+func (a *fakeAgentController) SetPreferences(map[string]string) {}
+func (a *fakeAgentController) CurrentState() types.AgentState   { return types.AgentStateIdle }
+func (a *fakeAgentController) ConfigInfo() map[string]any       { return nil }
 func (a *fakeAgentController) SubscribeStream(ctx context.Context) <-chan types.AgentStreamEvent {
 	return a.events
 }

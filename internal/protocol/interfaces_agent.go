@@ -128,10 +128,6 @@ AgentController interface {
 	SetPreferences(map[string]string)
 	CurrentState() types.AgentState
 	ConfigInfo() map[string]any
-	// SetMonthlyBudgetUSD 热更新月度预算上限，供 Cedar budget_cap 规则使用。
-	// 2026-07-04 审计修复（附录·任务11）：GET/PUT /v1/config/budget 此前只读写
-	// kv_store，从未回填到运行中的 Agent（启动时也硬编码 0），两条链路完全断开。
-	SetMonthlyBudgetUSD(budget float64)
 	// SubscribeStream 订阅 FSM 事件流，用于向 SSE 客户端回推流式响应 (UP-06)。
 	SubscribeStream(ctx context.Context) <-chan types.AgentStreamEvent
 	// InjectReplayData 注入崩溃恢复回放用的历史 LLM 调用队列（M04 §8）。

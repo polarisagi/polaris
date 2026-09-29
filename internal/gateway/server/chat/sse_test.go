@@ -63,10 +63,6 @@ func (m *mockAgentController) ConfigInfo() map[string]any {
 
 func (m *mockAgentController) SetPreferences(prefs map[string]string) {}
 
-// SetMonthlyBudgetUSD 测试桩：2026-07-04 审计修复（任务11）在 AgentController
-// 接口新增该方法后，测试用 mock 需同步实现以满足接口断言，无需真实记账逻辑。
-func (m *mockAgentController) SetMonthlyBudgetUSD(budget float64) {}
-
 func (m *mockAgentController) SubscribeStream(ctx context.Context) <-chan types.AgentStreamEvent {
 	return nil
 }

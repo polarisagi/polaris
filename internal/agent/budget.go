@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -17,66 +18,118 @@ import (
 // 编译期断言：BudgetManager 必须满足 fsm.BudgetController 接口。
 var _ fsm.BudgetController = (*BudgetManager)(nil)
 
-// BudgetManager 四层推理预算。
-type BudgetManager struct {
-	mu                 sync.RWMutex
-	maxReasoningSteps  int // 5
-	maxThinkingTokens  int // 4096
-	taskTokenBudget    int // 1M
-	sessionTokenBudget int // 5M
-	usedTokens         int
-	Now                func() time.Time // 允许注入虚拟时间
+// LLMSpendLedger llm_calls 账本的只读视图（消费端接口，实现见 internal/store/repo）。
+// 账本由 internal/llm 的记录包装异步逐次写入，读到的用量可能滞后最近一次调用——
+// 预算是软熔断而非计费，ADR-0104 决策四已接受该滞后。
+type LLMSpendLedger interface {
+	// SessionTokens 该会话累计 input+output token。
+	SessionTokens(ctx context.Context, sessionID string) (int64, error)
+	// SpendUSDSince 自 sinceMs（Unix 毫秒）起全部会话的累计 cost_usd。
+	SpendUSDSince(ctx context.Context, sinceMs int64) (float64, error)
 }
 
-// NewBudgetManager 创建带默认预算的管理器。
+// MonthlyLimitSource 月度预算上限来源（repo.BudgetRepository 的只读子集）。
+type MonthlyLimitSource interface {
+	GetBudget(ctx context.Context) (float64, error)
+}
+
+// monthlyLimitTTL 月度上限缓存时长：HandleSetBudget 写库后最迟此时长内对所有 Agent 生效，
+// 同时避免每次 DAG 校验都打库。
+const monthlyLimitTTL = 30 * time.Second
+
+// BudgetManager 四层推理预算。用量与花费不再持有内存计数，一律以 llm_calls 为唯一账本
+// （ADR-0104 决策四）：重启不清零，池化会话 Agent 与 agent-0 口径一致。
+type BudgetManager struct {
+	maxReasoningSteps  int              // 5
+	maxThinkingTokens  int              // 4096
+	taskTokenBudget    int              // 1M
+	sessionTokenBudget int              // 5M
+	Now                func() time.Time // 允许注入虚拟时间
+
+	sessionID string
+	ledger    LLMSpendLedger
+	limits    MonthlyLimitSource
+
+	limitMu       sync.Mutex
+	cachedLimit   float64
+	limitLoadedAt time.Time
+	limitLoaded   bool
+}
+
+// NewBudgetManager 创建带默认预算的管理器。未绑定账本时（WithLedger 前）不做用量判定。
 func NewBudgetManager() *BudgetManager {
 	return &BudgetManager{
 		maxReasoningSteps:  5,
 		maxThinkingTokens:  4096,
 		taskTokenBudget:    1000000,
 		sessionTokenBudget: 5000000,
-		usedTokens:         0,
 		Now:                time.Now,
 	}
 }
 
-// ConsumeTokens 消耗指定数量的 Tokens，若超出 Session 级预算则报错。
+// WithLedger 绑定所属会话、账本与月度上限来源。sessionID 为空时不做会话级判定
+// （按空 session_id 求和会把全部后台调用算进来）。
+func (bm *BudgetManager) WithLedger(sessionID string, ledger LLMSpendLedger, limits MonthlyLimitSource) *BudgetManager {
+	bm.sessionID = sessionID
+	bm.ledger = ledger
+	bm.limits = limits
+	return bm
+}
+
+// ConsumeTokens 上报本次消耗（仅埋点），并以账本判定会话累计用量是否超出 Session 级预算。
+// 账本读失败时 fail-open（Warn 后放行）：预算是软熔断，不能因 DB 抖动让所有对话失败；
+// 硬性安全边界（Cedar/Taint/KillSwitch）不依赖本检查，ADR-0087 的 fail-closed 清单不含预算。
 func (bm *BudgetManager) ConsumeTokens(ctx context.Context, tokens int) error {
-	bm.mu.Lock()
-	bm.usedTokens += tokens
-	used := bm.usedTokens
-	budget := bm.sessionTokenBudget
-	bm.mu.Unlock()
 	// HE-1: Token_Burn_Rate 一等公民上报
 	trace.RecordBudgetTokens(ctx, tokens)
-	if used > budget {
-		return apperr.New(apperr.CodeInternal, fmt.Sprintf("session token budget exceeded: %d > %d", used, budget))
+	if bm.ledger == nil || bm.sessionID == "" {
+		return nil
+	}
+	used, err := bm.ledger.SessionTokens(ctx, bm.sessionID)
+	if err != nil {
+		slog.Warn("budget: 读取会话 token 账本失败，放行", "session", bm.sessionID, "err", err)
+		return nil
+	}
+	if used > int64(bm.sessionTokenBudget) {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("session token budget exceeded: %d > %d", used, bm.sessionTokenBudget))
 	}
 	return nil
 }
 
-// HasSufficientBudget 检查是否还有足够的 Session 预算（不扣除）。
-func (bm *BudgetManager) HasSufficientBudget(requested int) bool {
-	bm.mu.RLock()
-	defer bm.mu.RUnlock()
-	return bm.usedTokens+requested <= bm.sessionTokenBudget
+// MonthlySpendUSD 当月（UTC）累计真实花费；读失败返回 0（放行，理由同 ConsumeTokens）。
+func (bm *BudgetManager) MonthlySpendUSD(ctx context.Context) float64 {
+	if bm.ledger == nil {
+		return 0
+	}
+	now := bm.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	spend, err := bm.ledger.SpendUSDSince(ctx, monthStart.UnixMilli())
+	if err != nil {
+		slog.Warn("budget: 读取月度花费账本失败，按 0 处理", "err", err)
+		return 0
+	}
+	return spend
 }
 
-// EstimatedSpendUSD 基于会话内已消耗 token 数的近似估算，非真实持久化月度账本。
-// 真实月度聚合需要新表（033_billing_ledger.sql），超出本任务范围，留待后续。
-const estimatedUSDPerMillionTokens = 3.0 // 粗略估算系数，非精确计费
-
-func (bm *BudgetManager) EstimatedSpendUSD() float64 {
-	bm.mu.RLock()
-	defer bm.mu.RUnlock()
-	return float64(bm.usedTokens) / 1_000_000.0 * estimatedUSDPerMillionTokens
-}
-
-// UsedTokens 返回已消耗的 token 数（用于 sCtx.TokensUsed 同步）。
-func (bm *BudgetManager) UsedTokens() int {
-	bm.mu.RLock()
-	defer bm.mu.RUnlock()
-	return bm.usedTokens
+// MonthlyLimitUSD 月度上限（0 = 不限额），带 monthlyLimitTTL 缓存；读失败沿用旧值，
+// 从未成功读过则按不限额处理（fail-open，理由同 ConsumeTokens）。
+func (bm *BudgetManager) MonthlyLimitUSD(ctx context.Context) float64 {
+	if bm.limits == nil {
+		return 0
+	}
+	bm.limitMu.Lock()
+	defer bm.limitMu.Unlock()
+	now := bm.Now()
+	if bm.limitLoaded && now.Sub(bm.limitLoadedAt) < monthlyLimitTTL {
+		return bm.cachedLimit
+	}
+	v, err := bm.limits.GetBudget(ctx)
+	if err != nil {
+		slog.Warn("budget: 读取月度预算上限失败，沿用缓存值", "err", err)
+		return bm.cachedLimit
+	}
+	bm.cachedLimit, bm.limitLoadedAt, bm.limitLoaded = v, now, true
+	return v
 }
 
 // Limits 返回推理步数与思考 Token 限制。

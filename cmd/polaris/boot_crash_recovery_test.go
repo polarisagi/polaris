@@ -116,7 +116,6 @@ func (f *fakeAgentController) Interrupt(_ types.InterruptRequest)              {
 func (f *fakeAgentController) SetPreferences(map[string]string)                {}
 func (f *fakeAgentController) CurrentState() types.AgentState                  { return types.AgentStateComplete }
 func (f *fakeAgentController) ConfigInfo() map[string]any                      { return nil }
-func (f *fakeAgentController) SetMonthlyBudgetUSD(float64)                     {}
 func (f *fakeAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) { f.replayCalls = calls }
 func (f *fakeAgentController) SetConversationHistory(history []types.Message)  {}
 func (f *fakeAgentController) SubscribeStream(_ context.Context) <-chan types.AgentStreamEvent {

@@ -343,9 +343,9 @@ WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/prompt/` 
 
 > **BudgetManager**（`budget.go`）：
 > - **入口**：BudgetManager 是唯一预算判断入口（Task 11）。实现 `fsm.BudgetController` 接口，通过 `SetBudget()` 注入 `StateContext.Budget`。
-> - **记账**：LLM 推理成功后调用 `ConsumeTokens(actualTokens)` 精确记账；`EstimatedSpendUSD()` 向 Cedar `budget_cap` 规则填充 `monthly_spend_usd`/`monthly_budget_usd`。内联 `StateContext.TokenBudget/TokensUsed` 逻辑保留作向后兼容，`Budget != nil` 时双轨并行（均计账）。
-> - **持久化与更新**：`protocol.AgentController` 提供 `SetMonthlyBudgetUSD(float64)`；`boot_server.go` 启动期从 `BudgetRepository.GetBudget()` 读取持久化值注入 Agent（避免启动时预算被重置为 0）；`HandleSetBudget`（`internal/gateway/server/sysadmin/budget.go`）持久化 `kv_store` 成功后同步调用 `Agent.SetMonthlyBudgetUSD()` 热更新。
-> - **闭环**：写路径与运行时读路径保持一致，二者与 `EstimatedSpendUSD()` 共同构成完整闭环。
+> - **记账**：BudgetManager 无内存计数，唯一账本为 `llm_calls` 表（ADR-0104 决策四）：`ConsumeTokens(actualTokens)` 的入参仅用于 `trace.RecordBudgetTokens` 埋点，会话用量判定读 `LLMSpendLedger.SessionTokens(sessionID)`（可能滞后一次调用，软熔断可接受）；`MonthlySpendUSD()` 读当月（UTC）真实 `cost_usd` 合计，与 `MonthlyLimitUSD()` 一同向 Cedar `budget_cap` 填充 `monthly_spend_usd`/`monthly_budget_usd`。账本读失败 fail-open（Warn 后放行）。内联 `StateContext.TokenBudget/TokensUsed` 逻辑保留作向后兼容，`Budget != nil` 时双轨并行。
+> - **注入与上限**：`buildAgent`（`cmd/polaris/boot_agent.go`）为每个 Agent（agent-0 与池化会话 Agent）注入绑定自身 sessionID 的 BudgetManager；月度上限每次经 `BudgetRepository.GetBudget()` 读取（30s TTL 缓存），`HandleSetBudget` 只写库，无需向 Agent 推送（已删 `SetMonthlyBudgetUSD`）。
+> - **闭环**：写路径（`HandleSetBudget` 写 kv_store）与运行时读路径（TTL 缓存）同源，与 `MonthlySpendUSD()` 共同构成完整闭环。
 
 ### 7.0 任务级预算自适应截断
 

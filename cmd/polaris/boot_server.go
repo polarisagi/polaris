@@ -7,7 +7,6 @@ import (
 	"runtime"
 
 	"github.com/polarisagi/polaris/configs"
-	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -230,28 +229,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	}
 	// ─── [/P2-FIX] ───────────────────────────────────────────────────────────
 
-	// ─── [Task 11] BudgetManager 接入主控制流 ───────────────────────────────────────
-	// 创建会话级 BudgetManager 并注入 Agent 。
-	// nil-safe：Agent.SetBudget(nil) 时内联 TokenBudget 逻辑仍有效（向后兑容）。
-	budgetMgr := agent.NewBudgetManager()
-	ab.Agent.SetBudget(budgetMgr)
-	// MonthlyBudgetUSD：2026-07-04 审计修复（附录·任务11）——此前硬编码为 0，
-	// 与 GET/PUT /v1/config/budget（internal/gateway/server/sysadmin/budget.go，
-	// 持久化到 kv_store）完全断开：用户通过 API 设置的预算上限重启后丢失，
-	// PUT 期间也不会热更新到运行中的 Agent。此处启动时从同一个 BudgetRepository
-	// 读回持久化值；HandleSetBudget 侧的热更新见该文件改动。
-	monthlyBudgetUSD := 0.0
-	if sb.Store != nil && sb.Store.DB() != nil {
-		budgetRepo := repo.NewSQLiteBudgetRepository(sb.Store.DB())
-		if v, err := budgetRepo.GetBudget(ctx); err != nil {
-			slog.Warn("polaris: failed to load persisted monthly budget, defaulting to unlimited", "err", err)
-		} else {
-			monthlyBudgetUSD = v
-		}
-	}
-	ab.Agent.SetMonthlyBudgetUSD(monthlyBudgetUSD)
-	slog.Info("polaris: BudgetManager initialized and injected into Agent", "monthly_budget_usd", monthlyBudgetUSD)
-	// ─── [/Task 11] ──────────────────────────────────────────────────────────
+	// BudgetManager 由 buildAgent 为每个 Agent 注入（绑定各自 sessionID，账本 = llm_calls；
+	// ADR-0104 决策四），此处不再对 agent-0 单独注入或推送月度上限。
 
 	// ─── OTA 热更新管理器 ─────────────────────────────────────────────────────
 	updMgr := updater.New(Version, CommitHash, BuildDate, sb.SafeHTTP)

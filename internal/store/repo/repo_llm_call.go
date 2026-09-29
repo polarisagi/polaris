@@ -35,3 +35,36 @@ func (r *SQLiteLLMCallRepository) RecordLLMUsage(ctx context.Context, rec protoc
 	}
 	return nil
 }
+
+// SQLiteLLMSpendLedger 是 agent.LLMSpendLedger 的实现：对 llm_calls 做 SUM 只读聚合
+// （ADR-0104 决策四）。应传入读连接（store.ReadDB()），避免占用单写连接。
+type SQLiteLLMSpendLedger struct {
+	db protocol.SQLQuerier
+}
+
+func NewSQLiteLLMSpendLedger(db protocol.SQLQuerier) *SQLiteLLMSpendLedger {
+	return &SQLiteLLMSpendLedger{db: db}
+}
+
+// SessionTokens 该会话累计 input+output token（input 已含缓存命中，output 已含推理）。
+func (l *SQLiteLLMSpendLedger) SessionTokens(ctx context.Context, sessionID string) (int64, error) {
+	var n int64
+	err := l.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_calls WHERE session_id = ?`,
+		sessionID).Scan(&n)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMSpendLedger.SessionTokens", err)
+	}
+	return n, nil
+}
+
+// SpendUSDSince 自 sinceMs（Unix 毫秒，含）起全部会话的累计 cost_usd。
+func (l *SQLiteLLMSpendLedger) SpendUSDSince(ctx context.Context, sinceMs int64) (float64, error) {
+	var v float64
+	err := l.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE created_at >= ?`, sinceMs).Scan(&v)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMSpendLedger.SpendUSDSince", err)
+	}
+	return v, nil
+}
