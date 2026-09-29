@@ -165,8 +165,7 @@
                     </div>
                   </template>
                 </div>
-                <a x-show="entry.homepage" :href="entry.homepage" target="_blank" rel="noopener" class="btn btn-ghost btn-sm text-xs px-2 shrink-0" x-text="$store.i18n.t('plugins_btn_details')"></a>
-                <button x-show="entry.type === 'plugin' && $store.plugins.installedPluginFor(entry)" class="btn btn-ghost btn-sm text-xs px-2 shrink-0" @click="$store.plugins.openDetail($store.plugins.installedPluginFor(entry))" x-text="$store.i18n.t('plugins_btn_details')"></button>
+                <button class="btn btn-ghost btn-sm text-xs px-2 shrink-0" @click="$store.plugins.onDetail(entry)" x-text="$store.i18n.t('plugins_btn_details')"></button>
               </div>
             </div>
           </div>
@@ -374,6 +373,41 @@
         </div>
       </div>
       <div class="modal-backdrop" @click="$store.plugins.showCreateModal=false"></div>
+    </dialog>
+
+    <!-- 目录条目详情：只读展示目录元数据（未安装 / skill / mcp 也可用） -->
+    <dialog class="modal" id="plugin_entry_modal" x-effect="$store.plugins.showEntryDetail ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showEntryDetail = false; $store.plugins.entryDetail = null">
+      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
+        <h3 class="font-bold text-lg" x-text="$store.plugins.entryDetail?.name"></h3>
+        <div class="flex flex-wrap items-center gap-1.5 mt-2 mb-4">
+          <span class="badge badge-sm font-bold uppercase" x-text="$store.plugins.typeLabel($store.plugins.entryDetail?.type)"></span>
+          <span class="badge badge-sm font-bold uppercase" x-text="$store.plugins.trustLabel($store.plugins.entryDetail?.trust_tier)"></span>
+          <span class="text-xs font-mono text-base-content/70" x-text="$store.plugins.entryDetail?.publisher"></span>
+          <span x-show="$store.plugins.entryDetail?.version" class="text-xs font-mono text-base-content/60">v<span x-text="$store.plugins.entryDetail?.version"></span></span>
+          <span x-show="$store.plugins.entryDetail?.installed" class="badge badge-success badge-sm" x-text="$store.i18n.t('plugins_installed')"></span>
+        </div>
+        <p class="text-sm text-base-content/80 whitespace-pre-line break-words" x-text="$store.plugins.entryDetail?.description || $store.i18n.t('plugins_entry_no_desc')"></p>
+        <dl class="mt-4 space-y-2 text-xs">
+          <template x-if="$store.plugins.entryDetail?.homepage">
+            <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_entry_homepage')"></dt><dd class="min-w-0 break-all"><a :href="$store.plugins.entryDetail.homepage" target="_blank" rel="noopener" class="link link-primary font-mono" x-text="$store.plugins.entryDetail.homepage"></a></dd></div>
+          </template>
+          <template x-if="$store.plugins.entryDetail?.url && $store.plugins.entryDetail.url !== $store.plugins.entryDetail.homepage && /^https?:/.test($store.plugins.entryDetail.url)">
+            <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_label_url')"></dt><dd class="min-w-0 break-all"><a :href="$store.plugins.entryDetail.url" target="_blank" rel="noopener" class="link link-primary font-mono" x-text="$store.plugins.entryDetail.url"></a></dd></div>
+          </template>
+          <template x-if="$store.plugins.entryDetail?.command">
+            <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_entry_command')"></dt><dd class="min-w-0 break-all font-mono" x-text="`${$store.plugins.entryDetail.command} ${($store.plugins.entryDetail.args||[]).join(' ')}`"></dd></div>
+          </template>
+        </dl>
+        <div class="flex flex-wrap gap-1 mt-4">
+          <template x-for="tag in ($store.plugins.entryDetail?.tags||[])" :key="tag">
+            <span class="badge badge-ghost badge-sm text-[10px]" x-text="tag"></span>
+          </template>
+        </div>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.plugins.showEntryDetail=false" x-text="$store.i18n.t('plugins_entry_close')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.plugins.showEntryDetail=false"></div>
     </dialog>
 
     <!-- Plugin Detail Modal：config / apps / dependencies / agents / hooks / channels -->

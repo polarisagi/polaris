@@ -37,6 +37,10 @@ Alpine.store('plugins', {
   installedIndex: {},
   showDetail: false,
   detail: null,       // 当前打开详情的 pluginRow
+  // 目录条目详情（未安装 / 非 plugin 类型 / 无 pluginRow 可查的条目）：纯展示目录元数据，
+  // 不发请求。与上面 pluginRow 详情（config/apps/... 需已安装）是两个弹窗。
+  showEntryDetail: false,
+  entryDetail: null,
   detailTab: 'config',
   detailLoading: {},  // tab -> true
   detailData: { config: null, apps: null, deps: null, agents: null, hooks: null, channels: null },
@@ -184,7 +188,7 @@ Alpine.store('plugins', {
         }
         this.installedIndex = idx
       }
-    } catch { /* 静默：详情按钮按 installedPluginFor() 返回值自然隐藏 */ }
+    } catch { /* 静默：installedIndex 为空时 onDetail 自然回落到目录条目详情 */ }
     this.loading = false
   },
 
@@ -548,6 +552,16 @@ Alpine.store('plugins', {
     } finally {
       delete this.deauthorizing[entry.id]
     }
+  },
+
+  // onDetail 目录卡片「详情」统一入口：已安装的 plugin 走 pluginRow 详情（可配置），
+  // 其余（未安装、skill、mcp）走目录条目详情。旧实现对有 homepage 的条目渲染
+  // <a target=_blank>，桌面外壳里新窗口请求被 WebView 吞掉，表现为点击无反应。
+  onDetail(entry) {
+    const row = entry.type === 'plugin' ? this.installedPluginFor(entry) : null
+    if (row) { this.openDetail(row); return }
+    this.entryDetail = entry
+    this.showEntryDetail = true
   },
 
   // ── 插件详情弹窗：config / apps / dependencies / agents / hooks / channels ──
