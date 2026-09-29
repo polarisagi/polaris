@@ -275,7 +275,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 							types.WithModelPool(llmEff.ModelPool),
 							types.WithThinkingMode(llmEff.ThinkingMode),
 							types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}),
-							types.WithPurpose("plan_prm_candidate"),
+							types.WithPurpose(types.PurposePlanPRMCandidate),
 						)
 						if cErr != nil {
 							candidateCh <- candidateResult{}

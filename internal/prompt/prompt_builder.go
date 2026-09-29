@@ -164,8 +164,27 @@ func (b *PromptBuilder) Build() []types.Message {
 // 不改写任何消息内容。
 func (b *PromptBuilder) BuildLayered() []types.Message {
 	var result []types.Message //nolint:prealloc
-	for _, layer := range b.layers {
+	stableEnd, sharedEnd := -1, -1
+	for i, layer := range b.layers {
 		result = append(result, layer...)
+		if len(result) == 0 {
+			continue
+		}
+		// 缓存断点提示（ADR-0105 决策三）：L0 末与 L0..L2 共享前缀末各标一处，
+		// 由 Anthropic 等显式断点适配器消费；自动前缀缓存的 Provider 忽略该字段。
+		// L2 为空时退到 L1 末——共享前缀的实际终点。
+		switch i {
+		case protocol.LayerStable:
+			stableEnd = len(result) - 1
+		case protocol.LayerSession, protocol.LayerHistory:
+			sharedEnd = len(result) - 1
+		}
+	}
+	if stableEnd >= 0 {
+		result[stableEnd].CacheBreakpoint = true
+	}
+	if sharedEnd >= 0 {
+		result[sharedEnd].CacheBreakpoint = true
 	}
 	return result
 }

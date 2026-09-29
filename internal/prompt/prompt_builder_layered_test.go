@@ -82,3 +82,28 @@ func TestSetLayer_OverridesDefaultUntilReset(t *testing.T) {
 		t.Fatalf("层次序错误: %+v", msgs)
 	}
 }
+
+// TestBuildLayered_CacheBreakpoints ADR-0105 决策三：L0 末与共享前缀（L0..L2）末各一处断点提示，
+// 其余消息不标——显式断点名额有限（Anthropic ≤4），多标会挤掉末条消息的断点。
+func TestBuildLayered_CacheBreakpoints(t *testing.T) {
+	msgs := layeredFixture(t).BuildLayered()
+	var marked []string
+	for _, m := range msgs {
+		if m.CacheBreakpoint {
+			marked = append(marked, m.Content)
+		}
+	}
+	if len(marked) != 2 || marked[0] != "stable" || !strings.Contains(marked[1], "hist") {
+		t.Fatalf("断点应只落在 stable 与历史末条，实际 %q", marked)
+	}
+
+	// 无历史时退到 L1 末。
+	b := NewPromptBuilder()
+	b.WriteStable(types.Message{Role: "system", Content: "stable"})
+	b.WriteExternalCatalog("extensions", taint.NewTaintedString("ext", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t"))
+	b.WritePhaseSystem("volatile")
+	out := b.BuildLayered()
+	if !out[0].CacheBreakpoint || !out[1].CacheBreakpoint || out[2].CacheBreakpoint {
+		t.Fatalf("无历史时断点应在 L0 末与 L1 末：%+v", out)
+	}
+}
