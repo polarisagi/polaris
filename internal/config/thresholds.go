@@ -66,6 +66,27 @@ type M1RouterThresholds struct {
 	EmbedHighMaxBatchSize   int `toml:"embed.high_max_batch_size"` // 100
 	EmbedLowMaxBatchSize    int `toml:"embed.low_max_batch_size"`  // 8
 	EmbedCallTimeoutSeconds int `toml:"embed.call_timeout_s"`      // 30
+
+	// Provider 缓存接线（ADR-0105 决策三）。
+	// AnthropicCacheTTL: cache_control.ttl，"5m"|"1h"；"5m" 为 API 默认，不显式下发。
+	AnthropicCacheTTL string `toml:"anthropic.cache_ttl"` // "5m"
+	// OpenAIPromptCacheRetention: prompt_cache_retention，""=不发送，"in_memory"|"24h"。
+	OpenAIPromptCacheRetention string `toml:"openai.prompt_cache_retention"` // ""
+}
+
+// Validate 校验 M1 中的缓存枚举字段，错误在加载时失败而非运行时被上游拒绝。
+func (t M1RouterThresholds) Validate() error {
+	switch t.AnthropicCacheTTL {
+	case "", "5m", "1h":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.anthropic.cache_ttl: invalid "+t.AnthropicCacheTTL+" (want 5m|1h)")
+	}
+	switch t.OpenAIPromptCacheRetention {
+	case "", "in_memory", "24h":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.openai.prompt_cache_retention: invalid "+t.OpenAIPromptCacheRetention+" (want in_memory|24h or empty)")
+	}
+	return nil
 }
 
 type M2StorageThresholds struct {
@@ -149,6 +170,10 @@ type M4KernelThresholds struct {
 	// ReflectSkipComplexity 反思跳过阈值（ADR-0102 决策四 4a）：首轮执行全部成功且
 	// 0 < TaskModel.Complexity < 此值时不调 Reflect LLM，直接回复。0 = 关闭跳过。
 	ReflectSkipComplexity float64 `toml:"reflect.skip_complexity"` // 0.4
+
+	// CacheUniformTools 实验开关（ADR-0105 决策三，默认 false）：true 时 Perceive/Reflect/Respond
+	// 也下发与 Plan 相同的 tools 并要求 Provider 不调用工具（tool_choice=none），四阶段 tools 前缀一致。
+	CacheUniformTools bool `toml:"cache.uniform_tools"` // false
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -383,6 +408,7 @@ func DefaultThresholds() Thresholds {
 			EmbedHighMaxBatchSize:    100,
 			EmbedLowMaxBatchSize:     8,
 			EmbedCallTimeoutSeconds:  30,
+			AnthropicCacheTTL:        "5m",
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,

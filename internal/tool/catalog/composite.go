@@ -19,14 +19,25 @@ type CompositeCatalog struct {
 
 	LazyLoadThreshold int
 	Embedder          search.Embedder
-	activeSessions    map[string]map[string]bool // sessionID -> map[toolName]bool
+	activeSessions    map[string]*sessionActivation // sessionID -> 本会话激活的工具（保持激活顺序）
+}
+
+// maxActivatedToolsPerSession 单会话激活工具数上限（有界，防 search_tools 反复激活撑爆 tools 数组）。
+// 超限时淘汰最早激活的一个：极端情形下宁可付一次 tools 前缀失配，也不让数组无界增长。
+const maxActivatedToolsPerSession = 64
+
+// sessionActivation 单会话的激活集合。order 决定 Schemas 中激活工具的追加顺序，
+// set 用于 O(1) 判重；二者由 CompositeCatalog.mu 保护。
+type sessionActivation struct {
+	order []string
+	set   map[string]bool
 }
 
 func NewCompositeCatalog(sources ...Catalog) *CompositeCatalog {
 	return &CompositeCatalog{
 		sources:           sources,
 		LazyLoadThreshold: 40, // 默认阈值
-		activeSessions:    make(map[string]map[string]bool),
+		activeSessions:    make(map[string]*sessionActivation),
 	}
 }
 
@@ -178,45 +189,64 @@ func (c *CompositeCatalog) Schemas(ctx context.Context, minTrust types.TrustTier
 		sessionID = tid
 	}
 
+	// 在锁内拷贝激活顺序：ActivateTool 会并发追加 order，锁外读取切片是数据竞争。
+	var activated []string
 	c.mu.RLock()
-	activeMap := c.activeSessions[sessionID]
+	if sa := c.activeSessions[sessionID]; sa != nil {
+		activated = append(activated, sa.order...)
+	}
 	c.mu.RUnlock()
 
-	var schemas []types.ToolSchema
-	for _, e := range entries {
-		isActive := activeMap != nil && activeMap[e.Name]
-		// 懒加载模式下，只返回 TrustTier == 4 (core builtin tools) 或者被当前 session 激活的工具
-		if shouldLazyLoad && e.TrustTier < 4 && !isActive {
-			continue
+	toSchema := func(e protocol.CatalogEntry) types.ToolSchema {
+		return types.ToolSchema{Name: e.Name, Description: e.Description, Parameters: e.Parameters}
+	}
+
+	if !shouldLazyLoad {
+		// 非懒加载：全量工具保持 List 的确定序（来源权重 + 名称）。
+		schemas := make([]types.ToolSchema, 0, len(entries))
+		for _, e := range entries {
+			schemas = append(schemas, toSchema(e))
 		}
-		schemas = append(schemas, types.ToolSchema{
-			Name:        e.Name,
-			Description: e.Description,
-			Parameters:  e.Parameters,
-		})
+		return schemas
 	}
 
-	if shouldLazyLoad {
-		schemas = append(schemas, types.ToolSchema{
-			Name:        "search_tools",
-			Description: "Search for available tools dynamically based on a query.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "Semantic query to find relevant tools",
-					},
+	// 懒加载（ADR-0105 决策三，tools 数组只追加）：
+	//   [核心工具（TrustTier>=4，List 确定序）] [search_tools] [本会话激活工具，按激活顺序]
+	// 激活只会在数组尾部追加，核心部分与已有激活部分的字节不随新激活而变——此前激活工具按名称
+	// 插进核心工具中间，插入点之后的 tools 定义全部失配（Anthropic 上 tools 变化使整个缓存失效）。
+	byName := make(map[string]protocol.CatalogEntry, len(entries))
+	schemas := make([]types.ToolSchema, 0, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+		if e.TrustTier >= 4 {
+			schemas = append(schemas, toSchema(e))
+		}
+	}
+	schemas = append(schemas, types.ToolSchema{
+		Name:        "search_tools",
+		Description: "Search for available tools dynamically based on a query.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "Semantic query to find relevant tools",
 				},
-				"required": []string{"query"},
 			},
-		})
+			"required": []string{"query"},
+		},
+	})
+	for _, name := range activated {
+		// 核心工具已在前段；已被卸载或被 minTrust 过滤的激活项静默跳过（不占位）。
+		if e, ok := byName[name]; ok && e.TrustTier < 4 {
+			schemas = append(schemas, toSchema(e))
+		}
 	}
-
 	return schemas
 }
 
 // ActivateTool activates a dynamically discovered tool for the specified session.
+// 重复激活同一工具保持其首次激活的位置（tools 数组前缀不变）。
 func (c *CompositeCatalog) ActivateTool(sessionID string, toolName string) {
 	if sessionID == "" || toolName == "" {
 		return
@@ -224,12 +254,22 @@ func (c *CompositeCatalog) ActivateTool(sessionID string, toolName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.activeSessions == nil {
-		c.activeSessions = make(map[string]map[string]bool)
+		c.activeSessions = make(map[string]*sessionActivation)
 	}
-	if c.activeSessions[sessionID] == nil {
-		c.activeSessions[sessionID] = make(map[string]bool)
+	sa := c.activeSessions[sessionID]
+	if sa == nil {
+		sa = &sessionActivation{set: make(map[string]bool)}
+		c.activeSessions[sessionID] = sa
 	}
-	c.activeSessions[sessionID][toolName] = true
+	if sa.set[toolName] {
+		return
+	}
+	if len(sa.order) >= maxActivatedToolsPerSession {
+		delete(sa.set, sa.order[0])
+		sa.order = sa.order[1:]
+	}
+	sa.order = append(sa.order, toolName)
+	sa.set[toolName] = true
 }
 
 // CleanupSession cleans up activated tools when a session ends to prevent memory leaks.

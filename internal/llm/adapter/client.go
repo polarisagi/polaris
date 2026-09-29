@@ -43,6 +43,12 @@ type OpenAIRequest struct {
 	// ReasoningEffort: "low" | "high" | "max"（ThinkingDisabled 时不发送）
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 	Thinking        *ThinkingConfig `json:"thinking,omitempty"`
+	// ToolChoice "none"|"auto"|"required"，仅 Tools 非空时发送（ADR-0105 决策三）。
+	ToolChoice string `json:"tool_choice,omitempty"`
+	// PromptCacheKey / PromptCacheRetention 为 OpenAI 专有缓存路由字段，由 OpenAIAdapter
+	// 在 SupportsPromptCacheKey 为真时填充；其他兼容端点保持空（omitempty，不发送）。
+	PromptCacheKey       string `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
 }
 
 // ThinkingConfig DeepSeek extended thinking 控制体。
@@ -241,6 +247,10 @@ func translateRequest(req *types.InferRequest, supportsVision bool) *OpenAIReque
 				Parameters:  t.Parameters,
 			},
 		})
+	}
+
+	if len(out.Tools) > 0 && req.ToolChoice != "" {
+		out.ToolChoice = req.ToolChoice
 	}
 
 	return out

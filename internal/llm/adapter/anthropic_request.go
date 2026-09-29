@@ -25,13 +25,23 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 	// systemParts 保留各 system 消息边界：缓存断点要落在"稳定前缀"之后（见下方
 	// Prompt Caching 段），整段拼接后只能在末尾打一个断点。
 	var systemParts []string
+	// 调用方在缓存层末尾置位的 Message.CacheBreakpoint（ADR-0105 决策一）：
+	// 记录其在 systemParts / msgs 中的下标；无任何置位时走下方内置启发式。
+	flagSys := map[int]bool{}
+	flagMsg := map[int]bool{}
 	for _, m := range req.Messages {
 		if m.Role == "system" {
 			system += m.Content + "\n"
 			if t := strings.TrimSpace(m.Content); t != "" {
 				systemParts = append(systemParts, t)
+				if m.CacheBreakpoint {
+					flagSys[len(systemParts)-1] = true
+				}
 			}
 			continue
+		}
+		if m.CacheBreakpoint {
+			flagMsg[len(msgs)] = true
 		}
 		if len(m.Parts) > 0 {
 			var contentBlocks []any
@@ -100,44 +110,21 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 			})
 		}
 		payload["tools"] = anthropicTools
+		if tc := anthropicToolChoice(req.ToolChoice); tc != nil {
+			payload["tool_choice"] = tc
+		}
 	}
 
-	// Anthropic Prompt Caching（ADR-0102 决策三），最多 4 个断点。缓存前缀顺序为
-	// tools → system → messages，断点缓存其之前的全部内容：
-	// 断点 1: 第一个 system block——ImmutableCore（人格/工具摘要/偏好，跨会话、跨阶段
-	//         稳定）连同其前的 tools 一并缓存。此前 system 整段拼接只在末尾打点，
-	//         阶段指令/核心记忆/工具目录任一变化即令人格前缀整段失配。
-	// 断点 2: 最后一个 system block——同阶段同会话内稳定的完整 system。
-	// 断点 3+4: 最近 2 条非 system 消息（会话历史前缀）。
-	if a.enablePromptCaching { //nolint:nestif
-		cacheMarker := map[string]string{"type": "ephemeral"}
-
-		if len(systemParts) > 0 {
-			blocks := make([]map[string]any, len(systemParts))
-			for i, part := range systemParts {
-				blocks[i] = map[string]any{"type": "text", "text": part}
-			}
-			blocks[0]["cache_control"] = cacheMarker
-			blocks[len(blocks)-1]["cache_control"] = cacheMarker
-			payload["system"] = blocks
-		} else if tools, ok := payload["tools"].([]map[string]any); ok && len(tools) > 0 {
-			// 无 system 时退回在 tools 末尾打点，保住工具定义前缀。
-			tools[len(tools)-1]["cache_control"] = cacheMarker
-		}
-		// 断点 3+4 — 最近 2 条非 system 消息（按序收集非 system 下标，取末尾 2 条）
-		var nonSysIdx []int
-		for i, m := range msgs {
-			if m["role"] != "system" {
-				nonSysIdx = append(nonSysIdx, i)
-			}
-		}
-		start := len(nonSysIdx) - 2
-		if start < 0 {
-			start = 0
-		}
-		for _, idx := range nonSysIdx[start:] {
-			applyMsgCacheControl(msgs[idx], cacheMarker)
-		}
+	// Anthropic Prompt Caching（ADR-0102 决策三 / ADR-0105 决策三），最多 4 个断点。缓存前缀顺序为
+	// tools → system → messages，断点缓存其之前的全部内容。
+	// 断点 1（L0 末）: 第一个 system block——ImmutableCore（人格/工具摘要/偏好，跨会话、跨阶段
+	//         稳定）连同其前的 tools 一并缓存；无 system 时退回 tools 末尾。
+	// 有 Message.CacheBreakpoint 标记时（prompt 组装方在 L2 历史末置位）：
+	//   断点 2: 标记消息（最多取最靠后的若干个，受 4 上限约束）；
+	//   断点 3: 最后一条非 system 消息（本轮增量）。
+	// 无标记时回退旧启发式：末个 system block + 最近 2 条非 system 消息。
+	if a.enablePromptCaching {
+		a.applyPromptCaching(payload, msgs, systemParts, flagSys, flagMsg)
 	}
 
 	b, err := json.Marshal(payload)
@@ -163,6 +150,98 @@ func applyMsgCacheControl(msg map[string]any, marker map[string]string) {
 			}
 		}
 	}
+}
+
+// anthropicCacheMarker 构造 cache_control 标记。ttl 为 "1h" 时显式下发；5m 是 API 默认，不下发以保持
+// 请求体与旧版字节一致。同一请求内所有断点使用同一 TTL（API 要求长 TTL 条目排在短 TTL 之前）。
+func (a *AnthropicAdapter) anthropicCacheMarker() map[string]string {
+	m := map[string]string{"type": "ephemeral"}
+	if a.cacheTTL == "1h" {
+		m["ttl"] = "1h"
+	}
+	return m
+}
+
+// maxAnthropicBreakpoints Anthropic 显式缓存断点上限。
+const maxAnthropicBreakpoints = 4
+
+// applyPromptCaching 按 ADR-0105 决策一的层对齐向 payload 注入 cache_control 断点，总数不超过 4。
+func (a *AnthropicAdapter) applyPromptCaching(payload map[string]any, msgs []map[string]any, systemParts []string, flagSys, flagMsg map[int]bool) {
+	marker := a.anthropicCacheMarker()
+	used := 0
+	if len(systemParts) > 0 {
+		used++ // 断点 1：首个 system block（L0 末），在下方渲染时落点
+	} else if tools, ok := payload["tools"].([]map[string]any); ok && len(tools) > 0 {
+		// 无 system 时退回在 tools 末尾打点，保住工具定义前缀。
+		tools[len(tools)-1]["cache_control"] = marker
+		used++
+	}
+
+	markSys, markMsg := pickBreakpoints(len(msgs), len(systemParts), flagSys, flagMsg, maxAnthropicBreakpoints-used)
+	if len(systemParts) > 0 {
+		markSys[0] = true
+		blocks := make([]map[string]any, len(systemParts))
+		for i, part := range systemParts {
+			blocks[i] = map[string]any{"type": "text", "text": part}
+			if markSys[i] {
+				blocks[i]["cache_control"] = marker
+			}
+		}
+		payload["system"] = blocks
+	}
+	for i := range msgs {
+		if markMsg[i] {
+			applyMsgCacheControl(msgs[i], marker)
+		}
+	}
+}
+
+// pickBreakpoints 在剩余名额 budget 内选出需要断点的 system block 与非 system 消息下标
+// （不含首个 system block，其断点由调用方固定放置）。
+//
+// 无任何 CacheBreakpoint 标记：回退旧启发式——末个 system block + 最近 2 条非 system 消息。
+// 有标记：最后一条消息优先占名额，其后标记消息按位置从后向前占用剩余名额
+// （历史越靠后越可能被下一轮复用），最后才是标记的 system block。
+func pickBreakpoints(nMsgs, nSys int, flagSys, flagMsg map[int]bool, budget int) (markSys, markMsg map[int]bool) {
+	markSys, markMsg = map[int]bool{}, map[int]bool{}
+	if len(flagSys) == 0 && len(flagMsg) == 0 {
+		if nSys > 1 {
+			markSys[nSys-1] = true
+		}
+		for i := nMsgs - 1; i >= 0 && i >= nMsgs-2; i-- {
+			markMsg[i] = true
+		}
+		return markSys, markMsg
+	}
+	if nMsgs > 0 && budget > 0 {
+		markMsg[nMsgs-1] = true
+		budget--
+	}
+	for i := nMsgs - 1; i >= 0 && budget > 0; i-- {
+		if flagMsg[i] && !markMsg[i] {
+			markMsg[i] = true
+			budget--
+		}
+	}
+	for i := nSys - 1; i > 0 && budget > 0; i-- {
+		if flagSys[i] {
+			markSys[i] = true
+			budget--
+		}
+	}
+	return markSys, markMsg
+}
+
+// anthropicToolChoice 把内部 ToolChoice 映射为 Anthropic tool_choice；未知值返回 nil（不下发）。
+// tool_choice 变化只使 messages 缓存失效，不影响工具定义与 system 前缀。
+func anthropicToolChoice(choice string) map[string]any {
+	switch choice {
+	case "none", "auto":
+		return map[string]any{"type": choice}
+	case "required", "any":
+		return map[string]any{"type": "any"}
+	}
+	return nil
 }
 
 func resolveAnthropicModel(requested string) string {

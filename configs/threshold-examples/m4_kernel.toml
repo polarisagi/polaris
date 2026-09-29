@@ -33,3 +33,4 @@ surprise_hint_threshold = 0.6
 'model_pool.validate' = 'default'
 'plan.reasoning_complexity' = 0.7
 'reflect.skip_complexity' = 0.4
+'cache.uniform_tools' = false

@@ -29,6 +29,7 @@ type AnthropicAdapter struct {
 	client              *http.Client
 	caps                types.ProviderCapabilities
 	enablePromptCaching bool   // 注入 cache_control 标记以激活 prompt caching
+	cacheTTL            string // cache_control.ttl：""|"5m"=API 默认不显式下发，"1h"=长 TTL（写入 2×）
 	baseURL             string // 空值 → "https://api.anthropic.com"（测试可覆盖）
 	tbr                 *metrics.TokenBurnRate
 }
@@ -45,6 +46,16 @@ func WithAnthropicPromptCaching() AnthropicOption {
 	return func(a *AnthropicAdapter) {
 		a.enablePromptCaching = true
 		a.caps.CostPer1KCacheHit = 0.30 // Anthropic cache read: $0.30/1M tokens
+	}
+}
+
+// WithAnthropicCacheTTL 设置缓存断点 TTL（ADR-0105 决策三，配置 m1_router.anthropic.cache_ttl）。
+// 仅接受 "5m"（API 默认，不显式下发）与 "1h"；其他值忽略，保持默认。
+func WithAnthropicCacheTTL(ttl string) AnthropicOption {
+	return func(a *AnthropicAdapter) {
+		if ttl == "1h" {
+			a.cacheTTL = ttl
+		}
 	}
 }
 
@@ -121,6 +132,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 		Model:          options.Model,
 		MaxTokens:      options.MaxTokens,
 		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
 		ThinkingMode:   options.ThinkingMode,
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
@@ -253,6 +265,7 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 		Model:          options.Model,
 		MaxTokens:      options.MaxTokens,
 		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
 		ThinkingMode:   options.ThinkingMode,
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
