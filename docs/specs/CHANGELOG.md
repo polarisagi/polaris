@@ -6,6 +6,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-29（ADR-0105 WP1：五层前缀账本 + 对话历史只追加 — 含**契约变更**）
+
+- **[契约] `protocol.ImmutableCore` 增 `StableMessage()` / `VolatileContent()`**：内核前缀账本取 L0 稳定核与 L3 易变层；`PrependToMessages` 语义改为稳定层置前、易变层插在**最后一条消息之前**（不再紧随稳定层），供网关直连等非内核调用方。实现 `memory/store.ImmutableCore`，测试替身须补两个方法。
+- **[契约] 稳定层字节稳定规则**：进入 ImmutableCore 稳定层的集合必须确定序（`InMemoryToolRegistry.List()` 按名称升序；插件摘要 SQL 带 `ORDER BY`；用户画像 map 按键排序），MCP/插件连接状态标记（✓/~/✗）移入易变层。
+- **[契约] `PromptBuilder.BuildLayered` + `protocol.Layer*`**：内核四阶段 × 两条路径按 L0..L4 输出；`WriteStable/WritePhaseSystem/WriteHistoryMessage/SetLayer` 为层写入器，只改次序不改信任分区。`fsm.WriteSessionLayer/WritePlanHints/FinishLayered` 为公共写入器，新增阶段须经它们写 L1/L2。
+- **[契约] 对话历史**：`fsm.RenderConversationHistory` 删除，改 `fsm.WindowConversationHistory`（分块跳窗 + 确定性锚定摘要）；Plan/Reflect 亦携带同一 L2。`StateContext.PlanHintBlocks` 承载 Plan 运行期提示块，取代对 `msgs[0]` 的追加（会改写 L0）。
+
 ## 2026-09-29（ADR-0103 决策八：MCP 2026-07-28 客户端 — 含**契约变更**与 **DDL 变更**）
 
 - **[前端]** 插件目录窗口化渲染：单个市场（如 `anthropic/claude-plugins-community`）可达 2000+ 条目，一次性全挂 DOM 是切 tab 卡顿的根因；`filtered` 仍在内存内跑全量过滤/搜索不变，`visibleFiltered` 只截取前 N 页渲染，切 tab / 搜索时自动回到第一页，「加载更多」按需展开。不引入虚拟滚动依赖。

@@ -69,7 +69,7 @@ ZoneTaintedData=3    // 外部数据，[TaintLevel] Tracked，永不进入指令
 4. 签名通过 → Monotonic Version Gate: 查询 `sys_config.min_skill_version`，version < min → 拒绝 + CRITICAL + 审计事件 `prompt_builder_rollback_attack_blocked`
 5. 写入对应 zone string builder
 
-**kernel.PromptBuilder.Build**: 固定顺序 ZoneImmutable → ZoneCoreMemory → ZoneMutableSkill → ZoneTaintedData。ZoneTaintedData (以及带有高污点等级的 ZoneCoreMemory 区块) 追加前，对 `[TaintLevel] >= TaintMedium` 的内容执行 M11 Spotlighting 包裹：
+**kernel.PromptBuilder.Build**（非内核调用方；内核四阶段用 `BuildLayered` 五层前缀账本，见 M04，ADR-0105）: 固定顺序 ZoneImmutable → ZoneCoreMemory → ZoneMutableSkill → ZoneTaintedData。ZoneTaintedData (以及带有高污点等级的 ZoneCoreMemory 区块) 追加前，对 `[TaintLevel] >= TaintMedium` 的内容执行 M11 Spotlighting 包裹：
   `=== UNTRUSTED_DATA_{sha256(content)[:8]} ===\n{content}\n=== END_UNTRUSTED_DATA ===`
 spotlight_hex 由内容 SHA-256 前 8 位派生（非随机）→ 同内容同标记，PromptFn 保纯函数性，M12 Eval 回放可验证。M4 上下文注入同此规则。
 
@@ -496,7 +496,7 @@ PromptBuilder 布局实现见 `internal/agent/`（PromptBuilder），SessionComp
 
 ### 11.0 系统提示词三层组装
 
-系统提示词在 `ImmutableCore.PrependToMessages()` 中按三层顺序组装，对应 KV Cache 由稳定到易变的排列原则：
+系统提示词的稳定层由 `ImmutableCore.StableMessage()` 渲染（L0，内核路径），易变层由 `ImmutableCore.VolatileContent()` 单独取出并置于对话历史之后（L3）；`PrependToMessages()` 仅供网关直连等非内核调用方（稳定层置前，易变层插在最后一条消息之前）。稳定层内的集合（工具名、插件/MCP 名称、用户画像）必须确定序，MCP 连接状态标记属易变量、只进易变层（ADR-0105 决策一）。三层组装对应 KV Cache 由稳定到易变的排列原则：
 
 | 层 | 内容 | 变更频率 | 文件 |
 |----|------|---------|------|

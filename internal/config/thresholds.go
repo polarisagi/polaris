@@ -111,7 +111,8 @@ type M4KernelThresholds struct {
 	PRMMinThreshold   float64 `toml:"prm.min_threshold"`   // 0.4 — 全部候选低于此分数时兜底取第一个候选
 	PRMScorerModel    string  `toml:"prm.scorer_model"`    // "" — 留空则沿用 Provider 默认路由，不强制指定 budget-tier 模型名
 
-	// 对话历史进入内核的上限（ADR-0098 决策四），自尾部截取；Perceive 与 Respond 各渲染一次。
+	// 对话历史进入内核的上限（ADR-0098 决策四；ADR-0105 决策二改为分块跳窗）：越界时一次丢弃前若干块
+	// （步长 = max_messages/2），四个阶段共用同一 L2。
 	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
 	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
 
