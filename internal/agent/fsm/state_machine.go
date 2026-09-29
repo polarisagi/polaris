@@ -112,6 +112,9 @@ type StateContext struct {
 	// 结果落地时重写（含失败/寒暄旁路清空），只由 Perceive→Respond 边消费，
 	// 其它入边（Plan 空计划/反思/耗尽）一律走 Respond LLM，杜绝陈旧回复被发布。
 	PreparedReply string
+	// TurnRecall 本回合的记忆召回结果（ADR-0105 决策四）。Perceive 写入，Plan 复用并只补
+	// 未覆盖的来源；与 PreparedReply 同一处在回合起点清空。读写均须持 Mu，召回 goroutine 不得触碰。
+	TurnRecall *TurnRecall
 	// ExecAllSucceeded 最近一次 S_EXECUTE 全部节点返回 Success（无 Go 错误、无工具软失败、
 	// 未降级重规划）。每次执行开始置 false，仅作 Reflect 可跳过的判据（ADR-0102 决策四）。
 	ExecAllSucceeded bool

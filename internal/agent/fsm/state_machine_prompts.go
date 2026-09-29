@@ -225,7 +225,7 @@ func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateCon
 	WriteKernelInstruction(b, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
 
 	resultTS := taint.NewTaintedString(
-		"Execution Result: "+string(sCtx.ExecuteResult),
+		"Execution Result: "+string(ExecuteResultForPrompt(sCtx)),
 		taint.TaintSource{OriginTaintLevel: types.TaintHigh},
 		"m4_execute_result",
 	)
