@@ -145,7 +145,7 @@ type CommandResult struct {
 // MemoryFacade 会话编排对记忆门面的消费端接口（仅 Stage 3 渲染 Task Canvas
 // 时调用）。与 chat.MemoryFacade 方法集完全一致，Go 结构化类型无需显式转换。
 type MemoryFacade interface {
-	RenderTaskCanvas() string
+	RenderTaskCanvas(ctx context.Context, sessionID string) string
 }
 
 // HookRunner 会话编排对 hooks.json 引擎的消费端接口（ADR-0103 决策六；两家标准事件）。

@@ -109,6 +109,9 @@ type AgentBundle struct {
 
 	// ReaperStop：run() 在 shutdown 时显式调用（defer 也会再次调用，幂等）
 	ReaperStop context.CancelFunc
+
+	// SurpriseCalc 全进程单例；run() 在 shutdown 时 Close 停掉 worker goroutine（幂等）。
+	SurpriseCalc *surprise.SurpriseCalculator
 }
 
 // buildAgent 构造并完全装配一个 Agent 实例。
@@ -132,6 +135,7 @@ func buildAgent(
 	workspaceCtxLoader *agentctx.WorkspaceContextLoader,
 	workspaceRoot string,
 	projectResolver func(ctx context.Context, sessionID string) *agentctx.ProjectContext,
+	surpriseCalc *surprise.SurpriseCalculator,
 ) *sysagent.Agent {
 	a := sysagent.NewAgent(sessionID, taskRepo, sb.Router)
 	a.SetExtQuerier(sb.Store.DB())
@@ -242,8 +246,9 @@ func buildAgent(
 	a.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
 
 	a.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
-	sc := surprise.NewSurpriseCalculator(mb.FallacyPool)
-	a.SetSurpriseCalc(sc)
+	// 进程单例（bootAgent 构造一次、进程关停时 Close）：此前每个会话 Agent 各建一个实例，
+	// 泄漏 4 个 worker goroutine 且 Markov 矩阵随 Agent 丢弃（ADR-0104 决策七）。
+	a.SetSurpriseCalc(surpriseCalc)
 	if kb != nil && kb.KnowledgeBase != nil {
 		a.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
 	}
@@ -252,7 +257,7 @@ func buildAgent(
 	}
 
 	// Inject trajectory store event writer for state trans and LLM call recording (Task 1)
-	a.GetStateMachine().SetSessionEventWriter(newStoreEventWriter(sb.Store))
+	a.GetStateMachine().SetSessionEventWriter(newStoreEventWriter(repo.NewSQLiteTrajectoryRepository(sb.Store.DB())))
 	// M04 §8 崩溃恢复：注入 KV Store 供 Run() 写入/清除 in-flight 崩溃检测标记
 	// （见 internal/agent/agent.go markInFlight/clearInFlight + boot_crash_recovery.go）。
 	a.InjectEventStore(sb.Store)
@@ -348,6 +353,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	evalStore := harness.NewSQLiteEvalStore(sb.Store, evalAccessEngine)
 	evalRunner := harness.NewRunner(sb.Store, evalStore, sb.Cfg.Thresholds, sb.Cfg.Eval)
 	evalRunner.InjectEvalPrivKey(m9OptimizerPriv)
+	evalRunner.InjectTrajectoryReader(repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()))
 	// V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区审计，见 00-Global-Dictionary.md
 	// §V8-Principle + internal/eval/analysis/meta_eval.go）。仅构造，不在此处调用——
 	// 调用入口是 evaladmin 的 HTTP handler（httpServer.SetEvalAdmin，boot_server.go），
@@ -594,7 +600,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		return &agentctx.ProjectContext{ID: p.ID, Root: p.RootPath, Trusted: p.Trusted, Instructions: p.Instructions}
 	}
 
-	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver)
+	// SurpriseCalculator 进程单例：先从轨迹工具序列预热 Markov 矩阵，再注入全部 Agent。
+	surpriseCalc := surprise.NewSurpriseCalculator(mb.FallacyPool)
+	warmStartSurprise(ctx, repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()), surpriseCalc)
+
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
 
 	maxConcurrent := sb.Cfg.System.MaxAgents
 	if maxConcurrent <= 0 {
@@ -602,7 +612,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
-		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver)
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
 	}, maxConcurrent).WithInteractiveReserve(sb.Cfg.Thresholds.M8Orchestrator.AgentsInteractiveReserved).WithSessionCloseCallback(func(sessionID string) {
 		if tb.Catalog != nil {
 			if cc, ok := tb.Catalog.(interface{ CleanupSession(string) }); ok {
@@ -841,7 +851,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// [W-5-B] 接入 FoundingAnchor 周期漂移检测（2026-07-14 补齐真实轨迹来源）：
 	// 此前 recentTrajectories 恒为空 slice（TODO 占位），根因是 sCtx.SessionID
 	// 从未被赋值（见 internal/agent/agent.go NewAgent 同批修复），
-	// events:session:{id}: 事件流按真实 sessionID 查询永远为空。现改为经
+	// session_trajectory 按真实 sessionID 查询永远为空。现改为经
 	// ChatRepository.ListSessions 取最近活跃会话 ID，逐个调用
 	// harness.TrajectoryRecorder.Record 聚合出真实 TrajectoryTrace。
 	concurrent.SafeGo(ctx, "founding-anchor-drift-detector", func(ctx context.Context) {
@@ -850,7 +860,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			driftCheckSessionLimit     = 50  // 周期漂移检查取近期窗口，不需要全量历史
 		)
 		chatRepo := repo.NewSQLiteChatRepository(sb.Store.DB())
-		recorder := harness.NewTrajectoryRecorder(sb.Store)
+		recorder := harness.NewTrajectoryRecorder(repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()))
 		gatherRecentTrajectories := func(ctx context.Context, limit int) []harness.TrajectoryTrace {
 			sessions, err := chatRepo.ListSessions(ctx, limit)
 			if err != nil {
@@ -1181,6 +1191,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	return &AgentBundle{
+		SurpriseCalc:     surpriseCalc,
 		EvalRunner:       evalRunner,
 		EvalStore:        evalStore,
 		MetaEvalSentinel: metaEvalSentinel,

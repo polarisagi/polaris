@@ -3,6 +3,8 @@
 package memory
 
 import (
+	"context"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -14,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 )
 
 // Layer classifies memory into four levels per the 2026 consensus.
@@ -56,7 +59,6 @@ func NewMemImpl(store protocol.Store) *MemImpl {
 		procedural: procedural,
 		retriever:  memretrieval.NewHybridRetriever(store),
 		reflection: memstore.NewReflectionMem(store),
-		taskCanvas: memgraph.NewTaskMermaidCanvas(),
 	}
 }
 
@@ -78,7 +80,6 @@ func NewMemImplFull(store protocol.Store, graph protocol.GraphTraverser, cogniti
 		episodic:   memstore.NewEpisodicMemWithCognitive(store, indexer, cognitive),
 		semantic:   memstore.NewSemanticMemWithCognitive(store, nil, cognitive),
 		procedural: procedural,
-		taskCanvas: memgraph.NewTaskMermaidCanvas(),
 	}
 	if db != nil {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
@@ -199,21 +200,32 @@ func (m *MemImpl) SetEpisodicBlobOverflowWriter(w memstore.BlobOverflowWriter) {
 	m.episodic.SetBlobOverflowWriter(w)
 }
 
-// TrackToolCall 记录一次工具调用开始（M05 §11.3 TaskMermaidCanvas），创建 pending 节点。
-// taskCanvas 保证由构造器初始化，非 nil。
-func (m *MemImpl) TrackToolCall(toolUseID, toolName string) {
-	m.taskCanvas.TrackToolCall(toolUseID, toolName)
+// TaskTrajectoryReader 任务画布对轨迹账本（session_trajectory）的消费端接口（HE-3）；
+// 由 cmd/polaris 注入 store/repo.SQLiteTrajectoryRepository。契约：按 seq 升序。
+type TaskTrajectoryReader interface {
+	ListToolBySession(ctx context.Context, sessionID string) ([]repo.TrajectoryRow, error)
 }
 
-// TrackToolResult 将 pending 节点转为已完成节点（成功/失败），追加到画布并自动连边。
-func (m *MemImpl) TrackToolResult(toolUseID string, success bool, summary string) {
-	m.taskCanvas.TrackToolResult(toolUseID, success, summary)
+// SetTrajectoryReader 注入轨迹读取端。bootMemory 早于 bootTools 执行、构造 MemImpl 时
+// 读连接尚未就绪，故与 SetEpisodicBlobOverflowWriter 一样由启动期原地补上。
+func (m *MemImpl) SetTrajectoryReader(r TaskTrajectoryReader) {
+	m.trajectory = r
 }
 
-// RenderTaskCanvas 生成当前任务的 Mermaid graph LR 文本，供 gateway 只读展示。
-// 空画布（尚无工具调用）返回空字符串。
-func (m *MemImpl) RenderTaskCanvas() string {
-	return m.taskCanvas.Render()
+// RenderTaskCanvas 生成指定会话的 Mermaid graph LR 工具调用画布（M05 §11.3），
+// 步骤取自该会话的工具轨迹行；无会话 ID、未注入读取端、尚无工具调用或读取失败均返回空串
+// （画布只是上下文压缩与只读展示的辅助，缺失不应阻断调用方）。
+// 不再持有任何画布状态：此前全进程共享单例，所有会话的工具调用混进同一张图。
+func (m *MemImpl) RenderTaskCanvas(ctx context.Context, sessionID string) string {
+	if m.trajectory == nil || sessionID == "" {
+		return ""
+	}
+	rows, err := m.trajectory.ListToolBySession(ctx, sessionID)
+	if err != nil {
+		slog.Warn("memory: 任务画布读取会话工具轨迹失败", "session", sessionID, "err", err)
+		return ""
+	}
+	return memgraph.RenderMmdCanvas(memgraph.MmdStepsFromTrajectory(rows))
 }
 
 // 编译期接口合规验证
@@ -239,8 +251,8 @@ type MemImpl struct {
 	retriever  *memretrieval.HybridRetrieverImpl
 	reflection protocol.ReflectionMemory // KV 实现或 SQL 实现，由构造器决定
 
-	// taskCanvas 当前任务的工具调用符号化画布（M05 §11.3），跨 agent/gateway 共享单实例。
-	taskCanvas *memgraph.TaskMermaidCanvas
+	// trajectory 任务画布的工具轨迹来源（M05 §11.3）；nil 时 RenderTaskCanvas 恒空。
+	trajectory TaskTrajectoryReader
 }
 
 const (

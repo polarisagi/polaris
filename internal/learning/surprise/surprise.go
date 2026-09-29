@@ -33,15 +33,19 @@ func (si *SurpriseIndex) Compute() float64 {
 		0.25*si.MEMFMatchSurprise
 }
 
-// SurpriseCalculator 异步计算器 (BoundedWorkQueue + LoadShedder)
+// SurpriseCalculator 异步计算器 (BoundedWorkQueue + LoadShedder)。
+//
+// 进程单例（ADR-0104 决策七）：由 cmd/polaris 构造一次并注入全部 Agent，进程关停时 Close。
+// 此前每个会话 Agent 各建一个实例，每个实例起 4 个 worker goroutine 且从不 Close（泄漏），
+// Markov 矩阵也随 Agent 丢弃、永远积累不到 Layer B 阈值。结果按 taskID 分桶，
+// 并发会话互不串味。
 type SurpriseCalculator struct {
 	queue           chan *CalcRequest
 	memfPool        *optimizer.FallacyMemoryPool
 	markov          *MarkovMatrix // 始终非 nil；达到 layerBThreshold 后自动激活 Layer B
 	layerBThreshold float64       // 可配置激活阈值，默认 DefaultLayerBThreshold
-	rollingAvg      float64       // 滑动平均 SurpriseIndex
-	rollingCount    int64
-	mu              sync.Mutex // 保护 rollingAvg/rollingCount/markov
+	buckets         *taskBuckets  // 按 taskID 分桶的 SurpriseIndex 滑动均值（有界 LRU）
+	mu              sync.Mutex    // 保护 buckets/markov
 	cancel          context.CancelFunc
 }
 
@@ -79,6 +83,7 @@ func NewSurpriseCalculatorWith(memf *optimizer.FallacyMemoryPool, layerBThreshol
 		queue:           make(chan *CalcRequest, 256), // cap=256
 		memfPool:        memf,
 		markov:          NewMarkovMatrix(), // 始终初始化，持续积累数据
+		buckets:         newTaskBuckets(DefaultTaskBucketCap),
 		layerBThreshold: layerBThreshold,
 		cancel:          cancel,
 	}
@@ -103,6 +108,14 @@ func (c *SurpriseCalculator) WithMarkovMatrix(m *MarkovMatrix) {
 	c.mu.Unlock()
 }
 
+// MarkovTransitions 返回内部矩阵已记录的转移总数（warm-start 后可观测积累进度）。
+func (c *SurpriseCalculator) MarkovTransitions() float64 {
+	c.mu.Lock()
+	m := c.markov
+	c.mu.Unlock()
+	return m.TotalTransitions()
+}
+
 // Submit 提交计算任务。如果队列满，执行丢弃降载（LoadShedding）。
 func (c *SurpriseCalculator) Submit(req *CalcRequest) bool {
 	select {
@@ -122,15 +135,15 @@ func (c *SurpriseCalculator) SubmitToolSeq(taskID string, toolSeq []string) {
 	})
 }
 
-// CurrentSurprise 返回滑动平均 SurpriseIndex，实现 SurpriseReader 接口。
-// 无历史数据时返回默认值 0.5。
-func (c *SurpriseCalculator) CurrentSurprise() float64 {
+// CurrentSurprise 返回指定任务的滑动平均 SurpriseIndex，实现 SurpriseReader 接口。
+// 该任务尚无历史数据（含空 taskID、桶已被淘汰）时返回中性默认值 0.5。
+func (c *SurpriseCalculator) CurrentSurprise(taskID string) float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.rollingCount == 0 {
-		return 0.5
+	if avg, ok := c.buckets.get(taskID); ok {
+		return avg
 	}
-	return c.rollingAvg
+	return 0.5
 }
 
 func (c *SurpriseCalculator) workerLoop(ctx context.Context) {
@@ -201,15 +214,12 @@ func (c *SurpriseCalculator) processRequest(req *CalcRequest) {
 	}
 	result := idx.Compute()
 
-	// 维护滑动平均（EWMA α=0.2），mutex 保护并发读写
-	c.mu.Lock()
-	if c.rollingCount == 0 {
-		c.rollingAvg = result
-	} else {
-		c.rollingAvg = 0.8*c.rollingAvg + 0.2*result
+	// 按 taskID 维护滑动平均（EWMA α=0.2），mutex 保护并发读写；空 taskID 不落桶。
+	if req.TaskID != "" {
+		c.mu.Lock()
+		c.buckets.observe(req.TaskID, result)
+		c.mu.Unlock()
 	}
-	c.rollingCount++
-	c.mu.Unlock()
 
 	select {
 	case req.ResultCh <- result:

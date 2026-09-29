@@ -2,7 +2,7 @@
 
 > Go | L3 治理层 | [Code-Package-Mapping] → internal/eval/> [HE-Rule-4]: Eval 第 0 行存在，失败 = PR 不能合并
 > 黄金测试集 + 轨迹回放 + 影子执行 + 回归基线 + 自动熔断
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 EvalCase / 2:58 Evaluator5层 / 3:78 轨迹录制 / 4:91 Runner / 4.1:112 开放基准适配器 / 5:125 Suite分区 / 6:158 IncidentToEval / 7:164 AutoBootstrap / 8:174 影子执行 / 9:182 连续采样 / 10:198 增量快照 / 11:210 回归检测 / 12:218 集成回放 / 13:222 InvariantTestSuite / 14:235 EvalStore / 15:239 闭环 / 17:245 (SOFT)降级 / 16:264 RedTeam常态化对抗 / 17-bis:281 已知Bug修复记录 / 18:287 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 EvalCase / 2:58 Evaluator5层 / 3:78 轨迹录制 / 4:93 Runner / 4.1:114 开放基准适配器 / 5:127 Suite分区 / 6:160 IncidentToEval / 7:166 AutoBootstrap / 8:176 影子执行 / 9:184 连续采样 / 10:200 增量快照 / 11:212 回归检测 / 12:220 集成回放 / 13:224 InvariantTestSuite / 14:237 EvalStore / 15:241 闭环 / 17:247 (SOFT)降级 / 16:266 RedTeam常态化对抗 / 17-bis:283 已知Bug修复记录 / 18:289 依赖 -->
 ## 0-bis. 职责边界
 
 | M12 **是** | M12 **不是** |
@@ -81,10 +81,12 @@ EvalResult:
 
 `TrajectoryTrace` 包含 LLMCalls / ToolCalls / StateTrans 三类记录。
 
-**TrajectoryRecorderImpl** 构造时需注入 `protocol.Store`（`NewTrajectoryRecorder(store)`）；`Record()` 扫描 `events:session:{id}:` 前缀，按 Type 分流：
+**TrajectoryRecorderImpl** 构造时注入 harness 包内声明的 `TrajectoryReader`（`NewTrajectoryRecorder(reader)`，生产实现 `store/repo.SQLiteTrajectoryRepository`，读 `session_trajectory` 表 045，ADR-0104 决策七；2026-09-29 订正：原为 `protocol.Store` 扫描 KV `events:session:{id}:` 前缀）；`Record()` 按 seq 升序读取会话事件，按 `event_type` 分流，每类最多 500 条：
 - `llm_call/inference_request` → LLMCalls
 - `action_pending/action_done` → ToolCalls
 - 其余 → StateTrans
+
+**RunReplay**（`RunnerImpl`）检查 seq 连续性（从 1 起逐条 +1），缺口处 `DivergentOffset` 报缺口后的首个 seq 且 `Consistent=false`（2026-09-29 订正：原读取不存在的 `Offset` 字段，连续性检查恒通过）。
 
 **TrajectoryReplayerImpl** 验证规则：状态转移链不断裂（StateTrans[i].From == StateTrans[i-1].To），断裂时返回含 step 位置的 Fail 结果；重放路径不产生新 LLM 调用（zero-token 保证，`new_llm=0`）。
 

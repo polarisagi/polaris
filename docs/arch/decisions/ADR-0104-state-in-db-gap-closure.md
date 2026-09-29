@@ -79,3 +79,4 @@ KillSwitch 瞬时计数、`TokenManager`（进程级密钥）、`ExemptionVault`
 | 日期 | 变更 |
 |------|------|
 | 2026-09-29 | 初稿 |
+| 2026-09-29 | 决策七实施复核：G9 事实订正——`TrackToolCall/TrackToolResult` 并非零调用，`agent_execute_dag.go` 的 `toolExecFn` 经 `a.memory` 调用，但落在全进程共享的 `MemImpl.taskCanvas` 单例上（跨会话串味）；实施时该两处调用与单例一并删除，画布改由工具轨迹行渲染。`GET /v1/agent/mmd-canvas` 新增必填 query `session_id`（缺失返回 400）。 |

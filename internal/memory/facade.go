@@ -206,17 +206,9 @@ func (f *MemoryFacadeImpl) HasPrunableGraphEdges(ctx context.Context) (bool, err
 	return has, nil
 }
 
-// TrackToolCall 调用（M05 §11.3），委托给底层 MemorySystem 共享单实例。
-func (f *MemoryFacadeImpl) TrackToolCall(toolUseID, toolName string) {
-	f.sys.Mem().TrackToolCall(toolUseID, toolName)
-}
-
-func (f *MemoryFacadeImpl) TrackToolResult(toolUseID string, success bool, summary string) {
-	f.sys.Mem().TrackToolResult(toolUseID, success, summary)
-}
-
-func (f *MemoryFacadeImpl) RenderTaskCanvas() string {
-	return f.sys.Mem().RenderTaskCanvas()
+// RenderTaskCanvas 渲染指定会话的工具调用画布（M05 §11.3），委托给底层 MemorySystem。
+func (f *MemoryFacadeImpl) RenderTaskCanvas(ctx context.Context, sessionID string) string {
+	return f.sys.Mem().RenderTaskCanvas(ctx, sessionID)
 }
 
 // legacy (for memory system internals)

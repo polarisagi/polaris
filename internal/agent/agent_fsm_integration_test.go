@@ -198,11 +198,8 @@ func (m *mockMemoryForIntegration) AppendReflection(ctx context.Context, entry t
 func (m *mockMemoryForIntegration) ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
 	return nil, nil
 }
-func (m *mockMemoryForIntegration) PruneMemoryGraph(ctx context.Context) error { return nil }
-func (m *mockMemoryForIntegration) TrackToolCall(toolUseID, toolName string)   {}
-func (m *mockMemoryForIntegration) TrackToolResult(toolUseID string, success bool, summary string) {
-}
-func (m *mockMemoryForIntegration) RenderTaskCanvas() string { return "" }
+func (m *mockMemoryForIntegration) PruneMemoryGraph(ctx context.Context) error      { return nil }
+func (m *mockMemoryForIntegration) RenderTaskCanvas(context.Context, string) string { return "" }
 
 type mockEpisodicMemForIntegration struct {
 	events []types.Event

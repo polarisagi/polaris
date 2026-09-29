@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -125,57 +126,69 @@ type RegressionAlert struct {
 // 零 LLM 重放：录制 LLM 响应快照，重放时从快照返回，不产生真实 LLM 调用。
 // ============================================================================
 
-// TrajectoryRecorderImpl 通过事件日志扫描构建轨迹快照。
-// 扫描前缀 "events:session:{sessionID}:"，按类型分流到 LLMCalls / ToolCalls / StateTrans。
+// TrajectoryReader 轨迹账本（session_trajectory，ADR-0104 决策七）的读取端消费接口（HE-3）；
+// 由 store/repo.SQLiteTrajectoryRepository 实现。契约：返回结果按 seq 升序。
+type TrajectoryReader interface {
+	ListBySession(ctx context.Context, sessionID string) ([]repo.TrajectoryRow, error)
+}
+
+// trajectoryTypeCap 每类（LLM 调用 / 工具调用 / 状态迁移）最多收录条数，防止超长会话撑爆快照。
+const trajectoryTypeCap = 500
+
+// TrajectoryRecorderImpl 从 session_trajectory 读取会话事件流并构建轨迹快照。
+// 按 event_type 分流到 LLMCalls / ToolCalls / StateTrans。
 type TrajectoryRecorderImpl struct {
-	store protocol.Store
+	reader TrajectoryReader
 }
 
 var _ TrajectoryRecorder = (*TrajectoryRecorderImpl)(nil)
 
-func NewTrajectoryRecorder(store protocol.Store) *TrajectoryRecorderImpl {
-	return &TrajectoryRecorderImpl{store: store}
+func NewTrajectoryRecorder(reader TrajectoryReader) *TrajectoryRecorderImpl {
+	return &TrajectoryRecorderImpl{reader: reader}
 }
 
-// Record 从 Store 扫描 session 事件流，构建 TrajectoryTrace。
+// Record 读取 session 事件流（按 seq 升序），构建 TrajectoryTrace。
 // 事件路由规则：
 //   - "llm_call" | "inference_request" → LLMCalls
 //   - "action_pending" | "action_done" | "tool_call" → ToolCalls
 //   - 其余状态迁移事件 → StateTrans（From 取前一状态 To，形成链）
 func (r *TrajectoryRecorderImpl) Record(ctx context.Context, sessionID string) (*TrajectoryTrace, error) {
-	if r.store == nil {
+	if r.reader == nil {
 		return &TrajectoryTrace{SessionID: sessionID}, nil
 	}
 
-	prefix := fmt.Appendf(nil, "events:session:%s:", sessionID)
-	iter, err := r.store.Scan(ctx, prefix)
+	rows, err := r.reader.ListBySession(ctx, sessionID)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "trajectory_recorder: scan failed", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "trajectory_recorder: read failed", err)
 	}
-	defer iter.Close()
 
 	trace := &TrajectoryTrace{SessionID: sessionID}
 	var prevStateTo string
 
-	for iter.Next() {
-		val := iter.Value()
-		var raw map[string]any
-		if err := json.Unmarshal(val, &raw); err != nil {
-			continue
-		}
-		evType, _ := raw["type"].(string)
-
+	for _, row := range rows {
+		evType := row.EventType
 		switch evType {
 		case "llm_call", "inference_request":
-			if len(trace.LLMCalls) < 500 {
+			if len(trace.LLMCalls) < trajectoryTypeCap {
+				var raw map[string]any
+				if err := json.Unmarshal([]byte(row.Payload), &raw); err != nil {
+					continue
+				}
 				req, _ := raw["request"].(map[string]any)
 				resp, _ := raw["response"].(map[string]any)
 				trace.LLMCalls = append(trace.LLMCalls, LLMCallRecord{Request: req, Response: resp})
 			}
 
 		case "action_pending", "action_done", "tool_call":
-			if len(trace.ToolCalls) < 500 {
+			if len(trace.ToolCalls) < trajectoryTypeCap {
+				var raw map[string]any
+				if err := json.Unmarshal([]byte(row.Payload), &raw); err != nil {
+					continue
+				}
 				name, _ := raw["tool"].(string)
+				if name == "" {
+					name = row.ToolName
+				}
 				input, _ := raw["args"].(map[string]any)
 				output, _ := raw["result"].(map[string]any)
 				trace.ToolCalls = append(trace.ToolCalls, ToolCallRecord{Name: name, Input: input, Output: output})
@@ -184,16 +197,13 @@ func (r *TrajectoryRecorderImpl) Record(ctx context.Context, sessionID string) (
 		default:
 			// 状态迁移事件：task_perceived / plan_generated / execution_completed / reflection_completed 等
 			if evType != "" {
-				if len(trace.StateTrans) < 500 {
+				if len(trace.StateTrans) < trajectoryTypeCap {
 					tr := StateTransRecord{From: prevStateTo, To: evType, Event: evType}
 					trace.StateTrans = append(trace.StateTrans, tr)
 				}
 				prevStateTo = evType
 			}
 		}
-	}
-	if iter.Err() != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "trajectory_recorder: iteration failed", iter.Err())
 	}
 
 	return trace, nil

@@ -1,144 +1,107 @@
 package graph
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 )
 
-func TestTaskMermaidCanvas_EmptyRender(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	if got := c.Render(); got != "" {
-		t.Errorf("空画布应返回空字符串，got %q", got)
+func toolRow(tool string, ok bool, payload string) repo.TrajectoryRow {
+	return repo.TrajectoryRow{ToolName: tool, ToolOK: &ok, Payload: payload}
+}
+
+func TestRenderMmdCanvas_Empty(t *testing.T) {
+	if got := RenderMmdCanvas(nil); got != "" {
+		t.Errorf("无步骤应返回空字符串，got %q", got)
+	}
+	if got := RenderMmdCanvas(MmdStepsFromTrajectory(nil)); got != "" {
+		t.Errorf("空轨迹应返回空字符串，got %q", got)
 	}
 }
 
-func TestTaskMermaidCanvas_SingleSuccessNode(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	c.TrackToolCall("id1", "read_file")
-	c.TrackToolResult("id1", true, "读取 config.go")
-
-	rendered := c.Render()
-	if !strings.Contains(rendered, "graph LR") {
-		t.Error("渲染结果应包含 graph LR")
-	}
-	if !strings.Contains(rendered, "read_file") {
-		t.Error("渲染结果应包含工具名")
-	}
-	if !strings.Contains(rendered, mmdStatusSuccess) {
-		t.Error("渲染结果应包含成功符号 ✓")
-	}
-	// 成功节点应有绿色样式
-	if !strings.Contains(rendered, "fill:#4a4") {
-		t.Error("成功节点应有绿色样式")
+func TestRenderMmdCanvas_SingleSuccessNode(t *testing.T) {
+	rendered := RenderMmdCanvas(MmdStepsFromTrajectory([]repo.TrajectoryRow{
+		toolRow("read_file", true, `{"tool":"read_file","result":{"path":"config.go"}}`),
+	}))
+	for _, want := range []string{"graph LR", "read_file", mmdStatusSuccess, "fill:#4a4", "config.go", `N1["`} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("渲染结果应包含 %q:\n%s", want, rendered)
+		}
 	}
 }
 
-func TestTaskMermaidCanvas_FailedNodeStyle(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	c.TrackToolCall("id1", "bash")
-	c.TrackToolResult("id1", false, "make build 失败")
-
-	rendered := c.Render()
-	if !strings.Contains(rendered, mmdStatusFailed) {
-		t.Error("渲染结果应包含失败符号 ✗")
+func TestRenderMmdCanvas_FailedNodeUsesErrorText(t *testing.T) {
+	rendered := RenderMmdCanvas(MmdStepsFromTrajectory([]repo.TrajectoryRow{
+		toolRow("bash", false, `{"result":{"error":"make build 失败"}}`),
+	}))
+	if !strings.Contains(rendered, mmdStatusFailed) || !strings.Contains(rendered, "fill:#d64") {
+		t.Errorf("失败节点应有 ✗ 与红色样式:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "fill:#d64") {
-		t.Error("失败节点应有红色样式")
+	if !strings.Contains(rendered, "make build 失败") {
+		t.Errorf("失败摘要应取 error 文本:\n%s", rendered)
 	}
 }
 
-func TestTaskMermaidCanvas_MultiStepFlow(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	// 模拟典型工具执行流
-	c.TrackToolCall("id1", "read_file")
-	c.TrackToolResult("id1", true, "读取 Makefile")
-	c.TrackToolCall("id2", "bash")
-	c.TrackToolResult("id2", false, "build 失败")
-	c.TrackToolCall("id3", "edit_file")
-	c.TrackToolResult("id3", true, "修复 Makefile")
-	c.TrackToolCall("id4", "bash")
-	c.TrackToolResult("id4", true, "build 成功")
-
-	rendered := c.Render()
-
-	// 验证节点顺序
-	if !strings.Contains(rendered, "N1") || !strings.Contains(rendered, "N4") {
-		t.Error("应包含 N1~N4 节点")
+func TestRenderMmdCanvas_MultiStepFlow(t *testing.T) {
+	rendered := RenderMmdCanvas(MmdStepsFromTrajectory([]repo.TrajectoryRow{
+		toolRow("read_file", true, `{}`),
+		toolRow("bash", false, `not json`),
+		{EventType: "llm_call", Payload: `{}`}, // 非工具行不入画布
+		toolRow("edit_file", true, `{}`),
+	}))
+	if !strings.Contains(rendered, "N1") || !strings.Contains(rendered, "N3") || strings.Contains(rendered, "N4") {
+		t.Errorf("应恰有 N1~N3:\n%s", rendered)
 	}
-	// 验证边连接
-	if !strings.Contains(rendered, "-->") {
-		t.Error("多步骤画布应有边连接")
+	if strings.Count(rendered, "-->") != 2 {
+		t.Errorf("3 步应有 2 条顺序边:\n%s", rendered)
 	}
-	// token 估算应合理
-	tokens := c.TokenEstimate()
-	if tokens <= 0 || tokens > 500 {
-		t.Errorf("token 估算应在合理范围内，got %d", tokens)
+	if !strings.Contains(rendered, "bash "+mmdStatusFailed+" | failed") {
+		t.Errorf("坏 payload 的失败步骤摘要应降级为 failed:\n%s", rendered)
 	}
 }
 
-func TestTaskMermaidCanvas_LabelTruncation(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	long := strings.Repeat("非常长的摘要文本", 10) // 80+ 字
-	c.TrackToolCall("id1", "tool")
-	c.TrackToolResult("id1", true, long)
-
-	rendered := c.Render()
-	// 渲染后标签不应超过 mmdMaxLabelChars 字符
+func TestRenderMmdCanvas_LabelTruncation(t *testing.T) {
+	long := strings.Repeat("非常长的摘要文本", 10)
+	rendered := RenderMmdCanvas(MmdStepsFromTrajectory([]repo.TrajectoryRow{
+		toolRow("tool", true, fmt.Sprintf(`{"result":{"s":%q}}`, long)),
+	}))
 	if strings.Count(rendered, "非常长的摘要文本") > 6 {
 		t.Error("超长 summary 应被截断")
 	}
-}
-
-func TestTaskMermaidCanvas_UnknownToolID(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	// 没有先调用 TrackToolCall 就调用 TrackToolResult
-	c.TrackToolResult("unknown_id", true, "orphan result")
-
-	rendered := c.Render()
-	// 应降级为 unknown 工具名，不崩溃
-	if !strings.Contains(rendered, "unknown") {
-		t.Error("未知 tool_use_id 应降级为 unknown 工具名")
+	if !strings.Contains(rendered, "…") {
+		t.Error("截断应带省略号")
 	}
 }
 
-func TestTaskMermaidCanvas_Reset(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	c.TrackToolCall("id1", "tool")
-	c.TrackToolResult("id1", true, "done")
-
-	c.Reset()
-	if c.NodeCount() != 0 {
-		t.Error("Reset 后 NodeCount 应为 0")
-	}
-	if c.Render() != "" {
-		t.Error("Reset 后 Render 应返回空字符串")
-	}
-}
-
-func TestTaskMermaidCanvas_MaxNodes(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	// 超过 mmdMaxNodes 后不应 panic，多余节点静默忽略
+// 超过 mmdMaxNodes 时保留最近的步骤，并重新编号，不 panic。
+func TestMmdStepsFromTrajectory_KeepsMostRecent(t *testing.T) {
+	rows := make([]repo.TrajectoryRow, 0, mmdMaxNodes+10)
 	for i := range mmdMaxNodes + 10 {
-		id := strings.Repeat("x", i+1)
-		c.TrackToolCall(id, "tool")
-		c.TrackToolResult(id, true, "step")
+		rows = append(rows, toolRow(fmt.Sprintf("tool%d", i), true, `{}`))
 	}
-	if c.NodeCount() > mmdMaxNodes {
-		t.Errorf("节点数不应超过 mmdMaxNodes(%d)，got %d", mmdMaxNodes, c.NodeCount())
+	steps := MmdStepsFromTrajectory(rows)
+	if len(steps) != mmdMaxNodes {
+		t.Fatalf("节点数应封顶 %d，got %d", mmdMaxNodes, len(steps))
 	}
-}
-
-func TestTaskMermaidCanvas_SpecialCharsEscaped(t *testing.T) {
-	c := NewTaskMermaidCanvas()
-	c.TrackToolCall("id1", `bash[rm -rf]`)
-	c.TrackToolResult("id1", true, `output "hello"`)
-
-	rendered := c.Render()
-	// 确认双引号被转义
-	if strings.Count(rendered, `"`) > strings.Count(rendered, `["`) {
-		// 标签内不应有裸双引号（除了节点定义的包裹引号）
-		t.Log("rendered:", rendered) // 辅助调试
+	if steps[0].Tool != "tool10" || steps[0].NodeID != "N1" || steps[len(steps)-1].Tool != fmt.Sprintf("tool%d", mmdMaxNodes+9) {
+		t.Errorf("应保留最近步骤并从 N1 重编号: first=%+v last=%+v", steps[0], steps[len(steps)-1])
 	}
 }
 
-// ─── retrieval.jaccardSimilarity 单测 ───────────────────────────────────────────────────
+func TestRenderMmdCanvas_SpecialCharsEscaped(t *testing.T) {
+	rendered := RenderMmdCanvas(MmdStepsFromTrajectory([]repo.TrajectoryRow{
+		toolRow(`bash[rm -rf]`, true, `{"result":{"o":"say \"hello\""}}`),
+	}))
+	if strings.Contains(rendered, "bash[rm") || strings.Contains(rendered, `\"`) {
+		t.Errorf("方括号/双引号应被转义:\n%s", rendered)
+	}
+}
+
+func TestMmdStepsFromTrajectory_NullToolOKDrawnFailed(t *testing.T) {
+	steps := MmdStepsFromTrajectory([]repo.TrajectoryRow{{ToolName: "x", Payload: `{}`}})
+	if len(steps) != 1 || steps[0].Status != mmdStatusFailed {
+		t.Fatalf("NULL tool_ok 应按失败画: %+v", steps)
+	}
+}

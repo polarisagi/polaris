@@ -2,7 +2,7 @@
 
 > MCP（Model Context Protocol，模型上下文协议） 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:184 三级沙箱(CANONICAL) / 5:385 PolicyGate / 6:448 Capability / 7:473 动作扩展 / 8:616 Usage演化 / 12:657 (SOFT)降级 / 13:675 跨模块契约 / 14:695 Plugin / 15:737 Hook -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:184 三级沙箱(CANONICAL) / 5:385 PolicyGate / 6:448 Capability / 7:473 动作扩展 / 8:616 Usage演化 / 12:658 (SOFT)降级 / 13:676 跨模块契约 / 14:696 Plugin / 15:738 Hook -->
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -631,7 +631,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 - **ToolUsagePolicy** — 工具的最优参数建议和适用场景。字段: `ToolName` / `ParamHints map[string]ParamHint`（最优参数建议）/ `BestFor []string`（适用场景）/ `NotRecommendedFor []string`（不适用场景）
 - **ParamHint** — 参数级别的最优值约束。字段: `DefaultValue any` / `Description string` / `MinValue any` / `MaxValue any`
 
-以下数据由 PolicyEvolver（§8.3）运行时维护，不持久化:
+以下数据由 PolicyEvolver（§8.3）运行时维护，不单独持久化；进程重启后由 `WarmStart` 从 `session_trajectory`（045）每工具最近 window 条工具事件重放恢复（2026-09-29 订正，ADR-0104 决策七：原重启清零；Params 不还原）:
 - **FailurePattern** — 失败模式签名（ErrorType × 输入特征），含频率计数和 LLM 生成的缓解策略
 - **CoToolPattern** — 工具组合模式（ToolName × Relationship ∈ {before, after}），按频率排序
 - **运行时统计** — `SuccessRate`（加权平均）、`AvgLatencyMs`、`UseCount`，每次调用后更新
@@ -640,6 +640,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 `internal/action/tool_usage_policy.go` 实现：
 
+- `WarmStart(outcomes)`：启动期把轨迹账本中的历史结果按时间序重放进滑动窗口（与实时 `RecordOutcome` 同一写入路径）
 - `RecordOutcome`：SuccessRate 滑动窗口加权更新 + 失败模式提取（ErrorType+频率，连续 3 次同类失败自动生成缓解建议）
 - `GetContextHint(toolName)`：历史调用 ≥20 次时返回 ParamHint 建议 + 高频失败警告；否则返回空（冷启动不注入噪声）
 - `BuildSystemHintBlock()`：聚合所有已激活工具的提示，生成标准 `<tool-hints>...</tool-hints>` XML 块，供 M4 DAG（Directed Acyclic Graph，有向无环图） 构建 InferRequest 时注入 System Prompt 的 ZoneMutableSkill 区。无任何提示时返回空字符串（调用方不注入）。

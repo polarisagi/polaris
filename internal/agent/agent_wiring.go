@@ -19,11 +19,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// SurpriseReader 读取当前 SurpriseIndex 滑动均值（consumer-side 接口）。
-// 由 learning/surprise.SurpriseCalculator 实现。
+// SurpriseReader 读取指定任务的 SurpriseIndex 滑动均值（consumer-side 接口）。
+// 由进程单例 learning/surprise.SurpriseCalculator 实现，全部 Agent 共享同一实例，
+// 故读写都带 taskID，结果按任务分桶，并发会话互不串味（ADR-0104 决策七）。
 type SurpriseReader interface {
 	SubmitToolSeq(taskID string, toolSeq []string)
-	CurrentSurprise() float64
+	CurrentSurprise(taskID string) float64
 }
 
 // SetPIIVault 注入 PIIVault，用于 Suspend 时持久化会话 PII。
@@ -248,7 +249,7 @@ func (a *Agent) SetTaskIntent(intentTS taint.TaintedString) {
 		if a.surpriseCalc != nil {
 			// 完整三分量异步计算（MEMF + Markov + Jaccard），CurrentSurprise 返回上一轮滑动均值
 			a.surpriseCalc.SubmitToolSeq(a.sCtx.TaskID, toolSeq)
-			a.sCtx.SurpriseIndex = a.surpriseCalc.CurrentSurprise()
+			a.sCtx.SurpriseIndex = a.surpriseCalc.CurrentSurprise(a.sCtx.TaskID)
 			// 同步写入 GlobalSurpriseIndex，保持 SelectPlanTier（fsm/transitions_respond.go planEffect）读值一致
 			metrics.GlobalSurpriseIndex().SetLastValue(a.sCtx.SurpriseIndex)
 		} else {

@@ -15,22 +15,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func canvasResultSummary(res *types.ToolResult, err error) string {
-	if err != nil {
-		return err.Error()
-	}
-	if res == nil {
-		return ""
-	}
-	if !res.Success {
-		if res.Error != "" {
-			return res.Error
-		}
-		return "failed"
-	}
-	return string(res.Output)
-}
-
 //nolint:gocyclo // MVP intercept logic
 func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args []byte) error {
 	if toolName != "computer_use" && toolName != "browser_use" {

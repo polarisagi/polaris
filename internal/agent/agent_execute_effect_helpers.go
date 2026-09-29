@@ -19,8 +19,7 @@ import (
 // consolidate 分支）可能落在同一操作系统时钟粒度内，UnixNano() 返回相同值
 // （已被 TestOutboxUniqueSuffix_Unique 实测命中）。加一个原子计数器可在
 // 时钟精度不足时兜底，保证进程内任意两次调用绝不相同。
-// 命名/写法与 cmd/polaris/boot_events.go 的 eventSeqTiebreaker 保持一致
-// （同为"纯粹避免碰撞的单调序号"，非业务共享状态，故豁免 gochecknoglobals）。
+// 纯粹避免碰撞的单调序号，非业务共享状态，故豁免 gochecknoglobals。
 //
 //nolint:gochecknoglobals
 var outboxSeqCounter atomic.Uint64

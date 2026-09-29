@@ -72,7 +72,7 @@ HT0 基线（`configs/defaults.toml`，tier=0, max_agents=3）已对齐，Featur
 
 ### 3.1 SurpriseIndex Layer B（马尔可夫转移矩阵）【代码已实现，等待数据积累转 stable】
 
-`MarkovMatrix`（`internal/learning/surprise/surprise_markov.go`，Laplace 平滑转移概率 + `Update`/`UpdateWeighted`/`Surprise`/`TotalTransitions`）已实现，且已接入 `SurpriseCalculator`（`internal/learning/surprise/surprise.go`）：`markov` 字段始终非 nil、在线持续积累转移数据；累计转移次数达到 `layerBThreshold` 后自动从 Tier-0 启发式基线切换为马尔可夫条件概率惊异值，无需人工升级。
+`MarkovMatrix`（`internal/learning/surprise/surprise_markov.go`，Laplace 平滑转移概率 + `Update`/`UpdateWeighted`/`Surprise`/`TotalTransitions`）已实现，且已接入 `SurpriseCalculator`（`internal/learning/surprise/surprise.go`）：`markov` 字段始终非 nil、在线持续积累转移数据（启动时由 `session_trajectory` 工具序列 warm-start，ADR-0104 决策七）；累计转移次数达到 `layerBThreshold` 后自动从 Tier-0 启发式基线切换为马尔可夫条件概率惊异值，无需人工升级。
 
 前置条件已从"时间维度（≥6 个月）"落地为"数据量维度"：`DefaultLayerBThreshold=100` 次转移、`MinLayerBThreshold=50`（约对应 50+ 条成功轨迹，见 M09 §2.0）。剩余是运营性前置条件——生产环境实际积累到阈值 + M12 评测验证增量收益后转 stable 主信号，代码层面已无阻塞。详见 `spec/state.yaml §signals.surprise_index`。
 

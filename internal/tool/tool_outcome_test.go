@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -12,10 +13,14 @@ type fakeSessionEventWriter struct {
 	sessionID      string
 	toolName       string
 	input, output  map[string]any
+	ok             bool
+	latencyMs      int64
 	writeCallCount int
 }
 
-func (f *fakeSessionEventWriter) WriteToolCallEvent(sessionID, toolName string, input, output map[string]any) {
+func (f *fakeSessionEventWriter) WriteToolCallEvent(sessionID, toolName string, input, output map[string]any, ok bool, latencyMs int64) {
+	f.ok = ok
+	f.latencyMs = latencyMs
 	f.writeCallCount++
 	f.sessionID = sessionID
 	f.toolName = toolName
@@ -34,7 +39,7 @@ func TestWriteToolCallOutcome_MalformedJSON_DegradesGracefully_S02(t *testing.T)
 	ctx := context.WithValue(context.Background(), protocol.CtxSessionIDKey{}, "sess-1")
 
 	res := &types.ToolResult{Output: []byte("{not valid json")}
-	writeToolCallOutcome(ctx, writer, "my_tool", []byte("{also not valid"), res, "")
+	writeToolCallOutcome(ctx, writer, "my_tool", []byte("{also not valid"), res, "", false, 0)
 
 	if writer.writeCallCount != 1 {
 		t.Fatalf("expected WriteToolCallEvent to be called exactly once, got %d", writer.writeCallCount)
@@ -57,7 +62,7 @@ func TestWriteToolCallOutcome_ValidJSON_ParsesFields_S02(t *testing.T) {
 	ctx := context.WithValue(context.Background(), protocol.CtxSessionIDKey{}, "sess-2")
 
 	res := &types.ToolResult{Output: []byte(`{"ok":true}`)}
-	writeToolCallOutcome(ctx, writer, "my_tool", []byte(`{"x":1}`), res, "")
+	writeToolCallOutcome(ctx, writer, "my_tool", []byte(`{"x":1}`), res, "", true, 42)
 
 	if writer.writeCallCount != 1 {
 		t.Fatalf("expected WriteToolCallEvent to be called exactly once, got %d", writer.writeCallCount)
@@ -67,5 +72,39 @@ func TestWriteToolCallOutcome_ValidJSON_ParsesFields_S02(t *testing.T) {
 	}
 	if writer.output["ok"] != true {
 		t.Errorf("expected output[ok]=true, got %v", writer.output)
+	}
+	if !writer.ok || writer.latencyMs != 42 {
+		t.Errorf("成败/耗时应原样透传，got ok=%v latency=%d", writer.ok, writer.latencyMs)
+	}
+}
+
+// 会话事件的成败与 PolicyEvolver 上报使用同一判据：成功/sandbox 报错两条路径各验一次。
+func TestExecuteTool_SessionEventCarriesOutcome(t *testing.T) {
+	r, sbx := newAllowRegistry()
+	_ = r.Register(minTool("ok"))
+	_ = r.Register(minTool("boom"))
+	sbx.Register("ok", func(_ context.Context, _ []byte) ([]byte, error) { return []byte(`{"a":1}`), nil })
+	sbx.Register("boom", func(_ context.Context, _ []byte) ([]byte, error) {
+		return nil, apperr.New(apperr.CodeInternal, "kaboom")
+	})
+	w := &fakeSessionEventWriter{}
+	rec := &mockOutcomeRecorder{}
+	r.WithSessionEventWriter(w).WithOutcomeRecorder(rec)
+	ctx := context.WithValue(ctxWithToken(), protocol.CtxSessionIDKey{}, "sess-x")
+
+	if _, err := r.ExecuteTool(ctx, "ok", []byte(`{"x":1}`), types.TaintNone); err != nil {
+		t.Fatal(err)
+	}
+	if !w.ok || w.ok != rec.calls[0].success || w.latencyMs != rec.calls[0].latencyMs {
+		t.Fatalf("成功路径口径不一致: writer ok=%v lat=%d rec=%+v", w.ok, w.latencyMs, rec.calls[0])
+	}
+	if _, err := r.ExecuteTool(ctx, "boom", []byte(`{"x":1}`), types.TaintNone); err != nil {
+		t.Fatal(err)
+	}
+	if w.ok || w.ok != rec.calls[1].success || w.toolName != "boom" {
+		t.Fatalf("失败路径口径不一致: writer ok=%v rec=%+v", w.ok, rec.calls[1])
+	}
+	if w.output["error"] == nil {
+		t.Fatalf("失败事件 payload 应带 error: %v", w.output)
 	}
 }

@@ -32,6 +32,17 @@ func NewMarkovMatrix() *MarkovMatrix {
 	}
 }
 
+// NewMarkovMatrixFromSequences 用历史工具序列批量构造矩阵（warm-start：启动时由
+// session_trajectory 的工具事件按会话分组、seq 排序后喂入）。每条序列独立计转移，
+// 不跨序列连边——会话之间没有先后依赖，跨界连边会伪造不存在的转移。
+func NewMarkovMatrixFromSequences(seqs [][]string) *MarkovMatrix {
+	m := NewMarkovMatrix()
+	for _, seq := range seqs {
+		m.Update(seq)
+	}
+	return m
+}
+
 // Update 用一条新工具序列在线更新转移计数（流式增量，无需批量重建）。
 func (m *MarkovMatrix) Update(seq []string) {
 	m.UpdateWeighted(seq, 1.0)

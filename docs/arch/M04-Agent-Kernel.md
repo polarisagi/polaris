@@ -301,10 +301,10 @@ S_PLAN 阶段若任务复杂度触发子规划策略，异步启动规划器池�
 
 **`SelectPlanTier` 注入**（与 System 路由正交，ADR-0102 决策六）: M4 `transitions_respond.go` `planEffect` 在 LLM 调用前调用 `SelectPlanTier(sCtx.Escalation, TaskModel.Complexity, SurpriseIndex)` 得到规划的模型池与 `[ThinkingMode]`，分别经 `types.WithModelPool` / `protocol.WithThinkingMode` 传入。`sCtx.Escalation` 只由能力类失败累计（`fsm.RecordFailure`：S_VALIDATE 按层 `ClassifyValidationLayer`、执行按错误码 `executionFailureKind`、规划不可用/自评超纲 `tryEscalatePlan`），安全拒绝/瞬时故障/观察—再规划不升级。阶梯与 Provider 映射见 M1 §5.2-bis。
 
-**SurpriseIndex 计算来源（ADR-0025（Architecture Decision Record，架构决策记录） BUG-D）**：`populateSessionContext` 优先从注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，三分量：Jaccard + MEMF + Markov）读取；未注入时退回 `ComputeBasic`（仅 Jaccard）。计算结果同步写入 `metrics.GlobalSurpriseIndex`，供 `SelectPlanTier` 消费。`SurpriseReader` 为 consumer-side 接口，防 L1→L2 包循环。
+**SurpriseIndex 计算来源（ADR-0025（Architecture Decision Record，架构决策记录） BUG-D）**：`populateSessionContext` 优先从注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，三分量：Jaccard + MEMF + Markov）读取；未注入时退回 `ComputeBasic`（仅 Jaccard）。计算结果同步写入 `metrics.GlobalSurpriseIndex`，供 `SelectPlanTier` 消费。`SurpriseReader` 为 consumer-side 接口，防 L1→L2 包循环。`SurpriseCalculator` 为**进程单例**（cmd/polaris 构造一次注入全部 Agent，关停时 Close；2026-09-29 订正，ADR-0104 决策七：原每会话 Agent 各建一个实例，泄漏 worker goroutine 且 Markov 矩阵随 Agent 丢弃）；结果按 taskID 分桶（有界 LRU，上限 1024），启动时 Markov 矩阵由 `session_trajectory` 最近 500 个会话的工具序列 warm-start。
 
 RouteReasoning:
-0. si = `Agent.surpriseCalc.CurrentSurprise()`（已注入时）或 `metrics.GlobalSurpriseIndex().ComputeBasic(nil, toolSeq)`（退化路径）→ 两者均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath；正式 FastPath 仅在 `0 < si < 0.3` 时激活。**
+0. si = `Agent.surpriseCalc.CurrentSurprise(taskID)`（已注入时）或 `metrics.GlobalSurpriseIndex().ComputeBasic(nil, toolSeq)`（退化路径）→ 两者均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath；正式 FastPath 仅在 `0 < si < 0.3` 时激活。**
 1. `0 < si < 0.3` → FastPath：合成 S_PERCEIVE 结果跳过 LLM，S_PLAN 阶段同样旁路 LLM（保留已有 DAGModel 或走空执行路径）。skillCache 命中直接执行 Wasm; 不兼容 fall through
 2. 未命中或 si>=0.3 → 调用 `M6.SkillSelector.SelectTopK(intent, K=5)` 选取候选工具/技能描述（**Tool Selection > Tool Design**：避免把全部工具列表塞给 LLM 导致选择崩溃）→ buildMessages → `providerRouter.Route`
 > **2026-09-20 复核**：SkillSelector.SelectTopK 已被 M13-bis CompositeCatalog 懒加载 + search_tools

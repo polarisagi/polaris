@@ -4,7 +4,7 @@
 
 ## 决策一：Perceive/Plan/Reflect 崩溃恢复回放（原 ADR-0057）
 
-`Agent.Run()` 写入 `inflight:session:{id}` KV 标记，干净退出经 `defer` 清除，进程崩溃则残留供下次启动识别。`recoverCrashedSessions`（`main.go`，`bootAgent` 之后 `bootServer` 之前调用）扫描候选会话，用 `TrajectoryRecorderImpl` 从 EventLog 重建 `TrajectoryTrace`，**仅当最后状态落在纯 LLM 状态（S_PERCEIVE/S_PLAN/S_REFLECT）时才自动恢复**——S_VALIDATE/S_EXECUTE/S_REPLAN/S_ROLLBACK 一律保守跳过（2PC 预写日志理论可保护但未经专门审计，不作为自动恢复安全网）。经 `AgentPool.Acquire`（与生产请求相同路径）+ `InjectReplayData` 注入历史 LLM 调用录像 + `SetReplayMode(true)` 驱动 FSM 续跑；消费最后一条录像的同一瞬间翻转为 false。仅 LLM 调用被回放，工具执行在 ReplayMode 窗口内统一短路为 stub，不重放工具历史输出。
+`Agent.Run()` 写入 `inflight:session:{id}` KV 标记，干净退出经 `defer` 清除，进程崩溃则残留供下次启动识别。`recoverCrashedSessions`（`main.go`，`bootAgent` 之后 `bootServer` 之前调用）扫描候选会话，用 `TrajectoryRecorderImpl` 从 EventLog 重建 `TrajectoryTrace`（2026-09-29 订正：轨迹存于 `session_trajectory` 表 045，ADR-0104 决策七，不再是 KV `events:session:*`），**仅当最后状态落在纯 LLM 状态（S_PERCEIVE/S_PLAN/S_REFLECT）时才自动恢复**——S_VALIDATE/S_EXECUTE/S_REPLAN/S_ROLLBACK 一律保守跳过（2PC 预写日志理论可保护但未经专门审计，不作为自动恢复安全网）。经 `AgentPool.Acquire`（与生产请求相同路径）+ `InjectReplayData` 注入历史 LLM 调用录像 + `SetReplayMode(true)` 驱动 FSM 续跑；消费最后一条录像的同一瞬间翻转为 false。仅 LLM 调用被回放，工具执行在 ReplayMode 窗口内统一短路为 stub，不重放工具历史输出。
 
 ## 决策二：Task Checkpoint 断点续跑（补齐决策一的保守局限）
 

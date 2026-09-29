@@ -43,6 +43,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -103,7 +104,7 @@ func recoverCrashedSessions(ctx context.Context, sb *SubstrateBundle, ab *AgentB
 	slog.Warn("polaris: crash recovery detected in-flight sessions from previous run, attempting replay recovery",
 		"count", len(sessionIDs))
 
-	recorder := harness.NewTrajectoryRecorder(sb.Store)
+	recorder := harness.NewTrajectoryRecorder(repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()))
 	for _, sessionID := range sessionIDs {
 		recoverOneSession(ctx, sb.Store.DB(), ab.AgentPool, recorder, sessionID)
 

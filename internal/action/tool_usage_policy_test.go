@@ -198,3 +198,46 @@ func TestContainsStrAndRemoveStr(t *testing.T) {
 		t.Errorf("Expected length 2, got %v", len(ss))
 	}
 }
+
+// WarmStart 重放后的窗口/成功率/策略标注应与逐条实时 RecordOutcome 完全一致，
+// 且窗口超限时只保留最近 window 条。
+func TestPolicyEvolver_WarmStart_MatchesLive(t *testing.T) {
+	outcomes := make([]ToolOutcome, 0, 12)
+	for i := range 12 {
+		outcomes = append(outcomes, ToolOutcome{ToolName: "bash", Success: i%3 != 0, LatencyMs: 10, Error: "boom"})
+	}
+	live := NewPolicyEvolver(10, 0.9)
+	for _, o := range outcomes {
+		live.RecordOutcome(o)
+	}
+	warm := NewPolicyEvolver(10, 0.9)
+	warm.WarmStart(outcomes)
+
+	if got, want := warm.SuccessRate("bash"), live.SuccessRate("bash"); got != want {
+		t.Fatalf("SuccessRate warm=%f live=%f", got, want)
+	}
+	// 12 条里 i=0,3,6,9 失败；窗口 10 条 = i=2..11，失败 3,6,9 共 3 条 → 成功率 0.7。
+	if got := warm.SuccessRate("bash"); got < 0.699 || got > 0.701 {
+		t.Fatalf("窗口应只留最近 10 条，成功率 0.7，got %f", got)
+	}
+	p := warm.GetPolicy("bash")
+	if p == nil || !containsStr(p.NotRecommendedFor, "high_failure_rate") {
+		t.Fatalf("成功率 0.7 < 0.9 应标注 high_failure_rate: %+v", p)
+	}
+	if warm.Window() != 10 {
+		t.Fatalf("Window()=%d", warm.Window())
+	}
+}
+
+func TestPolicyEvolver_WarmStart_EmptyAndThenLive(t *testing.T) {
+	e := NewPolicyEvolver(0, 0)
+	e.WarmStart(nil)
+	if e.SuccessRate("x") != -1 {
+		t.Fatal("空 warm-start 不应产生历史")
+	}
+	e.WarmStart([]ToolOutcome{{ToolName: "x", Success: true}, {ToolName: "x", Success: false}})
+	e.RecordOutcome(ToolOutcome{ToolName: "x", Success: true})
+	if got := e.SuccessRate("x"); got < 0.666 || got > 0.667 {
+		t.Fatalf("warm-start 之后继续实时累积，want 2/3 got %f", got)
+	}
+}

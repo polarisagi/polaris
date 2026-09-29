@@ -117,8 +117,8 @@ func doctorProviderCheck(reg protocol.LLMRegistry) (bool, string) {
 }
 
 // GET /v1/agent/mmd-canvas
-// 只读展示当前任务的 TaskMermaidCanvas（M05 §11.3 工具调用符号化画布）。
-// 画布由 agent 工具执行闭环（agent_execute.go toolExecFn）实时写入，
+// 只读展示指定会话（query: session_id）的任务画布（M05 §11.3 工具调用符号化画布）。
+// 画布由该会话的 session_trajectory 工具行渲染（ADR-0104 决策七），
 // 本 handler 仅通过 protocol.MemoryFacade 读取渲染结果，不持有画布状态。
 func (h *SysAdminHandler) HandleGetMMDCanvas(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -127,6 +127,11 @@ func (h *SysAdminHandler) HandleGetMMDCanvas(w http.ResponseWriter, r *http.Requ
 		_, _ = w.Write([]byte("agent memory not available"))
 		return
 	}
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		http.Error(w, "session_id query parameter required", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(h.Agent.Memory().RenderTaskCanvas()))
+	_, _ = w.Write([]byte(h.Agent.Memory().RenderTaskCanvas(r.Context(), sessionID)))
 }

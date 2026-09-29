@@ -558,9 +558,9 @@ Layout Zone → ContextZone 映射表、安全约束和不变量见上文 §2.1�
 压缩 Stage（由 M4 ContextWindowManager 调用，不独立设阈值）:
 - **Stage 1**: tool output pre-pruning——超过 10KB 的 `tool_result` 替换为存根 `[offloaded: N bytes → read_tool_ref("xxx")]`，原始内容经 `ToolRefOffloader` 落盘；立即释放 token，可按 node_id 按需回取
 - **Stage 2**: LLM 锚点摘要——以 currentSummary 为锚点追加新事件产生增量摘要（由 `internal/memory/compact` 包的 `Summarize` 实现，上层 M4 ContextWindowManager 调用后写回锚点）
-- **Stage 3**: **TaskMermaidCanvas 注入**——将 `TaskMermaidCanvas.Render()` 输出（`graph LR` 有向图）前置注入 anchor，形成 `## Task State (node_id → read_tool_ref)\n{mermaid}\n## Summary\n{anchor}` 结构；画布为空时跳过注入。来源：TencentDB Agent Memory 符号化短期记忆（61% token 节省原理）
+- **Stage 3**: **TaskMermaidCanvas 注入**——将 `RenderTaskCanvas(ctx, sessionID)` 输出（`graph LR` 有向图）前置注入 anchor，形成 `## Task State (node_id → read_tool_ref)\n{mermaid}\n## Summary\n{anchor}` 结构；画布为空时跳过注入。来源：TencentDB Agent Memory 符号化短期记忆（61% token 节省原理）
 
-**TaskMermaidCanvas**（`internal/memory/`）：线程安全符号画布，追踪工具调用的 pending/success/fail 状态并自动连边，输出 Mermaid `graph LR`。节点上限 30，估算约 8 token/节点（20 节点 ~160 token）。
+**任务画布**（渲染逻辑 `internal/memory/graph/mmd_canvas.go`，入口 `MemImpl.RenderTaskCanvas(ctx, sessionID)`）：从该会话在 `session_trajectory` 表（045）中的工具行（tool_name/tool_ok/payload）纯函数渲染 Mermaid `graph LR`，相邻步骤顺序连边；节点上限 30（取最近 30 步），估算约 8 token/节点（20 节点 ~160 token）。读取端由 cmd/polaris 注入（`SetTrajectoryReader`），无会话 ID/无工具调用/读取失败均返回空串。2026-09-29 订正（ADR-0104 决策七）：原为全进程共享的有状态单例 `TaskMermaidCanvas` + `TrackToolCall/TrackToolResult`，所有会话的工具调用混进同一张图，已删除。
 
 锚定策略: 架构决策、失败原因、修复方案、用户风格偏好永久保留；当前进度和待办事项允许更新；具体工具输出允许丢弃。
 
@@ -653,7 +653,7 @@ EmbeddingVersionTracker:
 | L2 SemanticMem | `internal/memory/` | **✅ 已完成** — 接口对接 MutationBus 写路径，支持直读查询，淘汰旧版 JSON KV 占位 |
 | Entity 生命周期 | `internal/memory/` `internal/protocol/schema/004_semantic_memory.sql` | **✅ 已完成** — 新增 status/superseded_by 字段；Consolidation Stage 2 引入 Jaccard 近重复检测（阈值 0.6，user_preference 类型）；检索路径过滤 active 状态 |
 | UserProfile 合成 | `internal/memory/` `internal/protocol/schema/004_semantic_memory.sql` | **✅ 已完成** — `user_profile` 新表；Consolidation Stage 3.5，`events≥10` 触发，LLM 路径（512 token）+ 规则降级；UserProfile 查询/写入接口实现 |
-| TaskMermaidCanvas | `internal/memory/` | **✅ 已完成** — 线程安全 Mermaid `graph LR` 画布；SessionCompressor 新增 Stage 3 注入逻辑；12 个单元测试覆盖节点样式、截断、Jaccard、Compressor 集成 |
+| 任务画布（原 TaskMermaidCanvas 单例，2026-09-29 改为按会话从轨迹表纯函数渲染） | `internal/memory/graph/` | **✅ 已完成** — Mermaid `graph LR` 画布；SessionCompressor 新增 Stage 3 注入逻辑；12 个单元测试覆盖节点样式、截断、Jaccard、Compressor 集成 |
 | EpisodicGraphBridge | `internal/memory/` | **✅ 已完成** — ACTION_DONE 事件解析提取 tool_name 构建动态图边，移除硬编码 |
 | ReflectionMem | `internal/memory/` | **✅ 已完成** — 实现了基于 HT0 限额的 LRU 缓存驱逐与存取机制 |
 | DurativeMemoryManager | `internal/memory/` | **✅ 已完成** — 实现了持续性记忆组 DurativeGroup 的聚类合并引擎 |

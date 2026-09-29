@@ -66,11 +66,8 @@ func (m *mockMemory) AppendReflection(ctx context.Context, entry types.Reflectio
 func (m *mockMemory) ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
 	return nil, nil
 }
-func (m *mockMemory) PruneMemoryGraph(ctx context.Context) error { return nil }
-func (m *mockMemory) TrackToolCall(toolUseID, toolName string)   {}
-func (m *mockMemory) TrackToolResult(toolUseID string, success bool, summary string) {
-}
-func (m *mockMemory) RenderTaskCanvas() string { return "" }
+func (m *mockMemory) PruneMemoryGraph(ctx context.Context) error      { return nil }
+func (m *mockMemory) RenderTaskCanvas(context.Context, string) string { return "" }
 
 type mockEpisodicMem struct {
 	events  []types.Event

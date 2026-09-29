@@ -4,9 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,76 +14,32 @@ import (
 
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/schema"
+	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ============================================================================
-// fakeKVStore — protocol.Store 最小内存实现，供 TrajectoryRecorder 扫描。
+// newTestTrajectoryRepo — 内存 SQLite + 045 DDL 的真实轨迹账本，供 TrajectoryRecorder 读取。
 // ============================================================================
 
-type fakeKVStore struct {
-	mu   sync.Mutex
-	data map[string][]byte
-}
-
-func newFakeKVStore() *fakeKVStore { return &fakeKVStore{data: make(map[string][]byte)} }
-
-func (s *fakeKVStore) Get(_ context.Context, key []byte) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.data[string(key)], nil
-}
-
-func (s *fakeKVStore) Put(_ context.Context, key, value []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data[string(key)] = append([]byte(nil), value...)
-	return nil
-}
-
-func (s *fakeKVStore) Delete(_ context.Context, key []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.data, string(key))
-	return nil
-}
-
-type fakeKVEntry struct{ key, value []byte }
-
-type fakeKVIterator struct {
-	entries []fakeKVEntry
-	idx     int
-}
-
-func (it *fakeKVIterator) Next() bool    { it.idx++; return it.idx < len(it.entries) }
-func (it *fakeKVIterator) Key() []byte   { return it.entries[it.idx].key }
-func (it *fakeKVIterator) Value() []byte { return it.entries[it.idx].value }
-func (it *fakeKVIterator) Err() error    { return nil }
-func (it *fakeKVIterator) Close() error  { return nil }
-
-func (s *fakeKVStore) Scan(_ context.Context, prefix []byte) (protocol.Iterator, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var keys []string
-	for k := range s.data {
-		if strings.HasPrefix(k, string(prefix)) {
-			keys = append(keys, k)
-		}
+func newTestTrajectoryRepo(t *testing.T) *repo.SQLiteTrajectoryRepository {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Strings(keys)
-	entries := make([]fakeKVEntry, 0, len(keys))
-	for _, k := range keys {
-		entries = append(entries, fakeKVEntry{key: []byte(k), value: s.data[k]})
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	ddl, err := schema.FS.ReadFile("045_session_trajectory.sql")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return &fakeKVIterator{entries: entries, idx: -1}, nil
+	if _, err := db.Exec(string(ddl)); err != nil {
+		t.Fatal(err)
+	}
+	return repo.NewSQLiteTrajectoryRepository(db)
 }
-
-func (s *fakeKVStore) BatchWrite(_ context.Context, _ []types.Op) error { return nil }
-func (s *fakeKVStore) Txn(_ context.Context, _ func(tx protocol.Transaction) error) error {
-	return nil
-}
-func (s *fakeKVStore) Capabilities() types.StoreCapabilities { return types.StoreCapabilities{} }
-func (s *fakeKVStore) Close() error                          { return nil }
 
 // ============================================================================
 // fakeAgentController / fakeAgentPool
@@ -204,7 +157,7 @@ func TestLastUserMessage_NoRows(t *testing.T) {
 
 func TestRecoverOneSession_SkipsUnsafeLastState(t *testing.T) {
 	ctx := context.Background()
-	kv := newFakeKVStore()
+	kv := newTestTrajectoryRepo(t)
 	writer := newStoreEventWriter(kv)
 	// 模拟"崩溃前最后已知状态落在 S_EXECUTE"——不安全，不应触碰 AgentPool。
 	writer.WriteStateTransEvent("sess-unsafe", fmt.Sprintf("%d", types.AgentStateExecute))
@@ -226,7 +179,7 @@ func TestRecoverOneSession_SkipsUnsafeLastState(t *testing.T) {
 
 func TestRecoverOneSession_SkipsWhenNoUserMessage(t *testing.T) {
 	ctx := context.Background()
-	kv := newFakeKVStore()
+	kv := newTestTrajectoryRepo(t)
 	writer := newStoreEventWriter(kv)
 	writer.WriteStateTransEvent("sess-no-msg", fmt.Sprintf("%d", types.AgentStatePerceive))
 
@@ -244,7 +197,7 @@ func TestRecoverOneSession_SkipsWhenNoUserMessage(t *testing.T) {
 
 func TestRecoverOneSession_SafeState_DrivesAgentWithReplayData(t *testing.T) {
 	ctx := context.Background()
-	kv := newFakeKVStore()
+	kv := newTestTrajectoryRepo(t)
 	writer := newStoreEventWriter(kv)
 	writer.WriteLLMCallEvent("sess-safe", map[string]any{"messages": "perceive prompt"}, map[string]any{"content": "mock_success"})
 	writer.WriteStateTransEvent("sess-safe", fmt.Sprintf("%d", types.AgentStatePerceive))

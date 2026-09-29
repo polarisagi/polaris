@@ -165,6 +165,7 @@ func run() error { //nolint:gocyclo
 		return err
 	}
 	// LIFO：Supervisor.Stop() 先于 ReaperStop() 执行（与原 defer 顺序一致）
+	defer ab.SurpriseCalc.Close()
 	defer ab.ReaperStop()
 	defer ab.Supervisor.Stop()
 	// Supervisor workers 已注册，defers 已就位，现在安全启动
@@ -252,6 +253,7 @@ func run() error { //nolint:gocyclo
 	// 两者 Stop 均幂等，上方 defer 保留作异常返回路径兜底。
 	ab.Supervisor.Stop()
 	ab.ReaperStop()
+	ab.SurpriseCalc.Close()
 	sb.EmbedBatcher.Stop()
 
 	// 单写者：停止接收 → 排空残余 → 最终落盘；超时则放弃等待（进程即将退出）。

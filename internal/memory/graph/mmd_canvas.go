@@ -1,28 +1,31 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
+
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 )
 
-// TaskMermaidCanvas 基于 Mermaid graph LR 的任务执行状态画布。
+// 任务执行状态画布：基于 Mermaid graph LR 的工具调用符号化渲染。
 //
 // 核心思想来自 TencentDB Agent Memory：
 //   - 工具调用历史不做字节截断，而是提炼为结构化符号图注入上下文
-//   - 每个节点携带 node_id，可用于 read_tool_ref drill-down 取回原始输出
 //   - LLM 对 Mermaid 有强先验（训练数据中大量 GitHub README），解析效率高于等效 JSON
-//   - 边关系（-->）原生表达执行流与分支，JSON 平铺列表无法简洁表达
+//   - 边关系（-->）原生表达执行流，JSON 平铺列表无法简洁表达
+//
+// 2026-09-29（ADR-0104 决策七）：画布不再是全进程共享的有状态单例（TaskMermaidCanvas +
+// TrackToolCall/TrackToolResult，所有会话的工具调用混进同一张图），改为从会话的工具步骤列表
+// 纯函数渲染；步骤取自 session_trajectory 的该会话工具行（MmdStepsFromTrajectory）。
 //
 // 典型输出（注入 anchor 后 LLM 可读）:
 //
 //	graph LR
-//	  N1["read_file ✓ | 读取 config.go"] --> N2
-//	  N2["bash ✗ | make build 失败"]
-//	  N2 --> N3["edit_file ✓ | 修改 Makefile"]
-//	  N3 --> N4["bash ✓ | build 成功"]
-//	  style N2 fill:#f66,color:#fff
-//	  style N4 fill:#6a6,color:#fff
+//	  N1["read_file ✓ | 读取 config.go"] --> N2["bash ✗ | make build 失败"]
+//	  N2["bash ✗ | make build 失败"] --> N3["edit_file ✓ | 修改 Makefile"]
+//	  style N2 fill:#d64,color:#fff
+//	  style N3 fill:#4a4,color:#fff
 //
 // 节点 token 估算: ~8 token/节点，20 节点画布约 160 token（TencentDB 实测 500 token 以内）。
 
@@ -36,139 +39,87 @@ const (
 
 // MmdStep 单个工具执行步骤记录。
 type MmdStep struct {
-	NodeID  string // 格式 "N{seq}"，如 "N1"、"N2"
+	NodeID  string // 格式 "N{序号}"，如 "N1"、"N2"
 	Tool    string // 工具名
-	Status  string // mmdStatusSuccess | mmdStatusFailed | mmdStatusPending
+	Status  string // mmdStatusSuccess | mmdStatusFailed
 	Summary string // ≤40 字摘要
-	RefID   string // offloader 存储的 tool_use_id，供 read_tool_ref drill-down
 }
 
-// MmdEdge 节点间有向边（支持条件标注）。
-type MmdEdge struct {
-	From  string
-	To    string
-	Label string // 可选，如 "retry" / "fallback"
-}
-
-// TaskMermaidCanvas 线程安全的 Mermaid 画布。
-type TaskMermaidCanvas struct {
-	mu           sync.Mutex
-	steps        []MmdStep
-	edges        []MmdEdge
-	pendingCalls map[string]string // tool_use_id → tool_name（等待结果）
-	seq          int
-}
-
-// NewTaskMermaidCanvas 创建空画布。
-func NewTaskMermaidCanvas() *TaskMermaidCanvas {
-	return &TaskMermaidCanvas{
-		pendingCalls: make(map[string]string),
+// MmdStepsFromTrajectory 把会话的工具轨迹行（须按 seq 升序）转成画布步骤。
+// 只取最近 mmdMaxNodes 步：画布注入的是压缩摘要，越近的步骤对续写越有用。
+// 摘要：失败取 payload.result.error，成功取 payload.result 的紧凑 JSON（键序确定），再截断。
+// tool_ok 为 NULL（理论上不出现在工具行）按失败画，宁可提示失败也不虚报成功。
+func MmdStepsFromTrajectory(rows []repo.TrajectoryRow) []MmdStep {
+	steps := make([]MmdStep, 0, min(len(rows), mmdMaxNodes))
+	for _, row := range rows {
+		if row.ToolName == "" {
+			continue
+		}
+		ok := row.ToolOK != nil && *row.ToolOK
+		status := mmdStatusFailed
+		if ok {
+			status = mmdStatusSuccess
+		}
+		steps = append(steps, MmdStep{
+			Tool:    row.ToolName,
+			Status:  status,
+			Summary: truncateLabel(trajectorySummary(row.Payload, ok)),
+		})
 	}
+	if len(steps) > mmdMaxNodes {
+		steps = steps[len(steps)-mmdMaxNodes:]
+	}
+	for i := range steps {
+		steps[i].NodeID = fmt.Sprintf("N%d", i+1)
+	}
+	return steps
 }
 
-// TrackToolCall 记录工具调用开始，创建 pending 节点。
-// toolUseID 对应 Anthropic tool_use_id 或 OpenAI tool_call_id。
-func (c *TaskMermaidCanvas) TrackToolCall(toolUseID, toolName string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pendingCalls[toolUseID] = toolName
-}
-
-// TrackToolResult 将 pending 节点转为已完成节点，追加到画布。
-// success=true → ✓ 绿色节点；success=false → ✗ 红色节点。
-// summary 建议 ≤40 字，超出自动截断。
-func (c *TaskMermaidCanvas) TrackToolResult(toolUseID string, success bool, summary string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	toolName, ok := c.pendingCalls[toolUseID]
+func trajectorySummary(payload string, ok bool) string {
+	var p struct {
+		Result map[string]any `json:"result"`
+	}
+	if json.Unmarshal([]byte(payload), &p) != nil || p.Result == nil {
+		if ok {
+			return ""
+		}
+		return "failed"
+	}
 	if !ok {
-		toolName = "unknown"
+		if msg, _ := p.Result["error"].(string); msg != "" {
+			return msg
+		}
+		return "failed"
 	}
-	delete(c.pendingCalls, toolUseID)
-
-	if len(c.steps) >= mmdMaxNodes {
-		return
+	b, err := json.Marshal(p.Result)
+	if err != nil {
+		return ""
 	}
-
-	c.seq++
-	status := mmdStatusSuccess
-	if !success {
-		status = mmdStatusFailed
-	}
-
-	nodeID := fmt.Sprintf("N%d", c.seq)
-	step := MmdStep{
-		NodeID:  nodeID,
-		Tool:    toolName,
-		Status:  status,
-		Summary: truncateLabel(summary),
-		RefID:   toolUseID,
-	}
-	c.steps = append(c.steps, step)
-
-	// 自动连接到前一个节点（顺序流）
-	if len(c.steps) > 1 {
-		prev := c.steps[len(c.steps)-2]
-		c.edges = append(c.edges, MmdEdge{From: prev.NodeID, To: nodeID})
-	}
+	return string(b)
 }
 
-// AddEdge 手动添加带标注的有向边，用于表达分支/重试/回退关系。
-func (c *TaskMermaidCanvas) AddEdge(from, to, label string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.edges = append(c.edges, MmdEdge{From: from, To: to, Label: label})
-}
-
-// Render 生成注入 LLM 上下文的 Mermaid graph LR 文本。
-// 空画布返回空字符串（调用方跳过注入）。
-func (c *TaskMermaidCanvas) Render() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(c.steps) == 0 {
+// RenderMmdCanvas 把步骤列表渲染为注入 LLM 上下文的 Mermaid graph LR 文本。
+// 相邻步骤顺序连边；空列表返回空字符串（调用方跳过注入）。纯函数，无状态。
+func RenderMmdCanvas(steps []MmdStep) string {
+	if len(steps) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
 	sb.WriteString("graph LR\n")
 
-	// 节点定义：已有前向边的节点在 edge 行内联定义，单独节点单独一行
-	// 为简洁，直接在 edge 行内联所有节点标签
-	edgeSet := make(map[string]bool)
-	for _, e := range c.edges {
-		edgeSet[e.From] = true
-		edgeSet[e.To] = true
+	for i := 1; i < len(steps); i++ {
+		fmt.Fprintf(&sb, "  %s[\"%s\"] --> %s[\"%s\"]\n",
+			steps[i-1].NodeID, mmdLabel(&steps[i-1]),
+			steps[i].NodeID, mmdLabel(&steps[i]))
+	}
+	// 单步画布没有边，节点需单独成行。
+	if len(steps) == 1 {
+		fmt.Fprintf(&sb, "  %s[\"%s\"]\n", steps[0].NodeID, mmdLabel(&steps[0]))
 	}
 
-	// 先输出所有边（内联节点定义）
-	for _, e := range c.edges {
-		fromStep := c.findStep(e.From)
-		toStep := c.findStep(e.To)
-		if fromStep == nil || toStep == nil {
-			continue
-		}
-		if e.Label != "" {
-			fmt.Fprintf(&sb, "  %s[\"%s\"] -->|%s| %s[\"%s\"]\n",
-				e.From, mmdLabel(fromStep), escapeMmd(e.Label),
-				e.To, mmdLabel(toStep))
-		} else {
-			fmt.Fprintf(&sb, "  %s[\"%s\"] --> %s[\"%s\"]\n",
-				e.From, mmdLabel(fromStep),
-				e.To, mmdLabel(toStep))
-		}
-	}
-
-	// 输出没有参与任何边的孤立节点
-	for _, s := range c.steps {
-		if !edgeSet[s.NodeID] {
-			fmt.Fprintf(&sb, "  %s[\"%s\"]\n", s.NodeID, mmdLabel(&s))
-		}
-	}
-
-	// 节点样式：失败=红，成功=绿，pending=默认灰
-	for _, s := range c.steps {
+	// 节点样式：失败=红，成功=绿
+	for _, s := range steps {
 		switch s.Status {
 		case mmdStatusFailed:
 			fmt.Fprintf(&sb, "  style %s fill:#d64,color:#fff\n", s.NodeID)
@@ -180,48 +131,7 @@ func (c *TaskMermaidCanvas) Render() string {
 	return sb.String()
 }
 
-// Steps 返回当前步骤快照（只读副本）。
-func (c *TaskMermaidCanvas) Steps() []MmdStep {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	result := make([]MmdStep, len(c.steps))
-	copy(result, c.steps)
-	return result
-}
-
-// TokenEstimate 估算 Render() 输出的 token 数（4 字符 ≈ 1 token）。
-func (c *TaskMermaidCanvas) TokenEstimate() int {
-	r := c.Render()
-	return len(r)/4 + 1
-}
-
-// Reset 清空画布（会话结束或强制重置时调用）。
-func (c *TaskMermaidCanvas) Reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.steps = c.steps[:0]
-	c.edges = c.edges[:0]
-	c.pendingCalls = make(map[string]string)
-	c.seq = 0
-}
-
-// NodeCount 返回已完成节点数。
-func (c *TaskMermaidCanvas) NodeCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.steps)
-}
-
 // ─── 内部辅助 ─────────────────────────────────────────────────────────────────
-
-func (c *TaskMermaidCanvas) findStep(nodeID string) *MmdStep {
-	for i := range c.steps {
-		if c.steps[i].NodeID == nodeID {
-			return &c.steps[i]
-		}
-	}
-	return nil
-}
 
 // mmdLabel 生成 Mermaid 节点标签："tool status | summary"
 func mmdLabel(s *MmdStep) string {

@@ -100,11 +100,32 @@ func (e *PolicyEvolver) ListPolicies() []*ToolUsagePolicy {
 	return out
 }
 
+// Window 返回滑动窗口大小，供启动期 warm-start 按同一口径向轨迹账本取数。
+func (e *PolicyEvolver) Window() int {
+	return e.window
+}
+
+// WarmStart 把历史 outcomes（须按时间从旧到新）重放进滑动窗口，恢复重启前的学习状态
+// （ADR-0104 决策七：PolicyEvolver 此前纯内存，重启清零）。
+// 逐条走与实时上报完全相同的路径，故 NotRecommendedFor 标注、超时提示与失败模式频次
+// 与"进程一直没重启"的结果一致；窗口超限时同样只保留最近 window 条。
+func (e *PolicyEvolver) WarmStart(outcomes []ToolOutcome) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, o := range outcomes {
+		e.recordLocked(o)
+	}
+}
+
 // RecordOutcome 记录一次工具调用结果，并触发策略更新。
 func (e *PolicyEvolver) RecordOutcome(outcome ToolOutcome) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.recordLocked(outcome)
+}
 
+// recordLocked 是 RecordOutcome 与 WarmStart 共用的写入体，调用方须持写锁。
+func (e *PolicyEvolver) recordLocked(outcome ToolOutcome) {
 	hist := e.history[outcome.ToolName]
 	hist = append(hist, outcome)
 	// 保持窗口大小：丢弃最旧的

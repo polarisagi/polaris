@@ -30,8 +30,10 @@ func (r *InMemoryToolRegistry) WithOutcomeRecorder(rec ToolOutcomeRecorder) *InM
 }
 
 // SessionEventWriter records events to the session trajectory store.
+// ok/latencyMs 与 ToolOutcomeRecorder 同一判据同一来源（ToolResult.Success / LatencyMs），
+// 使 session_trajectory 的 tool_ok/latency_ms 列与 PolicyEvolver 的窗口统计口径一致。
 type SessionEventWriter interface {
-	WriteToolCallEvent(sessionID, toolName string, input, output map[string]any)
+	WriteToolCallEvent(sessionID, toolName string, input, output map[string]any, ok bool, latencyMs int64)
 }
 
 // WithSessionEventWriter 注入 SessionEventWriter（可选）。
@@ -51,7 +53,7 @@ func (r *InMemoryToolRegistry) reportOutcome(toolName string, success bool, late
 	r.mu.RUnlock()
 
 	if sessionWriter != nil && ctx != nil {
-		writeToolCallOutcome(ctx, sessionWriter, toolName, input, res, errMsg)
+		writeToolCallOutcome(ctx, sessionWriter, toolName, input, res, errMsg, success, latencyMs)
 	}
 
 	if rec != nil {
@@ -59,7 +61,7 @@ func (r *InMemoryToolRegistry) reportOutcome(toolName string, success bool, late
 	}
 }
 
-func writeToolCallOutcome(ctx context.Context, sessionWriter SessionEventWriter, toolName string, input []byte, res *types.ToolResult, errMsg string) {
+func writeToolCallOutcome(ctx context.Context, sessionWriter SessionEventWriter, toolName string, input []byte, res *types.ToolResult, errMsg string, success bool, latencyMs int64) {
 	sm_sessionID, _ := ctx.Value(protocol.CtxSessionIDKey{}).(string)
 	if sm_sessionID == "" {
 		sm_sessionID, _ = ctx.Value(protocol.CtxTaskIDKey{}).(string)
@@ -85,5 +87,15 @@ func writeToolCallOutcome(ctx context.Context, sessionWriter SessionEventWriter,
 	} else if errMsg != "" {
 		outMap = map[string]any{"error": errMsg}
 	}
-	sessionWriter.WriteToolCallEvent(sm_sessionID, toolName, inMap, outMap)
+	// 失败事件的错误文本必须落进 payload：PolicyEvolver warm-start 与任务画布只能从轨迹行还原它，
+	// 而 res 非空的失败路径其 Output 往往为空（错误在 res.Error 里）。
+	if errMsg != "" {
+		if outMap == nil {
+			outMap = map[string]any{}
+		}
+		if _, has := outMap["error"]; !has {
+			outMap["error"] = errMsg
+		}
+	}
+	sessionWriter.WriteToolCallEvent(sm_sessionID, toolName, inMap, outMap, success, latencyMs)
 }

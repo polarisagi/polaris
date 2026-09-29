@@ -240,7 +240,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	toolReg.WithExemptionVault(exemptionVault)
 
 	// Inject trajectory store event writer for tool call recording (Task 1)
-	toolReg.WithSessionEventWriter(newStoreEventWriter(sb.Store))
+	toolReg.WithSessionEventWriter(newStoreEventWriter(repo.NewSQLiteTrajectoryRepository(sb.Store.DB())))
 
 	// 工具自进化闭环（2026-07-12 unwired-code-audit 补齐）：PolicyEvolver 此前
 	// 完整实现（滑动窗口成功率统计 + 失败模式识别）但从未被构造，ExecuteTool
@@ -249,6 +249,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 依赖 internal/action）→ PolicyEvolver.RecordOutcome；读侧（BuildSystemHintBlock）
 	// 由 bootAgent 经 fsm.ToolHintProvider 直接结构化满足（方法签名一致，无需适配器）。
 	policyEvolver := action.NewPolicyEvolver(0, 0)
+	// 学习状态从 session_trajectory 恢复（ADR-0104 决策七）：此前纯内存，重启清零。
+	warmStartPolicyEvolver(ctx, repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()), policyEvolver)
 	toolReg.WithOutcomeRecorder(&policyEvolverOutcomeAdapter{pe: policyEvolver})
 
 	memoryCatalog := catalog.NewMemoryCatalog()
@@ -487,6 +489,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 持有 mb（bootMemory 的产物）作为参数，vfsWM 一旦构造完成即可原地补上，
 	// 无需为此单独调整 bootSubstrate/bootMemory/bootTools 的既有执行顺序。
 	mb.Mem.SetEpisodicBlobOverflowWriter(vfsWM)
+	// 任务画布按会话从轨迹账本渲染（ADR-0104 决策七）；走读连接，画布只读。
+	mb.Mem.SetTrajectoryReader(repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()))
 	slog.Info("polaris: episodic BlobOverflowWriter wired to VFS workspace manager (GR-5-001)")
 
 	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), vfsWM)

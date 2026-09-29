@@ -22,12 +22,10 @@ MemorySystem interface {
 	SetVectorMode(mode int) error
 	GetMemoryPressure() *budget.ResourceBudget
 
-	// TaskMermaidCanvas（M05 §11.3）：工具调用符号化画布，跨 Agent/Gateway 共享的
-	// 当前任务执行状态追踪。TrackToolCall/TrackToolResult 由 agent 工具执行闭环调用，
-	// RenderTaskCanvas 供 gateway 只读展示（GET /v1/agent/mmd-canvas）。
-	TrackToolCall(toolUseID, toolName string)
-	TrackToolResult(toolUseID string, success bool, summary string)
-	RenderTaskCanvas() string
+	// 任务画布（M05 §11.3）：指定会话的工具调用符号化画布，从 session_trajectory 的该会话
+	// 工具行纯函数渲染（ADR-0104 决策七），不持有任何进程级画布状态。
+	// 供上下文压缩 Stage 3 与 gateway 只读展示（GET /v1/agent/mmd-canvas）。
+	RenderTaskCanvas(ctx context.Context, sessionID string) string
 }
 
 type
@@ -67,11 +65,9 @@ MemoryFacade interface {
 	ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error)
 	PruneMemoryGraph(ctx context.Context) error
 
-	// TaskMermaidCanvas（M05 §11.3）：agent 工具执行闭环调用 TrackToolCall/TrackToolResult
-	// 记录当前任务的工具调用轨迹，gateway（GET /v1/agent/mmd-canvas）经 RenderTaskCanvas 只读展示。
-	TrackToolCall(toolUseID, toolName string)
-	TrackToolResult(toolUseID string, success bool, summary string)
-	RenderTaskCanvas() string
+	// 任务画布（M05 §11.3）：按会话 ID 渲染工具调用画布，gateway（GET /v1/agent/mmd-canvas）
+	// 与上下文压缩经此只读取用。
+	RenderTaskCanvas(ctx context.Context, sessionID string) string
 }
 
 type

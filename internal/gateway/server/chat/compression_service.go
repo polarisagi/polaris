@@ -200,7 +200,7 @@ func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs
 	}
 
 	if mem != nil {
-		summary = compact.InjectTaskCanvas(mem.RenderTaskCanvas(), summary)
+		summary = compact.InjectTaskCanvas(mem.RenderTaskCanvas(ctx, sessionID), summary)
 	}
 
 	summaryMsg := apptypes.Message{

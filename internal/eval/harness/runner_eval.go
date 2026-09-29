@@ -246,13 +246,16 @@ func matchStringSets(actual []string, expected []any) bool {
 	return true
 }
 
+// RunReplay 检查会话轨迹的 seq 连续性（从 1 起、逐条 +1）并统计 LLM 调用数。
+// 缺口意味着事件写入丢失，回放将拿不到完整有序的 LLM 调用记录，DivergentOffset 报首个缺口处的 seq。
 func (r *RunnerImpl) RunReplay(ctx context.Context, sessionID string) (*types.ReplayReport, error) {
-	prefix := fmt.Appendf(nil, "events:session:%s:", sessionID)
-	iter, err := r.store.Scan(ctx, prefix)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "eval_runner: scan session events failed", err)
+	if r.traj == nil {
+		return nil, apperr.New(apperr.CodeInternal, "eval_runner: trajectory reader not injected")
 	}
-	defer iter.Close()
+	rows, err := r.traj.ListBySession(ctx, sessionID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "eval_runner: read session trajectory failed", err)
+	}
 
 	report := &types.ReplayReport{
 		SessionID:       sessionID,
@@ -260,29 +263,18 @@ func (r *RunnerImpl) RunReplay(ctx context.Context, sessionID string) (*types.Re
 		DivergentOffset: -1,
 	}
 
-	var prevOffset int64 = -1
-	for iter.Next() {
-		val := iter.Value()
-		var ev struct {
-			Offset int64
-			Type   string
-		}
-		if err := json.Unmarshal(val, &ev); err != nil {
-			continue
-		}
-		if prevOffset >= 0 && ev.Offset != prevOffset+1 {
-			report.DivergentOffset = ev.Offset
+	var prevSeq int64
+	for _, row := range rows {
+		if row.Seq != prevSeq+1 {
+			report.DivergentOffset = row.Seq
 			report.Consistent = false
 			break
 		}
-		prevOffset = ev.Offset
+		prevSeq = row.Seq
 
-		if ev.Type == "llm_call" || ev.Type == "inference_request" {
+		if row.EventType == "llm_call" || row.EventType == "inference_request" {
 			report.NewLLMCalls++
 		}
-	}
-	if iter.Err() != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "eval_runner: replay iteration failed", iter.Err())
 	}
 
 	// [W-5-E] TrajectoryReplayer 接入

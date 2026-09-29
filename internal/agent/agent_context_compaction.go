@@ -92,7 +92,7 @@ func (a *Agent) hotPathCompact(ctx context.Context, msgs []types.Message, level 
 	}
 
 	if a.memory != nil {
-		summary = compact.InjectTaskCanvas(a.memory.RenderTaskCanvas(), summary)
+		summary = compact.InjectTaskCanvas(a.memory.RenderTaskCanvas(ctx, a.sCtx.SessionID), summary)
 	}
 
 	summaryMsg := types.Message{

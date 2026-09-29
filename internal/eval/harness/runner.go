@@ -46,6 +46,7 @@ type RunnerImpl struct {
 	evalCfg             config.EvalConfig
 
 	recorder *TrajectoryRecorderImpl
+	traj     TrajectoryReader // RunReplay 连续性检查用；nil 时 RunReplay 报错
 	rd       *RegressionDetector
 	replayer *TrajectoryReplayerImpl
 }
@@ -68,10 +69,16 @@ func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore, thresholds conf
 		activeRuns: make(map[string]context.CancelFunc),
 		thresholds: thresholds,
 		evalCfg:    evalCfg,
-		recorder:   NewTrajectoryRecorder(store),
 		rd:         &RegressionDetector{},
 		replayer:   NewTrajectoryReplayer(),
 	}
+}
+
+// InjectTrajectoryReader 注入轨迹账本读取端，并据此构造 TrajectoryRecorder。
+// 未注入时 recorder 为 nil（RunSuite 的轨迹记录被跳过），RunReplay 返回错误。
+func (r *RunnerImpl) InjectTrajectoryReader(reader TrajectoryReader) {
+	r.traj = reader
+	r.recorder = NewTrajectoryRecorder(reader)
 }
 
 // SetEvalSignature 注入静态预签名以通过 policy gate（简单/测试场景；生产

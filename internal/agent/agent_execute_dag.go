@@ -460,18 +460,13 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		return res, nil
 	}
 
-	// toolExecFn 包一层 TaskMermaidCanvas 追踪（M05 §11.3）：工具调用开始/结束均记录到
-	// 当前任务的符号化画布，供 gateway GET /v1/agent/mmd-canvas 只读展示。
+	// toolExecFn 包一层流事件发布。任务画布（M05 §11.3）不再在此追踪：工具调用由
+	// tool 包 ExecuteTool 落 session_trajectory，画布按会话从轨迹渲染（ADR-0104 决策七）。
 	// 独立包装而非侵入 toolExecFnInner 内部多处 return，避免遗漏分支。
 	// nodeFailures 统计工具软失败（Success=false 但无 Go 错误），DAG 引擎不把它当节点失败，
 	// Reflect 跳过判据需要它（ADR-0102 决策四）。并行节点并发调用，故用原子量。
 	var nodeFailures atomic.Int32
 	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-		toolUseID := uuid.New().String()
-		if a.memory != nil {
-			a.memory.TrackToolCall(toolUseID, toolName)
-		}
-
 		// [UP-03] 污点等级下传进程内工具（类型化 key，禁魔法字符串）：
 		// core_memory_edit 等写入型工具按此落库，缺失时按 TaintNone 处理会
 		// 造成 HE-2 污点静默丢失。
@@ -509,10 +504,6 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			UI:         a.buildToolUIRef(toolName, args, res),
 		})
 
-		if a.memory != nil {
-			success := err == nil && res != nil && res.Success
-			a.memory.TrackToolResult(toolUseID, success, canvasResultSummary(res, err))
-		}
 		return res, err
 	}
 

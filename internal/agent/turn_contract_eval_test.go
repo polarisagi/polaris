@@ -125,7 +125,7 @@ func pinSystem2Routing(t *testing.T) {
 type fixedSurprise float64
 
 func (f fixedSurprise) SubmitToolSeq(string, []string) {}
-func (f fixedSurprise) CurrentSurprise() float64       { return float64(f) }
+func (f fixedSurprise) CurrentSurprise(string) float64 { return float64(f) }
 
 type turnOutcome struct {
 	reply    string

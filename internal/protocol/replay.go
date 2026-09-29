@@ -19,7 +19,7 @@ func IsReplaying() bool {
 // ReplayLLMCall 崩溃恢复回放用的历史 LLM 调用记录（M04-Agent-Kernel.md §8，
 // 2026-07-22 接线）。Request/Response 字段形状与
 // internal/eval/harness.LLMCallRecord 同源——均来自
-// TrajectoryRecorderImpl.Record 对 events:session:{id}: 前缀的扫描重建
+// TrajectoryRecorderImpl.Record 对 session_trajectory（045）会话事件流的读取重建
 // （payload["request"]/["response"] 原样透传）。
 //
 // 类型落在 internal/protocol（L0）而非直接复用 harness.LLMCallRecord：
