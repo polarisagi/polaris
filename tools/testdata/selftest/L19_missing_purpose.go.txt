@@ -1,0 +1,14 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// 直接调用缺 WithPurpose：只声明了思考档位。
+func selftestMissingPurpose(ctx context.Context, p protocol.Provider) {
+	_, _ = safecall.Infer(ctx, p, nil, types.WithThinkingMode(types.ThinkingDisabled))
+}

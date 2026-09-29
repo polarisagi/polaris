@@ -107,6 +107,7 @@ ADR 被代码引用时，源文件头部加：
 | 0102 | Token 经济增量（基于 ADR-0101）：零 LLM 寒暄快路 + 短确认精简感知；规划便宜池先行、失败再升级（ThinkingMode 去污点输入，修订 ADR-0020 决策二）；缓存稳定前缀（Anthropic 多断点、SysEnv 去易变量）；回合调用数压缩（Proposed） | Accepted | 2026-09-25 |
 | 0103 | 扩展体系对齐 OpenAI / Anthropic 双标准：技能 / 连接器 / 插件三分类，删除独立 App 类型（Codex 应用 = 插件内连接器绑定）；插件清单三格式归一化（agent-plugins 1.0 / .claude-plugin / .codex-plugin）；hooks 统一 hooks.json 模型且安装≠信任；双市场格式；MCP 2026-07-28（修订 ADR-0016 决策二/三） | Accepted | 2026-09-26 |
 | 0104 | State-in-DB 补齐：启动期孤儿运行对账、工作流断点续跑入口、session_todos、预算以 llm_calls 为账本、hitl_requests、subagent_runs/planner_sessions 写入、session_trajectory 取代 KV 轨迹并派生学习状态、PII 快照独立表、统一 consumer_cursors | Accepted | 2026-09-29 |
+| 0105 | Token 经济第三批：缓存优先五层前缀账本（修复稳定层 map 乱序）、历史只追加分块跳窗、Provider 缓存接线、召回预算与回合内复用、Provider 调用用途/思考档位门控、确定性后台调用精确缓存、错峰调度、用量可见性 | Proposed | 2026-09-29 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

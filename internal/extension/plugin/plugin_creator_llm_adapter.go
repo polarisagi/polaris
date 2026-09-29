@@ -28,10 +28,11 @@ func (a *ProviderLLMClient) Generate(ctx context.Context, systemPrompt, userProm
 	if a.Provider == nil {
 		return "", apperr.New(apperr.CodeInternal, "plugin_creator: no LLM provider available to generate plugin")
 	}
+	// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
 	resp, err := safecall.Infer(ctx, a.Provider, []types.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	})
+	}, types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposePluginCreate))
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: LLM infer failed", err)
 	}
@@ -45,10 +46,11 @@ func (a *ProviderLLMClient) GenerateJSON(ctx context.Context, systemPrompt, user
 	if a.Provider == nil {
 		return "", apperr.New(apperr.CodeInternal, "plugin_creator: no LLM provider available to generate plugin")
 	}
+	// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
 	resp, err := safecall.Infer(ctx, a.Provider, []types.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}))
+	}, types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposePluginCreate))
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: LLM infer failed", err)
 	}

@@ -57,7 +57,7 @@ func (e *hookPromptEvaluator) EvaluateHookPrompt(ctx context.Context, prompt, mo
 	if agent {
 		return e.evaluateWithAgent(ctx, prompt)
 	}
-	opts := []types.InferOption{types.WithPurpose("hook_prompt")}
+	opts := []types.InferOption{types.WithPurpose(types.PurposeHookPrompt)}
 	if model != "" {
 		opts = append(opts, types.WithModel(model))
 	}

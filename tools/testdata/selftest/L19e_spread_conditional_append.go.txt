@@ -1,0 +1,18 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// 声明只出现在 if 块里的追加：可能不执行，不得算作已声明（否则条件分支会让规则永远绿灯）。
+func selftestSpreadConditional(ctx context.Context, p protocol.Provider, deep bool) {
+	opts := []types.InferOption{types.WithMaxTokens(8)}
+	if deep {
+		opts = append(opts, types.WithPurpose("selftest"), types.WithThinkingMode(types.ThinkingHigh))
+	}
+	_, _ = safecall.Infer(ctx, p, nil, opts...)
+}

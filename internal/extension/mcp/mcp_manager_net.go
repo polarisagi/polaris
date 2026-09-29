@@ -186,7 +186,9 @@ func (m *MCPManager) makeSamplingHandler(serverName string, trustTier int) Serve
 				}
 				msgs = append(msgs, msg)
 			}
-			resp, err := safecall.Infer(ctx, m.samplingProvider, msgs, types.WithMaxTokens(maxTokens))
+			// MCP Server 发起的 sampling 请求内容不可预知（任意 Server 的任意提示词），不做降档假设，
+			// 沿用高档并显式声明（ADR-0105 决策五）；预算由 budget.reserve 管控。
+			resp, err := safecall.Infer(ctx, m.samplingProvider, msgs, types.WithMaxTokens(maxTokens), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposeMCPSampling))
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "MCPManager.makeSamplingHandler", err)
 			}

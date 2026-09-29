@@ -68,11 +68,26 @@ type usageRecordingProvider struct {
 	protocol.Provider
 	name string
 	sink *atomic.Pointer[usageSink]
+	// cache 为 nil（测试直接构造）或其指向 nil 时不缓存。
+	cache *atomic.Pointer[responseCache]
 }
 
 func (p *usageRecordingProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
 	start := time.Now()
+	// 精确响应缓存（ADR-0105 决策六）：命中时不调用 Provider，只记一行 status=cache_hit、token 为 0 的 llm_calls。
+	rc, cc, hit := p.probeResponseCache(ctx, msgs, opts)
+	if hit != nil {
+		if sink := p.sink.Load(); sink != nil {
+			row := p.baseRecord(ctx, start, opts, false)
+			row.Status = protocol.LLMUsageStatusCacheHit
+			sink.push(row)
+		}
+		return hit, nil
+	}
 	resp, err := p.Provider.Infer(ctx, msgs, opts...)
+	if err == nil && cc != nil {
+		rc.put(ctx, cc, resp)
+	}
 	if sink := p.sink.Load(); sink != nil {
 		row := p.baseRecord(ctx, start, opts, false)
 		if resp != nil {

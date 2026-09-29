@@ -1,0 +1,14 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// WithPurpose("") 形式上声明了、实际记为 unspecified。
+func selftestEmptyPurpose(ctx context.Context, p protocol.Provider) {
+	_, _ = safecall.Infer(ctx, p, nil, types.WithPurpose(""), types.WithThinkingMode(types.ThinkingLow))
+}

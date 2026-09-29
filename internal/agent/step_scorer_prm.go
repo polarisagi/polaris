@@ -90,6 +90,9 @@ func (s *stepScorer) runPRM(ctx context.Context, stepSummary string) (float64, b
 	}
 	resp, err := safecall.Infer(cctx, s.prm, msgs,
 		types.WithMaxTokens(4),
+		// 显式关闭思考（偏离「PRM 判官=Low」）：s.prm 是本地 GBNF 约束模型，输出上限 4 token、
+		// 硬超时 100ms；任何推理都会耗尽上限或超时，且 grammar 已把输出钉死为 +1/0/-1 三态。
+		types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposeStepPRMScore),
 		types.WithResponseFormat(&types.ResponseFormat{Type: "gbnf", Grammar: prmGrammar}),
 	)
 	if err != nil {

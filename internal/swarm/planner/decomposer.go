@@ -81,10 +81,11 @@ func (d *TaskDecomposer) decomposeLLM(ctx context.Context, goal string) ([]proto
 
 	userPrompt := fmt.Sprintf("Decompose this goal into sub-tasks:\n%s", goal)
 
+	// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
 	resp, err := safecall.Infer(ctx, d.provider, []types.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, types.WithMaxTokens(1024))
+	}, types.WithMaxTokens(1024), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposeTaskDecompose))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "task_decomposer: LLM infer failed", err)
 	}

@@ -430,7 +430,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			// 机械性任务：走便宜档 default 池并关闭思考——DeepSeek 省略 thinking 即按 effort=high
 			// 计推理 token（ADR-0101 决策三/七）。
 			// 调用方显式传入的 ThinkingMode 排在后面，仍可覆盖。
-			inferOpts := append([]types.InferOption{types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("background_llm_infer")}, opts...)
+			inferOpts := append([]types.InferOption{types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposeBackgroundLLMInfer)}, opts...)
 			resp, err := sb.Router.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, inferOpts...)
 			if err != nil {
 				return "", apperr.Wrap(apperr.CodeInternal, "boot_tools: llmInfer 失败", err)
@@ -685,6 +685,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 				}
 				if err := eventArchiver.Archive(context.Background()); err != nil {
 					slog.Warn("polaris: event archiver failed", "err", err)
+				}
+				// LLM 精确响应缓存的过期行清理（ADR-0105 决策六）；条数上限由写入时的淘汰保证，这里只回收 TTL 过期行。
+				if sb.InfReg != nil {
+					if n, err := sb.InfReg.PruneResponseCache(ctx); err != nil {
+						slog.Warn("polaris: llm response cache prune failed", "err", err)
+					} else if n > 0 {
+						slog.Info("polaris: llm response cache pruned", "expired_rows", n)
+					}
 				}
 			}
 		}

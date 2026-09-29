@@ -42,6 +42,7 @@
 | `apperr_semantics_check.go` | L-11/R2.5 错误码与消息语义一致 |
 | `regex_greedy_check.go` | L-12 贪婪跨行正则 |
 | `wiring_reachability_check.go` | L-13 包级接线可达性 |
+| `llm_call_opts_lint.go` | L-19 Provider 调用须显式 WithPurpose + WithThinkingMode（豁免 `//llmopts:exempt <理由>`，ADR-0105 决策五） |
 
 **元门控** —— `lint_selftest.go`（`make lint-selftest`）：逐条注入违规样例，断言每条
 规则确实能报红，再还原断言转绿。清单 `tools/lint-selftest.txt`。它还校验两件事：

@@ -516,6 +516,11 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	reg := llm.NewProviderRegistry(cfg.Thresholds.M1Router)
 	// 每次 LLM 调用写一行 llm_calls（用途/模型/token/费用，ADR-0101 决策六）。
 	reg.InjectUsageRecorder(ctx, repo.NewSQLiteLLMCallRepository(store.DB()))
+	// 确定性后台调用（graphrag_*/rag_query_rewrite/memory_write_filter 等白名单用途）的精确匹配响应缓存
+	// （ADR-0105 决策六）：命中不调用 Provider，只记一行 status=cache_hit 的 llm_calls。读走读连接，
+	// 写走单写连接；内核阶段 purpose 在 internal/llm 内被硬性排除，与配置无关。
+	reg.InjectResponseCache(ctx, repo.NewSQLiteLLMResponseCacheRepository(store.DB(), store.ReadDB()),
+		llm.ResponseCacheConfigFromThresholds(cfg.Thresholds.M1Router))
 	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。
 	provider.SeedProvidersFromEnv(ctx, repo.NewSQLiteProviderRepository(store.DB()).WithVault(vault))
 

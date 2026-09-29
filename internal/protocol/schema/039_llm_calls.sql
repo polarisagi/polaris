@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     model_pool       TEXT    NOT NULL DEFAULT '',  -- 请求的 Model Pool（default/general/reasoning/budget）
     thinking_mode    TEXT    NOT NULL DEFAULT '',  -- 下发的思考档位，空 = Provider 默认
     streaming        INTEGER NOT NULL DEFAULT 0,
-    status           TEXT    NOT NULL,             -- ok | error | cancelled
+    status           TEXT    NOT NULL,             -- ok | error | cancelled | cache_hit（命中精确响应缓存，token 为 0，见 047）
     input_tokens     INTEGER NOT NULL DEFAULT 0,   -- 全部输入 token（含缓存命中）
     cache_hit_tokens INTEGER NOT NULL DEFAULT 0,   -- 其中命中前缀缓存的部分
     output_tokens    INTEGER NOT NULL DEFAULT 0,   -- 全部输出 token（含推理）

@@ -46,10 +46,19 @@ type M1RouterThresholds struct {
 	SemanticCacheMaxEntries       int     `toml:"semantic_cache.max_entries"`           // 10000
 	SemanticCacheSimilarity       float64 `toml:"semantic_cache.similarity_threshold"`  // 0.95
 	SemanticCacheTTLHours         int     `toml:"semantic_cache.ttl_hours"`             // 24
-	WindowBreakerWindowSecs       int     `toml:"window_breaker_window_secs"`
-	WindowBreakerMinSamples       int     `toml:"window_breaker_min_samples"`
-	WindowBreakerThreshold        float64 `toml:"window_breaker_threshold"`
-	WindowBreakerCooldownSec      int     `toml:"window_breaker_cooldown_sec"`
+
+	// 确定性后台调用的精确匹配响应缓存（ADR-0105 决策六）。仅对 ResponseCachePurposes 白名单内、
+	// Temperature==0 且 ThinkingDisabled 且无 Tools 的调用生效；内核阶段 purpose 即使误配也被
+	// 硬性排除（types.IsKernelPurpose）。默认开启：命中要求 provider/模型/purpose/全部消息逐字节一致，
+	// 白名单用途均为「同输入同输出」的抽取/摘要/过滤，且条目有 TTL 与条数上限。
+	ResponseCacheEnabled     bool     `toml:"response_cache.enabled"`     // true
+	ResponseCacheTTLHours    int      `toml:"response_cache.ttl_hours"`   // 168
+	ResponseCacheMaxEntries  int      `toml:"response_cache.max_entries"` // 20000
+	ResponseCachePurposes    []string `toml:"response_cache.purposes"`
+	WindowBreakerWindowSecs  int      `toml:"window_breaker_window_secs"`
+	WindowBreakerMinSamples  int      `toml:"window_breaker_min_samples"`
+	WindowBreakerThreshold   float64  `toml:"window_breaker_threshold"`
+	WindowBreakerCooldownSec int      `toml:"window_breaker_cooldown_sec"`
 
 	// EmbeddingBatcher 调度（ADR-0099）：High/Low 独立 flush；Low 单批上限约束其在
 	// 串行后端上的占用；每次下游调用独立超时，后端挂起不冻结队列。
@@ -359,14 +368,21 @@ func DefaultThresholds() Thresholds {
 			SemanticCacheMaxEntries:       10000,
 			SemanticCacheSimilarity:       0.95,
 			SemanticCacheTTLHours:         24,
-			WindowBreakerWindowSecs:       60,
-			WindowBreakerMinSamples:       20,
-			WindowBreakerThreshold:        0.5,
-			WindowBreakerCooldownSec:      30,
-			EmbedBatchWindowMs:            10,
-			EmbedHighMaxBatchSize:         100,
-			EmbedLowMaxBatchSize:          8,
-			EmbedCallTimeoutSeconds:       30,
+			ResponseCacheEnabled:          true,
+			ResponseCacheTTLHours:         168,
+			ResponseCacheMaxEntries:       20000,
+			ResponseCachePurposes: []string{
+				"graphrag_extract", "graphrag_summary", "graphrag_community", "graphrag_concept",
+				"rag_summary_tree", "rag_query_rewrite", "memory_write_filter",
+			},
+			WindowBreakerWindowSecs:  60,
+			WindowBreakerMinSamples:  20,
+			WindowBreakerThreshold:   0.5,
+			WindowBreakerCooldownSec: 30,
+			EmbedBatchWindowMs:       10,
+			EmbedHighMaxBatchSize:    100,
+			EmbedLowMaxBatchSize:     8,
+			EmbedCallTimeoutSeconds:  30,
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,

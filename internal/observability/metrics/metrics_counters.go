@@ -26,6 +26,8 @@ func simpleCounters() []counterSpec {
 		{"polaris.cedar.ffi_leaks_total", "Cumulative count of Cedar FFI goroutine leaks (timeout-triggered)", &GlobalCedarFFILeaksTotal},
 		{"polaris.outbox.dead_letter_total", "Total number of outbox messages dead", &GlobalOutboxDeadLetterTotal},
 		{"polaris.factuality.judge_unavailable_total", "Factuality judge unavailable count", &GlobalFactualityJudgeUnavailableTotal},
+		{"polaris.llm.response_cache_hit_total", "Deterministic background LLM calls served from the exact-match response cache", &GlobalLLMResponseCacheHitTotal},
+		{"polaris.llm.response_cache_miss_total", "Cache-eligible LLM calls that missed the exact-match response cache", &GlobalLLMResponseCacheMissTotal},
 		{"polaris.blind_zone.routing_total", "Forced System2 escalations due to BlindZone detection", &GlobalBlindZoneRoutingTotal},
 		{"polaris.agent.schema_validation_failure_total", "LLMFillEffect responses failing SchemaRef validation", &GlobalSchemaValidationFailureTotal},
 		{"polaris.agent.context_overflow_recovery_total", "LLM requests pruned and retried after context overflow", &GlobalContextOverflowRecoveryTotal},

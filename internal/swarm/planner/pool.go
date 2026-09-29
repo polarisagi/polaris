@@ -197,7 +197,8 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		Model:       "reasoning",
 	}
 
-	resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
+	resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposePlannerPatchCandidate))
 	if err != nil || resp == nil || len(resp.Content) == 0 {
 		return
 	}
@@ -323,7 +324,8 @@ func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultCha
 			Model:       "reasoning",
 		}
 
-		resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+		// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
+		resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposePlannerPlanCandidate))
 		if err == nil && resp != nil && len(resp.Content) > 0 {
 			resultChan <- workerResult{
 				score:   0.9,

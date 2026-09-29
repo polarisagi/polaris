@@ -40,6 +40,12 @@ var (
 	// OTel gauge 在 RegisterMetrics() 的 RegisterCallback 中注册。
 	GlobalFactualityJudgeUnavailableTotal atomic.Int64
 
+	// GlobalLLMResponseCacheHitTotal / GlobalLLMResponseCacheMissTotal 确定性后台调用精确响应缓存
+	// （ADR-0105 决策六，internal/llm 记录包装）的命中/未命中（仅统计满足缓存条件的调用）。
+	// 命中率持续 <5% 达 30 天即触发该 ADR 的重新评估条件 4（删除缓存与表）。
+	GlobalLLMResponseCacheHitTotal  atomic.Int64
+	GlobalLLMResponseCacheMissTotal atomic.Int64
+
 	// GlobalBlindZoneRoutingTotal 因 BlindZone 检测强制升级为 System2 的累计次数（V8-S4）。
 	GlobalBlindZoneRoutingTotal atomic.Int64
 
