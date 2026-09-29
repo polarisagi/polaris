@@ -34,3 +34,7 @@ surprise_hint_threshold = 0.6
 'plan.reasoning_complexity' = 0.7
 'reflect.skip_complexity' = 0.4
 'cache.uniform_tools' = false
+'recall.item_max_chars' = 400
+'recall.max_tokens' = 1200
+'recall.min_score' = 0.0
+'recall.min_score_ratio' = 0.2

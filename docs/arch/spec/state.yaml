@@ -1004,6 +1004,10 @@ thresholds:
     plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0102 决策六：LLM 判定 complexity ≥ 此值时规划阶梯起点为 level 2（plan_replan 池 + high）
     cache_uniform_tools: false # toml:"cache.uniform_tools"，ADR-0105 决策三实验开关：true 时 Perceive/Reflect/Respond 也下发 Plan 的 tools 并设 tool_choice=none，使四阶段 tools 前缀一致；须以 llm_calls 实测命中/未命中 token 决定是否默认开启（HE-4）
     reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0102 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭
+    recall_item_max_chars: 400 # toml:"recall.item_max_chars"，ADR-0105 决策四：单条召回渲染后字符（rune）上限，超出截断；情景事件 payload 原可达 8KB
+    recall_max_tokens: 1200 # toml:"recall.max_tokens"，ADR-0105 决策四：召回段总 token 上限，按 反思>情景>L2语义>RAG>画像 装入，装不下即止
+    recall_min_score: 0 # toml:"recall.min_score"，L2 语义/RAG 绝对分下限，0=关闭；L2 分为 BM25 原始分（无界）、RAG 分恒 1.0，均非归一化相似度，故默认不设
+    recall_min_score_ratio: 0.2 # toml:"recall.min_score_ratio"，命中相对本次最高分的比例下限（top 恒保留），尺度无关；0=关闭；默认值待 Eval 校准（HE-4）
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - thinking_*: ["perceive_route_accuracy_drop", "reflect_goal_achieved_false_positive", "plan_schema_fail_rate>0.05"]
