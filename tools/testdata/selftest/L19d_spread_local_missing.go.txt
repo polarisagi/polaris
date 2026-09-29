@@ -1,0 +1,17 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// opts... 展开本函数内构造的切片，但字面量里缺 WithThinkingMode。
+// 负向用例刻意用「字面量 + append」这一仓库里最常见的构造形态，而不是最省事的裸调用。
+func selftestSpreadLocalMissing(ctx context.Context, p protocol.Provider) {
+	opts := []types.InferOption{types.WithPurpose("selftest")}
+	opts = append(opts, types.WithMaxTokens(8))
+	_, _ = safecall.Infer(ctx, p, nil, opts...)
+}
