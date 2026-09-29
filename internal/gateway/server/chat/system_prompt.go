@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,15 +40,14 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 
 	// 用户画像（P0-2：消费 default 用户画像）
 	if p, err := agentCtrl.Memory().GetUserProfile(ctx, "default"); err == nil && p != nil {
-		var summary []string
-		for _, sf := range p.StableFacts {
-			summary = append(summary, "- "+fmt.Sprint(sf))
-		}
-		for _, bp := range p.BehavioralPatterns {
-			summary = append(summary, "- "+fmt.Sprint(bp))
-		}
+		// StableFacts/BehavioralPatterns 都是 map：直接 range 顺序随机，画像内容不变时
+		// 稳定层也逐请求漂移（ADR-0105 决策一字节稳定规则 1），故按键排序后输出值。
+		summary := sortedValueLines(p.StableFacts)
+		summary = append(summary, sortedValueLines(p.BehavioralPatterns)...)
 		if len(summary) > 0 {
 			ic.UserProfile = "## User Profile (Context)\n" + strings.Join(summary, "\n")
+		} else {
+			ic.UserProfile = ""
 		}
 	}
 
@@ -105,27 +105,41 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 	// 平台感知提示
 	ic.PlatformHint = s.PromptMgr.PlatformHintFor(s.ServerPlatform)
 
-	// volatile 层：当前日期（精确到天，不破坏 prefix cache），会话信息由调用方追加
-	ic.VolatileBlock = "当前日期：" + time.Now().Format("2006-01-02")
-
 	// Built-in tools — 仅注入工具名列表；描述已由 function schema 传递，避免系统提示词冗余膨胀。
+	// 名称显式排序：不依赖 ToolReg.List() 的实现是否有序（ToolRegistry 是接口，其他实现
+	// 可能遍历 map）；稳定层任何集合都必须确定序（ADR-0105 决策一字节稳定规则 1）。
+	// 无工具时必须清空：ic 是长生命周期共享对象，不清空会残留上一请求的工具名。
+	ic.BuiltinTools = ""
 	if s.ToolReg != nil {
 		var names []string
 		for _, t := range s.ToolReg.List() {
 			names = append(names, t.Name)
 		}
+		sort.Strings(names)
 		if len(names) > 0 {
 			ic.BuiltinTools = fmt.Sprintf("%d: %s", len(names), strings.Join(names, ", "))
 		}
 	}
 
-	// 扩展感知（插件 / MCP / App）— 仅名称 + 连接状态摘要，细节由 BuildToolSchemas() 注入 function schema。
-	ic.InstalledPlugins = s.buildExtensionSummary(ctx)
+	// 扩展感知（插件 / MCP / App）：稳定层只放名称清单（确定序），连接状态 ✓/~/✗ 随
+	// MCP 连接/断开变化，属易变量，并入下方易变层（ADR-0105 决策一字节稳定规则 2）。
+	// 细节由 BuildToolSchemas() 注入 function schema。
+	extSnap := s.snapshotExtensions(ctx)
+	ic.InstalledPlugins = extSnap.extensionNames()
+
+	// volatile 层（L3）：当前日期（精确到天）+ 扩展连接状态；会话信息由调用方追加。
+	// 内核路径把它放在历史之后，网关直连路径放在最后一条消息之前，均不打断 L0..L2 前缀。
+	ic.VolatileBlock = "当前日期：" + time.Now().Format("2006-01-02")
+	if status := extSnap.extensionStatus(); status != "" {
+		ic.VolatileBlock += "\n" + status
+	}
 
 	// Ambient skills 写入独立字段，不拼接进 SystemPromptTemplate。
 	// 原因：skill instructions 可能含 {{ }} 语法（代码示例/Jinja/Handlebars），
 	// 若拼入模板字符串会导致 template.Parse() 崩溃，系统提示词退化为报错文本。
 	// PrependToMessages 在模板渲染完成后再追加 AmbientContext，彻底脱离模板解析器。
+	// 与 BuiltinTools 同理，无 DB 时也要清空，避免残留上一请求的技能全文。
+	ic.AmbientContext = ""
 	if s.DB != nil {
 		ic.AmbientContext = s.buildAmbientSkillsSection(ctx, userQuery)
 	}
@@ -149,8 +163,22 @@ const (
 // Ambient skills 相关性判定/文本注入 (relevanceScore/skillTextKey/
 // cachedSkillEmbed/isSkillRelevant/buildAmbientSkillsSection/
 // SetActivatedSystemPrompt) 见 system_prompt_ambient.go；插件/MCP 感知
-// 摘要 (buildExtensionSummary/queryPluginSummary/
-// standaloneMCPSummary) 见 system_prompt_extensions.go（均为 R7 拆分）。
+// 摘要 (snapshotExtensions/extensionNames/extensionStatus/queryPluginEntries/
+// standaloneMCPEntries) 见 system_prompt_extensions.go（均为 R7 拆分）。
+
+// sortedValueLines 按键升序把 map 的值渲染为 "- 值" 行（确定序）。
+func sortedValueLines(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		lines = append(lines, "- "+fmt.Sprint(m[k]))
+	}
+	return lines
+}
 
 func loadOperationalDirectives(pm PromptManager) string {
 	var opDirectives []string
