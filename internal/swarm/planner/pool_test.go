@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -260,5 +261,91 @@ func TestPlannerPool_WorkerEngineA_WithWorkspace_StagesAndCleansUp(t *testing.T)
 	}
 	if cleanups != staged {
 		t.Errorf("expected cleanup() called once per staged file, got %d cleanups for %d staged", cleanups, staged)
+	}
+}
+
+// ── SessionRecorder ─────────────────────────────────────────────────────────
+
+type fakeSessionRecorder struct {
+	mu       sync.Mutex
+	starts   []fakeStart
+	finishes []fakeSessionFinish
+}
+
+type fakeStart struct {
+	id, taskID, goal, taskType string
+	workers                    int
+}
+
+type fakeSessionFinish struct {
+	id, status, engine string
+	score              float64
+}
+
+func (f *fakeSessionRecorder) Start(_ context.Context, id, taskID, goal, taskType string, workerCount int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.starts = append(f.starts, fakeStart{id, taskID, goal, taskType, workerCount})
+	return nil
+}
+
+func (f *fakeSessionRecorder) Finish(_ context.Context, id, status string, score float64, engine string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.finishes = append(f.finishes, fakeSessionFinish{id, status, engine, score})
+	return nil
+}
+
+func TestPlannerPool_Recorder_DoneWithEngineB(t *testing.T) {
+	prov := &mockProvider{resp: &types.ProviderResponse{Content: "plan"}}
+	rec := &fakeSessionRecorder{}
+	pool := NewPlannerPool("g", "general", prov, make(chan protocol.MemoryWhisper, 10), nil)
+	pool.SetRecorder(rec, "task-1")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool.Run(ctx)
+
+	if len(rec.starts) != 1 || rec.starts[0].taskID != "task-1" || rec.starts[0].workers != 3 || !strings.HasPrefix(rec.starts[0].id, "plan_") {
+		t.Fatalf("start: %+v", rec.starts)
+	}
+	if len(rec.finishes) != 1 || rec.finishes[0].status != "done" || rec.finishes[0].engine != "engine_b" ||
+		rec.finishes[0].score < 0.9 || rec.finishes[0].id != rec.starts[0].id {
+		t.Fatalf("finish: %+v", rec.finishes)
+	}
+}
+
+// code_act 且沙箱/工作区均缺失 → 所有 worker 无结果 → failed，引擎记 engine_a。
+func TestPlannerPool_Recorder_FailedWhenNoResult(t *testing.T) {
+	rec := &fakeSessionRecorder{}
+	pool := NewPlannerPool("g", "code_act", nil, make(chan protocol.MemoryWhisper, 10), nil)
+	pool.SetRecorder(rec, "")
+	pool.Run(context.Background())
+	if len(rec.finishes) != 1 || rec.finishes[0].status != "failed" || rec.finishes[0].engine != "engine_a" {
+		t.Fatalf("finish: %+v", rec.finishes)
+	}
+}
+
+// ctx 已取消 → 即使有结果也记 failed（规划被中断，结果不可信）。
+func TestPlannerPool_Recorder_CanceledCtxIsFailed(t *testing.T) {
+	prov := &mockProvider{resp: &types.ProviderResponse{Content: "plan"}}
+	rec := &fakeSessionRecorder{}
+	pool := NewPlannerPool("g", "general", prov, make(chan protocol.MemoryWhisper, 10), nil)
+	pool.SetRecorder(rec, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool.Run(ctx)
+	if len(rec.finishes) != 1 || rec.finishes[0].status != "failed" {
+		t.Fatalf("finish: %+v", rec.finishes)
+	}
+}
+
+// nil whisperChan 提前返回：不产生任何记录。
+func TestPlannerPool_Recorder_NoRecordWhenNoWhisperChan(t *testing.T) {
+	rec := &fakeSessionRecorder{}
+	pool := NewPlannerPool("g", "general", nil, nil, nil)
+	pool.SetRecorder(rec, "")
+	pool.Run(context.Background())
+	if len(rec.starts) != 0 || len(rec.finishes) != 0 {
+		t.Fatalf("不应记录: %+v %+v", rec.starts, rec.finishes)
 	}
 }

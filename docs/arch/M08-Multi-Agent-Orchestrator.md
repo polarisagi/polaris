@@ -5,7 +5,7 @@
 > M8 描述的编排语义/不变量不变，仅物理归属调整；`internal/swarm` 现在是消费方而非实现方。
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:124 Supervisor / 2-bis:143 常驻角色Agent / 3:160 编排模式 / 3-bis:193 (已删除,见ADR-0062) / 3-ter:201 PipelineOrchestrator / 3-quater:242 PatternDAGExecutor / 3-quinquies:256 StateGraphExecutor / 4:295 AgentCard / 5:307 Task分解 / 8:325 拓扑自演化(已删除,见ADR-0062) / 10:333 (SOFT)降级 / 11:352 跨模块契约 / 11.2:378 已知实现缺口 / 12:392 Custom Agent / 13:408 CSV Fan-out / §3-sexies:441 PatternDebate -->
+<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:124 Supervisor / 2-bis:143 常驻角色Agent / 3:160 编排模式 / 3-bis:193 (已删除,见ADR-0062) / 3-ter:201 PipelineOrchestrator / 3-quater:242 PatternDAGExecutor / 3-quinquies:256 StateGraphExecutor / 4:296 AgentCard / 5:308 Task分解 / 8:326 拓扑自演化(已删除,见ADR-0062) / 10:334 (SOFT)降级 / 11:353 跨模块契约 / 11.2:379 已知实现缺口 / 12:393 Custom Agent / 13:409 CSV Fan-out / §3-sexies:442 PatternDebate -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
@@ -288,6 +288,7 @@ WebUI「工作流」自动化功能（`internal/gateway/server/sysadmin/workflow
 - **图构造**（`workflow_graph.go` `buildGraphSpec`）：`workflows.type='chain'`（默认）时完全忽略 `depends_on`，按 `seq` 合成顺序链，与旧实现行为逐字节等价；`type='dag'` 时如实按 `depends_on` 构造无条件依赖边，多依赖由上述 AND-Join 保证等待全部完成。`depends_on` 的 JSON 数组元素是 **0-based seq 索引的字符串**而非步骤 DB id——因为 `CreateWorkflowWithSteps`/`UpdateWorkflowWithSteps` 每次保存都对整张 `workflow_steps` 表先删后插、为全部步骤重新生成 id，id 在两次保存之间不稳定，seq 索引才是前端可持久引用的锚点。`max_retries>0` 的步骤额外附加自环条件边（`status=="error"` 时重试），`MaxVisits=1+max_retries`；与 `compensation_tool`（Saga 补偿）互斥，HTTP 层提前校验拒绝（`validateStepRetryCompensation`）。
 - **执行下沉**（`workflow_step_worker.go` `WorkflowAdmin.RunStepWorkerLoop`）：不依赖中心化推送机制，采用"自订阅 Blackboard + CAS 认领"模式（与 `default_worker.go` 同构，二者独立收敛出同一模式——已废弃的中心化 `Orchestrator`/`Worker`，见 §1.1 ADR-0062 说明）——订阅 `task_posted`，按 `PeekTask` 返回的 `Type` 过滤仅认领 `workflow_step` 能力类型的任务，实际执行复用既有 `runWorkflowStep`（AgentPool headless 推理）。业务失败（工具/LLM 报错）一律走 `CompleteTask` 写回 `{"status":"error",...}` 而非 `FailTask`——把重试判定完全交给声明式自环条件边；只有基础设施级故障（intent 解析失败、步骤配置缺失）才走 `FailTask` 触发 Fail-Fast 中止。
 - **执行历史**：`workflow_runs.step_outputs`/`current_step` 由该 Worker 以原子 SQL（`json_insert` 追加 / `current_step+1` 自增）增量写入，兼容 DAG 并行下多步骤并发完成，避免"读-改-写"竞态丢失更新。
+- **中断与续跑**：启动期孤儿对账把遗留 `running` 的 run 置 `interrupted`；`POST /v1/workflows/runs/{id}/resume` 仅允许 `interrupted|error`，以同一 runID 重入 StateGraphExecutor，`task_checkpoints` 中 `done` 节点复用，不自动续跑（ADR-0104 决策一/二）。
 - **生命周期**：`RunStepWorkerLoop` 在 `server.Start()` 以 `concurrent.SafeGo` 启动为长驻 goroutine，`Shutdown()` 时随专属 `context.CancelFunc` 一并停止。
 
 ---
@@ -397,7 +398,7 @@ inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所�
 - 项目 `<project_root>/.polaris/agents/` > 用户 `<data>/agents/`：Claude `*.md`（frontmatter + 正文）/ Codex `*.toml`（`developer_instructions`）
 - 已启用插件 `agents/*.md` → `<plugin>:<agent>`
 
-**执行链**: `transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker` → `SubagentRunner.Run`（角色解析 → SubagentStart hook → `AcquireHeadless(WithAgentProfile)` → SubagentStop hook，续跑 ≤3）→ `Agent.SetAgentProfile`。`SubagentRunner` 同时服务用户调用的 `context: fork` 技能（`SlashCommandRouter`）与 `agent` 类型 hook；模型调用的 fork 技能由内核 `tryForkSkill` 转为 `transfer_to_agent`。内置类型 `Explore`/`Plan`/`default`/`worker`/`explorer`（`lifecycle/agent_builtin.go`）。`list_agents` 向模型列出目标；`general-purpose` = 无角色；未知名称任务失败并把原因回传委派方。`mcp:` 目标仍由 `MCPA2AWorker` 认领（ADR-0084）。
+**执行链**: `transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker` → `SubagentRunner.Run`（角色解析 → SubagentStart hook → `AcquireHeadless(WithAgentProfile)` → SubagentStop hook，续跑 ≤3）→ `Agent.SetAgentProfile`。每次运行写 `subagent_runs`（042；`entry` = delegation/fork_skill/hook，子会话 ID 固定 `sub-{agent_id}`，写失败仅告警；ADR-0104 决策六）。`SubagentRunner` 同时服务用户调用的 `context: fork` 技能（`SlashCommandRouter`）与 `agent` 类型 hook；模型调用的 fork 技能由内核 `tryForkSkill` 转为 `transfer_to_agent`。内置类型 `Explore`/`Plan`/`default`/`worker`/`explorer`（`lifecycle/agent_builtin.go`）。`list_agents` 向模型列出目标；`general-purpose` = 无角色；未知名称任务失败并把原因回传委派方。`mcp:` 目标仍由 `MCPA2AWorker` 认领（ADR-0084）。
 
 **角色边界**（执行入口硬拦截 `Agent.checkProfileTool`）: 工具白/黑名单（Claude 工具名映射）、只读（Codex `read-only` / Claude `plan`）、`maxTurns`→`MaxStepsLimit`、默认禁再委派；指令进 `ZoneMutableSkill`。字段级映射与「解析但不生效」清单见 ADR-0103。
 

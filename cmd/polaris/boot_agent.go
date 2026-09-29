@@ -209,6 +209,9 @@ func buildAgent(
 		// 测试评分（WP-9：不再用裸 os.MkdirTemp/os.WriteFile 触碰宿主机系统级
 		// /tmp，见 planner.WorkspaceStager 注释）。
 		pool.SetWorkspace(tb.VFSWorkspace)
+		// 031_planner_sessions：规划审计落库；task_id 由 agent_execute_dag 显式带入 ctx，可能为空。
+		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+		pool.SetRecorder(repo.NewSQLitePlannerSessionRepository(sb.Store.DB()), taskID)
 		pool.Run(ctx)
 	})
 	a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
@@ -619,7 +622,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// "agent_handoff:mcp:" 前缀由专用 MCPA2AWorker 认领（ADR-0084），排除后
 	// 防止 target_agent_role 的 mcp: 委派语义被当作纯文本 headless 查询丢弃。
 	// 子 Agent 执行唯一实现（委派任务 / 用户 fork 技能 / agent 类型 hook 共用，ADR-0103）。
-	subagentRunner := newSubagentRunner(agentPool, tb)
+	subagentRunner := newSubagentRunner(agentPool, tb, repo.NewSQLiteSubagentRunRepository(sb.Store.DB()))
 	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool,
 		"workflow_step", orchestrator.DebateTaskType, orchestrator.MCPA2AHandoffPrefix)
 	// ADR-0103 决策三：agent_handoff:<name> 按插件/项目/用户子 Agent 定义以角色执行，

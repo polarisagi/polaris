@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
@@ -30,6 +32,16 @@ type WorkspaceStager interface {
 	StageEphemeralFile(namespace, filename string, data []byte) (absPath string, cleanup func(), err error)
 }
 
+// SessionRecorder 规划会话记录的持久化（调用方定义，HE-6；实现见 store/repo，表 031_planner_sessions）。
+// 纯观测性审计账本：写失败只告警，不影响规划结果推送。
+//
+// @producer: internal/store/repo/repo_planner_session.go
+type SessionRecorder interface {
+	Start(ctx context.Context, id, taskID, goal, taskType string, workerCount int) error
+	// Finish status ∈ {done, failed}；engine ∈ {engine_a, engine_b}。
+	Finish(ctx context.Context, id, status string, score float64, engine string) error
+}
+
 // PlannerPool 管理多个并发的思考流，并将最佳结果（通过耳语）汇报给主脑。
 type PlannerPool struct {
 	goal        string
@@ -39,6 +51,14 @@ type PlannerPool struct {
 	sandbox     SandboxExecutor
 	workspace   WorkspaceStager
 	decomposer  *TaskDecomposer
+	recorder    SessionRecorder // 可选；nil 时不落库
+	taskID      string          // planner_sessions.task_id，来自调用方 ctx，可为空
+}
+
+// SetRecorder 注入规划会话记录器（nil 安全）。taskID 为关联的任务/会话标识，可为空。
+func (p *PlannerPool) SetRecorder(rec SessionRecorder, taskID string) {
+	p.recorder = rec
+	p.taskID = taskID
 }
 
 // SetWorkspace 注入 WorkspaceStager（通常为 *vfs.WorkspaceManager），供
@@ -71,6 +91,8 @@ func (p *PlannerPool) Run(ctx context.Context) {
 	}
 
 	workerCount := 3
+	sessionID := "plan_" + uuid.NewString()
+	p.recordStart(ctx, sessionID, workerCount)
 	resultChan := make(chan workerResult, workerCount)
 	var wg sync.WaitGroup
 
@@ -110,6 +132,8 @@ func (p *PlannerPool) Run(ctx context.Context) {
 		}
 	}
 
+	p.recordFinish(ctx, sessionID, hasResult && ctx.Err() == nil, best.score)
+
 	if best.content != "" {
 		select {
 		case p.whisperChan <- protocol.MemoryWhisper{
@@ -119,6 +143,32 @@ func (p *PlannerPool) Run(ctx context.Context) {
 		}:
 		case <-ctx.Done():
 		}
+	}
+}
+
+func (p *PlannerPool) recordStart(ctx context.Context, id string, workerCount int) {
+	if p.recorder == nil {
+		return
+	}
+	if err := p.recorder.Start(ctx, id, p.taskID, p.goal, p.taskType, workerCount); err != nil {
+		slog.Warn("planner_pool: record start failed", "id", id, "err", err)
+	}
+}
+
+// recordFinish 用脱离取消的 ctx 落终态：ctx 取消（父任务结束）时仍须把行写成 failed 而非停在 running。
+func (p *PlannerPool) recordFinish(ctx context.Context, id string, ok bool, score float64) {
+	if p.recorder == nil {
+		return
+	}
+	status, engine := "failed", "engine_b"
+	if ok {
+		status = "done"
+	}
+	if p.taskType == "code_act" {
+		engine = "engine_a"
+	}
+	if err := p.recorder.Finish(context.WithoutCancel(ctx), id, status, score, engine); err != nil {
+		slog.Warn("planner_pool: record finish failed", "id", id, "err", err)
 	}
 }
 

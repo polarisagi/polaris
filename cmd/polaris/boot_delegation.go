@@ -92,7 +92,7 @@ func (f skillForker) RenderSkill(ctx context.Context, skillName string, args []b
 
 // newSubagentRunner 组装子 Agent 执行器：定义解析来自 AgentDefinitionProvider，生命周期 hook
 // 来自 hooks.json 引擎；并把 agent 类型 hook 的评估接到同一执行器（引擎先于 Agent 池构造）。
-func newSubagentRunner(pool protocol.AgentPool, tb *ToolBundle) *orchestrator.SubagentRunner {
+func newSubagentRunner(pool protocol.AgentPool, tb *ToolBundle, rec orchestrator.SubagentRunRecorder) *orchestrator.SubagentRunner {
 	var profiles orchestrator.AgentProfileResolver
 	if tb.AgentDefs != nil {
 		profiles = tb.AgentDefs
@@ -101,7 +101,7 @@ func newSubagentRunner(pool protocol.AgentPool, tb *ToolBundle) *orchestrator.Su
 	if tb.HookRunner != nil {
 		hooks = tb.HookRunner
 	}
-	runner := orchestrator.NewSubagentRunner(pool, profiles, hooks)
+	runner := orchestrator.NewSubagentRunner(pool, profiles, hooks).WithRecorder(rec)
 	if tb.HookEvaluator != nil {
 		tb.HookEvaluator.bindSubagents(runner)
 	}

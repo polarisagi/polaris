@@ -208,7 +208,13 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}
 
 			if a.plannerSpawner != nil {
-				concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.planner_spawner", func(gctx context.Context) {
+				// DetachedWithLink 只保留 span，会丢掉 CtxTaskIDKey；在此显式带上会话标识，
+				// PlannerPool 落 planner_sessions.task_id 时据此关联（不改 plannerSpawner 签名）。
+				detached := trace.DetachedWithLink(ctx)
+				if a.sCtx != nil && a.sCtx.SessionID != "" {
+					detached = context.WithValue(detached, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+				}
+				concurrent.SafeGo(detached, "agent.planner_spawner", func(gctx context.Context) {
 					a.plannerSpawner(gctx, goal, taskType, a.provider)
 				})
 			}

@@ -214,7 +214,8 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapshot, prompt string, opts []types.HeadlessOption) (string, error) {
 	if name, ok := strings.CutPrefix(snap.Type, handoffTypePrefix); ok && w.subagents != nil {
 		out, err := w.subagents.Run(ctx, SubagentRequest{ParentSessionID: snap.Namespace, AgentID: snap.ID,
-			AgentName: name, Prompt: prompt, Options: opts})
+			AgentName: name, Prompt: prompt, Options: opts,
+			Entry: SubagentEntryDelegation, TaskID: snap.ID})
 		if err != nil {
 			return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: subagent", err)
 		}

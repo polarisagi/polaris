@@ -83,7 +83,8 @@ func (e *hookPromptEvaluator) evaluateWithAgent(ctx context.Context, prompt stri
 	if r == nil {
 		return "", apperr.New(apperr.CodeInternal, "agent hook: subagent runner not ready")
 	}
-	out, err := r.Run(ctx, orchestrator.SubagentRequest{Profile: hookAgentProfile(), Prompt: hookPromptInstruction + prompt})
+	out, err := r.Run(ctx, orchestrator.SubagentRequest{Profile: hookAgentProfile(), Prompt: hookPromptInstruction + prompt,
+		Entry: orchestrator.SubagentEntryHook})
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeOf(err), "agent hook", err)
 	}
