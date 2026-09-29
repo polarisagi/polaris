@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -32,38 +31,23 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 		}
 	}
 
+	// 降级路径（无记忆系统）与记忆路径同构：L1 会话层 → L2 历史 → L3 阶段模板 → L4 本轮意图
+	// （ADR-0105 决策一）。S-02：模板不再承载 ExtensionsSection 占位符——扩展自述属不可信
+	// 数据，由 WriteSessionLayer 单独按 TaintHigh 围栏写入，保持模板与 TaintNone 标记名副其实。
 	b := prompt.NewPromptBuilder()
 	sCtx.Mu.RLock()
-	sysEnvSnapshot := sCtx.SysEnvSnapshot
-	extInfo := sCtx.InstalledExtensionsInfo
 	rawIntent := sCtx.RawIntentTS
 	epochTracker := sCtx.EpochTracker
 	sCtx.Mu.RUnlock()
 
-	if sysEnvSnapshot != "" {
-		b.WriteSystemEnvironment(sysEnvSnapshot)
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("perceive: session layer failed, continuing without it", "err", err)
 	}
-	// S-02：模板不再承载 ExtensionsSection 占位符，故此处不传入——保持模板与
-	// TaintNone 标记名副其实（纯静态内核指令，无第三方内容混入）。
-	tmpl, _ := configs.LoadPromptTemplate("kernel/perceive.md", nil)
-	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
-		tmpl,
-		taint.TaintSource{OriginTaintLevel: types.TaintNone},
-		"system_prompt",
-	))
-	b.WriteInstruction(safeInst)
-
-	// S-02：已安装扩展的自述信息来源不可信（第三方可控），必须单独进入
-	// ZoneExternalCatalog 并按 TaintHigh 打标，禁止与内核指令混入 ZoneImmutable。
-	if extInfo != "" {
-		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
-			extInfo,
-			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
-			"extension_catalog"))
-	}
+	WriteConversationHistory(b, sCtx)
+	WriteKernelInstruction(b, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object.")
 
 	b.WriteUserData(rawIntent)
-	msgs := b.Build()
+	msgs := FinishLayered(b, nil)
 	if epochTracker != nil {
 		sCtx.Mu.Lock()
 		sCtx.ContextEpoch = epochTracker.check(msgs)
@@ -88,13 +72,18 @@ func (sm *StateMachine) onPerceiveFailure(sCtx protocol.StateContext, err error)
 }
 
 func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContext) []types.Message {
+	// 运行期提示块（重规划新增工具、<tool-hints>）先落到 sCtx，两条路径统一写入 L3。
+	// 此前记忆路径把它们追加到 msgs[0]，会改写 L0 稳定核（ADR-0105 决策一）。
+	blocks := sm.planHintBlocks()
+	sCtx.Mu.Lock()
+	sCtx.PlanHintBlocks = blocks
+	sCtx.Mu.Unlock()
+
 	// 有记忆系统时注入历史执行经验（Episodic Top-5 + 任务目标 + 工具列表）
 	if pCtx.Mem != nil {
 		ctx, cancel := sm.bgCtx()
 		defer cancel()
 		if msgs, err := sm.cb.BuildPlanContext(ctx, pCtx.Mem, sCtx, nil, sCtx.Cognitive); err == nil {
-			sm.appendDynamicHints(msgs)
-			sm.appendToolHints(msgs)
 			if sCtx.EpochTracker != nil {
 				sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 			}
@@ -104,15 +93,14 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 
 	b := prompt.NewPromptBuilder()
 	sCtx.Mu.RLock()
-	sysEnvSnapshot := sCtx.SysEnvSnapshot
-	extInfo := sCtx.InstalledExtensionsInfo
 	groundingGap := sCtx.GroundingGap
 	preferences := sCtx.Preferences
 	sCtx.Mu.RUnlock()
 
-	if sysEnvSnapshot != "" {
-		b.WriteSystemEnvironment(sysEnvSnapshot)
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("plan: session layer failed, continuing without it", "err", err)
 	}
+	WriteConversationHistory(b, sCtx)
 
 	// TaskID 激活作用域同源于 pCtx.SessionID（与 agent_execute.go 的
 	// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID) 保持一致），
@@ -122,44 +110,16 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	defer cancel()
 	toolListCtx = context.WithValue(toolListCtx, protocol.CtxTaskIDKey{}, pCtx.SessionID)
 
-	// S-02：模板不再承载 ToolsSection/ExtensionsSection 占位符。
-	tmpl, _ := configs.LoadPromptTemplate("kernel/plan.md", nil)
+	// L3 阶段层。S-02：模板不再承载 ToolsSection/ExtensionsSection 占位符。
+	WriteKernelInstruction(b, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section.")
 
-	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
-		tmpl,
-		taint.TaintSource{OriginTaintLevel: types.TaintNone},
-		"system_prompt",
-	))
-	b.WriteInstruction(safeInst)
-
-	// GroundingGap 来自世界模型对外部知识的评估，属不可信数据：进 ZoneUserData 围栏，
-	// 禁止拼进 TaintNone 的系统模板（GR-4.1-003，特权区注入）。
-	if groundingGap != "" {
-		b.WriteUserData(taint.NewTaintedString(
-			"Critical Knowledge Gap (address it explicitly in the plan):\n"+groundingGap,
-			taint.TaintSource{Module: "world_model", OriginTaintLevel: types.TaintHigh},
-			"grounding_gap"))
-	}
-
-	// S-02：外部工具/扩展目录（第三方来源，禁止混入 ZoneImmutable）。拆成独立方法
-	// 以控制 promptPlan 圈复杂度（R7/gocyclo）。
-	sm.writePlanExternalCatalogs(b, toolListCtx, extInfo)
+	// 外部工具目录（第三方来源，禁止混入 ZoneImmutable）。拆成独立方法以控制 promptPlan
+	// 圈复杂度（R7/gocyclo）；工具目录只出现在 Plan，故属 L3 而非 L1。
+	sm.writePlanExternalCatalogs(b, toolListCtx)
 
 	mode, anyAppEnabled, chromeEnabled := computerUsePolicyFromPrefs(preferences)
 	b.WriteComputerUsePolicy(mode, anyAppEnabled, chromeEnabled)
-
-	if sm.toolHintProvider != nil {
-		b.WriteToolHints(sm.toolHintProvider.BuildSystemHintBlock())
-	}
-
-	if sCtx.TaskModel != nil {
-		goalTS := taint.NewTaintedString(
-			"Task Goal: "+sCtx.TaskModel.Goal,
-			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
-			"m4_task_model",
-		)
-		b.WriteUserData(goalTS)
-	}
+	WritePlanHints(b, sCtx)
 
 	// 预算压力约束：75% 阈值已触发时，要求 LLM 生成最小必要 DAG。
 	// 防止在预算末尾生成大型 DAG 导致 S_EXECUTE 阶段触发 INFERENCE_OOM。
@@ -179,10 +139,28 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		safeHint, _ := taint.SanitizeToSafe(budgetTS)
 		b.WriteInstruction(safeHint)
 	}
+
+	// L4 回合层：TaskModel → GroundingGap → 观测 → 重规划反馈。
+	if sCtx.TaskModel != nil {
+		goalTS := taint.NewTaintedString(
+			"Task Goal: "+sCtx.TaskModel.Goal,
+			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
+			"m4_task_model",
+		)
+		b.WriteUserData(goalTS)
+	}
+	// GroundingGap 来自世界模型对外部知识的评估，属不可信数据：进 ZoneUserData 围栏，
+	// 禁止拼进 TaintNone 的系统模板（GR-4.1-003，特权区注入）。
+	if groundingGap != "" {
+		b.WriteUserData(taint.NewTaintedString(
+			"Critical Knowledge Gap (address it explicitly in the plan):\n"+groundingGap,
+			taint.TaintSource{Module: "world_model", OriginTaintLevel: types.TaintHigh},
+			"grounding_gap"))
+	}
 	WriteObservations(b, sCtx)
 	WriteReplanFeedback(b, sCtx)
 
-	msgs := b.Build()
+	msgs := FinishLayered(b, nil)
 	if sCtx.EpochTracker != nil {
 		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 	}
@@ -193,24 +171,20 @@ func (sm *StateMachine) onPlanFailure(sCtx protocol.StateContext, err error) (ty
 	return types.State("S_PLAN_FAILED"), apperr.New(apperr.CodeInternal, "plan: LLM fill failed")
 }
 
-// writePlanExternalCatalogs 将第三方来源的扩展/工具目录写入 ZoneExternalCatalog
-// （S-02：从 promptPlan 拆出以控制圈复杂度，语义不变）。
-func (sm *StateMachine) writePlanExternalCatalogs(b *prompt.PromptBuilder, toolListCtx context.Context, extInfo string) {
-	if extInfo != "" {
-		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
-			extInfo,
-			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
-			"extension_catalog"))
-	}
-
+// writePlanExternalCatalogs 将第三方来源的工具目录写入 ZoneExternalCatalog 的 L3 阶段层
+// （S-02：从 promptPlan 拆出以控制圈复杂度，语义不变）。扩展自述目录已移至 L1
+// （WriteSessionLayer），这里只剩仅 Plan 阶段需要的工具目录。
+func (sm *StateMachine) writePlanExternalCatalogs(b *prompt.PromptBuilder, toolListCtx context.Context) {
 	// MCP 外部工具描述禁止与内核指令混入同一 TaintNone 区；BuildToolListSection
 	// 返回该次目录中出现过的最高来源污点等级。
 	toolsSection, toolsTaint := sm.cb.BuildToolListSection(toolListCtx, nil)
 	if toolsSection != "" {
+		b.SetLayer(protocol.LayerPhase)
 		b.WriteExternalCatalog("tools", taint.NewTaintedString(
 			toolsSection,
 			taint.TaintSource{Module: "tool_catalog", OriginTaintLevel: toolsTaint},
 			"tool_catalog"))
+		b.ResetLayer()
 	}
 }
 
@@ -244,16 +218,11 @@ func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateCon
 	}
 
 	b := prompt.NewPromptBuilder()
-	if sCtx.SysEnvSnapshot != "" {
-		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("reflect: session layer failed, continuing without it", "err", err)
 	}
-	tmpl, _ := configs.LoadPromptTemplate("kernel/reflect.md", nil)
-	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
-		tmpl,
-		taint.TaintSource{OriginTaintLevel: types.TaintNone},
-		"system_prompt",
-	))
-	b.WriteInstruction(safeInst)
+	WriteConversationHistory(b, sCtx)
+	WriteKernelInstruction(b, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
 
 	resultTS := taint.NewTaintedString(
 		"Execution Result: "+string(sCtx.ExecuteResult),
@@ -261,7 +230,7 @@ func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateCon
 		"m4_execute_result",
 	)
 	b.WriteUserData(resultTS)
-	msgs := b.Build()
+	msgs := FinishLayered(b, nil)
 	if sCtx.EpochTracker != nil {
 		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 	}

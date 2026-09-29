@@ -98,8 +98,12 @@ type StateContext struct {
 	AgentProfile *types.AgentProfileSpec
 	RawIntentTS  taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
 	// ConversationHistory 本轮之前的对话（ADR-0098 决策四），已剔除 system 角色；
-	// 仅 Perceive/Respond 渲染进 prompt，按 TaintHigh 围栏。
+	// 四个阶段共用同一 L2 历史层（ADR-0105 决策二），逐条按 TaintHigh 围栏。
 	ConversationHistory []types.Message
+	// PlanHintBlocks S_PLAN 阶段层（L3）的运行期提示块（重规划新增工具、<tool-hints>）。
+	// 每次构造 Plan prompt 前由状态机刷新；此前它们被追加到 msgs[0]，会改写 L0 稳定核，
+	// 使 Plan 请求的前缀与其它阶段失配（ADR-0105 决策一）。
+	PlanHintBlocks []string
 	// ReplanFeedback 规划被拒 / 执行失败的原因（ADR-0098 决策六），经 RecordReplanFeedback 写入。
 	ReplanFeedback []string
 	// Observations 本回合各轮执行结果（ADR-0098 决策八），经 RecordObservation 写入。

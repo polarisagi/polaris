@@ -88,33 +88,29 @@ type ExtActivatedHint struct {
 	Description string
 }
 
-func (sm *StateMachine) appendDynamicHints(msgs []types.Message) {
+// planHintBlocks 收集 S_PLAN 阶段层（L3）的运行期提示块：重规划新增可用工具、
+// ToolHintProvider 产出的 <tool-hints>。二者随运行时状态变化，属易变量，只能进 L3，
+// 不得再改写 msgs[0]（L0 稳定核）——那会让 Plan 请求的整个前缀与其它阶段失配。
+func (sm *StateMachine) planHintBlocks() []string {
+	var blocks []string
 	sm.hintsMu.Lock()
 	hints := sm.dynamicHints
 	sm.hintsMu.Unlock()
-	if len(hints) > 0 && len(msgs) > 0 {
+	if len(hints) > 0 {
 		var sb strings.Builder
-		sb.WriteString("\n\n## 本次重规划新增可用工具\n")
+		sb.WriteString("## 本次重规划新增可用工具\n")
 		sb.WriteString("以下工具刚刚被激活，你可以在重规划中使用它们：\n")
 		for _, h := range hints {
 			fmt.Fprintf(&sb, "- **%s**: %s\n", h.ToolName, h.Description)
 		}
-		msgs[0].Content += sb.String()
+		blocks = append(blocks, sb.String())
 	}
-}
-
-// appendToolHints 将 ToolHintProvider 产出的 <tool-hints> 块追加到 msgs[0]（与
-// appendDynamicHints 的注入方式一致），供有记忆系统（BuildPlanContext）分支复用——
-// 该分支绕过 PromptBuilder 直接返回消息数组，故不能走 WriteToolHints。
-func (sm *StateMachine) appendToolHints(msgs []types.Message) {
-	if sm.toolHintProvider == nil || len(msgs) == 0 {
-		return
+	if sm.toolHintProvider != nil {
+		if hint := sm.toolHintProvider.BuildSystemHintBlock(); hint != "" {
+			blocks = append(blocks, hint)
+		}
 	}
-	hint := sm.toolHintProvider.BuildSystemHintBlock()
-	if hint == "" {
-		return
-	}
-	msgs[0].Content += "\n\n" + hint
+	return blocks
 }
 
 // WithExtensionActivator 注入按需扩展激活器（可选，启动时由上层 wire）。
