@@ -83,8 +83,8 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 	// 2. 写 run 记录（running 状态）
 	// trigger 列有 CHECK(cron/webhook/manual/event)，漏传即空串违反约束、整条插入失败；
-	// status 取 DDL 注释所列的 running（原 "pending" 不在其中，TimeoutRuns 只扫
-	// running，崩溃的 run 会永远不被标记 timeout）。
+	// status 取 DDL 注释所列的 running（原 "pending" 不在其中，启动期孤儿对账只扫
+	// running，崩溃的 run 会永远不被标记 interrupted）。
 	if err := ca.AutomationRepo.CreateRun(ctx, repo.AutomationRunRow{
 		ID:           runID,
 		AutomationID: a.ID,

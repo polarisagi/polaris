@@ -61,5 +61,4 @@ type AutomationRepository interface {
 	UpdateRunStatus(ctx context.Context, id, status, errorMsg, finishedAt string) error
 	DeleteRunsByAutomationID(ctx context.Context, automationID string) error
 	ListRunsByAutomationID(ctx context.Context, automationID string, limit int) ([]AutomationRunRow, error)
-	TimeoutRuns(ctx context.Context, startedBefore string) error
 }

@@ -383,3 +383,56 @@ func (h *WorkflowAdmin) HandleListWorkflowRuns(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"runs": list}) //nolint:errcheck
 }
+
+// ─── POST /v1/workflows/runs/{id}/resume ─────────────────────────────────────
+
+// HandleResumeWorkflowRun 续跑 interrupted|error 的运行（ADR-0104 决策二）：以同一 runID 重入
+// StateGraphExecutor，done 节点由 task_checkpoints 复用。只能显式触发、启动期不自动续跑：
+// 步骤是完整 Agent 运行，executing 节点重跑可能重复不可逆副作用，须由人确认。
+func (h *WorkflowAdmin) HandleResumeWorkflowRun(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+	ctx := r.Context()
+
+	var wfID, status string
+	if err := h.DB.QueryRowContext(ctx, `SELECT workflow_id, status FROM workflow_runs WHERE id=?`, runID).Scan(&wfID, &status); err != nil {
+		http.Error(w, "workflow run not found", http.StatusNotFound)
+		return
+	}
+	if status != "interrupted" && status != "error" {
+		http.Error(w, "run is not resumable (status="+status+")", http.StatusConflict)
+		return
+	}
+
+	var wf workflow
+	var enabledInt int
+	if err := h.DB.QueryRowContext(ctx, `
+		SELECT id, type, name, description, trigger_type, cron_schedule, enabled
+		FROM workflows WHERE id=?`, wfID).Scan(
+		&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
+	); err != nil {
+		http.Error(w, "workflow deleted", http.StatusConflict)
+		return
+	}
+	wf.Enabled = enabledInt == 1
+	if !wf.Enabled {
+		http.Error(w, "workflow disabled", http.StatusConflict)
+		return
+	}
+
+	// 条件 UPDATE 是并发闸门：两个并发续跑请求只有一个能把状态从 interrupted|error 翻到 running。
+	resumed, err := h.WorkflowRepo.ResumeWorkflowRun(ctx, runID, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+	if !resumed {
+		http.Error(w, "run is not resumable", http.StatusConflict)
+		return
+	}
+
+	h.runWorkflowGraph(&wf, runID, h.loadWorkflowSteps(ctx, wf.ID))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"run_id": runID, "status": "resumed"}) //nolint:errcheck
+}

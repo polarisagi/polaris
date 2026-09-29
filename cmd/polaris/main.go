@@ -129,6 +129,14 @@ func run() error { //nolint:gocyclo
 	}
 	defer rt.release()
 
+	// ─── §4.06 孤儿运行对账（ADR-0104 决策一）────────────────────────────────
+	// 必须在单实例锁之后（保证库中 running 行必为孤儿）、任何调度器启动之前：
+	// cron/workflow 调度查询以 last_run_status != 'running' 过滤，遗留行会永久阻断调度。
+	// 失败只留痕不阻断启动：对账是自愈，不是服务前置条件。
+	if err := reconcileOrphanRuns(ctx, sb.Store.DB(), time.Now()); err != nil {
+		slog.Error("polaris: orphan run reconcile failed", "err", err)
+	}
+
 	// ─── §4.10~§5 记忆系统 + MEMF ──────────────────────────────────────────
 	mb, err := bootMemory(ctx, sb)
 	if err != nil {

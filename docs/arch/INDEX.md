@@ -105,9 +105,9 @@
 | `00-Global-Dictionary.md` | 字典 | 26K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 25K | 状态机 + 全模块阈值（唯一权威） |
 | `M04-Agent-Kernel.md` | L1 内核 | 25K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
-| `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 20K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
+| `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 21K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
 | `M09-Self-Improvement-Engine.md` | L2 自演化 | 18K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
-| `M13-bis-Extension-Registry.md` | L3 扩展 | 17K | 见下方 [M13-bis 补充](#m13-bis-补充) |
+| `M13-bis-Extension-Registry.md` | L3 扩展 | 18K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M01-Inference-Runtime.md` | L0 推理 | 17K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
 | `M02-Storage-Fabric.md` | L0 存储 | 17K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
 | `M10-Knowledge-RAG.md` | L2 知识 | 16K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |

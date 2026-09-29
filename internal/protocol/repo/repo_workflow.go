@@ -49,6 +49,12 @@ type WorkflowRepository interface {
 	CreateWorkflowRun(ctx context.Context, runID, wfID, trigger, status string, currentStep, totalSteps int, startedAt string) error
 	UpdateWorkflowRunStatus(ctx context.Context, runID, status, finishedAt, errMsg, stepOutputs string, currentStep int) error
 	UpdateWorkflowRunCurrentStep(ctx context.Context, runID string, currentStep int) error
+	// ResumeWorkflowRun 把 interrupted|error 的运行原子置回 running（条件 UPDATE，ADR-0104 决策二）：
+	// 清 finished_at/error_msg，丢弃 step_outputs 中 status=error 的旧记录（这些步骤将被重跑，
+	// 旧失败记录留着会让续跑成功后仍被判为失败）并据剩余条数重算 current_step，同事务把父
+	// workflows.last_run_status 置 running。运行不处于可续跑状态（含不存在、已被并发续跑）时
+	// 返回 resumed=false。
+	ResumeWorkflowRun(ctx context.Context, runID, updatedAt string) (resumed bool, err error)
 	UpdateWorkflowLastRun(ctx context.Context, wfID, lastRunAt, nextRunAt, lastRunStatus, updatedAt string) error
 	UpdateWorkflowStats(ctx context.Context, wfID, status, errMsg, finishedAt string, circuitBreakThreshold int) error
 

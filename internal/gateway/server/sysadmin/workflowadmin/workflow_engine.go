@@ -46,6 +46,15 @@ func (h *WorkflowAdmin) executeWorkflow(ctx context.Context, wf *workflow, trigg
 		slog.Warn("workflow: update status failed", "id", wf.ID, "err", err)
 	}
 
+	h.runWorkflowGraph(wf, runID, steps)
+	return runID
+}
+
+// runWorkflowGraph 后台执行状态图并收尾（run/workflows 状态与统计）。新建运行与
+// 续跑（ResumeWorkflowRun，ADR-0104 决策二）共用：续跑以同一 runID 作为
+// StateGraphExecutor 的 parentTaskID，task_checkpoints 中 done 节点被复用而不重投任务。
+func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []workflowStep) {
+	total := len(steps)
 	concurrent.SafeGo(context.Background(), "gateway.sysadmin.execute_workflow", func(context.Context) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 120*time.Minute)
 		defer cancel()
@@ -97,8 +106,6 @@ func (h *WorkflowAdmin) executeWorkflow(ctx context.Context, wf *workflow, trigg
 			errMsg = fmt.Sprintf("%d step(s) failed: %s", failCount, firstErr)
 		}
 	})
-
-	return runID
 }
 
 // readRunCurrentStep 读回 RunStepWorkerLoop 已增量自增的 current_step，避免

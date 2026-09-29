@@ -189,6 +189,39 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowRunCurrentStep(ctx context.Cont
 	return nil
 }
 
+func (r *SQLiteWorkflowRepository) ResumeWorkflowRun(ctx context.Context, runID, updatedAt string) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "db error", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const keepNonError = `SELECT COALESCE(json_group_array(json(value)), '[]') FROM json_each(workflow_runs.step_outputs)
+		WHERE COALESCE(json_extract(value, '$.status'), '') != 'error'`
+	const countNonError = `SELECT COUNT(*) FROM json_each(workflow_runs.step_outputs)
+		WHERE COALESCE(json_extract(value, '$.status'), '') != 'error'`
+	res, err := tx.ExecContext(ctx, `
+		UPDATE workflow_runs
+		SET status='running', finished_at='', error_msg='',
+		    step_outputs=(`+keepNonError+`), current_step=(`+countNonError+`)
+		WHERE id=? AND status IN ('interrupted','error')`, runID)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "db error", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE workflows SET last_run_status='running', last_run_error='', updated_at=?
+		WHERE id=(SELECT workflow_id FROM workflow_runs WHERE id=?)`, updatedAt, runID); err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "db error", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "db error", err)
+	}
+	return true, nil
+}
+
 func (r *SQLiteWorkflowRepository) UpdateWorkflowLastRun(ctx context.Context, wfID, lastRunAt, nextRunAt, lastRunStatus, updatedAt string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE workflows SET last_run_at=?, next_run_at=?, last_run_status=?, updated_at=?

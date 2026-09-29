@@ -330,17 +330,6 @@ func (r *SQLiteAutomationRepository) ListRunsByAutomationID(ctx context.Context,
 	return list, nil
 }
 
-func (r *SQLiteAutomationRepository) TimeoutRuns(ctx context.Context, startedBefore string) error {
-	// 复核修复：017_automations.sql 的 automation_runs 表从未有过 error 列（仅
-	// error_msg），此处引用不存在的列此前会导致每次调用都以 SQL 错误失败，卡在
-	// running 状态的执行记录永远不会被标记为 timeout。改用真实存在的 error_msg。
-	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status='timeout', error_msg='execution timeout' WHERE status='running' AND started_at < ?`, startedBefore)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.TimeoutRuns", err)
-	}
-	return nil
-}
-
 func (r *SQLiteAutomationRepository) UpdateAutomationStats(ctx context.Context, id, status, errMsg, finishedAt string, circuitBreakThreshold int) (int, error) {
 	if status == "error" {
 		_, err := r.db.ExecContext(ctx, "UPDATE automations SET last_run_status=?, last_run_error=?, run_count=run_count+1, failure_count=failure_count+1, circuit_open=CASE WHEN failure_count+1 >= ? THEN 1 ELSE circuit_open END, circuit_opened_at=CASE WHEN failure_count+1 >= ? AND circuit_open=0 THEN ? ELSE circuit_opened_at END, updated_at=? WHERE id=?", status, errMsg, circuitBreakThreshold, circuitBreakThreshold, finishedAt, finishedAt, id)

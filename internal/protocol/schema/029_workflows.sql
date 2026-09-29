@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     id              TEXT    PRIMARY KEY,               -- "wfr_{8字节hex}"
     workflow_id     TEXT    NOT NULL,
     trigger         TEXT    NOT NULL DEFAULT 'manual', -- 'cron' | 'manual'
-    status          TEXT    NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'error' | 'timeout'
+    status          TEXT    NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'error' | 'timeout' | 'interrupted'
     current_step    INTEGER NOT NULL DEFAULT 0,        -- 当前执行步骤 seq（实时更新）
     total_steps     INTEGER NOT NULL DEFAULT 0,
     started_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),

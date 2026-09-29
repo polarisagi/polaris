@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS automations (
     last_run_at       TEXT    NOT NULL DEFAULT '',
     next_run_at       TEXT    NOT NULL DEFAULT '',       -- cronTick 预计算下次触发时间
     run_count         INTEGER NOT NULL DEFAULT 0,
-    last_run_status   TEXT    NOT NULL DEFAULT '',       -- 'ok' | 'error' | 'running' | 'suspended' | ''
+    last_run_status   TEXT    NOT NULL DEFAULT '',       -- 'ok' | 'error' | 'running' | 'suspended' | ''（重启对账后 running→error）
     last_run_error    TEXT    NOT NULL DEFAULT '',
     -- 电路断路器（Gap-C, HE-Rule-2）：连续 N 次 error 后开路，停止调度
     failure_count     INTEGER NOT NULL DEFAULT 0,        -- 连续失败计数；status=ok 时清零
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     id             TEXT    PRIMARY KEY,               -- "run_{8字节hex}"
     automation_id  TEXT    NOT NULL,                  -- automations.id
     trigger        TEXT    NOT NULL DEFAULT 'cron' CHECK(trigger IN ('cron','webhook','manual','event')),
-    status         TEXT    NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'error' | 'timeout' | 'suspended'
+    status         TEXT    NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'error' | 'timeout' | 'suspended' | 'interrupted'
     session_id     TEXT    NOT NULL DEFAULT '',       -- chat_sessions.id；执行产生的 session
     started_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     finished_at    TEXT    NOT NULL DEFAULT '',
