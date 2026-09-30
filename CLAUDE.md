@@ -128,7 +128,7 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
   - **上线前**（`§当前阶段` 未标注"上线后"）：Schema 变更**直接修改原始建表文件**；开发库删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。
   - **上线后**（存在生产数据）：新增编号迁移文件（ALTER TABLE / 数据迁移），不得修改已应用历史文件。
   - Phase 判断 SSoT：本文 `§当前阶段`。不确定 → 主动提问，禁止静默决策。
-- **[强制] Git 署名**：所有的 Git 提交必须统一使用署名 `MrLaoLiAI <polarisagi.online@gmail.com>`（防止代理 AI 工具或 Bot 意外污染 GitHub 贡献者列表）。
+- **[强制] Git 署名与 Commit Message**：所有的 Git 提交必须统一使用署名 `MrLaoLiAI <polarisagi.online@gmail.com>`。**绝对禁止**在 commit message 中添加 `Co-authored-by: Claude ...`、`Co-authored-by: Gemini ...` 或任何 AI 工具的联合署名标签，这会污染 GitHub 的贡献者（Contributors）列表。如果你作为代理工具自动生成了这些标签，必须在执行 `git commit` 前将其剔除。
 
 ## 文档加载协议
 
