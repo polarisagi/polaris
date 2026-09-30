@@ -102,6 +102,41 @@
 - Prometheus `llm_prompt_cache_hit_ratio{purpose,provider}`。
 - `llm_calls` 按 `created_at` 纳入现有归档/清理周期，保留期 `llm.usage.retention_days`（默认 90）。
 
+### 决策九：阶段契约库并入稳定核（2026-09-30 追加）
+
+**上下文事实**：决策一把阶段模板放在 L3（历史之后），DeepSeek/OpenAI 上可行；但 Anthropic/Gemini 只接受开头的 system，WP6 把 L3 内联为 user 角色 `<system_instruction>` 块——阶段契约（输出 Schema、路由规则、安全约束，四份合计约 7.5KB）因此以 user 角色出现，遵从度低于真 system，且每阶段按未命中价付费。
+
+**决策**：四份阶段契约（`kernel/perceive.md`、`plan.md`、`reflect.md`、`respond.md`）以固定顺序、固定标题渲染为 L0 稳定核内的 `# PHASE CONTRACTS` 段（部署期不变，全部阶段、全部回合共享，命中价计费）；L3 只保留一条几十 token 的阶段选择器（`# ACTIVE PHASE: PLAN` + "只按该契约输出"）与易变内容。
+
+- 契约在所有 Provider 上都以真 system 出现，Anthropic/Gemini 内联块只剩选择器与易变量，遵从度问题随之消失；WP6 的 `inline_nonleading_system` 保持默认开启。
+- 无 ImmutableCore 的降级路径（无 L0）仍在 L3 写入完整契约（行为不变）。
+- `respond_reminder.md` 仍位于末尾（位置优势是其存在理由），不并入。
+- 开关 `m4_kernel.prompt.phase_contracts_in_core`（默认 true），供回合契约评测对照；评测不达标则关闭即回到决策一的 L3 全文模板。
+- 反例守护：禁止在契约段内插入任何按会话/阶段变化的文本（阶段差异只能出现在 L3 选择器）。
+
+### 决策十：召回单一管线、秩融合与校准相关度门（2026-09-30 追加，修订决策四的阈值部分）
+
+**上下文事实**（审计 main @ 7d4bdc8）：
+1. **存在第二条召回管线**：`agent_execute_memory.go` `injectMemoryToMsgs` 在 `executeEffect` 中对 TaskModel 非空的每次 LLM 调用（Plan/Reflect/Respond 及 PRM 候选）经 `Assembler` 再召回一次（情景 + 知识，上限 2000 token），并插入到开头连续 system 之后——即 L1 与 L2 之间。它与决策四的回合内召回重复计费，且把按 Goal 变化的内容插进共享前缀中部，使 Plan/Reflect/Respond 的 L2 历史前缀全部失配。决策一的前缀门控只测了 builder，没覆盖真实请求边界，故未发现。
+2. L2 语义召回 `SetCognitiveSearcher` 生产无调用点（未接线）。
+3. RAG 适配器 `fsmKnowledgeAdapter.SearchRAG` 丢弃检索分，恒填 1.0。
+4. 决策四的 `min_score_ratio=0.2` 无数据依据；各来源分数量纲不可比（BM25 无界、向量余弦、RAG 恒 1.0）。
+
+**决策**：
+- **单一管线**：删除 `injectMemoryToMsgs` 与 `Assembler` 这条旁路；其独有能力（按 SurpriseIndex 决定知识检索深度、按 MaxTaint 过滤）并入决策四的回合内召回。全内核只有一处召回、一处注入点（L4）。
+- **秩融合取代分数阈值**：各来源先按各自原生分排序，再以 RRF（k=60）融合为单一序列，按融合秩装入 token 预算。RRF 只用秩，不需要跨来源可比的分数，因此不再需要 `min_score_ratio`（默认改为 0=关闭，保留开关）。来源优先级改为对 RRF 分的加权（反思、情景权重可配），不再是硬顺序。
+- **校准相关度门（有本地重排器时）**：Tier1 已加载本地交叉编码重排器（Qwen3-Reranker，`ffi.LlamaRerank`，零 API token）时，对融合后前 N 条重排，丢弃相关概率低于 `m4_kernel.recall.rerank_min_prob`（默认 0.5——交叉编码器 yes/no 二分类的自然判定边界，而非经验比例）的条目。无重排器时不设相关度门，仅由预算约束（预算才是成本的硬上限）。
+- **接线 L2 语义召回**：按 ADR-0062 WIRE 标准核实 `SurrealDBCoreStore` FTS/向量索引中存放的内容及取正文方式，实现 `fsm.CognitiveSearcher` 适配器并在 `boot_agent.go` 注入；若核实为与情景/RAG 完全重复的数据源，则改为删除该路径并在本 ADR 追记理由（二者择一，不得保持"有接口无接线"）。
+- **RAG 分数透传**：`KnowledgeBase.Search` 返回检索分，适配器不再填常量。
+
+### 决策十一：请求边界字节稳定（2026-09-30 追加）
+
+**上下文事实**：`PIITokenVault.TokenizeForTask` 对每次出现的 PII 生成新的随机令牌，`tokenizeMessagesForLLM` 在每次 LLM 调用前对全部消息重新令牌化——凡含 PII 的消息（用户画像、核心记忆、历史）每次请求字节都不同，L0..L2 前缀在该位置断开。
+
+**决策**：
+- **确定性会话内令牌**：同一 taskID（会话）内同一原文映射到同一令牌（反向映射复用），跨会话仍随机（不可关联性不变）；持久化/恢复（ADR-0104 `task_pii_vault`）同时恢复反向映射。令牌格式与解析语义不变。
+- **真实请求边界门控**：新增端到端测试——以记录请求的 fake Provider 驱动一个完整回合（Perceive→Plan→Execute→Reflect→Respond，含 PII、核心记忆、召回、历史）及相邻第二回合，断言**实际发往 Provider 的消息**满足：同回合各阶段 L0..L2 字节一致；相邻回合（未跳窗）前缀关系成立。凡在 PromptFn 之后改写消息的步骤（令牌化、压缩、溢出恢复、PRM 候选）都在此门控覆盖下。
+
 ## 后果
 
 - **正向**：稳定层恢复为真正的字节稳定；同一回合 4 次调用共享 L0..L2，跨回合 L2 只追加——对话越长，命中占比越高；召回段有上限且不重复计费；每一笔调用可归因；确定性后台重复计算归零；可延迟批任务可按非高峰价执行。
@@ -149,6 +184,7 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-09-29 | 初稿（Proposed） |
+| 2026-09-30 | 追加决策九（阶段契约库并入稳定核）、决策十（召回单一管线/RRF/校准重排门/接线 L2，修订决策四阈值）、决策十一（PII 确定性令牌 + 真实请求边界门控） |
 | 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
 | 2026-09-30 | WP6 落地（决策一/三，Anthropic/Gemini 适配器）：新增 `m1_router.anthropic.inline_nonleading_system` / `m1_router.google.inline_nonleading_system`（默认 true）。开启时仅**开头连续**的 system 消息进 `system`/`systemInstruction`，其后的 system（L3 阶段层）原位转 user 角色 `<system_instruction>\n…\n</system_instruction>` 文本块，与相邻 user 内容合并以满足 user/assistant（Gemini：user/model）交替；tool_result/functionResponse 块前置于合并后的 user 轮首，不破坏与 tool_use/functionCall 的相邻关系；`CacheBreakpoint` 落在被合并消息对应的内容块上（末条与层断点同处一条消息时占两个名额，总数仍 ≤4）。适配器对所有非内联来源的 user 文本/tool_result 字符串无条件转义 `<system_instruction>` 标签字面（全角＜）——`taint.Spotlighting` 仅对 TaintMedium+ 生效，TaintLow/None 的 user 输入与 Parts 不经围栏。关闭时请求体与改动前字节一致（有回归测试）。实现见 `internal/llm/adapter/{inline_system,anthropic_inline}.go`、`google_request.go` |
 | 2026-09-30 | WP5 落地（决策七、八）：`GET /v1/usage` + `polaris usage`；`pkg/offpeak` 错峰窗口；llm_calls 保留期。见下「WP5 实施追记」 |
