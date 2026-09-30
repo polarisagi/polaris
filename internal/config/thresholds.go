@@ -165,6 +165,11 @@ type M4KernelThresholds struct {
 	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
 	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
 
+	// PromptPhaseContractsInCore 阶段契约库并入稳定核（ADR-0105 决策九）：true 且存在 ImmutableCore 时，
+	// 四阶段契约（PERCEIVE/PLAN/REFLECT/RESPOND）整体渲染进 L0，各阶段 L3 只写一条「当前阶段」选择器，
+	// 四阶段 L0..L2 字节一致、L3 缩到几十字节；false 回到决策一的 L3 全文模板（回合契约评测不达标时的回退）。
+	PromptPhaseContractsInCore bool `toml:"prompt.phase_contracts_in_core"` // true
+
 	// 各阶段思考档位（ADR-0101 决策三）："" = 沿用 Provider 默认（DeepSeek 省略即 high），
 	// 其余取 disabled/low/high/max。推理 token 按输出价计费：结构化分类阶段无需深度思考；
 	// 首轮规划不再因用户输入恒为 TaintHigh 而恒为 max；升档由 metrics.SelectPlanTier 按失败成因决定（ADR-0102 决策六）。
@@ -514,6 +519,7 @@ func DefaultThresholds() Thresholds {
 			PRMScorerModel:                 "",
 			ConversationHistoryMaxMessages: 20,
 			ConversationHistoryMaxBytes:    24576,
+			PromptPhaseContractsInCore:     true,
 			ThinkingPerceive:               "low",
 			ThinkingPlanInitial:            "high",
 			ThinkingReflect:                "low",
