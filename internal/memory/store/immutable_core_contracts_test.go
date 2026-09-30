@@ -45,7 +45,8 @@ func TestPhaseContracts_SectionOrderAndContent(t *testing.T) {
 	}
 }
 
-// 契约段是部署期常量：多次渲染字节一致，且与会话字段（易变层、身份、自定义指令）无关。
+// 契约段是部署期常量：独立的第一条 system 消息，与会话字段（易变层、身份、自定义指令、画像、工具名）无关，
+// 任意两个 core 的 L0[0] 字节一致——跨会话、跨用户共享最大的稳定块。
 func TestPhaseContracts_ByteStableAndSessionIndependent(t *testing.T) {
 	a := newContractCore()
 	a.VolatileBlock = "当前日期：2026-01-01"
@@ -53,31 +54,59 @@ func TestPhaseContracts_ByteStableAndSessionIndependent(t *testing.T) {
 	b := newContractCore()
 	b.SoulMDContent = "another persona"
 	b.CustomInstructions = "be terse"
+	b.BuiltinTools = "read_file"
+	b.UserProfile = "profile of someone else"
+	b.UserPreferences["language"] = "en"
 	b.VolatileBlock = "当前日期：2030-12-31"
 	b.AmbientContext = "skill B"
 
-	first, second := a.StableMessageWithContracts().Content, a.StableMessageWithContracts().Content
-	if first != second {
-		t.Fatal("同一 core 两次渲染应字节一致")
+	section := configs.PhaseContractsSection()
+	ma, mb := a.StableMessagesWithContracts(), b.StableMessagesWithContracts()
+	if len(ma) != 2 || len(mb) != 2 {
+		t.Fatalf("L0 应为 [契约段, 可变稳定核] 两条，got %d/%d", len(ma), len(mb))
 	}
-	// 易变字段不进稳定层：仅易变字段不同的 core，L0 字节一致。
+	if ma[0].Content != section || mb[0].Content != section || ma[0].Role != "system" {
+		t.Fatal("L0[0] 必须恰为 configs.PhaseContractsSection() 常量，与任何会话字段无关")
+	}
+	if ma[1].Content == mb[1].Content {
+		t.Fatal("可变稳定核应随身份/指令/工具/画像变化（本断言保证上一条不是空测）")
+	}
+	// 多次渲染字节一致；易变层字段不进稳定层。
+	again := a.StableMessagesWithContracts()
 	c := newContractCore()
 	c.VolatileBlock = "另一天"
-	if a.StableMessageWithContracts().Content != c.StableMessageWithContracts().Content {
-		t.Fatal("易变层字段不应影响含契约的 L0")
-	}
-	// 身份/自定义指令不同：契约段后缀（自总标题起）必须逐字节相同。
-	section := configs.PhaseContractsSection()
-	for _, ic := range []*ImmutableCore{a, b} {
-		if got := ic.StableMessageWithContracts().Content; !strings.HasSuffix(got, "\n\n"+section) {
-			t.Fatal("L0 应以不变的契约段结尾")
-		}
+	if again[1].Content != ma[1].Content || c.StableMessagesWithContracts()[1].Content != ma[1].Content {
+		t.Fatal("同一 core 重复渲染、或仅易变字段不同的 core，可变稳定核应字节一致")
 	}
 	// 契约段不含任何时间/会话变量。
 	for _, bad := range []string{"当前日期", "VOLATILE", "{{"} {
 		if strings.Contains(section, bad) {
 			t.Fatalf("契约段不应含变量痕迹 %q", bad)
 		}
+	}
+}
+
+// L0 可变稳定核按变化频率升序：配置期（身份/引导/自定义指令/平台/操作指令）→ 安装期（工具名/扩展）
+// → 会话间演化（画像/偏好）。最稳定的在最前，任一处变化只使其后的内容失配。
+func TestStableMessage_OrderedByVolatility(t *testing.T) {
+	ic := newContractCore()
+	ic.SoulMDContent = "MARK-SOUL"
+	ic.ModelGuidance = "MARK-GUIDANCE"
+	ic.CustomInstructions = "MARK-CUSTOM"
+	ic.PlatformHint = "MARK-PLATFORM"
+	ic.OperationalDirectives = "MARK-OPS"
+	ic.BuiltinTools = "MARK-TOOLS"
+	ic.InstalledPlugins = "MARK-PLUGINS"
+	ic.UserProfile = "MARK-PROFILE"
+	ic.UserPreferences["k"] = "MARK-PREF"
+	content := ic.StableMessage().Content
+	last := -1
+	for _, mk := range []string{"MARK-SOUL", "MARK-GUIDANCE", "MARK-CUSTOM", "MARK-PLATFORM", "MARK-OPS", "MARK-TOOLS", "MARK-PLUGINS", "MARK-PROFILE", "MARK-PREF"} {
+		i := strings.Index(content, mk)
+		if i < 0 || i <= last {
+			t.Fatalf("%s 缺失或次序违反稳定度升序（idx=%d last=%d）", mk, i, last)
+		}
+		last = i
 	}
 }
 
@@ -98,13 +127,15 @@ func TestPhaseContracts_NonKernelPathsExcluded(t *testing.T) {
 	}
 }
 
-// 截断必须优先保护契约段：自定义指令撑爆上限时，被截的是可变部分，契约段完整保留。
+// 截断必须优先保护契约段：自定义指令撑爆上限时，被截的是可变稳定核的尾部（最易变的画像/偏好先被牺牲），
+// 契约段作为独立消息完整保留、不计入 maxSystemPromptBytes；身份等配置期内容在头部，保留。
 func TestPhaseContracts_TruncationProtectsContracts(t *testing.T) {
 	section := configs.PhaseContractsSection()
 	huge := strings.Repeat("user instruction line.\n\n", 4000) // ≈ 92KB
 
 	cases := map[string]*ImmutableCore{}
 	ic := newContractCore()
+	ic.SoulMDContent = "IDENTITY-MARKER"
 	ic.CustomInstructions = huge
 	ic.UserProfile = "PROFILE-MARKER"
 	cases["custom_instructions"] = ic
@@ -113,21 +144,25 @@ func TestPhaseContracts_TruncationProtectsContracts(t *testing.T) {
 	cases["template"] = tpl
 
 	for name, core := range cases {
-		withC := core.StableMessageWithContracts().Content
-		if !strings.HasSuffix(withC, "\n\n"+section) {
-			t.Fatalf("%s: 契约段必须完整保留在末尾", name)
+		msgs := core.StableMessagesWithContracts()
+		if len(msgs) != 2 || msgs[0].Content != section {
+			t.Fatalf("%s: 契约段必须完整保留为第一条消息", name)
 		}
-		if !strings.Contains(withC, "[...系统提示词已截断]") {
+		variable := msgs[1].Content
+		if !strings.Contains(variable, "[...系统提示词已截断]") {
 			t.Fatalf("%s: 可变部分应被截断并带标记", name)
 		}
-		// 可变部分仍受 maxSystemPromptBytes 约束（契约段在其外追加）。
-		variable := strings.TrimSuffix(withC, "\n\n"+section)
+		// 可变部分受 maxSystemPromptBytes 约束（契约段是另一条消息，不占该上限）。
 		if len(variable) > maxSystemPromptBytes+len("\n\n[...系统提示词已截断]") {
 			t.Fatalf("%s: 可变部分超出上限: %d", name, len(variable))
 		}
-		// 画像在尾部，先于契约被牺牲。
-		if name == "custom_instructions" && strings.Contains(withC, "PROFILE-MARKER") {
-			t.Fatal("超长自定义指令下尾部画像应被截掉")
+		if name == "custom_instructions" {
+			if strings.Contains(variable, "PROFILE-MARKER") {
+				t.Fatal("超长自定义指令下尾部画像应被截掉")
+			}
+			if !strings.Contains(variable, "IDENTITY-MARKER") {
+				t.Fatal("截断从尾部开始，头部的身份必须保留")
+			}
 		}
 		// 不含契约的路径行为不变：同样截断、无契约。
 		noC := core.StableMessage().Content

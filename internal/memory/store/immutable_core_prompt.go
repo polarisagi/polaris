@@ -39,10 +39,14 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		return ic.renderSystemPromptFromTemplate()
 	}
 
-	// 三层组装：stable → model guidance → platform hint（volatile 由 PrependToMessages 另起一条消息）
+	// 按"变化频率"从低到高排列（字节前缀缓存：越靠前的内容越多请求共享，任何一处变化使其后全部失配；
+	// 超过 maxSystemPromptBytes 时截断从尾部开始，即最先牺牲最易变的画像/偏好）：
+	//   配置期（部署/配置变更才变）→ 安装期（装卸工具/扩展才变）→ 会话间演化（画像、偏好随使用变化）。
+	// 阶段契约段（部署期常量）在此之前，作为独立的第一条 system 消息，见 StableMessagesWithContracts。
 	var parts []string
 
-	// 1. stable — 身份（SoulMDContent 已由 server 按三层优先级填充）
+	// —— 配置期 ——
+	// 1. 身份（SoulMDContent 已由 server 按三层优先级填充）
 	if ic.SoulMDContent != "" {
 		parts = append(parts, ic.SoulMDContent)
 	} else {
@@ -50,37 +54,39 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		parts = append(parts, protocol.DefaultPolarisIdentityFallback)
 	}
 
-	// 2. stable — 模型专属工具调用引导
+	// 2. 模型专属工具调用引导
 	if ic.ModelGuidance != "" {
 		parts = append(parts, ic.ModelGuidance)
 	}
 
-	// 3. stable — 用户自定义追加指令（追加而非覆盖，保留产品基线行为）
+	// 3. 用户自定义追加指令（追加而非覆盖，保留产品基线行为）
 	if ic.CustomInstructions != "" {
 		parts = append(parts, ic.CustomInstructions)
 	}
 
-	// 4. stable — 平台感知提示
+	// 4. 平台感知提示
 	if ic.PlatformHint != "" {
 		parts = append(parts, ic.PlatformHint)
 	}
 
-	// 5. stable — 工具/扩展感知摘要（仅名称，细节由 function schema 传递）
-	if toolHint := ic.renderToolHint(); toolHint != "" {
-		parts = append(parts, toolHint)
-	}
-
-	// 5.5 stable — 用户画像 (L3 摘要)
-	if ic.UserProfile != "" {
-		parts = append(parts, ic.UserProfile)
-	}
-
-	// 5.6 stable — 操作指令 (Memory Hygiene 等)
+	// 5. 操作指令 (Memory Hygiene 等)：来自提示词管理器，随配置变更而非随会话变化
 	if ic.OperationalDirectives != "" {
 		parts = append(parts, ic.OperationalDirectives)
 	}
 
-	// 5.7 stable — 用户显式偏好画像（PersonaRefiner，M05 §2.3；与 5.5 UserProfile
+	// —— 安装期 ——
+	// 6. 工具/扩展感知摘要（仅名称，细节由 function schema 传递）
+	if toolHint := ic.renderToolHint(); toolHint != "" {
+		parts = append(parts, toolHint)
+	}
+
+	// —— 会话间演化 ——
+	// 7. 用户画像 (L3 摘要)
+	if ic.UserProfile != "" {
+		parts = append(parts, ic.UserProfile)
+	}
+
+	// 8. 用户显式偏好画像（PersonaRefiner，M05 §2.3；与 7 的 UserProfile
 	// 互补，见 chat/system_prompt.go 写入侧注释）。map 迭代顺序不确定，排序后拼接
 	// 保证同一画像状态下渲染结果确定，避免打乱 LLM provider 的 prompt prefix cache。
 	if prefsBlock := ic.renderUserPreferencesBlock(); prefsBlock != "" {
@@ -147,7 +153,7 @@ func (ic *ImmutableCore) renderUserPreferencesBlock() string {
 // ambient skill 全文注入有独立的 maxFullTextChars 预算，两者各自独立保护。
 const maxSystemPromptBytes = 32_000
 
-// StableMessage 渲染 L0 稳定核：单条只含稳定层的 system 消息（含 maxSystemPromptBytes 截断）。
+// StableMessage 渲染 L0 的可变稳定核：单条只含稳定层的 system 消息（含 maxSystemPromptBytes 截断）。
 //
 // 内核四阶段（agent/context 与 agent/fsm 的 prompt 构造）把它放在整个前缀账本的最前面
 // （ADR-0105 决策一 L0），易变层不再紧随其后——见 VolatileContent。
@@ -159,30 +165,8 @@ const maxSystemPromptBytes = 32_000
 // 本方法**不含**阶段契约段：PrependToMessages（网关直连/cron/workflow 等非内核调用方）
 // 走这里。这些路径不做 Perceive/Plan/Reflect/Respond 阶段调用，多付 ~7.5KB（≈2.5K token
 // 命中价）毫无收益，还会在无选择器的对话里引入互相竞争的输出格式；故只有内核经
-// StableMessageWithContracts 得到含契约段的 L0（ADR-0105 决策九）。
+// StableMessagesWithContracts 得到含契约段的 L0（ADR-0105 决策九）。
 func (ic *ImmutableCore) StableMessage() types.Message {
-	return ic.stableMessage(false)
-}
-
-// HasPhaseContracts 报告本进程能否渲染出完整的阶段契约段（四个嵌入模板均可读）。
-// 内核据此决定各阶段 L3 写选择器还是回退写完整模板，二者必须与 L0 是否含契约段一致。
-func (ic *ImmutableCore) HasPhaseContracts() bool {
-	return configs.PhaseContractsSection() != ""
-}
-
-// StableMessageWithContracts 渲染含 "# PHASE CONTRACTS" 段的 L0（仅内核前缀账本使用，
-// 开关 m4_kernel.prompt.phase_contracts_in_core，ADR-0105 决策九）。
-//
-// 契约段是部署期常量（configs.PhaseContractsSection，同一二进制字节恒定，与会话/阶段/
-// 时间无关），紧跟在可变的稳定层之后。截断优先级：maxSystemPromptBytes 只约束前面的
-// 可变部分（身份/自定义指令/工具摘要/画像/偏好——截断从尾部开始，即最先牺牲画像与偏好），
-// 契约段在截断**之后**追加、不计入该上限，因此无论用户自定义指令多长都不会被截掉。
-// 契约是四阶段输出格式的唯一来源，被截断会直接导致解析失败，比多付固定 ~7.5KB 严重得多。
-func (ic *ImmutableCore) StableMessageWithContracts() types.Message {
-	return ic.stableMessage(true)
-}
-
-func (ic *ImmutableCore) stableMessage(withContracts bool) types.Message {
 	stable := *ic
 	stable.VolatileBlock = ""
 	stable.AmbientContext = ""
@@ -196,7 +180,8 @@ func (ic *ImmutableCore) stableMessage(withContracts bool) types.Message {
 		content = "你是 Polaris AI Agent。"
 	}
 
-	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限可变的稳定层部分）
+	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限可变的稳定层部分）。
+	// 渲染顺序按变化频率升序，截断从尾部开始，故最先牺牲最易变的画像/偏好。
 	if len(content) > maxSystemPromptBytes {
 		originalBytes := len(content)
 		truncated := content[:maxSystemPromptBytes]
@@ -208,12 +193,37 @@ func (ic *ImmutableCore) stableMessage(withContracts bool) types.Message {
 		slog.Warn("system prompt truncated",
 			"original_bytes", originalBytes, "cap_bytes", maxSystemPromptBytes)
 	}
-	if withContracts {
-		if section := configs.PhaseContractsSection(); section != "" {
-			content += "\n\n" + section
-		}
-	}
 	return types.Message{Role: "system", Content: content}
+}
+
+// HasPhaseContracts 报告本进程能否渲染出完整的阶段契约段（四个嵌入模板均可读）。
+// 内核据此决定各阶段 L3 写选择器还是回退写完整模板，二者必须与 L0 是否含契约段一致。
+func (ic *ImmutableCore) HasPhaseContracts() bool {
+	return configs.PhaseContractsSection() != ""
+}
+
+// StableMessagesWithContracts 渲染内核前缀账本的 L0：两条 system 消息，按稳定度降序——
+//
+//  1. "# PHASE CONTRACTS" 阶段契约段（部署期常量，configs.PhaseContractsSection，同一二进制
+//     字节恒定，与会话/用户/阶段/时间无关，约 7.9KB，L0 里最大且最稳定的一块）；
+//  2. StableMessage() 的可变稳定核（配置期身份/指令/平台 → 安装期工具名 → 会话间演化的画像/偏好）。
+//
+// 为什么契约在前且单独成消息：此前契约追加在可变部分之后，画像/偏好/工具名任一变化都使契约段
+// 缓存失配，而契约是最大的稳定块；放到最前，所有会话、所有用户共享同一份契约前缀缓存
+// （DeepSeek/OpenAI 的前缀缓存按字节前缀匹配；Anthropic 适配器恒把首个 system block 作为第一个
+// 缓存断点，契约独立成块才能被跨会话共享，见 anthropic_request.go applyPromptCaching）。
+//
+// 截断优先级：maxSystemPromptBytes 只约束第 2 条（可变部分，截断自尾部，最先牺牲画像与偏好）；
+// 契约段是独立的消息，不计入该上限，因此无论用户自定义指令多长都不会被截掉——契约是四阶段输出
+// 格式的唯一来源，被截断会直接导致解析失败，比多付固定 ~7.9KB 严重得多。
+// 契约库不可用（模板读取失败，构建缺陷）时只返回可变稳定核，调用方经 HasPhaseContracts 回退 L3 全文模板。
+func (ic *ImmutableCore) StableMessagesWithContracts() []types.Message {
+	variable := ic.StableMessage()
+	section := configs.PhaseContractsSection()
+	if section == "" {
+		return []types.Message{variable}
+	}
+	return []types.Message{{Role: "system", Content: section}, variable}
 }
 
 // VolatileContent 返回易变层文本（日期 VolatileBlock、扩展连接状态、按本轮问题挑选的

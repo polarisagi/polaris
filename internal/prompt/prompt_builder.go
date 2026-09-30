@@ -182,6 +182,11 @@ func (b *PromptBuilder) BuildLayered() []types.Message {
 	}
 	if stableEnd >= 0 {
 		result[stableEnd].CacheBreakpoint = true
+		// L0 由多条 system 组成时（契约段 + 可变稳定核），其内部也是稳定度边界：首条（部署期常量）
+		// 单独标一处，使跨会话可共享的最稳定块在显式断点适配器上有自己的缓存条目。
+		if len(b.layers[protocol.LayerStable]) > 1 {
+			result[0].CacheBreakpoint = true
+		}
 	}
 	if sharedEnd >= 0 {
 		result[sharedEnd].CacheBreakpoint = true

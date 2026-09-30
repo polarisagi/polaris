@@ -78,13 +78,20 @@ func templateBody(t *testing.T, name string) string {
 func TestPhaseContracts_SwitchOn_ContractsInL0_SelectorInL3(t *testing.T) {
 	setPhaseContractsSwitch(t, true)
 	const histLen = 6
-	prefix := 1 + ledgerL1Count + histLen
+	const l0Len = 2 // L0 = [阶段契约段, 可变稳定核]（ADR-0105 决策九，WP10 起契约在最前且独立成消息）
+	prefix := l0Len + ledgerL1Count + histLen
 	phases := buildAllPhasesFacade(t, newRealCoreMemory("日期 X"), newLedgerCtx(ledgerHistory(histLen), "本轮意图"))
 
 	base := phases["PERCEIVE"]
 	l0 := base[0].Content
-	if !strings.Contains(l0, "# PHASE CONTRACTS") {
-		t.Fatalf("L0 应含 PHASE CONTRACTS 段")
+	if !strings.HasPrefix(l0, "# PHASE CONTRACTS") || l0 != configs.PhaseContractsSection() {
+		t.Fatalf("L0[0] 应恰为阶段契约段常量")
+	}
+	if strings.Contains(base[1].Content, "# PHASE CONTRACTS") || base[1].Role != "system" {
+		t.Fatalf("L0[1] 是可变稳定核，不应含契约段")
+	}
+	if !base[0].CacheBreakpoint || !base[1].CacheBreakpoint {
+		t.Fatalf("L0 两条消息的末尾都应是缓存断点（契约段可跨会话共享）")
 	}
 	// 四段标题按固定顺序出现。
 	last := -1
@@ -105,6 +112,9 @@ func TestPhaseContracts_SwitchOn_ContractsInL0_SelectorInL3(t *testing.T) {
 			if !sameMsg(msgs[i], base[i]) {
 				t.Fatalf("%s 的第 %d 条与 PERCEIVE 不一致", name, i)
 			}
+		}
+		if !strings.Contains(msgs[prefix-1].Content, "history-005") {
+			t.Fatalf("%s: L0=2 条时 L2 末条应位于下标 %d: %q", name, prefix-1, msgs[prefix-1].Content)
 		}
 		// L3：只有选择器，没有完整模板；选择器点名本阶段。
 		selector := ""
