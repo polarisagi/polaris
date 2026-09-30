@@ -89,7 +89,9 @@ func EnsureFFmpeg(ctx context.Context, binDir string, httpClient *http.Client) (
 
 	// 赋予执行权限
 	if runtime.GOOS != "windows" {
-		_ = os.Chmod(destPath, 0o755)
+		if err := os.Chmod(destPath, 0o755); err != nil {
+			slog.Warn("ffmpeg: failed to chmod", "err", err, "path", destPath)
+		}
 	}
 
 	slog.Info("ffmpeg: installed successfully", "path", destPath)
