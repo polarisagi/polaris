@@ -126,6 +126,10 @@ type AugmentedContext struct {
 	Parent      *Chunk // 父块（ParentChunk），nil 表示已是顶层
 	PrevSibling *Chunk // 前一个兄弟 LeafChunk，nil 表示无
 	NextSibling *Chunk // 后一个兄弟 LeafChunk，nil 表示无
+	// Score 检索器（混合检索 RRF 融合分 / 重排分）给 Primary 的分数，仅用于同一次检索内的相对排序，
+	// 量纲随检索配置而变，不得跨来源直接比较。ADR-0105 决策十：此前构造 Chunk 时丢弃了该分，
+	// 下游只能拿到常量。零值表示检索器未给分。
+	Score float64
 }
 
 // SubQuery 是 QueryPlanner 分解出的子查询。

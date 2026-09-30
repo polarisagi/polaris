@@ -1,6 +1,8 @@
 package config
 
 import (
+	"math"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/offpeak"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -198,14 +200,31 @@ type M4KernelThresholds struct {
 	// 记忆召回预算（ADR-0105 决策四）。召回段位于 L4，每回合都按未命中价计费，必须有上限。
 	// RecallItemMaxChars 单条召回（情景/反思/L2 语义/RAG/画像）渲染后的字符（rune）上限，超出截断。
 	RecallItemMaxChars int `toml:"recall.item_max_chars"` // 400
-	// RecallMaxTokens 召回段总 token 上限；按段优先级（反思>情景>L2>RAG>画像）逐条装入，装不下即止。
+	// RecallMaxTokens 召回段总 token 上限；按 RRF 融合秩逐条装入，装不下即止（ADR-0105 决策十）。
 	RecallMaxTokens int `toml:"recall.max_tokens"` // 1200
 	// RecallMinScore L2 语义/RAG 命中的绝对分下限（低于丢弃）。0 = 关闭。L2 分是 SurrealDB BM25 原始分
-	// （无界、随语料与查询漂移），RAG 分当前恒为 1.0，二者都不是归一化相似度，故默认不设绝对下限。
+	// （无界、随语料与查询漂移），RAG 分是检索融合分（RRF/重排，量纲随检索配置变），二者都不是归一化相似度，
+	// 故默认不设绝对下限。
 	RecallMinScore float64 `toml:"recall.min_score"` // 0
 	// RecallMinScoreRatio L2 语义/RAG 命中相对本次最高分的比例下限（低于 ratio×top 丢弃，最高分命中恒保留）。
-	// 尺度无关，对 BM25 这类无界分数成立；0 = 关闭。
-	RecallMinScoreRatio float64 `toml:"recall.min_score_ratio"` // 0.2
+	// 尺度无关；0 = 关闭。ADR-0105 决策十起默认关闭：该比例无数据依据，来源间排序由 RRF 秩融合承担。
+	RecallMinScoreRatio float64 `toml:"recall.min_score_ratio"` // 0
+
+	// 来源权重（ADR-0105 决策十）：各来源按原生分排序后以 RRF（k=60）融合，来源权重乘在 RRF 分上。
+	// 反思是已蒸馏的经验教训（单位 token 信息密度最高）、情景是与本用户/本项目直接相关的历史，
+	// 故略高于 L2 语义与 RAG（外部/通用知识）；权重只决定"同秩时谁先"，不会让低秩条目越过高秩多名。0 = 停用该来源。
+	RecallWeightReflection float64 `toml:"recall.weight_reflection"` // 1.2
+	RecallWeightEpisodic   float64 `toml:"recall.weight_episodic"`   // 1.1
+	RecallWeightSemantic   float64 `toml:"recall.weight_semantic"`   // 1.0
+	RecallWeightRAG        float64 `toml:"recall.weight_rag"`        // 1.0
+	// RecallRerankTopN / RecallRerankMinProb 校准相关度门（仅当注入了本地重排器时生效，ADR-0105 决策十）：
+	// 对融合后前 N 条重排，丢弃相关概率 < MinProb 的条目。0.5 = 交叉编码器 yes/no 二分类的自然判定边界。
+	// TopN=0 关闭该门。无重排器/重排失败/超时均跳过此门（不阻断召回）。
+	RecallRerankTopN    int     `toml:"recall.rerank_top_n"`    // 12
+	RecallRerankMinProb float64 `toml:"recall.rerank_min_prob"` // 0.5
+	// RecallRAGMinSurprise SurpriseIndex 低于此值时本回合不查 RAG（环境平稳、无需外部知识补充）；
+	// 高于 SurpriseHintThreshold 时 RAG 检索深度加倍。自原 Assembler 迁入回合内召回（ADR-0105 决策十）。
+	RecallRAGMinSurprise float64 `toml:"recall.rag_min_surprise"` // 0.3
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -245,6 +264,23 @@ func (t M4KernelThresholds) validateRecall() error {
 	}
 	if t.RecallMinScoreRatio < 0 || t.RecallMinScoreRatio > 1 {
 		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.min_score_ratio: must be within [0,1]")
+	}
+	for key, v := range map[string]float64{
+		"weight_reflection": t.RecallWeightReflection, "weight_episodic": t.RecallWeightEpisodic,
+		"weight_semantic": t.RecallWeightSemantic, "weight_rag": t.RecallWeightRAG,
+	} {
+		if v < 0 || math.IsNaN(v) {
+			return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall."+key+": must be >= 0 (0 disables the source)")
+		}
+	}
+	if t.RecallRerankTopN < 0 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.rerank_top_n: must be >= 0 (0 disables the gate)")
+	}
+	if t.RecallRerankMinProb < 0 || t.RecallRerankMinProb > 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.rerank_min_prob: must be within [0,1]")
+	}
+	if t.RecallRAGMinSurprise < 0 || t.RecallRAGMinSurprise > 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.rag_min_surprise: must be within [0,1]")
 	}
 	return nil
 }
@@ -528,7 +564,14 @@ func DefaultThresholds() Thresholds {
 			RecallItemMaxChars:             400,
 			RecallMaxTokens:                1200,
 			RecallMinScore:                 0,
-			RecallMinScoreRatio:            0.2,
+			RecallMinScoreRatio:            0,
+			RecallWeightReflection:         1.2,
+			RecallWeightEpisodic:           1.1,
+			RecallWeightSemantic:           1.0,
+			RecallWeightRAG:                1.0,
+			RecallRerankTopN:               12,
+			RecallRerankMinProb:            0.5,
+			RecallRAGMinSurprise:           0.3,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

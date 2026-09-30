@@ -173,7 +173,9 @@ func (a *fsmKnowledgeAdapter) SearchRAG(ctx context.Context, query string, topK 
 		out[i] = fsm.KnowledgeResult{
 			Content: r.Primary.Content,
 			Source:  r.Primary.SourceURI,
-			Score:   1.0, // RAG 内部如果无分值则给1.0，或如果后续有分数可更新
+			// 检索器的真实分（ADR-0105 决策十）：召回融合按分排序、按分过滤，不得再填常量。
+			Score: float32(r.Score),
+			Taint: types.TaintLevel(r.Primary.TaintLevel),
 		}
 	}
 	return out, nil

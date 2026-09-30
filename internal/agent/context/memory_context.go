@@ -60,7 +60,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 	if sCtx.TaskID != "" && intent != "" && !leanAck {
 		episodicQuery = intent
 	}
-	recalled, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
+	recalled, recallTaint, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
 		episodicQuery: episodicQuery,
 		episodicK:     perceiveEpisodicK,
 		withProfile:   true,
@@ -93,13 +93,13 @@ func BuildPerceiveContext( //nolint:gocyclo
 		if types.TaintMedium > sCtx.GlobalTaintLevel {
 			sCtx.GlobalTaintLevel = types.TaintMedium
 		}
-		// 附加等级必须取 max(自身, 会话全局)（L-03）：写死 TaintMedium 时，
-		// 若本会话已因更脏的来源升到 TaintHigh，这段召回文本会被重新标成
-		// Medium，等于凭一次拼接把污点降级。与 BuildReflectContext 里
+		// 附加等级必须取 max(自身, 会话全局, 已装入召回项)（L-03）：写死 TaintMedium 时，
+		// 若本会话已因更脏的来源升到 TaintHigh、或召回项本身是 TaintHigh（如工具输出事件），
+		// 这段召回文本会被重新标成 Medium，等于凭一次拼接把污点降级。与 BuildReflectContext 里
 		// execute_result 的处置保持一致。
 		b.WriteUserData(taint.NewTaintedString(
 			retrieved.String(),
-			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel, recallTaint)},
 			"retrieved_memory"))
 	}
 
@@ -190,7 +190,7 @@ func writePlanRecall(
 	}
 	// 复用本回合 Perceive 的召回：情景记忆已查过则不再查，只用已解析的 Goal 补 反思/L2/RAG；
 	// Perceive 被跳过或召回被放弃、且 Goal 非空时才补查情景（ADR-0105 决策四）。
-	recalled, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
+	recalled, recallTaint, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
 		episodicQuery: queryStr,
 		episodicK:     planEpisodicK,
 		goal:          queryStr,
@@ -205,10 +205,10 @@ func writePlanRecall(
 		if types.TaintMedium > sCtx.GlobalTaintLevel {
 			sCtx.GlobalTaintLevel = types.TaintMedium
 		}
-		// 同 BuildPerceiveContext：附加等级取 max(自身, 会话全局)，禁写死常量（L-03）。
+		// 同 BuildPerceiveContext：附加等级取 max(自身, 会话全局, 已装入召回项)，禁写死常量（L-03）。
 		b.WriteUserData(taint.NewTaintedString(
 			retrieved.String(),
-			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel, recallTaint)},
 			"retrieved_memory"))
 	}
 	return nil

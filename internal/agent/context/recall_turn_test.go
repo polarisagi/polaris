@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -196,10 +197,12 @@ func TestScoreFilter(t *testing.T) {
 // L2/RAG 低分命中在采集阶段被丢弃。
 type scoredCog struct{ hits []fsm.CogResult }
 
-func (c scoredCog) FTSSearch(string, int) ([]fsm.CogResult, error) { return c.hits, nil }
-func (scoredCog) VecKNN([]float32, int) ([]fsm.CogResult, error)   { return nil, nil }
+func (c scoredCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) {
+	return c.hits, nil
+}
 
 func TestSemanticMinScoreRatioFiltersTail(t *testing.T) {
+	withThresholds(t, func(th *config.Thresholds) { th.M4Kernel.RecallMinScoreRatio = 0.2 })
 	mem := newCountingMem()
 	cog := scoredCog{hits: []fsm.CogResult{
 		{DocID: "a", Snippet: "高相关命中甲", Score: 12},
@@ -226,7 +229,7 @@ func TestRecallDedupAgainstHistory(t *testing.T) {
 		{Role: "user", Content: "我想   把配置迁移到\ngoose 工具，然后跑测试"},
 		{Role: "user", Content: "用户刚才说过要把配置迁移到 goose 工具"},
 	}
-	text, err := turnRecallText(context.Background(), mem, nil, sCtx, recallWant{episodicQuery: "继续", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, nil, sCtx, recallWant{episodicQuery: "继续", episodicK: 4}, "test")
 	require.NoError(t, err)
 	require.NotContains(t, text, "goose", "已在 L2 历史里的召回应丢弃（规范化空白后包含即算）")
 	require.Contains(t, text, "一条与历史无关的独特记忆")

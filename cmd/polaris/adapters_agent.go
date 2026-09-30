@@ -2,21 +2,16 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/action/codeact"
 	"github.com/polarisagi/polaris/internal/action/lam"
 	"github.com/polarisagi/polaris/internal/agent"
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/extension/native"
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
-	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -110,75 +105,4 @@ func (a *agentInvokerAdapter) InvokeAgent(ctx context.Context, intent string, op
 	a.agent.SetTaskIntent(taint.NewTaintedString(intent, taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
 	err := a.agent.SendIntent(types.TriggerIntentReceived)
 	return a.agent.AgentID(), err
-}
-
-// ─── episodicMemAdapter ───────────────────────────────────────────────────────
-
-type episodicMemAdapter struct {
-	ep protocol.EpisodicMemory
-}
-
-func (a *episodicMemAdapter) Query(ctx context.Context, q string, maxTaint types.TaintLevel, projectID string) ([]agentctx.ContextItem, error) {
-	if projectID == "" {
-		projectID = types.DefaultProjectID // fail-closed：未声明作用域不得看到具名项目的记忆
-	}
-	res, err := a.ep.Query(ctx, types.EpisodicQuery{Semantic: q, ProjectID: projectID, MaxTaintLevel: maxTaint, K: 10})
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "query episodic memory", err)
-	}
-	var items []agentctx.ContextItem
-	for _, r := range res {
-		if ev := r.EventPtr(); ev != nil {
-			content := fmt.Sprintf("[%s] %s: %s", ev.CreatedAt.Format(time.RFC3339), ev.Type, string(ev.Payload))
-			items = append(items, agentctx.ContextItem{
-				Content:   content,
-				Source:    "episodic",
-				Relevance: r.Score,
-				Taint:     ev.TaintLevel,
-			})
-		}
-	}
-	return items, nil
-}
-
-// ─── knowledgeAdapter ─────────────────────────────────────────────────────────
-
-type knowledgeAdapter struct {
-	kb *knowledgepkg.KnowledgeBase
-}
-
-func (a *knowledgeAdapter) Search(ctx context.Context, q string, depth int) ([]agentctx.ContextItem, error) {
-	if a.kb == nil {
-		return nil, nil
-	}
-	topK := 5
-	if depth > 1 {
-		topK = 10
-	}
-	req := knowledgepkg.KnowledgeBaseSearchRequest{
-		Query:    q,
-		TopK:     topK,
-		TaintMax: types.TaintHigh,
-	}
-	res, err := a.kb.Search(ctx, req)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "search knowledge base", err)
-	}
-	items := make([]agentctx.ContextItem, 0, len(res))
-	for _, ac := range res {
-		content := ac.Primary.Content
-		if ac.Parent != nil {
-			content = ac.Parent.Content + "\n" + content
-		}
-		items = append(items, agentctx.ContextItem{
-			Content:   content,
-			Source:    "knowledge",
-			Relevance: 1.0,
-			Taint:     types.TaintLevel(ac.Primary.TaintLevel),
-		})
-	}
-	for i := range items {
-		items[i].Relevance = 1.0 / float64(i+1)
-	}
-	return items, nil
 }

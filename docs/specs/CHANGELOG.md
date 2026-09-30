@@ -6,6 +6,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-30（ADR-0105 WP8：召回单一管线、RRF 融合 — 含**契约变更**）
+
+- **[契约] 删除第二条召回管线**：`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`/`SetAssembler`/`AgentConfig.SurpriseHintThreshold` 移除；召回只在回合内、L4 一处注入。
+- **[契约] `fsm.CognitiveSearcher` 去掉 `VecKNN`，`FTSSearch` 增 `ctx`**；`CogResult`/`KnowledgeResult` 增 `Score`/`Taint`；新增消费端接口 `fsm.RecallReranker` 与 `Agent.SetRecallReranker`（无生产加载路径，门不生效）。`KnowledgeBase.Search` 结果带检索 `Score`。
+- **[配置] `m4_kernel.recall.*`**：新增 `weight_{reflection,episodic,semantic,rag}`、`rerank_top_n`、`rerank_min_prob`、`rag_min_surprise`；`min_score_ratio` 默认 0.2→0。
+- **L2 语义召回接线**：`cmd/polaris/adapters_recall.go`（`sement_` 实体 FTS，项目隔离）。
+
 ## 2026-09-29（ADR-0105 WP1：五层前缀账本 + 对话历史只追加 — 含**契约变更**）
 
 - **[契约] `protocol.ImmutableCore` 增 `StableMessage()` / `VolatileContent()`**：内核前缀账本取 L0 稳定核与 L3 易变层；`PrependToMessages` 语义改为稳定层置前、易变层插在**最后一条消息之前**（不再紧随稳定层），供网关直连等非内核调用方。实现 `memory/store.ImmutableCore`，测试替身须补两个方法。

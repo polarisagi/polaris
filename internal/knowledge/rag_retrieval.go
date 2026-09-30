@@ -340,6 +340,8 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 	// 2. 每个子查询独立检索
 	var allChunks []Chunk
 	seen := map[string]struct{}{}
+	// 检索分按 chunk ID 暂存：Chunk 是落库结构体，不携带检索分；首次命中的分为准（多子查询去重后）。
+	scores := map[string]float64{}
 	for _, sub := range subQueries {
 		scope := sub.TargetScope
 		if deepRAG && scope == "" {
@@ -366,6 +368,7 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 					continue
 				}
 				seen[c.Source] = struct{}{}
+				scores[c.Source] = c.Score
 				chunk := Chunk{
 					ID:          c.Source,
 					DocID:       c.Source,
@@ -388,7 +391,14 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 	if len(allChunks) == 0 {
 		return nil, nil
 	}
-	return kb.expander.Expand(ctx, allChunks, req.TaintMax)
+	out, err := kb.expander.Expand(ctx, allChunks, req.TaintMax)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Score = scores[out[i].Primary.ID]
+	}
+	return out, nil
 }
 
 func parseTaintLevel(s string) types.TaintLevel {

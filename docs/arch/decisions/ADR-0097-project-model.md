@@ -69,7 +69,7 @@
 |---|---|---|
 | P1/P2 | 感知/规划上下文 `ListEpisodicEvents` | `EpisodicQuery.ProjectID` → `EpisodicMem.Query` |
 | P3/P4 | 感知/规划上下文 `cognitive.FTSSearch`（SurrealDB 共享 FTS） | 命中 ID 经 `MemoryFacade.EpisodicProjectOf` 反查，属他项目的事件剔除；非事件命中（实体/扩展条目）放行 |
-| P5 | Assembler（`episodicMemAdapter`） | `AssembleRequest.ProjectID` 显式传入 |
+| P5 | L2 语义实体召回适配器（`recallCognitiveAdapter`；原 Assembler 随 ADR-0105 决策十删除） | 经 `projectScopedFTS` 按项目过滤，显式传入 ProjectID |
 | P6 | `memory_search` 工具 → HybridRetriever 七路 | `SearchScope.ProjectID`；`projectScopedSource` **包装整个 DocumentSource**，四个方法的全部产出统一按 Source 分类过滤——结构上不存在"漏一路"：新增召回路只要经 DocumentSource 输出就必然经过过滤 |
 
 不在清单内的读取方均为后台/系统用途且产出落入全局层（Consolidation → Semantic、Reflexion → Reflection、技能演化），或会话自身范围（2PC 预写查询按 SessionID）。MemoryAgent 耳语只投递给 agent-0（非项目会话，按上条以默认项目为界——耳语扫描 `episodic_events` 物化表不含项目列，故耳语内容仅在默认项目 Agent 可见的前提成立，见"已知限制"）。

@@ -8,27 +8,40 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// CognitiveSearcher L2 语义检索接口（消费方定义，防止包循环）。
-
+// CogResult L2 语义检索的单条结果。
 type CogResult struct {
 	DocID   string
 	Snippet string
 	Score   float32
+	// Taint 命中内容的污点等级（召回按 MaxTaint 过滤、并据此给召回段定级）。
+	Taint types.TaintLevel
 }
 
+// CognitiveSearcher L2 语义检索接口（消费方定义，防止包循环）。
+//
+// 只有 FTS 一路：SurrealDB 向量索引里只有情景事件与扩展目录的向量，语义实体（L2 的唯一独有数据）
+// 只写 FTS 索引（SemanticMem.UpsertFact），没有向量可查，故不设 VecKNN（ADR-0105 决策十 WP8 追记）。
 type CognitiveSearcher interface {
-	FTSSearch(query string, k int) ([]CogResult, error)
-	VecKNN(embedding []float32, k int) ([]CogResult, error)
+	FTSSearch(ctx context.Context, query string, k int) ([]CogResult, error)
 }
 
+// KnowledgeResult 单条 RAG 命中。Score 是检索器给的分（仅用于同一次检索内排序，不可跨来源比较）。
 type KnowledgeResult struct {
 	Content string
 	Source  string
 	Score   float32
+	Taint   types.TaintLevel
 }
 
 type KnowledgeSearcher interface {
 	SearchRAG(ctx context.Context, query string, topK int) ([]KnowledgeResult, error)
+}
+
+// RecallReranker 召回相关度门的重排器（消费方私有接口，R1.4；ADR-0105 决策十）。
+// 实现必须是本地推理（零 API token）；返回值是校准后的相关**概率** [0,1]，长度与 docs 一致。
+// 不可用时调用方不注入（nil），门被跳过。
+type RecallReranker interface {
+	RelevanceProbs(ctx context.Context, query string, docs []string) ([]float64, error)
 }
 
 // ContextBuilder 接口由使用状态机的客户端（如 agent）实现，

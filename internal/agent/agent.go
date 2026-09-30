@@ -67,7 +67,6 @@ type Agent struct {
 	codeAct           CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
 	skillCache        ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
 	skillExecutor     protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
-	assembler         *agentctx.Assembler       // CC-3 ContextAssembler
 	lamEngine         LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
 	surpriseCalc      SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
 	terminalCallback  func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
@@ -191,8 +190,7 @@ type AgentConfig struct {
 	// SystemTier 对应硬件层级（0=Tier0/8GB, 1+=Tier1+）。
 	// L3 LLM 看门狗仅在 SystemTier >= 1 时激活。
 	// 由 M3 HardwareProbe 探测结果注入。
-	SystemTier            int
-	SurpriseHintThreshold float64
+	SystemTier int
 }
 
 func NewAgent(id string, taskRepo protocol.TaskReadRepository, provider protocol.Provider) *Agent {

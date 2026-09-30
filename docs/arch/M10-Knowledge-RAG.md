@@ -3,7 +3,7 @@
 > 消费 `[Storage-SQLite]` + `[Storage-SurrealDB-Core]`，非独立存储 | Hybrid Search + GraphRAG | 增量索引 | 来源追踪
 > Go 检索流水线 + GraphRAG，Rust SurrealDB-Core FFI 侧车
 > `[Code-Package-Mapping]`: internal/swarm/| `[Module-Topology]`: M10 L2 | `[HE-Rule-5]` `[HE-Rule-6]`
-<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:107 检索 / 3:213 增量索引 / 4:231 来源追踪 / 5:270 Reranking / 6:286 检索质量 / 7:292 数据流闭环 / 9:308 (SOFT)降级 / 10:326 跨模块契约 / 11:345 实现状态+2026研究对照 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:107 检索 / 3:215 增量索引 / 4:233 来源追踪 / 5:272 Reranking / 6:288 检索质量 / 7:294 数据流闭环 / 9:310 (SOFT)降级 / 10:328 跨模块契约 / 11:347 实现状态+2026研究对照 -->
 ## 0-bis. 职责边界
 
 | M10 **是** | M10 **不是** |
@@ -111,6 +111,8 @@ M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-
 1. **结构化导航**: query → embed → 摘要层搜索(文档级+章节级摘要向量) → 锁定目标 DocNode
 2. **内容检索**: 目标子树内 Hybrid Search(BM25+Dense+实体图) → Top50 → 命中 LeafChunk
 3. **上下文展开**: LeafChunk → ParentChunk(完整段落+章节路径+前文衔接+来源追踪) → prompt context
+
+**分数透传**（ADR-0105 决策十）：`KnowledgeBase.Search` 在 `AugmentedContext.Score` 返回检索器分（按 chunk ID 对应展开后的上下文），`fsmKnowledgeAdapter` 据此填充回合内召回的 RAG 分，不再恒填 1.0；召回侧以名次做 RRF 融合，不依赖其绝对量纲。
 
 ### 2.2 HybridRetriever (内容层)
 
