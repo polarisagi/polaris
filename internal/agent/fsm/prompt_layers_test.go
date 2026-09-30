@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -91,5 +92,43 @@ func TestPromptLayers_PlanHintsStayInPhaseLayer(t *testing.T) {
 	}
 	if !strings.Contains(joined, "new_tool") || !strings.Contains(joined, "<tool-hints>h</tool-hints>") {
 		t.Fatal("提示块应出现在 Plan 请求中")
+	}
+}
+
+// 降级路径（无 ImmutableCore，无 L0）即使开关开启也必须写完整模板：
+// 没有 L0 就没有契约库，只写选择器会让模型看不到输出格式（ADR-0105 决策九）。
+func TestPromptLayers_FallbackKeepsFullTemplateEvenWhenSwitchOn(t *testing.T) {
+	sCtx := &StateContext{
+		RawIntentTS:         taint.NewTaintedString("x", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "test"),
+		ConversationHistory: []types.Message{{Role: "user", Content: "old"}},
+		TaskModel:           &TaskModel{Goal: "goal"},
+	}
+	sm := &StateMachine{cb: &dummyContextBuilder{}}
+	pCtx := protocol.StateContext{SessionID: "s1"}
+	cases := map[string][]types.Message{
+		"perceive": sm.promptPerceive(sCtx, pCtx),
+		"plan":     sm.promptPlan(sCtx, pCtx),
+		"reflect":  sm.promptReflect(sCtx, pCtx),
+		"respond":  sm.promptRespond(sCtx, pCtx),
+	}
+	wantTemplate := map[string]string{
+		"perceive": "kernel/perceive.md", "plan": "kernel/plan.md",
+		"reflect": "kernel/reflect.md", "respond": "kernel/respond.md",
+	}
+	for name, msgs := range cases {
+		joined := ""
+		for _, m := range msgs {
+			joined += m.Content + "\n"
+		}
+		if strings.Contains(joined, "# ACTIVE PHASE:") {
+			t.Fatalf("%s: 降级路径不应写选择器", name)
+		}
+		body, err := configs.LoadPromptTemplate(wantTemplate[name], nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(joined, strings.TrimSpace(body)) {
+			t.Fatalf("%s: 降级路径应写完整模板", name)
+		}
 	}
 }
