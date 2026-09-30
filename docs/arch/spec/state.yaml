@@ -1009,9 +1009,16 @@ thresholds:
     cache_uniform_tools: false # toml:"cache.uniform_tools"，ADR-0105 决策三实验开关：true 时 Perceive/Reflect/Respond 也下发 Plan 的 tools 并设 tool_choice=none，使四阶段 tools 前缀一致；须以 llm_calls 实测命中/未命中 token 决定是否默认开启（HE-4）
     reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0102 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭
     recall_item_max_chars: 400 # toml:"recall.item_max_chars"，ADR-0105 决策四：单条召回渲染后字符（rune）上限，超出截断；情景事件 payload 原可达 8KB
-    recall_max_tokens: 1200 # toml:"recall.max_tokens"，ADR-0105 决策四：召回段总 token 上限，按 反思>情景>L2语义>RAG>画像 装入，装不下即止
-    recall_min_score: 0 # toml:"recall.min_score"，L2 语义/RAG 绝对分下限，0=关闭；L2 分为 BM25 原始分（无界）、RAG 分恒 1.0，均非归一化相似度，故默认不设
-    recall_min_score_ratio: 0.2 # toml:"recall.min_score_ratio"，命中相对本次最高分的比例下限（top 恒保留），尺度无关；0=关闭；默认值待 Eval 校准（HE-4）
+    recall_max_tokens: 1200 # toml:"recall.max_tokens"，ADR-0105 决策四/十：召回段总 token 上限，各来源按 RRF(k=60) 融合后按融合秩装入，装不下即止；画像不参与融合，只填剩余预算
+    recall_min_score: 0 # toml:"recall.min_score"，L2 语义/RAG 绝对分下限，0=关闭；L2 分为 BM25 原始分（无界）、RAG 分为检索融合分，均非归一化相似度，故默认不设
+    recall_min_score_ratio: 0 # toml:"recall.min_score_ratio"，命中相对本次最高分的比例下限（top 恒保留），尺度无关；0=关闭（ADR-0105 决策十：默认由 0.2 改为关闭，来源间排序交给 RRF；保留开关）
+    recall_weight_reflection: 1.2 # toml:"recall.weight_reflection"，ADR-0105 决策十：RRF 来源权重，反思=已蒸馏经验，单位 token 信息密度最高；0=停用该来源；默认值待 Eval 校准（HE-4）
+    recall_weight_episodic: 1.1 # toml:"recall.weight_episodic"，情景=与本用户/本项目直接相关的历史；略高于 L2/RAG
+    recall_weight_semantic: 1.0 # toml:"recall.weight_semantic"，L2 语义实体（SurrealDB FTS）
+    recall_weight_rag: 1.0 # toml:"recall.weight_rag"，外部知识库片段
+    recall_rerank_top_n: 12 # toml:"recall.rerank_top_n"，校准相关度门：对融合后前 N 条重排；0=关闭。仅当注入本地重排器才生效（生产当前无加载路径，见 ADR-0105 WP8 追记）
+    recall_rerank_min_prob: 0.5 # toml:"recall.rerank_min_prob"，重排相关概率下限；0.5=交叉编码器 yes/no 二分类的自然判定边界，非经验比例
+    recall_rag_min_surprise: 0.3 # toml:"recall.rag_min_surprise"，SurpriseIndex 低于此值本回合不查 RAG；高于 surprise_hint_threshold 时 RAG 深度加倍（自原 Assembler 迁入回合内召回）
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - thinking_*: ["perceive_route_accuracy_drop", "reflect_goal_achieved_false_positive", "plan_schema_fail_rate>0.05"]
