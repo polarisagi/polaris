@@ -165,7 +165,7 @@
 - `internal/memory/store/immutable_core_prompt.go` `PrependToMessages`、`internal/prompt/prompt_builder.go` `Build`、`internal/agent/context/memory_context.go`、`internal/agent/context/respond_context.go`、`internal/agent/fsm/state_machine_prompts.go`、`internal/agent/fsm/prompt_respond.go`（决策一/二）
 - `internal/agent/fsm/conversation.go` `RenderConversationHistory`、`internal/agent/agent_context_compaction.go`（决策二）
 - `internal/llm/adapter/anthropic_request.go`、`internal/llm/adapter/client.go`、`internal/llm/adapter/openai.go`、`internal/llm/adapter/google.go`、`internal/tool/catalog/composite.go` `Schemas`、`internal/agent/agent_execute_effect.go`（决策三）
-- `internal/agent/context/recall.go`（决策四）
+- `internal/agent/context/recall.go`（决策四）、`internal/agent/context/recall_fuse.go`、`cmd/polaris/adapters_recall.go`（决策十）
 - `internal/llm/safecall/safecall.go` 及上下文第 6 条所列 27 个调用点（决策五）
 - `internal/llm/router.go` `resolveSemanticCache`（决策六，维持不接线）
 - `internal/protocol/schema/039_llm_calls.sql`、`internal/llm/usage_recorder.go`（决策八）
@@ -188,6 +188,7 @@
 | 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
 | 2026-09-30 | WP6 落地（决策一/三，Anthropic/Gemini 适配器）：新增 `m1_router.anthropic.inline_nonleading_system` / `m1_router.google.inline_nonleading_system`（默认 true）。开启时仅**开头连续**的 system 消息进 `system`/`systemInstruction`，其后的 system（L3 阶段层）原位转 user 角色 `<system_instruction>\n…\n</system_instruction>` 文本块，与相邻 user 内容合并以满足 user/assistant（Gemini：user/model）交替；tool_result/functionResponse 块前置于合并后的 user 轮首，不破坏与 tool_use/functionCall 的相邻关系；`CacheBreakpoint` 落在被合并消息对应的内容块上（末条与层断点同处一条消息时占两个名额，总数仍 ≤4）。适配器对所有非内联来源的 user 文本/tool_result 字符串无条件转义 `<system_instruction>` 标签字面（全角＜）——`taint.Spotlighting` 仅对 TaintMedium+ 生效，TaintLow/None 的 user 输入与 Parts 不经围栏。关闭时请求体与改动前字节一致（有回归测试）。实现见 `internal/llm/adapter/{inline_system,anthropic_inline}.go`、`google_request.go` |
 | 2026-09-30 | WP5 落地（决策七、八）：`GET /v1/usage` + `polaris usage`；`pkg/offpeak` 错峰窗口；llm_calls 保留期。见下「WP5 实施追记」 |
+| 2026-09-30 | WP8 落地（决策十）：删除第二条召回管线（`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`），回合内召回改 RRF(k=60) 融合 + 可选重排门，L2 语义召回接线，RAG 分透传。见下「WP8 实施追记」 |
 
 ### WP4 实施追记（2026-09-30）
 
@@ -205,3 +206,13 @@
 - **配置键落在 `m1_router` 段**（与 `response_cache.*` 同处）：`offpeak.windows`（默认空）、`usage.retention_days`（默认 90，0=不清理）。保留期清理挂在既有 6h 周期，并在启动时先跑一次；分批 DELETE（5000 行/批）避免长时间独占单写连接。`llm_response_cache` 过期清理已在同一周期内（WP4）。
 - **错峰接入点**：outbox 类（新增 `protocol.OffPeakDeferral`，outbox 直接把 `next_retry_at` 置为窗口起点，不计失败/死信）——`graph_build`、`rag_doc_ingested`、`rag_doc_summary_needed`（graphrag_*）、`m9_capability_gap`（synthetic_skill_gen）；周期循环类（窗口外跳过 tick，不积压）——synthetic-eval-gen、`curriculum` 后台调度、learning.Engine 中环；`PromptOptimizer.OptimizeTask`（窗口外登记待办并合并同 taskType，到窗口起点执行）；`DefaultIngestionPipeline` 降级 goroutine 的 rag_summary_tree（等窗口）。
 - **未接入**：交互路径与 `consolidate_summary`（决策明文排除）；`TriggerCurriculum`（安全冻结/管理员显式触发，是响应事件）；红队 24h 探针（安全边界退化检测，非批处理）；`logic_collapse_codegen`（不在决策七清单，且由工具成功阈值事件触发）；`memory_write_filter`/`rag_query_rewrite`（在交互路径上）；`internal/prompt` 的 `Manager.Optimize` 未改（按任务约束），错峰在其下游 `PromptOptimizer.OptimizeTask` 生效。
+
+### WP8 实施追记（2026-09-30）
+
+- **第二条管线已删除**：`injectMemoryToMsgs`、`assembleWithBudget`、`Assembler`/`SetAssembler`/`AssembleRequest`/`performRRF`、`episodicMemAdapter`、`knowledgeAdapter`、`AgentConfig.SurpriseHintThreshold` 及其测试均无其他消费方，一并删除；`executeEffect` 与 PRM 候选路径不再改写请求消息。新增真实请求边界测试 `agent/recall_single_pipeline_test.go`：Plan/Reflect/Respond 实际请求中无 `Relevant Context:`、L1/L2 之间无插入、L0..L2 跨阶段字节一致、召回只在 L4。
+- **迁入回合内召回的独有能力**：(a) SurpriseIndex 决定 RAG 深度——低于 `recall.rag_min_surprise`（0.3）不查 RAG，高于 `surprise_hint_threshold` 时 topK 加倍（核实：原逻辑在现行召回中已不生效，RAG 恒 topK=3，故属恢复而非新增）；(b) MaxTaint 过滤，fail-closed——取意图 `OriginTaintLevel`，`None` 按 `High`；情景/L2/RAG 条目逐条带 `Taint`，超限丢弃，召回段包装标签污点取入选条目最大值。核实：旧实现的上限在生产中实际恒为 High（所有意图均为 TaintHigh），语义保持不变。
+- **RRF 与权重**：`score=Σ weight/(60+rank)`，同正文跨来源累加只留一条，同分按来源序、首次出现序。权重 `m4_kernel.recall.weight_{reflection=1.2, episodic=1.1, semantic=1.0, rag=1.0}`：反思为 Agent 自总结的经验、密度最高；情景为本项目真实发生过的事件；L2 与 RAG 为补充。默认值为先验而非校准结果，待 Eval 标定。按融合名次装入 `max_tokens`。**画像不参与融合**：它对每个回合恒定、没有与 Goal 相关的名次，作固定小段仅用融合后剩余预算；并与 L1 核心记忆的偏好重复。后续建议把画像移入 L1（现位于未缓存的 L4）。`min_score_ratio` 默认 0（开关保留），`min_score` 保留。
+- **重排门（实现完成，生产不生效）**：核实 `ffi.LlamaRerank` 是经单一模型槽位做 bi-encoder 余弦，**不是**决策正文假定的 cross-encoder（Qwen3-Reranker yes/no），无校准语义，且仓库内无任何生产调用方与加载路径。因此只落地消费端接口 `fsm.RecallReranker`（`RelevanceProbs(ctx, query, docs) ([]float64, error)`，要求返回已校准概率）与注入点 `Agent.SetRecallReranker`，未伪造接线。**当前无加载路径，门在生产中不生效**。有实现注入后：对融合前 `rerank_top_n`（12）条取概率，丢弃 p<`rerank_min_prob`（0.5）及未验证的尾部；超时复用召回 ctx 截止，失败/超时/概率非法（NaN、越界、长度不符）一律跳过门，并以 `recall_gate_*` 记录指标。若将来接入 logit 输出的 cross-encoder，须在适配器内先做 sigmoid 再返回。
+- **L2 语义召回：WIRE**（ADR-0062）。核实：FTS 索引覆盖 SurrealDB 中多类记录，`sement_` 语义实体是 L2 独有数据（实体只有 FTS 索引，无向量），情景与 RAG 已有各自路径，故适配器只取 `sement_` 命中、按 ID 取正文，仅保留 active、未过期、非 `graphrag_ingest` 的实体；`CognitiveSearcher` 去掉无数据支撑的 `VecKNN`。项目隔离经 `projectScopedFTS`，`TestProjectIsolation_RecallCognitiveAdapter` 替代原 Assembler 适配器隔离用例（`memory-isolation-check` 仍 11 条）。已知局限：Tier0（无 SurrealDB）无 L2；FTS 按 BM25 混排多类记录，用 ×3 过量取 + `projectScopedFTS` 的 ×4 缓解；情景源仍是整句子串匹配（分恒 1.0，几乎恒空），FTS+向量的情景模糊检索留作后续。
+- **RAG 分透传**：`KnowledgeBase.Search` 在 `AugmentedContext.Score` 返回检索分（向后兼容），`fsmKnowledgeAdapter` 使用真实分与条目污点。
+- **新增阈值**（`state.yaml` → `thresholds.go` + Validate → `gen-threshold-examples`）：`weight_*`（≥0）、`rerank_top_n`（12，0=关闭）、`rerank_min_prob`（0.5）、`rag_min_surprise`（0.3）。

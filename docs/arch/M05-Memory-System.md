@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:127 L1 Episodic / 4:229 L2 Semantic / 5:271 L3 Procedural / 5-bis:281 Memory-Write-Tool(Agent主动写) / 6:332 写路径 / 7:344 HybridRetriever / 8:430 EffConn / 9:440 Consolidation / 10:476 Forgetting / 11:493 PromptBuilder / 12:569 Drift / 14:607 (SOFT)降级 / 15:631 依赖 / 16:647 实现状态+2026研究对照 / 13:673 MemoryAgent(Swarm集成) -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:127 L1 Episodic / 4:229 L2 Semantic / 5:271 L3 Procedural / 5-bis:281 Memory-Write-Tool(Agent主动写) / 6:332 写路径 / 7:344 HybridRetriever / 8:430 EffConn / 9:440 Consolidation / 10:476 Forgetting / 11:493 PromptBuilder / 12:571 Drift / 14:609 (SOFT)降级 / 15:633 依赖 / 16:649 实现状态+2026研究对照 / 13:675 MemoryAgent(Swarm集成) -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -491,6 +491,8 @@ Forgettable 事件保持原地，由 ColdArchiver.PhysicalCompact 负责最终�
 ---
 
 ## 11. Context Assembler / PromptBuilder
+
+> ADR-0105 决策十：原 `Assembler` 第二条召回管线已删除，召回只在回合内（`agent/context/recall*.go`）经 RRF 融合后注入 L4；L2 语义召回由 `cmd/polaris/adapters_recall.go` 的 `recallCognitiveAdapter` 接线（仅 `sement_` 语义实体，FTS 命中后按 ID 取正文，项目隔离经 `projectScopedFTS`）。详见 M04 召回段。
 
 PromptBuilder 布局实现见 `internal/agent/`（PromptBuilder），SessionCompressor 实现见 `internal/memory/`（SessionCompressor）。
 

@@ -101,8 +101,8 @@
 | `M13-Interface-Scheduler.md` | L3 接口 | 38K | 见下方 [M13 补充](#m13-补充) |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 32K | 见下方 [M07 补充](#m07-补充) |
 | `M05-Memory-System.md` | L1 记忆 | 28K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
-| `M04-Agent-Kernel.md` | L1 内核 | 27K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
-| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 26K | 状态机 + 全模块阈值（唯一权威） |
+| `M04-Agent-Kernel.md` | L1 内核 | 28K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
+| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 27K | 状态机 + 全模块阈值（唯一权威） |
 | `M11-Policy-Safety.md` | L0 策略 | 26K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
 | `00-Global-Dictionary.md` | 字典 | 26K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 21K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
