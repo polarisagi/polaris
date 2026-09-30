@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-30（ADR-0105 WP11：情景召回按相关度、删除召回画像 — 含**契约变更**）
+
+- **[契约] `types.EpisodicQuery.Semantic` 删除，新增 `IDs`**（按 ID 直取，保持顺序，仍受 ProjectID/MaxTaintLevel/SessionID/Topics 过滤）；子串匹配路径 DELETE。
+- **[契约] 新增消费端接口 `fsm.EpisodicSearcher.FTSEpisodic`**（`recallCognitiveAdapter` 实现）；`fsm.RecallProfile`、`TurnRecall.ProfileDone` 删除，`packRecall` 不再接画像参数。用户画像只走 L0 `ImmutableCore.UserProfile`。
+- 情景召回：FTS(BM25) → 项目隔离 → 按 ID 取正文；无 SurrealDB/FTS 失败降级为空。
+
 ## 2026-09-30（ADR-0105 WP8：召回单一管线、RRF 融合 — 含**契约变更**）
 
 - **[契约] 删除第二条召回管线**：`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`/`SetAssembler`/`AgentConfig.SurpriseHintThreshold` 移除；召回只在回合内、L4 一处注入。

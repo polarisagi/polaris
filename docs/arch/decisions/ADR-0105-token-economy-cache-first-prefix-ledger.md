@@ -191,6 +191,7 @@
 | 2026-09-30 | WP9 落地（决策十一第一项）：PII 确定性会话内令牌。见下「WP9 实施追记」 |
 | 2026-09-30 | WP8 落地（决策十）：删除第二条召回管线（`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`），回合内召回改 RRF(k=60) 融合 + 可选重排门，L2 语义召回接线，RAG 分透传。见下「WP8 实施追记」 |
 | 2026-09-30 | WP7 落地（决策九）：新增 `m4_kernel.prompt.phase_contracts_in_core`（默认 true）。契约段由 `configs/phase_contracts.go` 渲染（`# PHASE CONTRACTS` + 四段 `## PHASE: <NAME>`，顺序 PERCEIVE→PLAN→REFLECT→RESPOND，正文取 `kernel/<phase>.md`，约 7.9KB，进程内缓存、字节恒定），经 `ImmutableCore.StableMessageWithContracts()` 追加在稳定层末尾；**追加发生在 `maxSystemPromptBytes` 截断之后、不计入该上限**，故超长自定义指令只会截掉可变部分，契约段不会被截。仅内核前缀账本（`fsm.FinishLayered`）使用含契约的 L0；`StableMessage()`/`PrependToMessages`（网关直连、cron/workflow）不含契约段。L3 由 `fsm.WritePhaseContract` 改写 147 字节选择器（契约已在 L0 时），开关关闭、降级路径（无 ImmutableCore）、ImmutableCore 无契约能力或模板读取失败时回退写完整模板，与并入前一致；压力提示与 `respond_reminder.md` 位置不变 |
+| 2026-09-30 | WP11 落地（决策十延续）：情景召回改按相关度检索（FTS BM25 → 项目隔离 → 按 ID 取正文），删除子串匹配 `EpisodicQuery.Semantic`；删除召回画像段（与 L0 `UserProfile` 同源）。见下「WP11 实施追记」 |
 
 ### WP4 实施追记（2026-09-30）
 
@@ -225,3 +226,12 @@
 - **L2 语义召回：WIRE**（ADR-0062）。核实：FTS 索引覆盖 SurrealDB 中多类记录，`sement_` 语义实体是 L2 独有数据（实体只有 FTS 索引，无向量），情景与 RAG 已有各自路径，故适配器只取 `sement_` 命中、按 ID 取正文，仅保留 active、未过期、非 `graphrag_ingest` 的实体；`CognitiveSearcher` 去掉无数据支撑的 `VecKNN`。项目隔离经 `projectScopedFTS`，`TestProjectIsolation_RecallCognitiveAdapter` 替代原 Assembler 适配器隔离用例（`memory-isolation-check` 仍 11 条）。已知局限：Tier0（无 SurrealDB）无 L2；FTS 按 BM25 混排多类记录，用 ×3 过量取 + `projectScopedFTS` 的 ×4 缓解；情景源仍是整句子串匹配（分恒 1.0，几乎恒空），FTS+向量的情景模糊检索留作后续。
 - **RAG 分透传**：`KnowledgeBase.Search` 在 `AugmentedContext.Score` 返回检索分（向后兼容），`fsmKnowledgeAdapter` 使用真实分与条目污点。
 - **新增阈值**（`state.yaml` → `thresholds.go` + Validate → `gen-threshold-examples`）：`weight_*`（≥0）、`rerank_top_n`（12，0=关闭）、`rerank_min_prob`（0.5）、`rag_min_surprise`（0.3）。
+
+### WP11 实施追记（2026-09-30）
+
+- **情景召回改按相关度检索**：`collectEpisodic` 不再调用整句子串匹配，改为 `fsm.EpisodicSearcher.FTSEpisodic`（`recallCognitiveAdapter` 实现，对 SurrealDB 共享 FTS 做 BM25，预先剔除 `sement_`/`her_`/`ext_` 文档）→ `projectScopedEpisodicFTS`（`EpisodicProjectOf` 判定"确为情景事件且属当前项目"，×4 过量取后截到 K）→ `min_score`/`min_score_ratio` 相关度下限 → `ListEpisodicEvents(EpisodicQuery{IDs})` 按 FTS 秩取正文（存储层再按 ProjectID / MaxTaintLevel 过滤，召回侧再判一次污点）→ 沿用 WP3 紧凑渲染 → 进入 WP8 的 RRF 作为情景来源的来源内秩。`Plan` 复用 `Perceive` 召回的语义不变（`EpisodicDone` 标记与计数 fake 测试照旧）。
+- **只走 FTS，不接向量**：情景向量虽存在，但由 `OnlineReindexer` 异步回填（新事件可能尚无向量），且查询侧每回合多一次 embedding（`SyncBatcherAdapter` 固定 Background+30s，WP8 期间曾使 Perceive 卡 30s）；BM25 已能按词面选出候选，后续由（若注入的）重排门把关。未来若接向量，应作为情景来源内部的第二路（FTS/向量先 RRF 再进来源内秩），不必改本路径的接口。已知局限：BM25 对不含共同词面的同义表述不敏感。
+- **降级**（均按"情景无结果"，不阻断回合，仍标记 `EpisodicDone`）：无 SurrealDB（Tier0，`SetCognitiveSearcher` 未接）、`cognitive` 未实现 `EpisodicSearcher`、FTS 失败、取正文失败。此前 Tier0 的情景召回由子串匹配兜底，但该路径分恒 1.0、几乎恒空，实际无效，故不保留。
+- **子串路径 DELETE（ADR-0062）**：`EpisodicQuery.Semantic` 与 `EpisodicMem.Query` 中的 `strings.Contains` 分支仅被 `collectEpisodic` 消费，已删除（字段换为 `IDs`）。`ListEpisodicEvents` 本身保留：`agent_execute_dag.go` 的 2PC 崩溃检测（按 SessionID 扫描）、Consolidation/Reflexion/Durative 聚类仍在用；`Topics` 过滤保留。
+- **画像：删除召回画像段（同源）**。核实：L0 `ImmutableCore.UserProfile` 由 `gateway/server/chat/system_prompt.go` 的 `InjectSystemPrompt` 每请求用 `GetUserProfile(ctx, "default")` 写入，渲染为 `## User Profile (Context)` + 按键排序的值行，内核 `fsm.FinishLayered` 经 `StableMessage()` 取它；召回画像段 `collectUserProfile` 读的是同一个 `GetUserProfile(ctx, "default")`（仅多输出 key）。二者数据来源相同，故不迁入 L1，直接删除召回画像段及 `RecallProfile`、`TurnRecall.ProfileDone`、`recallWant.withProfile`、`packRecall` 的画像参数（L0 已命中缓存价，画像变化才使 L0 失配）。局限：L0 的画像由网关 `InjectSystemPrompt` 写入共享 `ImmutableCore`，未经网关请求的进程（纯 cron 且从未有交互请求）L0 无画像；此前这类场景靠 L4 召回补，现在不补——与网关直连路径同口径。
+- **其他结构性重复核实**：(a) 反思——`ListReflections` 读反思存储，FTS 中的 `her_<taskID>` 是 reflexion 写入的同一批洞察的倒排索引；L2 适配器与情景路径都不放行 `her_`，故反思只从反思来源进入，无重复。(b) L2 `sement_` 与 RAG——适配器已排除 `graphrag_ingest` 来源实体（正文在 RAG 来源里），其余 `sement_` 是独有数据；情景路径也不放行 `sement_`。(c) 情景事件与语义实体在内容上可由抽取关联，但是不同形态的条目，仍靠 WP8 的跨来源正文去重兜底。**结论：FTS 共享索引的四类文档现在各自只经一条检索路径进入 prompt**（情景→`FTSEpisodic`、实体→`FTSSearch`、反思→`ListReflections`、扩展目录→不进召回）。

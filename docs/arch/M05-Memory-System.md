@@ -492,7 +492,7 @@ Forgettable 事件保持原地，由 ColdArchiver.PhysicalCompact 负责最终�
 
 ## 11. Context Assembler / PromptBuilder
 
-> ADR-0105 决策十：原 `Assembler` 第二条召回管线已删除，召回只在回合内（`agent/context/recall*.go`）经 RRF 融合后注入 L4；L2 语义召回由 `cmd/polaris/adapters_recall.go` 的 `recallCognitiveAdapter` 接线（仅 `sement_` 语义实体，FTS 命中后按 ID 取正文，项目隔离经 `projectScopedFTS`）。详见 M04 召回段。
+> ADR-0105 决策十：原 `Assembler` 第二条召回管线已删除，召回只在回合内（`agent/context/recall*.go`）经 RRF 融合后注入 L4；L2 语义召回由 `cmd/polaris/adapters_recall.go` 的 `recallCognitiveAdapter` 接线（仅 `sement_` 语义实体，FTS 命中后按 ID 取正文，项目隔离经 `projectScopedFTS`）；情景事件另经 `FTSEpisodic`（BM25，`projectScopedEpisodicFTS` 项目隔离，按 ID 取正文，ADR-0105 决策十 WP11），`EpisodicQuery` 以 `IDs` 取代已删除的 `Semantic` 子串匹配；用户画像只走 L0 稳定核，召回不再含画像段。详见 M04 召回段。
 
 PromptBuilder 布局实现见 `internal/agent/`（PromptBuilder），SessionCompressor 实现见 `internal/memory/`（SessionCompressor）。
 
