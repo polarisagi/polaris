@@ -239,7 +239,11 @@ func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
 		tBox := s.chatHandler.AudioService.TTSEngine.Load()
 		if tBox != nil && tBox.P != nil {
-			ttsProvider = "active"
+			if tBox.Name != "" {
+				ttsProvider = tBox.Name
+			} else {
+				ttsProvider = "active"
+			}
 		}
 	}
 

@@ -79,10 +79,11 @@ func readWAVChunks(r io.Reader) (wavHeaderInfo, []byte, error) {
 	var (
 		info      wavHeaderInfo
 		fmtFound  bool
+		dataFound bool
 		dataBytes []byte
 	)
 
-	for len(dataBytes) == 0 {
+	for !dataFound {
 		var chunkHeader [8]byte
 		if _, err := io.ReadFull(r, chunkHeader[:]); err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
@@ -109,6 +110,7 @@ func readWAVChunks(r io.Reader) (wavHeaderInfo, []byte, error) {
 				return info, nil, err
 			}
 			dataBytes = bytes
+			dataFound = true
 
 		default:
 			if _, err := io.CopyN(io.Discard, r, int64(chunkSize)); err != nil {
@@ -121,8 +123,8 @@ func readWAVChunks(r io.Reader) (wavHeaderInfo, []byte, error) {
 		}
 	}
 
-	if !fmtFound || len(dataBytes) == 0 {
-		return info, nil, apperr.New(apperr.CodeInvalidInput, "wav: missing fmt or data chunk")
+	if !fmtFound || !dataFound || len(dataBytes) == 0 {
+		return info, nil, apperr.New(apperr.CodeInvalidInput, "wav: missing fmt or valid data chunk")
 	}
 	return info, dataBytes, nil
 }

@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 )
@@ -64,7 +65,7 @@ func TestHandleAudioTranscriptions_WAVDirect(t *testing.T) {
 	sttBox := new(atomic.Pointer[STTEngineBox])
 	sttBox.Store(&STTEngineBox{E: sttMock})
 
-	service := NewAudioService(sttBox, new(atomic.Pointer[TTSProviderBox]))
+	service := NewAudioService(sttBox, new(atomic.Pointer[TTSProviderBox]), t.TempDir(), nil)
 
 	// 构造 16kHz WAV
 	rawWav := makeTestWAV([]float32{0.1, -0.2, 0.3}, 16000)
@@ -113,7 +114,7 @@ func TestHandleAudioTranscriptions_InvalidWAV(t *testing.T) {
 	sttBox := new(atomic.Pointer[STTEngineBox])
 	sttBox.Store(&STTEngineBox{E: sttMock})
 
-	service := NewAudioService(sttBox, new(atomic.Pointer[TTSProviderBox]))
+	service := NewAudioService(sttBox, new(atomic.Pointer[TTSProviderBox]), t.TempDir(), nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -144,9 +145,12 @@ func TestHandleAudioTranscriptions_NonWAV_FFmpegMissing(t *testing.T) {
 	sttBox := new(atomic.Pointer[STTEngineBox])
 	sttBox.Store(&STTEngineBox{E: sttMock})
 
-	service := NewAudioService(sttBox, new(atomic.Pointer[TTSProviderBox]))
-	// 指定一个空的 binDir 且无 httpClient，且假设 PATH 中若无则必报错，若有则测试不崩溃
-	service.SetBinDir(t.TempDir())
+	service := NewAudioService(sttBox, new(atomic.Pointer[TTSProviderBox]), t.TempDir(), nil)
+
+	// Override PATH to ensure system ffmpeg is not found
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", t.TempDir())
+	defer os.Setenv("PATH", oldPath)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -161,15 +165,13 @@ func TestHandleAudioTranscriptions_NonWAV_FFmpegMissing(t *testing.T) {
 	service.HandleAudioTranscriptions(w, req)
 
 	resp := w.Result()
-	// 如果系统 PATH 没有 ffmpeg 或转码失败，应返回 422，决不能静默返回 200 mock 假数据
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("expected 422 or 200, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("expected 422, got %d", resp.StatusCode)
 	}
-	if resp.StatusCode == http.StatusUnprocessableEntity {
-		var errResp map[string]string
-		json.NewDecoder(w.Body).Decode(&errResp)
-		if errResp["error"] == "" {
-			t.Errorf("expected error code in response, got %v", errResp)
-		}
+
+	var errResp map[string]string
+	json.NewDecoder(w.Body).Decode(&errResp)
+	if errResp["error"] != "ffmpeg_not_found" {
+		t.Errorf("expected ffmpeg_not_found error, got %v", errResp)
 	}
 }

@@ -103,13 +103,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		deps.Registry,
 	)
 
-	audio := NewAudioService(deps.STTEngine, deps.TTSEngine)
-	if deps.BinDir != "" {
-		audio.SetBinDir(deps.BinDir)
-	}
-	if deps.HTTPClient != nil {
-		audio.SetHTTPClient(deps.HTTPClient)
-	}
+	audio := NewAudioService(deps.STTEngine, deps.TTSEngine, deps.BinDir, deps.HTTPClient)
 
 	prompt := NewPromptAssemblyService(
 		deps.PromptMgr,

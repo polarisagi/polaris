@@ -57,8 +57,11 @@ func TestEnsureFFmpeg_AutoDownload(t *testing.T) {
 		}),
 	}
 
-	// Rename or mock PATH if needed; since binDir doesn't have it, if system doesn't have it, it will download.
-	// But to guarantee download happens, test with a custom function or ensure destPath exists after EnsureFFmpeg.
+	// Override PATH to ensure system ffmpeg is not found
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", t.TempDir())
+	defer os.Setenv("PATH", oldPath)
+
 	exeName := "ffmpeg"
 	if runtime.GOOS == "windows" {
 		exeName = "ffmpeg.exe"

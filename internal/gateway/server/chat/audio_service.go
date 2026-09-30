@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/llm/stt"
@@ -23,25 +24,19 @@ import (
 type AudioService struct {
 	STTEngine  *atomic.Pointer[STTEngineBox]
 	TTSEngine  *atomic.Pointer[TTSProviderBox]
-	BinDir     string
-	HTTPClient *http.Client
+	binDir     string
+	httpClient *http.Client
+
+	ffmpegSF singleflight.Group
 }
 
-func NewAudioService(stt *atomic.Pointer[STTEngineBox], tts *atomic.Pointer[TTSProviderBox]) *AudioService {
+func NewAudioService(stt *atomic.Pointer[STTEngineBox], tts *atomic.Pointer[TTSProviderBox], binDir string, httpClient *http.Client) *AudioService {
 	return &AudioService{
-		STTEngine: stt,
-		TTSEngine: tts,
+		STTEngine:  stt,
+		TTSEngine:  tts,
+		binDir:     binDir,
+		httpClient: httpClient,
 	}
-}
-
-// SetBinDir 设置二进制可执行文件查找目录（用于查找或自动安装 ffmpeg）。
-func (s *AudioService) SetBinDir(binDir string) {
-	s.BinDir = binDir
-}
-
-// SetHTTPClient 设置安全 HTTP 客户端（用于下载 ffmpeg 等资产）。
-func (s *AudioService) SetHTTPClient(client *http.Client) {
-	s.HTTPClient = client
 }
 
 // SetSTTEngine 原子替换全局 STT 引擎实例（goroutine-safe）。
@@ -52,12 +47,12 @@ func (s *AudioService) SetSTTEngine(engine STTTranscriber) {
 
 // SetTTSEngine 原子替换全局 TTS Provider 实例（goroutine-safe）。
 // p == nil 时显式清除（使 Load 返回 nil，HandleAudioSpeech 返回 503）。
-func (s *AudioService) SetTTSEngine(p TTSProvider) {
+func (s *AudioService) SetTTSEngine(p TTSProvider, name string) {
 	if p == nil {
 		s.TTSEngine.Store(nil)
 		return
 	}
-	s.TTSEngine.Store(&TTSProviderBox{P: p})
+	s.TTSEngine.Store(&TTSProviderBox{P: p, Name: name})
 }
 
 func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
@@ -123,41 +118,24 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 	}
 	defer file.Close()
 
-	// 保存为临时文件
+	// 架构分流策略：
+	//  1. 若上传音频为 .wav 格式（标准录音）：走纯 Go 内存解码器，零依赖，直接送入 STT 引擎；
+	//  2. 若为非 .wav 格式（.webm/.mp4/.ogg/.mp3/.flac 等）：按 binDir → PATH 顺序查找 ffmpeg，
+	//     若不存在则自动按平台下载；转码失败返回明确 422 错误，绝不静默返回假数据。
+
 	tmpDir := os.TempDir()
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if ext == "" {
 		ext = ".wav" // 默认优先尝试 wav
 	}
-	inPath := filepath.Join(tmpDir, uuid.New().String()+ext)
-
-	outFile, err := os.Create(inPath)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	if _, err := io.Copy(outFile, file); err != nil {
-		outFile.Close()
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	outFile.Close()
-	defer os.Remove(inPath)
 
 	var samples []float32
 	var sampleRate int
 
 	switch ext {
 	case ".wav":
-		// 路径 A：纯 Go WAV 解码器（零外部依赖，极速且健壮）
-		f, err := os.Open(inPath)
-		if err != nil {
-			http.Error(w, "server error", http.StatusInternalServerError)
-			return
-		}
-		defer f.Close()
-
-		wavSamples, sr, err := stt.DecodeWAV(f)
+		// 路径 A：纯 Go WAV 解码器（零外部依赖，直接从 multipart stream 解码）
+		wavSamples, sr, err := stt.DecodeWAV(file)
 		if err != nil {
 			slog.Warn("wav decode failed", "err", err)
 			httputil.WriteJSONStatus(w, http.StatusBadRequest, map[string]string{
@@ -170,8 +148,26 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 		sampleRate = sr
 
 	default:
-		// 路径 B：非 WAV 格式需通过 ffmpeg 转码
-		ffmpegExe, err := builtin.EnsureFFmpeg(r.Context(), s.BinDir, s.HTTPClient)
+		// 路径 B：非 WAV 格式需通过 ffmpeg 转码，必须落盘为临时文件
+		inPath := filepath.Join(tmpDir, uuid.New().String()+ext)
+		outFile, err := os.Create(inPath)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		if _, err := io.Copy(outFile, file); err != nil {
+			outFile.Close()
+			os.Remove(inPath)
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		outFile.Close()
+		defer os.Remove(inPath)
+
+		// 使用 singleflight 保护并发下载
+		v, err, _ := s.ffmpegSF.Do("ffmpeg", func() (any, error) {
+			return builtin.EnsureFFmpeg(r.Context(), s.binDir, s.httpClient)
+		})
 		if err != nil {
 			slog.Error("audio decode failed: ffmpeg unavailable", "ext", ext, "err", err)
 			httputil.WriteJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{
@@ -180,6 +176,7 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 			})
 			return
 		}
+		ffmpegExe := v.(string)
 
 		pcmBytes, err := builtin.ConvertToRawPCM(r.Context(), inPath, ffmpegExe)
 		if err != nil {

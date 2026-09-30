@@ -63,7 +63,8 @@ type TTSProvider interface {
 
 // TTSProviderBox 包装 TTSProvider
 type TTSProviderBox struct {
-	P TTSProvider
+	P    TTSProvider
+	Name string
 }
 
 // STTResult STT 识别结果。

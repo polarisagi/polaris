@@ -298,12 +298,6 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		tierParams = &sb.AutoConf.Config.Params
 		httpServer.SetTier(sb.AutoConf.Config.Tier, sb.AutoConf.Config.Params)
 	}
-	if sb.Layout.Bin != "" {
-		httpServer.SetAudioBinDir(sb.Layout.Bin)
-	}
-	if sb.SafeHTTP != nil {
-		httpServer.SetAudioHTTPClient(sb.SafeHTTP)
-	}
 	initSTTEngine(ctx, httpServer, sb.DataDir, sttGate, tierParams, sb.SafeHTTP, sb.Cfg.Inference.STT)
 	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, tierParams, sb.SafeHTTP, sb.Cfg.Inference.TTS, sb.Dialer)
 

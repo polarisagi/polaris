@@ -397,9 +397,11 @@ Alpine.store('chat', {
       };
 
       const fetchAudioBlob = async (sentenceText) => {
+        const headers = authHeaders();
+        headers['Content-Type'] = 'application/json';
         const resp = await fetch('/v1/audio/speech', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: headers,
           body: JSON.stringify({ input: sentenceText })
         });
         if (!resp.ok) throw new Error('TTS Request Failed: ' + resp.status);

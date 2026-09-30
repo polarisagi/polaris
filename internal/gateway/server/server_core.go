@@ -531,21 +531,9 @@ func (s *Server) SetSTTProvider(provider chat.STTTranscriber) {
 	}
 }
 
-func (s *Server) SetTTSProvider(provider chat.TTSProvider) {
+func (s *Server) SetTTSProvider(provider chat.TTSProvider, name string) {
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		s.chatHandler.AudioService.SetTTSEngine(provider)
-	}
-}
-
-func (s *Server) SetAudioBinDir(binDir string) {
-	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		s.chatHandler.AudioService.SetBinDir(binDir)
-	}
-}
-
-func (s *Server) SetAudioHTTPClient(client *http.Client) {
-	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		s.chatHandler.AudioService.SetHTTPClient(client)
+		s.chatHandler.AudioService.SetTTSEngine(provider, name)
 	}
 }
 

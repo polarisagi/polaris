@@ -15,7 +15,7 @@ func TestAudioHandlers_EngineNotInitialized(t *testing.T) {
 		STTEngine: new(atomic.Pointer[STTEngineBox])}
 
 	// Test SetTTSEngine with nil
-	h.SetTTSEngine(nil)
+	h.SetTTSEngine(nil, "")
 	h.SetSTTEngine(nil)
 
 	// Test handleAudioSpeech

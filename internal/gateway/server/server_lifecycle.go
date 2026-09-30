@@ -102,6 +102,13 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(rwDB)
 	s.projectRepo = repo.NewSQLiteProjectRepository(rwDB)
 
+	s.tier = probe.Tier0
+	s.tierParams = probe.TierParameters{
+		STTNumThreads:    1,
+		TTSNumThreads:    2,
+		TTSPrefetchCount: 1,
+	}
+
 	// 系统提示词模板（含 embedded FS / 三层加载 Layer 0/1）的初始化推迟到
 	// Setprotocol.PromptFacade 阶段，以便使用 promptMgr 提供的内嵌文件系统能力，
 	// 避免模块循环依赖；必须在 LoadSoulMD / DefaultIdentity 之前完成。
