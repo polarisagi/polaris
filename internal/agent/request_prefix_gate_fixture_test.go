@@ -223,8 +223,23 @@ func (m *gateMemory) GetUserProfile(context.Context, string) (*types.UserProfile
 	return &types.UserProfile{StableFacts: map[string]any{"contact": gateEmailAlice, "role": "DBA"}}, nil
 }
 
-func (m *gateMemory) ListEpisodicEvents(context.Context, types.EpisodicQuery) ([]types.ScoredEvent, error) {
+// EpisodicProjectOf 把 FTS 命中的 gate_ev1 登记为默认项目的情景事件（召回按项目隔离反查归属）。
+func (m *gateMemory) EpisodicProjectOf(_ context.Context, id string) (string, bool) {
+	return types.DefaultProjectID, id == "gate_ev1"
+}
+
+// ListEpisodicEvents 只按 IDs 回取正文（ADR-0105 决策十 WP11：FTS 选 ID → 取正文）；
+// 不带 IDs 的旧式整句子串查询不再有情景返回。
+func (m *gateMemory) ListEpisodicEvents(_ context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) {
+	want := false
+	for _, id := range q.IDs {
+		want = want || id == "gate_ev1"
+	}
+	if !want {
+		return nil, nil
+	}
 	return []types.ScoredEvent{{Score: 1, Event: &types.Event{
+		ID:        "gate_ev1",
 		Type:      "task_done",
 		Payload:   []byte(`{"summary":"RECALL_EPISODIC_MARKER 上次迁移用了 goose"}`),
 		CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
@@ -239,6 +254,11 @@ type gateCognitive struct{}
 
 func (gateCognitive) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) {
 	return []fsm.CogResult{{DocID: "sement_1", Snippet: "RECALL_SEMANTIC_MARKER 数据库迁移需要维护窗口", Score: 2}}, nil
+}
+
+// FTSEpisodic 情景召回经 BM25 选 ID；共享索引里混有语义实体文档，应被情景来源丢弃。
+func (gateCognitive) FTSEpisodic(context.Context, string, int) ([]fsm.CogResult, error) {
+	return []fsm.CogResult{{DocID: "gate_ev1", Score: 7}, {DocID: "sement_1", Score: 6}}, nil
 }
 
 type gateKnowledge struct{}
