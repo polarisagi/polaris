@@ -51,3 +51,29 @@ func projectScopedFTS(ctx context.Context, memory protocol.MemoryFacade, cogniti
 	}
 	return out, nil
 }
+
+// projectScopedEpisodicFTS 情景事件的 FTS 检索 + 项目隔离（ADR-0105 决策十 WP11）。
+// 与 projectScopedFTS 相反，这里只放行"确为情景事件且属当前项目"的命中：共享索引里的语义实体/反思/扩展目录
+// 各有来源（isEpisodic=false 一律丢弃，避免同一内容经两条检索路径进入 prompt），他项目的情景事件剔除。
+// memory 为 nil 时无法反查归属，整体返回空（fail-closed）。
+func projectScopedEpisodicFTS(ctx context.Context, memory protocol.MemoryFacade, es fsm.EpisodicSearcher,
+	query string, k int, projectID string) ([]fsm.CogResult, error) {
+	if memory == nil {
+		return nil, nil
+	}
+	hits, err := es.FTSEpisodic(ctx, query, k*ftsOverfetch)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // 调用方按"无结果"降级，原样透传
+	}
+	out := make([]fsm.CogResult, 0, k)
+	for _, h := range hits {
+		if owner, isEpisodic := memory.EpisodicProjectOf(ctx, h.DocID); !isEpisodic || owner != projectID {
+			continue
+		}
+		out = append(out, h)
+		if len(out) == k {
+			break
+		}
+	}
+	return out, nil
+}

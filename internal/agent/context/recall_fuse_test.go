@@ -132,7 +132,7 @@ func TestPackRecall_BudgetFollowsFusedRank(t *testing.T) {
 	w := equalWeights()
 	w.rag = 5
 
-	text, _ := packRecall(fuseRecall(r, "", w), nil, "", 100)
+	text, _ := packRecall(fuseRecall(r, "", w), 100)
 	require.Contains(t, text, "rag ")
 	require.NotContains(t, text, "refl ")
 	require.LessOrEqual(t, estimateTokens(text), 100)
@@ -144,35 +144,15 @@ func TestPackRecall_TaintIsMaxOfIncluded(t *testing.T) {
 		withMeta(newRecallItem("", "低污点的一条", 400), types.TaintLow, 1),
 		withMeta(newRecallItem("", "高污点的一条", 400), types.TaintHigh, 1),
 	}
-	_, tl := packRecall(fuseRecall(r, "", testWeights()), nil, "", 10000)
+	_, tl := packRecall(fuseRecall(r, "", testWeights()), 10000)
 	require.Equal(t, types.TaintHigh, tl)
 
 	// 高污点那条没装下时，整段不得被它抬级。
-	_, tl = packRecall(fuseRecall(r, "", testWeights())[:1], nil, "", 10000)
+	_, tl = packRecall(fuseRecall(r, "", testWeights())[:1], 10000)
 	require.Equal(t, types.TaintLow, tl)
 
-	_, tl = packRecall(nil, nil, "", 10000)
+	_, tl = packRecall(nil, 10000)
 	require.Equal(t, types.TaintNone, tl)
-}
-
-// 画像不参与融合：只在融合条目之后、用剩余预算装入；与融合条目/历史重复的画像项丢弃。
-func TestPackRecall_ProfileFillsLeftoverOnly(t *testing.T) {
-	r := &fsm.TurnRecall{}
-	ranked(fsm.RecallEpisodic, r, "情景事件内容")
-	r.Items[fsm.RecallProfile] = []fsm.RecallItem{
-		newRecallItem("", "role: 架构师", 400),
-		newRecallItem("", "情景事件内容", 400), // 与融合条目同正文
-		newRecallItem("", "lang: Go", 400),
-	}
-	text, _ := packRecall(fuseRecall(r, "", testWeights()), r.Items[fsm.RecallProfile], "", 10000)
-	require.Less(t, strings.Index(text, "Relevant Historical"), strings.Index(text, "## User Profile"))
-	require.Equal(t, 1, strings.Count(text, "情景事件内容"))
-	require.Contains(t, text, "- role: 架构师")
-	require.Contains(t, text, "- lang: Go")
-
-	// 预算刚够融合条目时画像整体不出现（也不留孤立标题）。
-	tight, _ := packRecall(fuseRecall(r, "", testWeights()), r.Items[fsm.RecallProfile], "", estimateTokens("Relevant Historical Episodic Memories:\n- 情景事件内容\n")+2)
-	require.NotContains(t, tight, "User Profile")
 }
 
 // ---- 相关度门 ----
@@ -271,7 +251,7 @@ func TestTurnRecall_RerankGateEndToEnd(t *testing.T) {
 	sCtx := newTurnCtx("查询", "")
 	sCtx.RecallReranker = &fakeReranker{probs: []float64{0.8, 0.1}}
 
-	text, _, err := turnRecallText(context.Background(), mem, nil, sCtx, recallWant{episodicQuery: "查询", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{episodicQuery: "查询", episodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Contains(t, text, "相关的情景事件")
 	require.NotContains(t, text, "不相关的情景事件")
@@ -281,7 +261,7 @@ func TestTurnRecall_NoRerankerMeansNoGate(t *testing.T) {
 	mem := newCountingMem()
 	mem.events = []types.ScoredEvent{scoredEvent("t", "情景甲", time.Now()), scoredEvent("t", "情景乙", time.Now())}
 	sCtx := newTurnCtx("查询", "")
-	text, _, err := turnRecallText(context.Background(), mem, nil, sCtx, recallWant{episodicQuery: "查询", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{episodicQuery: "查询", episodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Contains(t, text, "情景甲")
 	require.Contains(t, text, "情景乙")
@@ -334,7 +314,11 @@ func TestTurnRecall_SurpriseGatesRAGDepth(t *testing.T) {
 
 // ---- MaxTaint 过滤（自原 Assembler 迁入）----
 
-type taintedCog struct{ hits []fsm.CogResult }
+// taintedCog L2 实体来源返回预设命中；情景来源沿用内嵌 episodicCog（由 mem.cog() 生成）。
+type taintedCog struct {
+	*episodicCog
+	hits []fsm.CogResult
+}
 
 func (c taintedCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) {
 	return c.hits, nil
@@ -354,7 +338,7 @@ func TestTurnRecall_MaxTaintFiltersEverySource(t *testing.T) {
 			{Content: "高污点知识", Score: 1, Taint: types.TaintHigh},
 		}}
 		sCtx.KnowledgeSearcher = kb
-		cog := taintedCog{hits: []fsm.CogResult{
+		cog := taintedCog{episodicCog: mem.cog(), hits: []fsm.CogResult{
 			{DocID: "a", Snippet: "低污点实体", Score: 2, Taint: types.TaintLow},
 			{DocID: "b", Snippet: "高污点实体", Score: 1, Taint: types.TaintHigh},
 		}}

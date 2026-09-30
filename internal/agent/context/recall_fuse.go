@@ -22,7 +22,7 @@ import (
 // recallRRFK RRF 平滑常数（Cormack 等原文与全仓 m5_memory.rrf_k 同值）。k 越大，秩差对分数的影响越小。
 const recallRRFK = 60
 
-// recallWeights 来源权重（m4_kernel.recall.weight_*）。画像不参与融合，无权重。
+// recallWeights 来源权重（m4_kernel.recall.weight_*）。
 type recallWeights struct{ reflection, episodic, semantic, rag float64 }
 
 func recallWeightsOf(th config.M4KernelThresholds) recallWeights {
@@ -44,8 +44,6 @@ func (w recallWeights) of(kind fsm.RecallKind) float64 {
 		return w.semantic
 	case fsm.RecallRAG:
 		return w.rag
-	case fsm.RecallProfile:
-		return 0
 	}
 	return 0
 }
@@ -211,14 +209,13 @@ func rerankWithin(ctx context.Context, r fsm.RecallReranker, query string, docs 
 
 // packRecall 按融合秩把条目装入 maxTokens 预算，按来源分组输出（便于模型理解）：组顺序固定为
 // 反思、情景、L2、RAG，组内保持融合秩序；遇到第一条装不下的条目即止（严格按秩截断，不跳过它去塞
-// 后面更短的低秩条目）。画像不参与融合：它与查询无关、无相关度可言，排在最后只填剩余预算。
+// 后面更短的低秩条目）。
 // 同时返回已装入条目的最高污点——调用方据此给整段定级（污点只升不降）。
-func packRecall(fused []fusedItem, profile []fsm.RecallItem, history string, maxTokens int) (string, types.TaintLevel) {
+func packRecall(fused []fusedItem, maxTokens int) (string, types.TaintLevel) {
 	kinds := fsm.RecallKinds()
 	groups := make(map[fsm.RecallKind][]string, len(kinds))
 	taint := types.TaintNone
 	used := 0
-	seen := make(map[string]struct{}, len(fused))
 	for _, f := range fused {
 		need := estimateTokens(f.item.Text) + 1 // +1 换行
 		if len(groups[f.kind]) == 0 {
@@ -229,27 +226,7 @@ func packRecall(fused []fusedItem, profile []fsm.RecallItem, history string, max
 		}
 		used += need
 		groups[f.kind] = append(groups[f.kind], f.item.Text)
-		seen[f.item.Key] = struct{}{}
 		taint = types.PropagateTaint(taint, f.item.Taint)
-	}
-	for _, it := range profile {
-		if it.Key == "" || containedInHistory(it.Key, history) {
-			continue
-		}
-		if _, dup := seen[it.Key]; dup {
-			continue
-		}
-		need := estimateTokens(it.Text) + 1
-		if len(groups[fsm.RecallProfile]) == 0 {
-			need += estimateTokens(recallHeader(fsm.RecallProfile))
-		}
-		if used+need > maxTokens {
-			break
-		}
-		used += need
-		groups[fsm.RecallProfile] = append(groups[fsm.RecallProfile], it.Text)
-		seen[it.Key] = struct{}{}
-		taint = types.PropagateTaint(taint, it.Taint)
 	}
 	var out strings.Builder
 	for _, kind := range kinds {

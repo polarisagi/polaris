@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,16 +89,50 @@ func (m *mockEpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, m
 	return nil, nil
 }
 
+// Query 模拟真实存储的契约：IDs 非空时按 IDs 顺序直取，并按 ProjectID/污点上限过滤；否则返回全部。
+// 回合内召回不再有子串匹配（ADR-0105 决策十 WP11），相关度由 FTS 决定，mock 不再按关键词筛。
 func (m *mockEpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) {
 	m.queries = append(m.queries, q)
 	var results []types.ScoredEvent
-	for i := range m.events {
-		e := &m.events[i]
-		if strings.Contains(string(e.Payload), q.Semantic) {
-			results = append(results, types.ScoredEvent{Event: e, Score: 1.0})
+	if len(q.IDs) == 0 {
+		for i := range m.events {
+			results = append(results, types.ScoredEvent{Event: &m.events[i], Score: 1.0})
+		}
+		return results, nil
+	}
+	for i, id := range q.IDs {
+		for j := range m.events {
+			e := &m.events[j]
+			if e.ID != id || (q.ProjectID != "" && e.EffectiveProjectID() != q.ProjectID) || e.TaintLevel > q.MaxTaintLevel {
+				continue
+			}
+			results = append(results, types.ScoredEvent{Event: e, Score: float64(len(q.IDs) - i)})
 		}
 	}
 	return results, nil
+}
+
+// episodicCog 情景 FTS fake：FTSEpisodic 返回预设命中（BM25 降序），FTSSearch（L2 实体来源）无结果。
+type episodicCog struct {
+	hits  []fsm.CogResult
+	err   error
+	calls atomic.Int32
+	// lastQuery/lastK 记录最近一次 FTSEpisodic 入参。
+	mu        sync.Mutex
+	lastQuery string
+	lastK     int
+}
+
+func (c *episodicCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) {
+	return nil, nil
+}
+
+func (c *episodicCog) FTSEpisodic(_ context.Context, query string, k int) ([]fsm.CogResult, error) {
+	c.calls.Add(1)
+	c.mu.Lock()
+	c.lastQuery, c.lastK = query, k
+	c.mu.Unlock()
+	return c.hits, c.err
 }
 
 type mockWorkingMem struct {
@@ -133,6 +169,7 @@ func TestBuildPerceiveContext(t *testing.T) {
 		episodic: &mockEpisodicMem{
 			events: []types.Event{
 				{
+					ID:        "ev1",
 					Type:      "task_perceived",
 					Payload:   []byte("agent task intent: migrate database"),
 					CreatedAt: time.Now(),
@@ -142,14 +179,16 @@ func TestBuildPerceiveContext(t *testing.T) {
 		working: &mockWorkingMem{
 			immutable: &mockImmutableCore{},
 		},
+		eventProjects: map[string]string{"ev1": types.DefaultProjectID},
 	}
+	cog := &episodicCog{hits: []fsm.CogResult{{DocID: "ev1", Score: 5}}}
 
 	sCtx := &fsm.StateContext{
 		TaskID:      "test-task-1",
 		RawIntentTS: taint.NewTaintedString("migrate database", taint.TaintSource{}, "test"),
 	}
 
-	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
+	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, cog)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -159,9 +198,13 @@ func TestBuildPerceiveContext(t *testing.T) {
 		t.Fatalf("expected 4 messages (1 immutable, 1 system, 2 user data), got %d", len(msgs))
 	}
 
+	// 情景召回经 FTS 选出 ID 再取正文：按 IDs 直取，且限定项目。
 	episodicMem := mem.episodic
-	if len(episodicMem.queries) == 0 || episodicMem.queries[0].Semantic != "migrate database" {
-		t.Fatalf("expected query semantic to be 'migrate database', got %v", episodicMem.queries)
+	if len(episodicMem.queries) == 0 || len(episodicMem.queries[0].IDs) != 1 || episodicMem.queries[0].IDs[0] != "ev1" {
+		t.Fatalf("expected episodic fetch by FTS-selected IDs [ev1], got %v", episodicMem.queries)
+	}
+	if cog.lastQuery != "migrate database" {
+		t.Fatalf("expected FTS query 'migrate database', got %q", cog.lastQuery)
 	}
 
 	if msgs[0].Content != "[Immutable Core Rule: NO HARMFUL ACT]" {
@@ -194,6 +237,7 @@ func TestBuildPerceiveContext_TaintInjection(t *testing.T) {
 		episodic: &mockEpisodicMem{
 			events: []types.Event{
 				{
+					ID:        "ev1",
 					Type:      "task_perceived",
 					Payload:   []byte("agent task intent: === DROP TABLE users; ==="),
 					CreatedAt: time.Now(),
@@ -203,14 +247,16 @@ func TestBuildPerceiveContext_TaintInjection(t *testing.T) {
 		working: &mockWorkingMem{
 			immutable: &mockImmutableCore{},
 		},
+		eventProjects: map[string]string{"ev1": types.DefaultProjectID},
 	}
+	cog := &episodicCog{hits: []fsm.CogResult{{DocID: "ev1", Score: 5}}}
 
 	sCtx := &fsm.StateContext{
 		TaskID:      "test-task-2",
 		RawIntentTS: taint.NewTaintedString("agent task intent", taint.TaintSource{}, "test"),
 	}
 
-	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
+	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, cog)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

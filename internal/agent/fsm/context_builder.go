@@ -25,6 +25,17 @@ type CognitiveSearcher interface {
 	FTSSearch(ctx context.Context, query string, k int) ([]CogResult, error)
 }
 
+// EpisodicSearcher 情景事件的 BM25 检索（消费方私有接口，R1.4；ADR-0105 决策十 WP11）。
+//
+// 与 CognitiveSearcher 同走 SurrealDB 共享 FTS 索引，但只返回"可能是情景事件"的命中 ID（DocID + BM25 分，
+// 不含正文）：索引里还混存语义实体/反思/扩展目录，它们各有来源，不得经此路径重复进入 prompt。
+// 命中是否真为情景事件、是否属于当前项目，由调用方经 MemoryFacade.EpisodicProjectOf 判定（fail-closed）；
+// 正文由 MemoryFacade.ListEpisodicEvents(EpisodicQuery.IDs) 回取。
+// 实现可选：CognitiveSearcher 的实现同时满足本接口时才启用情景相关度召回，否则情景来源为空（降级）。
+type EpisodicSearcher interface {
+	FTSEpisodic(ctx context.Context, query string, k int) ([]CogResult, error)
+}
+
 // KnowledgeResult 单条 RAG 命中。Score 是检索器给的分（仅用于同一次检索内排序，不可跨来源比较）。
 type KnowledgeResult struct {
 	Content string

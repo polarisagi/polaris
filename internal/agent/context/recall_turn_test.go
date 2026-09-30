@@ -2,6 +2,7 @@ package agentctx
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,9 +35,37 @@ func newCountingMem() *countingMem {
 	}}
 }
 
-func (m *countingMem) ListEpisodicEvents(context.Context, types.EpisodicQuery) ([]types.ScoredEvent, error) {
+// ListEpisodicEvents 按 IDs 顺序回取 m.events（与真实存储契约一致：IDs 是 FTS 选出的相关度序）。
+func (m *countingMem) ListEpisodicEvents(_ context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) {
 	m.episodicCalls.Add(1)
-	return m.events, nil
+	m.episodic.queries = append(m.episodic.queries, q)
+	var out []types.ScoredEvent
+	for _, id := range q.IDs {
+		for _, e := range m.events {
+			if ev := e.EventPtr(); ev != nil && ev.ID == id {
+				out = append(out, e)
+			}
+		}
+	}
+	return out, nil
+}
+
+// cog 由 m.events 生成情景 FTS fake：按事件顺序给递减的 BM25 分，并登记为默认项目的情景事件
+// （EpisodicProjectOf 据此反查）。事件 ID 为空时补 ev1、ev2…。
+func (m *countingMem) cog() *episodicCog {
+	if m.eventProjects == nil {
+		m.eventProjects = map[string]string{}
+	}
+	c := &episodicCog{}
+	for i, e := range m.events {
+		ev := e.EventPtr()
+		if ev.ID == "" {
+			ev.ID = fmt.Sprintf("ev%d", i+1)
+		}
+		m.eventProjects[ev.ID] = types.DefaultProjectID
+		c.hits = append(c.hits, fsm.CogResult{DocID: ev.ID, Score: float32(3 * (len(m.events) - i))})
+	}
+	return c
 }
 
 func (m *countingMem) ListReflections(context.Context, types.ReflectionQuery) ([]types.ReflectionEntry, error) {
@@ -71,13 +100,13 @@ func TestPlanReusesPerceiveRecall(t *testing.T) {
 	mem.reflections = []types.ReflectionEntry{{Strategy: "先备份", Decision: "迁移前必须先备份数据库", CreatedAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)}}
 	sCtx := newTurnCtx("帮我迁移数据库", "")
 
-	_, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
+	_, err := BuildPerceiveContext(context.Background(), mem, sCtx, mem.cog())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, mem.episodicCalls.Load(), "Perceive 应查一次情景")
 	require.EqualValues(t, 0, mem.reflectionCalls.Load(), "Perceive 不以遗留 Goal 查反思")
 
 	sCtx.TaskModel = &fsm.TaskModel{Goal: "迁移数据库到新版本"}
-	msgs, err := BuildPlanContext(context.Background(), mem, sCtx, nil, nil)
+	msgs, err := BuildPlanContext(context.Background(), mem, sCtx, nil, mem.cog())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, mem.episodicCalls.Load(), "Plan 复用 Perceive 的情景召回，不得再调 ListEpisodicEvents")
 	require.EqualValues(t, 1, mem.reflectionCalls.Load(), "Plan 用已解析 Goal 补查反思")
@@ -87,11 +116,11 @@ func TestPlanReusesPerceiveRecall(t *testing.T) {
 	require.Contains(t, all, "迁移前必须先备份数据库")
 
 	// 同回合再次规划（重规划）：所有来源均已覆盖，零检索。
-	_, err = BuildPlanContext(context.Background(), mem, sCtx, nil, nil)
+	_, err = BuildPlanContext(context.Background(), mem, sCtx, nil, mem.cog())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, mem.episodicCalls.Load())
 	require.EqualValues(t, 1, mem.reflectionCalls.Load())
-	require.EqualValues(t, 1, mem.profileCalls.Load(), "画像也只在 Perceive 取一次")
+	require.EqualValues(t, 0, mem.profileCalls.Load(), "画像不再召回：L0 稳定核已有同一份 UserProfile")
 }
 
 // Perceive 被跳过（无 TurnRecall）且 Goal 非空：Plan 补查一次情景。
@@ -100,7 +129,7 @@ func TestPlanFallsBackWhenPerceiveSkipped(t *testing.T) {
 	mem.events = []types.ScoredEvent{scoredEvent("task_done", "补查到的情景", time.Now())}
 	sCtx := newTurnCtx("好的", "部署服务")
 
-	msgs, err := BuildPlanContext(context.Background(), mem, sCtx, nil, nil)
+	msgs, err := BuildPlanContext(context.Background(), mem, sCtx, nil, mem.cog())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, mem.episodicCalls.Load())
 	require.Contains(t, joinContents(msgs), "补查到的情景")
@@ -112,7 +141,7 @@ func TestPlanFallsBackWhenPerceiveSkipped(t *testing.T) {
 func TestPerceiveLeanAckDoesNotMarkEpisodicDone(t *testing.T) {
 	mem := newCountingMem()
 	sCtx := newTurnCtx("好的", "")
-	_, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
+	_, err := BuildPerceiveContext(context.Background(), mem, sCtx, mem.cog())
 	require.NoError(t, err)
 	require.EqualValues(t, 0, mem.episodicCalls.Load())
 	require.False(t, sCtx.TurnRecall != nil && sCtx.TurnRecall.EpisodicDone)
@@ -122,7 +151,7 @@ func TestPerceiveLeanAckDoesNotMarkEpisodicDone(t *testing.T) {
 func TestPlanEmptyGoalDoesNotQuery(t *testing.T) {
 	mem := newCountingMem()
 	sCtx := newTurnCtx("x", "")
-	_, err := BuildPlanContext(context.Background(), mem, sCtx, nil, nil)
+	_, err := BuildPlanContext(context.Background(), mem, sCtx, nil, mem.cog())
 	require.NoError(t, err)
 	require.EqualValues(t, 0, mem.episodicCalls.Load())
 	require.EqualValues(t, 0, mem.reflectionCalls.Load())
@@ -136,7 +165,7 @@ func TestEpisodicRenderedCompact(t *testing.T) {
 		scoredEvent("action_done", `{"tool":"shell","status":"done"}`, time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)),
 	}
 	sCtx := newTurnCtx("列目录", "")
-	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
+	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, mem.cog())
 	require.NoError(t, err)
 	all := joinContents(msgs)
 	require.Contains(t, all, "- [2026-09-01] execution_completed: 列出了 3 个文件")
@@ -145,7 +174,7 @@ func TestEpisodicRenderedCompact(t *testing.T) {
 	require.NotContains(t, all, `"args"`)
 }
 
-// 同输入两次渲染字节一致（含 map 遍历的画像）。
+// 同输入两次渲染字节一致（画像 map 即便有数据也不进召回段）。
 func TestRecallDeterministic(t *testing.T) {
 	build := func() string {
 		mem := newCountingMem()
@@ -153,9 +182,13 @@ func TestRecallDeterministic(t *testing.T) {
 			StableFacts:        map[string]any{"role": "架构师", "lang": "Go", "editor": "vim", "os": "macOS", "shell": "zsh"},
 			BehavioralPatterns: map[string]any{"style": "简洁", "tone": "直接", "review": "严格"},
 		}
-		mem.events = []types.ScoredEvent{scoredEvent("t", "事件甲", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))}
+		mem.events = []types.ScoredEvent{
+			scoredEvent("t", "事件甲", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+			scoredEvent("t", "事件乙", time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)),
+			scoredEvent("t", "事件丙", time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)),
+		}
 		sCtx := newTurnCtx("查询", "")
-		msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
+		msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, mem.cog())
 		require.NoError(t, err)
 		return joinContents(msgs)
 	}
@@ -163,7 +196,9 @@ func TestRecallDeterministic(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		require.Equal(t, first, build())
 	}
-	require.Contains(t, first, "- editor: vim\n- lang: Go\n- os: macOS\n- role: 架构师\n- shell: zsh\n- review: 严格\n- style: 简洁\n- tone: 直接")
+	require.Contains(t, first, "- [2026-01-01] t: 事件甲\n- [2026-01-02] t: 事件乙\n- [2026-01-03] t: 事件丙", "按 FTS 相关度序渲染")
+	require.NotContains(t, first, "架构师", "画像只在 L0，不再进召回段")
+	require.NotContains(t, first, "User Profile")
 }
 
 // 召回被预算放弃时不置覆盖标记，Plan 会补查。
@@ -176,7 +211,7 @@ func TestRecallTimeoutDoesNotMarkDone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	_, err := BuildPlanContext(ctx, mem, sCtx, nil, nil)
+	_, err := BuildPlanContext(ctx, mem, sCtx, nil, mem.cog())
 	require.NoError(t, err, "超时应降级而非报错")
 	require.False(t, sCtx.TurnRecall != nil && sCtx.TurnRecall.GoalDone)
 }
@@ -229,7 +264,7 @@ func TestRecallDedupAgainstHistory(t *testing.T) {
 		{Role: "user", Content: "我想   把配置迁移到\ngoose 工具，然后跑测试"},
 		{Role: "user", Content: "用户刚才说过要把配置迁移到 goose 工具"},
 	}
-	text, _, err := turnRecallText(context.Background(), mem, nil, sCtx, recallWant{episodicQuery: "继续", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{episodicQuery: "继续", episodicK: 4}, "test")
 	require.NoError(t, err)
 	require.NotContains(t, text, "goose", "已在 L2 历史里的召回应丢弃（规范化空白后包含即算）")
 	require.Contains(t, text, "一条与历史无关的独特记忆")

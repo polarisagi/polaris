@@ -43,7 +43,7 @@ func TestTurnRecallClone_NilSafeAndIndependent(t *testing.T) {
 
 func TestRecallKinds_PriorityOrder(t *testing.T) {
 	require.Equal(t,
-		[]RecallKind{RecallReflection, RecallEpisodic, RecallSemantic, RecallRAG, RecallProfile},
+		[]RecallKind{RecallReflection, RecallEpisodic, RecallSemantic, RecallRAG},
 		RecallKinds())
 }
 

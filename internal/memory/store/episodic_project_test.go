@@ -24,16 +24,16 @@ func TestProjectIsolation_EpisodicQuery(t *testing.T) {
 	mustAppend(t, mem, ctx, types.Event{ID: "b1", TaskID: "sB", ProjectID: "prj_b", Payload: []byte("BRAVO 数据库迁移方案")})
 	mustAppend(t, mem, ctx, types.Event{ID: "d1", TaskID: "sD", Payload: []byte("DEFAULT 数据库迁移方案")}) // 未打标 = 默认项目
 
-	got := queryPayloads(t, mem, types.EpisodicQuery{Semantic: "数据库迁移", ProjectID: "prj_b", MaxTaintLevel: types.TaintHigh})
+	got := queryPayloads(t, mem, types.EpisodicQuery{Topics: []string{"数据库迁移"}, ProjectID: "prj_b", MaxTaintLevel: types.TaintHigh})
 	if len(got) != 1 || !strings.Contains(got[0], "BRAVO") {
 		t.Fatalf("项目 B 只应看到自己的事件，got %v", got)
 	}
-	got = queryPayloads(t, mem, types.EpisodicQuery{Semantic: "数据库迁移", ProjectID: types.DefaultProjectID, MaxTaintLevel: types.TaintHigh})
+	got = queryPayloads(t, mem, types.EpisodicQuery{Topics: []string{"数据库迁移"}, ProjectID: types.DefaultProjectID, MaxTaintLevel: types.TaintHigh})
 	if len(got) != 1 || !strings.Contains(got[0], "DEFAULT") {
 		t.Fatalf("默认项目只应看到未打标事件，got %v", got)
 	}
 	// 空 ProjectID = 后台/系统读取，不限项目。
-	if got = queryPayloads(t, mem, types.EpisodicQuery{Semantic: "数据库迁移", MaxTaintLevel: types.TaintHigh}); len(got) != 3 {
+	if got = queryPayloads(t, mem, types.EpisodicQuery{Topics: []string{"数据库迁移"}, MaxTaintLevel: types.TaintHigh}); len(got) != 3 {
 		t.Fatalf("不限项目时应返回全部 3 条，got %v", got)
 	}
 }
@@ -128,4 +128,25 @@ func queryPayloads(t *testing.T, mem *EpisodicMem, q types.EpisodicQuery) []stri
 		}
 	}
 	return out
+}
+
+// TestEpisodicQuery_ByIDs 回合内召回用：按 FTS 选出的 ID 直取，保持 ID 顺序，且项目/污点/会话过滤仍然生效
+// （ID 来自共享索引，不能信任调用方已筛过）。陈旧/不存在的 ID 静默跳过。
+func TestEpisodicQuery_ByIDs(t *testing.T) {
+	ctx := context.Background()
+	mem := NewEpisodicMem(testutil.NewMockStore())
+	mustAppend(t, mem, ctx, types.Event{ID: "a1", ProjectID: "prj_a", Payload: []byte("ALPHA")})
+	mustAppend(t, mem, ctx, types.Event{ID: "b1", ProjectID: "prj_b", Payload: []byte("BRAVO")})
+	mustAppend(t, mem, ctx, types.Event{ID: "b2", ProjectID: "prj_b", TaintLevel: types.TaintHigh, Payload: []byte("BRAVO-TAINTED")})
+	mustAppend(t, mem, ctx, types.Event{ID: "b3", ProjectID: "prj_b", Payload: []byte("BRAVO-3")})
+
+	ids := []string{"b3", "missing", "a1", "episodic:b1", "b2", "b3"}
+	got := queryPayloads(t, mem, types.EpisodicQuery{IDs: ids, ProjectID: "prj_b", MaxTaintLevel: types.TaintLow})
+	if len(got) != 2 || got[0] != "BRAVO-3" || got[1] != "BRAVO" {
+		t.Fatalf("应按 IDs 顺序只返回项目 B 且污点不超限、去重后的事件，got %v", got)
+	}
+	got = queryPayloads(t, mem, types.EpisodicQuery{IDs: ids, ProjectID: "prj_b", MaxTaintLevel: types.TaintHigh, K: 2})
+	if len(got) != 2 || got[0] != "BRAVO-3" || got[1] != "BRAVO" {
+		t.Fatalf("K 截断应保持 IDs 顺序，got %v", got)
+	}
 }

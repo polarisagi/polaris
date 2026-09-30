@@ -128,6 +128,9 @@ func (em *EpisodicMem) ftsIndexAsync(gctx context.Context, ev types.Event) {
 }
 
 func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) { //nolint:gocyclo
+	if len(q.IDs) > 0 {
+		return em.queryByIDs(ctx, q)
+	}
 	em.mu.RLock()
 	var events []types.Event
 	if len(em.events) > 0 {
@@ -170,9 +173,6 @@ func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]type
 			if !match {
 				continue
 			}
-		}
-		if q.Semantic != "" && !strings.Contains(payload, q.Semantic) {
-			continue
 		}
 		// 深拷贝 Payload/ReasoningState：ev 来自 em.events 内部切片浅拷贝
 		// （Query 顶部 copy(events, em.events)），[]byte 字段仍与内部缓存共享
