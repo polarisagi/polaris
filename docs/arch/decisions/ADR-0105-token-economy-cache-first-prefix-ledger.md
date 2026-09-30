@@ -188,6 +188,7 @@
 | 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
 | 2026-09-30 | WP6 落地（决策一/三，Anthropic/Gemini 适配器）：新增 `m1_router.anthropic.inline_nonleading_system` / `m1_router.google.inline_nonleading_system`（默认 true）。开启时仅**开头连续**的 system 消息进 `system`/`systemInstruction`，其后的 system（L3 阶段层）原位转 user 角色 `<system_instruction>\n…\n</system_instruction>` 文本块，与相邻 user 内容合并以满足 user/assistant（Gemini：user/model）交替；tool_result/functionResponse 块前置于合并后的 user 轮首，不破坏与 tool_use/functionCall 的相邻关系；`CacheBreakpoint` 落在被合并消息对应的内容块上（末条与层断点同处一条消息时占两个名额，总数仍 ≤4）。适配器对所有非内联来源的 user 文本/tool_result 字符串无条件转义 `<system_instruction>` 标签字面（全角＜）——`taint.Spotlighting` 仅对 TaintMedium+ 生效，TaintLow/None 的 user 输入与 Parts 不经围栏。关闭时请求体与改动前字节一致（有回归测试）。实现见 `internal/llm/adapter/{inline_system,anthropic_inline}.go`、`google_request.go` |
 | 2026-09-30 | WP5 落地（决策七、八）：`GET /v1/usage` + `polaris usage`；`pkg/offpeak` 错峰窗口；llm_calls 保留期。见下「WP5 实施追记」 |
+| 2026-09-30 | WP9 落地（决策十一第一项）：PII 确定性会话内令牌。见下「WP9 实施追记」 |
 
 ### WP4 实施追记（2026-09-30）
 
@@ -205,3 +206,11 @@
 - **配置键落在 `m1_router` 段**（与 `response_cache.*` 同处）：`offpeak.windows`（默认空）、`usage.retention_days`（默认 90，0=不清理）。保留期清理挂在既有 6h 周期，并在启动时先跑一次；分批 DELETE（5000 行/批）避免长时间独占单写连接。`llm_response_cache` 过期清理已在同一周期内（WP4）。
 - **错峰接入点**：outbox 类（新增 `protocol.OffPeakDeferral`，outbox 直接把 `next_retry_at` 置为窗口起点，不计失败/死信）——`graph_build`、`rag_doc_ingested`、`rag_doc_summary_needed`（graphrag_*）、`m9_capability_gap`（synthetic_skill_gen）；周期循环类（窗口外跳过 tick，不积压）——synthetic-eval-gen、`curriculum` 后台调度、learning.Engine 中环；`PromptOptimizer.OptimizeTask`（窗口外登记待办并合并同 taskType，到窗口起点执行）；`DefaultIngestionPipeline` 降级 goroutine 的 rag_summary_tree（等窗口）。
 - **未接入**：交互路径与 `consolidate_summary`（决策明文排除）；`TriggerCurriculum`（安全冻结/管理员显式触发，是响应事件）；红队 24h 探针（安全边界退化检测，非批处理）；`logic_collapse_codegen`（不在决策七清单，且由工具成功阈值事件触发）；`memory_write_filter`/`rag_query_rewrite`（在交互路径上）；`internal/prompt` 的 `Manager.Optimize` 未改（按任务约束），错峰在其下游 `PromptOptimizer.OptimizeTask` 生效。
+
+### WP9 实施追记（2026-09-30）
+
+- **实现**：`PIITokenVault` 增加反向映射 `taskID → original → token`，与正向映射同锁；`TokenizeForTask` 先读锁命中复用，未命中写锁双检后生成。`ClearTask` 同时删除两张表；`TokenizeKnownValues` 直接用反向映射。附带修复：此前每次 LLM 调用都为同一 PII 新增一条正向映射，会话内无界增长，现在按不同原文数封顶。
+- **规范化决策：不规范化**。检测器是正则规则，直接返回原文切片；同一实体的不同写法（`Alice@x.com`/`alice@x.com`、`138 0000 1111`/`13800001111`）得到不同令牌。代价仅是这类写法的缓存命中略低；邮箱本地部分在部分系统区分大小写，规范化会把可能不同的实体合并，且合并不可逆，故取保守。
+- **持久化/恢复：无需回灌**。核实 `task_pii_vault`（`SessionPIIVault`）只快照 `raw_intent`/`session_id` 原文，从不保存令牌映射；`PIITokenVault` 仅在内存，进程重启后为空，重启后整段历史本就冷缓存，重新令牌化即可。因此没有"回灌反向映射"的代码路径，也未新增（无调用方的方法会成为死代码）。若将来引入令牌映射持久化，回灌须由正向映射推导反向映射，遇多令牌指向同一原文取字典序最小者，保证确定性。
+- **令牌碰撞**：旧实现无碰撞处理，重复令牌会覆盖另一原文的映射，`RestoreForTask` 会还原出错误的 PII。现在生成时检测占用并重试，不设重试上限（每次成功概率 ≥ 1-n/2³²；库代码 panic 受 F-12 棘轮禁止，熵源损坏由 `secureRandomBytes` 自身 fail-fast）。4 字节熵下同会话 n 个不同值的碰撞概率约 n²/2³³，不可忽略，故此修复是必要的。
+- **安全审查**：令牌相等性只暴露"两处是同一值"，会话内本可从上下文推断；令牌为纯随机（非哈希/HMAC），无法字典攻击；跨会话独立随机，不可关联；未新增原文驻留（原文本就在正向映射中）。空 taskID（`""`）桶是进程级共享，确定性令牌在其内跨调用方相同——该桶仅用于无会话标识的遗留路径，生产路径均带 SessionID。
