@@ -17,14 +17,13 @@ const alphaMarker = "ALPHA-MARKER-7f3c"
 // fakeCog 共享 FTS 同时命中：项目 A 的情景事件、项目 B 的情景事件、一条语义实体。
 type fakeCog struct{}
 
-func (fakeCog) FTSSearch(string, int) ([]fsm.CogResult, error) {
+func (fakeCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) {
 	return []fsm.CogResult{
 		{DocID: "evA", Snippet: alphaMarker + " 部署密钥", Score: 9},
 		{DocID: "evB", Snippet: "BRAVO 部署流程", Score: 5},
 		{DocID: "sement_Tool_go", Snippet: "GLOBAL-ENTITY Go 1.26", Score: 3},
 	}, nil
 }
-func (fakeCog) VecKNN([]float32, int) ([]fsm.CogResult, error) { return nil, nil }
 
 func scopedMem() *mockMemory {
 	return &mockMemory{

@@ -229,6 +229,9 @@ type StateContext struct {
 	// KnowledgeSearcher 知识 RAG 检索接口（M10）
 	KnowledgeSearcher KnowledgeSearcher
 
+	// RecallReranker 召回相关度门的本地重排器（ADR-0105 决策十）；nil = 不设相关度门。
+	RecallReranker RecallReranker
+
 	// LastReasoningContent 上一轮 LLM 在 thinking 模式下产出的推理内容。
 	// 由 agent_execute.go 在成功 Infer 后写入，供下一轮 PromptFn 注入消息历史。
 	LastReasoningContent string

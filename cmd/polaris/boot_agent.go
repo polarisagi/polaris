@@ -124,8 +124,6 @@ func buildAgent(
 	tb *ToolBundle,
 	kb *KnowledgeBundle,
 	taskRepo *repo.SQLiteTaskReadRepository,
-	epAdapter agentctx.MemoryRetriever,
-	knowAdapter agentctx.KnowledgeRetriever,
 	lamEngine *lam.ComputerUseEngine,
 	reflectionWorker *reflexion.ReflectionWorker,
 	prefs map[string]string,
@@ -152,7 +150,6 @@ func buildAgent(
 	a.Config.DefaultBudget = sb.Cfg.Thresholds.M4Kernel.DefaultBudget
 	a.Config.MaxSteps = sb.Cfg.Thresholds.M4Kernel.MaxSteps
 	a.Config.IdleTimeoutSec = sb.Cfg.Thresholds.M4Kernel.SuspendIdleThresholdMin * 60
-	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
 	// S_VALIDATE L1 PolicyGate：与 Dispatcher 执行链路同一个 Cedar 门（deny-by-default）。
@@ -206,7 +203,6 @@ func buildAgent(
 	// S_VALIDATE（2026-07-12 随 internal/execute 模块化新增，见 provider.go）。
 	a.InjectDAGRunner(agentdag.NewRunner())
 	a.InjectDAGValidator(agentdag.NewValidator())
-	a.SetAssembler(agentctx.NewAssembler(epAdapter, knowAdapter))
 	a.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
 		whisperChan := a.GetWhisperChan()
 		if whisperChan == nil {
@@ -252,6 +248,10 @@ func buildAgent(
 	if kb != nil && kb.KnowledgeBase != nil {
 		a.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
 	}
+	// L2 语义实体召回（ADR-0105 决策十 WP8）：此前 SetCognitiveSearcher 全仓零调用点，回合内召回的
+	// L2 来源恒为空。仅 SurrealDB 可用（Tier1+/≥8GB）时有 FTS 索引；Tier0 无此来源，按无 L2 降级。
+	// 适配器只放行语义实体命中并回取正文，见 adapters_recall.go。
+	wireL2Recall(a, sb, mb)
 	if prefs != nil {
 		a.SetPreferences(prefs)
 	}
@@ -531,11 +531,6 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ─── §10 Agent Kernel (L1 M4) ────────────────────────────────────────────
 	taskRepo := repo.NewSQLiteTaskReadRepository(sb.Store.DB())
 
-	epAdapter := &episodicMemAdapter{ep: mb.Mem.Episodic()}
-	var knowAdapter agentctx.KnowledgeRetriever
-	if kb.KnowledgeBase != nil {
-		knowAdapter = &knowledgeAdapter{kb: kb.KnowledgeBase}
-	}
 	// NewReflectionWorkerWithConfig 2026-07-21 deadcode 审查补齐：此前该构造函数
 	// 有完整实现+测试（白名单覆盖/MinReplanCount 触发行为），但生产侧从未有配置
 	// 来源，只能走 NewReflectionWorker 的硬编码默认值。M5Memory.Reflection* 字段
@@ -608,7 +603,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	surpriseCalc := surprise.NewSurpriseCalculator(mb.FallacyPool)
 	warmStartSurprise(ctx, repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()), surpriseCalc)
 
-	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
 
 	maxConcurrent := sb.Cfg.System.MaxAgents
 	if maxConcurrent <= 0 {
@@ -616,7 +611,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
-		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
 	}, maxConcurrent).WithInteractiveReserve(sb.Cfg.Thresholds.M8Orchestrator.AgentsInteractiveReserved).WithSessionCloseCallback(func(sessionID string) {
 		if tb.Catalog != nil {
 			if cc, ok := tb.Catalog.(interface{ CleanupSession(string) }); ok {

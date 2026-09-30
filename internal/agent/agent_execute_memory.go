@@ -6,103 +6,13 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
-	"time"
 
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
-
-// memoryAssembleBudget 单次 LLM 阶段前记忆召回的时间预算，与 StateMachine.bgCtx 一致。
-const memoryAssembleBudget = 3 * time.Second
-
-// assembleWithBudget 在调用边界强制召回预算。
-//
-// 召回是增益，不是回合关键路径：此前用无时限的 Effect ctx，嵌入后端卡住时
-// （2026-09-24 实测每次 30s 超时）每个 LLM 阶段都白等一轮，直答回合被拖到 90s+。
-// 只传带截止的 ctx 不够——search.Embedder 接口无 ctx，SyncBatcherAdapter 内部
-// 用 Background+30s，截止时间传不下去。故在此处按预算放弃等待：后台 goroutine
-// 受下游 30s 上限约束必然退出（A-13），结果写入容量 1 的通道后被丢弃，不阻塞。
-func (a *Agent) assembleWithBudget(ctx context.Context, req agentctx.AssembleRequest) (agentctx.AssembledContext, error) {
-	type result struct {
-		ac  agentctx.AssembledContext
-		err error
-	}
-	actx, cancel := context.WithTimeout(ctx, memoryAssembleBudget)
-	done := make(chan result, 1)
-	assembler := a.assembler
-	concurrent.SafeGo(actx, "agent.memory_assemble", func(gctx context.Context) {
-		ac, err := assembler.Assemble(gctx, req)
-		done <- result{ac, err}
-	})
-	defer cancel()
-	select {
-	case r := <-done:
-		return r.ac, r.err
-	case <-actx.Done():
-		return agentctx.AssembledContext{}, apperr.Wrap(apperr.CodeTimeout, "agent: memory assemble exceeded budget", actx.Err())
-	}
-}
-
-func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []types.Message {
-	if a.assembler == nil || a.sCtx.TaskModel == nil {
-		return msgs
-	}
-
-	maxT := a.sCtx.RawIntentTS.Source.OriginTaintLevel
-	if maxT == types.TaintNone {
-		maxT = types.TaintHigh
-	}
-	req := agentctx.AssembleRequest{
-		Query:                 a.sCtx.TaskModel.Goal,
-		SessionKey:            a.sCtx.SessionID,
-		ProjectID:             a.currentProjectID(),
-		MaxTokens:             2000,
-		MaxTaint:              maxT,
-		IncludeKnowledge:      true,
-		SurpriseHint:          metrics.GlobalSurpriseIndex().Current(),
-		SurpriseHintThreshold: a.Config.SurpriseHintThreshold,
-	}
-
-	ac, err := a.assembleWithBudget(ctx, req)
-	if err != nil {
-		slog.WarnContext(ctx, "agent: memory assemble degraded, continuing without recalled context",
-			"session", a.sCtx.SessionID, "budget", memoryAssembleBudget, "err", err)
-		return msgs
-	}
-	if len(ac.Items) == 0 {
-		return msgs
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Relevant Context:\n")
-	for _, item := range ac.Items {
-		fmt.Fprintf(&sb, "- [%s] %s\n", item.Source, item.Content)
-	}
-
-	// 召回内容是数据不是指令（GR-4.1-004）：记忆/RAG 可含外部摄取文本，此前以 Role "system"
-	// 裸拼插到最前，等于绕过 PromptBuilder 四区隔离把外部文本提权为系统指令。
-	// 改为 user 角色 + Spotlighting 围栏（与 PromptBuilder.WriteUserData 同形），
-	// 污点取 max(召回项, 会话累计, Medium) 只升不降；插在前导 system 段之后，保持系统区连续。
-	level := types.PropagateTaint(types.TaintMedium, ac.Taint, a.sessionTaint())
-	memMsg := types.Message{Role: "user", Content: taint.Spotlighting(taint.NewTaintedString(
-		sb.String(), taint.TaintSource{Module: "memory_assembler", OriginTaintLevel: level}, "assembled_context"))}
-	i := 0
-	for i < len(msgs) && msgs[i].Role == "system" {
-		i++
-	}
-	out := make([]types.Message, 0, len(msgs)+1)
-	out = append(out, msgs[:i]...)
-	out = append(out, memMsg)
-	return append(out, msgs[i:]...)
-}
 
 // sessionTaint 返回当前会话已观测到的最高污点：GlobalTaintLevel（跨轮累积）与原始意图污点取 max。
 func (a *Agent) sessionTaint() types.TaintLevel {

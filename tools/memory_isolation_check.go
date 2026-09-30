@@ -27,7 +27,7 @@ var isolationPackages = []string{ //nolint:gochecknoglobals // 工具脚本内�
 	"./internal/memory/retrieval/", // P6 HybridRetriever 七路（包装层 + Tier0/Tier1 端到端）
 	"./internal/agent/context/",    // P1~P4 感知/规划上下文组装
 	"./internal/tool/builtin/",     // P6 入口：memory_search 工具取项目作用域
-	"./cmd/polaris/",               // P5 Assembler 情景适配器
+	"./cmd/polaris/",               // P5 L2 语义实体召回适配器（recallCognitiveAdapter，原 Assembler 适配器已随第二条召回管线删除）
 }
 
 // minPassing 全体最少通过条数：低于它说明有用例被删/改名而门控未同步。

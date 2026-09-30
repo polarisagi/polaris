@@ -3,6 +3,7 @@ package fsm
 import (
 	"strings"
 
+	"github.com/polarisagi/polaris/pkg/types"
 	"github.com/polarisagi/polaris/pkg/util"
 )
 
@@ -16,7 +17,8 @@ import (
 // 并发约定：TurnRecall 只由 Perceive/Plan 的构造函数在主路径上持 sCtx.Mu 读写；
 // 召回 goroutine 只拿调用前捕获的值，绝不触碰 sCtx（预算到期被放弃后它可能仍在运行）。
 
-// RecallKind 召回段种类；数值即装入预算的优先级（越小越先装）。
+// RecallKind 召回段种类。数值决定渲染时的分组顺序与 RRF 同分时的先后（越小越先），
+// 装入预算的次序由 RRF 融合秩决定（ADR-0105 决策十），不再是硬优先级。
 type RecallKind int
 
 const (
@@ -28,7 +30,7 @@ const (
 	RecallSemantic
 	// RecallRAG 外部知识库片段。
 	RecallRAG
-	// RecallProfile 用户画像：与 L1 核心记忆里的用户偏好部分重复，最先被预算挤掉。
+	// RecallProfile 用户画像：与查询无关的常驻小段，无相关度可言，不参与 RRF 融合，只填融合后的剩余预算。
 	RecallProfile
 	recallKindCount
 )
@@ -47,10 +49,14 @@ func RecallKinds() []RecallKind {
 type RecallItem struct {
 	Text string
 	Key  string
+	// Taint 命中内容的污点等级：召回段定级取已装入条目的最大值（污点只升不降，HE-2）。
+	Taint types.TaintLevel
+	// Score 来源原生分（BM25 / 检索融合分 / 情景恒 1），仅用于来源内排序，不跨来源比较。
+	Score float64
 }
 
-// TurnRecall 本回合的召回结果。Items 按种类存放、保持检索返回顺序（相关度序）；
-// 预算截断与去重在渲染时做（渲染依赖当时的 L2 历史），不改写这里的原始条目。
+// TurnRecall 本回合的召回结果。Items 按种类存放、来源内按原生分降序（稳定）；
+// RRF 融合、预算截断与去重在渲染时做（渲染依赖当时的 L2 历史），不改写这里的原始条目。
 type TurnRecall struct {
 	Items [recallKindCount][]RecallItem
 	// EpisodicDone/GoalDone/ProfileDone 记录哪些来源已成功查过（含"查过但为空"）。
@@ -60,6 +66,8 @@ type TurnRecall struct {
 	ProfileDone  bool
 	// Text 最近一次渲染出的召回段正文（已受总预算约束、已去重），Plan 无补查时原样复用。
 	Text string
+	// Taint Text 中已装入条目的最高污点等级（Text 为空时为 TaintNone）。
+	Taint types.TaintLevel
 }
 
 // Clone 深拷贝，供调用方在锁外合并新条目而不与其它读者共享底层数组。

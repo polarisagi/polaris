@@ -35,7 +35,7 @@ func projectScopedFTS(ctx context.Context, memory protocol.MemoryFacade, cogniti
 	if memory == nil {
 		return nil, nil
 	}
-	hits, err := cognitive.FTSSearch(query, k*ftsOverfetch)
+	hits, err := cognitive.FTSSearch(ctx, query, k*ftsOverfetch)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // 调用方按"无结果"降级，原样透传
 	}

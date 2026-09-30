@@ -31,7 +31,12 @@ type recallSpec struct {
 	withProfile   bool
 	projectID     string
 	knowledge     fsm.KnowledgeSearcher
-	limits        recallLimits
+	// knowledgeTopK RAG 检索条数；0 = 本回合不查 RAG（SurpriseIndex 低于 recall.rag_min_surprise）。
+	knowledgeTopK int
+	// maxTaint 召回项污点上限：高于它的命中一律丢弃（fail-closed）。取自本轮意图的来源污点，
+	// 未标注（TaintNone）按 TaintHigh——与原 Assembler 旁路同口径（ADR-0105 决策十）。
+	maxTaint types.TaintLevel
+	limits   recallLimits
 }
 
 // degradeOnRecallTimeout 召回超时按"无召回"降级（召回是增益，不是阶段的前置条件）；
@@ -70,8 +75,8 @@ func recallWithin(ctx context.Context, memory protocol.MemoryFacade, cognitive f
 	}
 }
 
-// recall 按优先级顺序（反思 > 情景 > L2 > RAG > 画像）逐来源检索，只返回渲染好的条目；
-// 预算截断与去重留给 renderRecall（它依赖检索完成后的 L2 历史与总预算）。
+// recall 逐来源检索（反思、情景、L2、RAG、画像），只返回渲染好的条目，各来源内按原生分降序。
+// 来源间的取舍（RRF 融合）、预算截断与去重留给 fuseRecall/packRecall（它们依赖检索完成后的 L2 历史与总预算）。
 func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) (*fsm.TurnRecall, error) {
 	out := &fsm.TurnRecall{}
 	if spec.goal != "" {
@@ -87,7 +92,7 @@ func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.Cog
 	if cognitive != nil && spec.goal != "" {
 		out.Items[fsm.RecallSemantic] = collectSemantic(ctx, memory, cognitive, spec)
 	}
-	if spec.knowledge != nil && spec.goal != "" {
+	if spec.knowledge != nil && spec.goal != "" && spec.knowledgeTopK > 0 {
 		out.Items[fsm.RecallRAG] = collectKnowledge(ctx, spec)
 	}
 	if spec.withProfile {
@@ -96,12 +101,24 @@ func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.Cog
 	return out, nil
 }
 
+// withMeta 给召回条目补上污点与来源原生分。
+func withMeta(it fsm.RecallItem, taint types.TaintLevel, score float64) fsm.RecallItem {
+	it.Taint = taint
+	it.Score = score
+	return it
+}
+
+// sortByScoreDesc 来源内按原生分降序（稳定：同分保持检索返回序，保证同输入字节一致）。
+func sortByScoreDesc(items []fsm.RecallItem) {
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Score > items[j].Score })
+}
+
 func collectEpisodic(ctx context.Context, memory protocol.MemoryFacade, spec recallSpec) ([]fsm.RecallItem, error) {
 	events, err := memory.ListEpisodicEvents(ctx, types.EpisodicQuery{
 		Semantic:      spec.episodicQuery,
 		ProjectID:     spec.projectID, // 情景记忆按项目隔离（ADR-0097 决策三修订）
 		K:             spec.episodicK,
-		MaxTaintLevel: types.TaintHigh,
+		MaxTaintLevel: spec.maxTaint,
 	})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
@@ -112,11 +129,16 @@ func collectEpisodic(ctx context.Context, memory protocol.MemoryFacade, spec rec
 		if pbEv == nil {
 			continue
 		}
+		// 底层已按 MaxTaintLevel 过滤；此处再判一次，不依赖各存储实现都遵守该参数（fail-closed）。
+		if pbEv.TaintLevel > spec.maxTaint {
+			continue
+		}
 		// 不再输出 payload 原始 JSON：payload 形态不一（工具输出/结构化 JSON/纯文本，最长 8KB），
 		// 取描述性字段或压成单行后按单条上限截断；时间戳只要日期，秒级时间在提示词里无信息量。
-		items = append(items, newRecallItem(datePrefix(pbEv.CreatedAt)+string(pbEv.Type)+": ",
-			episodicSummary(pbEv.Payload), spec.limits.itemMaxChars))
+		items = append(items, withMeta(newRecallItem(datePrefix(pbEv.CreatedAt)+string(pbEv.Type)+": ",
+			episodicSummary(pbEv.Payload), spec.limits.itemMaxChars), pbEv.TaintLevel, e.Score))
 	}
+	sortByScoreDesc(items)
 	return items, nil
 }
 
@@ -126,8 +148,10 @@ func collectReflections(ctx context.Context, memory protocol.MemoryFacade, spec 
 		return nil
 	}
 	items := make([]fsm.RecallItem, 0, len(reflections))
-	for _, r := range reflections {
-		items = append(items, newRecallItem(datePrefix(r.CreatedAt), r.Strategy+": "+r.Decision, spec.limits.itemMaxChars))
+	for i, r := range reflections {
+		// 反思无相关度分：保持存储层返回序，用递减序号分占位，使来源内排序语义与其它来源一致。
+		items = append(items, withMeta(newRecallItem(datePrefix(r.CreatedAt), r.Strategy+": "+r.Decision, spec.limits.itemMaxChars),
+			types.TaintNone, float64(len(reflections)-i)))
 	}
 	return items
 }
@@ -143,16 +167,18 @@ func collectSemantic(ctx context.Context, memory protocol.MemoryFacade, cognitiv
 	}
 	var items []fsm.RecallItem
 	for i, keep := range scoreFilter(scores, spec.limits) {
-		// 分数只用于过滤，不再写进提示词（BM25 原始分对模型无意义，还白占 token）。
-		if keep {
-			items = append(items, newRecallItem("", hits[i].Snippet, spec.limits.itemMaxChars))
+		// 分数只用于过滤/排序，不再写进提示词（BM25 原始分对模型无意义，还白占 token）。
+		if !keep || hits[i].Taint > spec.maxTaint {
+			continue
 		}
+		items = append(items, withMeta(newRecallItem("", hits[i].Snippet, spec.limits.itemMaxChars), hits[i].Taint, scores[i]))
 	}
+	sortByScoreDesc(items)
 	return items
 }
 
 func collectKnowledge(ctx context.Context, spec recallSpec) []fsm.RecallItem {
-	hits, err := spec.knowledge.SearchRAG(ctx, spec.goal, 3)
+	hits, err := spec.knowledge.SearchRAG(ctx, spec.goal, spec.knowledgeTopK)
 	if err != nil || len(hits) == 0 {
 		return nil
 	}
@@ -162,7 +188,7 @@ func collectKnowledge(ctx context.Context, spec recallSpec) []fsm.RecallItem {
 	}
 	var items []fsm.RecallItem
 	for i, keep := range scoreFilter(scores, spec.limits) {
-		if !keep {
+		if !keep || hits[i].Taint > spec.maxTaint {
 			continue
 		}
 		// 来源 URI 可能很长，单独限长后再作前缀，避免它吃光单条上限而正文只剩一截。
@@ -170,8 +196,9 @@ func collectKnowledge(ctx context.Context, spec recallSpec) []fsm.RecallItem {
 		if src := truncateRunes(collapseSpace(hits[i].Source), sourceMaxChars); src != "" {
 			prefix = src + ": "
 		}
-		items = append(items, newRecallItem(prefix, hits[i].Content, spec.limits.itemMaxChars))
+		items = append(items, withMeta(newRecallItem(prefix, hits[i].Content, spec.limits.itemMaxChars), hits[i].Taint, scores[i]))
 	}
+	sortByScoreDesc(items)
 	return items
 }
 

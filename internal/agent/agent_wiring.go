@@ -96,11 +96,6 @@ func (a *Agent) WithSkillExecutor(se protocol.SkillExecutor) *Agent {
 	return a
 }
 
-// SetAssembler 注入 ContextAssembler.
-func (a *Agent) SetAssembler(assembler *agentctx.Assembler) {
-	a.assembler = assembler
-}
-
 // BlindZoneDetector 盲区探测器接口，打破 L1 到 L2 的依赖。
 type BlindZoneDetector interface {
 	RecordProduction(taskType string)
@@ -294,6 +289,12 @@ func (a *Agent) SetCognitiveSearcher(cs fsm.CognitiveSearcher) {
 // SetKnowledgeSearcher 注入 RAG 知识检索器 (M10)
 func (a *Agent) SetKnowledgeSearcher(ks fsm.KnowledgeSearcher) {
 	a.sCtx.KnowledgeSearcher = ks
+}
+
+// SetRecallReranker 注入召回相关度门的本地重排器（ADR-0105 决策十）。
+// 只接受本地推理实现（零 API token）；不注入则不设相关度门，召回只受预算约束。
+func (a *Agent) SetRecallReranker(r fsm.RecallReranker) {
+	a.sCtx.RecallReranker = r
 }
 
 // Memory 返回 Agent 挂载的物理记忆实例

@@ -11,7 +11,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// 召回段渲染：紧凑化 / 预算截断 / 去重（ADR-0105 决策四）。全部是纯函数，同输入字节一致。
+// 召回条目渲染：紧凑化 / 估算 / 去重辅助（ADR-0105 决策四）。融合与装入见 recall_fuse.go。全部是纯函数，同输入字节一致。
 
 const (
 	// sourceMaxChars RAG 来源 URI 的单独上限。
@@ -99,8 +99,8 @@ func truncateRunes(s string, max int) string {
 }
 
 // scoreFilter 返回各命中是否保留：低于绝对下限 min_score 的丢弃；低于 ratio×最高分的丢弃
-// （最高分命中恒过相对阈值）。L2 分是无界 BM25、RAG 分当前恒 1.0，不可跨来源直接比较，
-// 所以每个来源只与自身的最高分比。
+// （最高分命中恒过相对阈值）。L2 分是无界 BM25、RAG 分是检索融合分，量纲互不相同，
+// 所以每个来源只与自身的最高分比。ADR-0105 决策十起 ratio 默认 0（关闭）：来源间取舍由 RRF 承担。
 func scoreFilter(scores []float64, l recallLimits) []bool {
 	top := 0.0
 	for _, s := range scores {
@@ -145,56 +145,4 @@ func historyBlob(history []types.Message) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
-}
-
-// renderRecall 按 fsm.RecallKind 优先级装入召回段，总量不超过 maxTokens。
-//
-// 去重两层：条目正文（规范化空白后）已被当前 L2 对话历史包含则丢弃——它已在前缀里、
-// 且是缓存命中价，再放一遍是纯增量成本；召回段内正文相同的条目只留优先级最高的一条。
-// 装入策略：某段内按检索相关度顺序装，遇到装不下的条目即止（不跳过它去塞后面更短的低相关条目），
-// 但仍继续尝试后续（更低优先级）段——它们的条目可能更短。
-func renderRecall(r *fsm.TurnRecall, history string, maxTokens int) string {
-	if r == nil {
-		return ""
-	}
-	seen := make(map[string]struct{})
-	var out strings.Builder
-	used := 0
-	for _, kind := range fsm.RecallKinds() {
-		header := recallHeader(kind)
-		headerCost := estimateTokens(header)
-		var lines []string
-		sectionCost := 0
-		for _, it := range r.Items[kind] {
-			if it.Key == "" {
-				continue
-			}
-			if _, dup := seen[it.Key]; dup {
-				continue
-			}
-			// 被截断的条目以 … 结尾，去掉后再判（截断前缀仍是历史的子串则同样重复）。
-			if probe := strings.TrimSuffix(it.Key, "…"); runeCount(probe) >= minContainKeyRunes && strings.Contains(history, probe) {
-				continue
-			}
-			cost := estimateTokens(it.Text) + 1 // +1 换行
-			need := cost
-			if len(lines) == 0 {
-				need += headerCost
-			}
-			if used+sectionCost+need > maxTokens {
-				break
-			}
-			lines = append(lines, it.Text)
-			seen[it.Key] = struct{}{}
-			sectionCost += need
-		}
-		if len(lines) == 0 {
-			continue
-		}
-		used += sectionCost
-		out.WriteString(header)
-		out.WriteString(strings.Join(lines, "\n"))
-		out.WriteByte('\n')
-	}
-	return out.String()
 }
