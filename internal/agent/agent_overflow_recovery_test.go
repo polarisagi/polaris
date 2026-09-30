@@ -134,3 +134,63 @@ func TestStreamInferWithOverflowRecovery_OtherErrorsNotRetried(t *testing.T) {
 		t.Fatalf("non-overflow errors must pass through without retry, calls=%d err=%v", p.calls, err)
 	}
 }
+
+// ADR-0105 决策十一（WP10）：溢出修剪先只动 L0..L2 缓存前缀之后的回合内容。
+func layeredOverflowMsgs(l4Bytes int) []types.Message {
+	return []types.Message{
+		{Role: "system", Content: "L0 contracts", CacheBreakpoint: true},
+		{Role: "system", Content: "L0 stable", CacheBreakpoint: true},
+		{Role: "user", Content: "<<DATA>>" + strings.Repeat("h", 8_000) + "<</DATA>>"}, // L2
+		{Role: "assistant", Content: "<<DATA>>" + strings.Repeat("a", 8_000) + "<</DATA>>", CacheBreakpoint: true},
+		{Role: "system", Content: "# ACTIVE PHASE: PLAN"},
+		{Role: "user", Content: "<<DATA>>" + strings.Repeat("r", l4Bytes) + "<</DATA>>"}, // L4
+	}
+}
+
+func TestPruneForOverflow_PrefersTurnContentOverCachedPrefix(t *testing.T) {
+	in := layeredOverflowMsgs(40_000)
+	out, ok := pruneForOverflow(in)
+	if !ok {
+		t.Fatal("expected progress")
+	}
+	for i := 0; i < 5; i++ {
+		if out[i].Content != in[i].Content || out[i].CacheBreakpoint != in[i].CacheBreakpoint {
+			t.Fatalf("L0..L2 与 L3 选择器不得被改写：msgs[%d]", i)
+		}
+	}
+	if len(out[5].Content) >= len(in[5].Content)/2 {
+		t.Fatalf("回合内容应承担全部削减：%d -> %d", len(in[5].Content), len(out[5].Content))
+	}
+	if !strings.HasPrefix(out[5].Content, "<<DATA>>") || !strings.HasSuffix(out[5].Content, "<</DATA>>") {
+		t.Fatal("修剪后围栏标记必须保留")
+	}
+}
+
+// 回合内容太小、无法独自达成削减目标时，才退回连 L2 一起截（此时别无他法让请求放进窗口）。
+func TestPruneForOverflow_FallsBackToHistoryWhenTurnContentTooSmall(t *testing.T) {
+	in := layeredOverflowMsgs(300)
+	out, ok := pruneForOverflow(in)
+	if !ok {
+		t.Fatal("expected progress via fallback")
+	}
+	if len(out[2].Content) >= len(in[2].Content) && len(out[3].Content) >= len(in[3].Content) {
+		t.Fatal("回合内容过小时应退回截断 L2 历史")
+	}
+	if out[0].Content != in[0].Content || out[1].Content != in[1].Content {
+		t.Fatal("开头连续 system 始终固定")
+	}
+}
+
+// 同一 L2、不同大小的回合内容（不同阶段）→ 修剪后 L0..L2 字节相同。
+func TestPruneForOverflow_PrefixIndependentOfTurnContentSize(t *testing.T) {
+	a, okA := pruneForOverflow(layeredOverflowMsgs(40_000))
+	b, okB := pruneForOverflow(layeredOverflowMsgs(60_000))
+	if !okA || !okB {
+		t.Fatal("expected progress")
+	}
+	for i := 0; i < 5; i++ {
+		if a[i].Content != b[i].Content {
+			t.Fatalf("前缀 msgs[%d] 随回合内容大小而变", i)
+		}
+	}
+}

@@ -76,15 +76,34 @@ func (a *Agent) hotPathCompact(ctx context.Context, msgs []types.Message, level 
 	}
 
 	// Stage 2/3：仅硬触发（>90%）执行，需要真实 LLM 调用生成锚点摘要。
-	head, body := compact.SplitPinnedHead(msgs)
+	//
+	// 固定前缀 = L0..L2（最后一条 CacheBreakpoint 之前）∪ 开头连续 system：内核前缀账本的缓存前缀
+	// 由决策二的分块跳窗独占管理，压缩只能作用于其后的回合内容（L3/L4）。此前只固定开头连续 system，
+	// L2 历史被卷进摘要——每个请求都让 LLM 重写一遍（非确定）、缓存前缀逐请求改变，且历史被降级成
+	// assistant 摘要；同时 L3 阶段选择器（system）也被卷进摘要，模型看不到当前阶段。
+	head, body := msgs[:pinnedPrefixLen(msgs)], msgs[pinnedPrefixLen(msgs):]
 	middle, tail := compact.SplitMessages(body, hotPathHardTailTokens)
-	if len(middle) == 0 {
-		// tail 已覆盖全部消息，无法进一步压缩（Stage 1 卸载结果已是最终结果）。
+	if len(middle) > 0 && len(tail) == 0 {
+		// 最后一条（本轮意图/观测）本身就超过尾部预算：不得把它卷进摘要——那等于用摘要替换用户本轮的请求。
+		tail, middle = middle[len(middle)-1:], middle[:len(middle)-1]
+	}
+	// L3 的 system 消息（阶段选择器、易变层、压力提示、工具目录）原样保留：摘要会把指令降级成
+	// assistant 文本，且选择器丢失后模型不知道当前该按哪份阶段契约输出。
+	var keep, squash []types.Message
+	for _, m := range middle {
+		if m.Role == "system" {
+			keep = append(keep, m)
+		} else {
+			squash = append(squash, m)
+		}
+	}
+	if len(squash) == 0 {
+		// 可压缩内容为空（Stage 1 卸载结果已是最终结果）。
 		return msgs
 	}
 
-	budget := compact.CalcSummaryBudget(middle, compact.DefaultSummaryRatio, compact.DefaultMinSummaryTokens, compact.DefaultMaxSummaryTokens)
-	summary, err := compact.Summarize(ctx, middle, budget, a.provider)
+	budget := compact.CalcSummaryBudget(squash, compact.DefaultSummaryRatio, compact.DefaultMinSummaryTokens, compact.DefaultMaxSummaryTokens)
+	summary, err := compact.Summarize(ctx, squash, budget, a.provider)
 	if err != nil {
 		slog.Warn("agent: hot-path context compaction summarize failed, keeping Stage-1-only result",
 			"agent_id", a.ID, "task_id", taskID, "err", err)
@@ -99,8 +118,9 @@ func (a *Agent) hotPathCompact(ctx context.Context, msgs []types.Message, level 
 		Role:    "assistant",
 		Content: compact.SummaryPrefix + "\n\n" + summary,
 	}
-	newMsgs := make([]types.Message, 0, len(head)+1+len(tail))
+	newMsgs := make([]types.Message, 0, len(head)+len(keep)+1+len(tail))
 	newMsgs = append(newMsgs, head...) // 固定前缀字节级不变（GD-14-001）
+	newMsgs = append(newMsgs, keep...)
 	newMsgs = append(newMsgs, summaryMsg)
 	newMsgs = append(newMsgs, tail...)
 
@@ -109,4 +129,22 @@ func (a *Agent) hotPathCompact(ctx context.Context, msgs []types.Message, level 
 		"tokens_before", compact.RoughTokens(msgs), "tokens_after", compact.RoughTokens(newMsgs))
 
 	return newMsgs
+}
+
+// cachedPrefixLen 返回 L0..L2 缓存前缀的消息数：最后一条带 CacheBreakpoint 的消息（含）之前。
+// prompt 组装方（PromptBuilder.BuildLayered）只在 L0 内部边界与 L0..L2 共享前缀末置位，
+// 所以"最后一个断点"就是 L2 末（L2 为空时为 L1 末）。无任何标记（非内核前缀账本的请求）返回 0。
+func cachedPrefixLen(msgs []types.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].CacheBreakpoint {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// pinnedPrefixLen 是压缩/修剪绝不改写的前缀长度：缓存前缀与开头连续 system（GD-14-001）取较长者。
+func pinnedPrefixLen(msgs []types.Message) int {
+	head, _ := compact.SplitPinnedHead(msgs)
+	return max(len(head), cachedPrefixLen(msgs))
 }

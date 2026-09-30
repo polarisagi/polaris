@@ -217,8 +217,8 @@ func TestPIITokenVault_NoCrossTaskLeak(t *testing.T) {
 }
 
 // TestPIITokenVault_ClearTask_OnlyClearsOwnNamespace 验证 ClearTask 只清理指定
-// taskID 的命名空间，不影响其他并发任务的令牌（handleTerminalState 每次终态触发
-// 时都会调用 ClearTask(a.sCtx.SessionID)，必须不误伤同一进程内其他并发会话）。
+// taskID 的命名空间，不影响其他并发任务的令牌（显式销毁某会话映射时，必须不误伤同一进程内
+// 其他并发会话；回合终态走 ReleaseTask 保留映射，见 pii_token_vault_release_test.go）。
 func TestPIITokenVault_ClearTask_OnlyClearsOwnNamespace(t *testing.T) {
 	vault := guard.NewPIITokenVault()
 	tokA := vault.TokenizeForTask("session-A", "a@example.com")

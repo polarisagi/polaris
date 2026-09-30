@@ -6,6 +6,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-30（ADR-0105 WP10：真实请求边界门控 — 含**契约变更**）
+
+- **[契约] `ImmutableCore.StableMessageWithContracts()` → `StableMessagesWithContracts() []types.Message`**：返回 `[契约段, 可变核心]`（契约为空时仅可变核心）；L0 改按稳定度排序（契约 → 身份/指令/平台/运营指令 → 工具提示 → 画像/偏好），契约段独立首条且不计入 32KB 上限。`BuildLayered` 在 L0 多于一条时首条也置 `CacheBreakpoint`。
+- **[契约] `PIITokenVault.ReleaseTask`**：回合终态只释放不清空令牌映射（6h 空闲/1024 会话回收），使同一 PII 跨回合令牌不变；`ClearTask` 保留给显式销毁。
+- **[修复] 前缀稳定**：PRM 候选请求在 `uniform_tools` 下携带与其它阶段一致的 tools；热路径压缩与溢出恢复只改缓存前缀之后的内容，L3 阶段选择器原位保留。
+- **[门控] `internal/agent/request_prefix_gate*_test.go`**：实际请求的 L0..L2 字节相等/相邻回合前缀/tools 一致/无旁路召回/PII 令牌一致，含负向验证。
+
 ## 2026-09-30（ADR-0105 WP8：召回单一管线、RRF 融合 — 含**契约变更**）
 
 - **[契约] 删除第二条召回管线**：`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`/`SetAssembler`/`AgentConfig.SurpriseHintThreshold` 移除；召回只在回合内、L4 一处注入。

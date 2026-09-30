@@ -98,3 +98,19 @@ func TestToolInferOptions_NoCatalogOrEmptySchemas(t *testing.T) {
 		}
 	}
 }
+
+// PRM 候选请求的 tools 形态与非 Plan 阶段一致（ADR-0105 决策三/十一）：
+// uniform 关闭无 tools；开启时 tools 与 Plan 字节一致且 tool_choice=none。
+func TestCandidateToolOptions_MatchesNonPlanStages(t *testing.T) {
+	tools := []types.ToolSchema{{Name: "a"}, {Name: "b"}}
+	a := &Agent{sCtx: &fsm.StateContext{SessionID: "s"}, catalog: &stubCatalog{schemas: tools}}
+	ctx := context.Background()
+	if got := a.candidateToolOptions(ctx, false); got != nil {
+		t.Fatalf("uniform 关闭时候选不应带 tools：%v", got)
+	}
+	on := applyOpts(a.candidateToolOptions(ctx, true))
+	want := applyOpts(a.toolInferOptions(ctx, types.AgentStateReflect, true))
+	if len(on.Tools) != 2 || on.ToolChoice != "none" || on.ToolChoice != want.ToolChoice {
+		t.Fatalf("uniform 开启时候选应与非 Plan 阶段同形：%+v", on)
+	}
+}

@@ -68,27 +68,55 @@ func (a *Agent) streamInferOnce(ctx context.Context, msgs []types.Message, opts 
 	return a.doStreamInfer(ctx, ch, audience)
 }
 
-// pruneForOverflow 把开头连续 system 消息（固定前缀：内核指令、安全规约，同
-// compact.SplitPinnedHead）之后的 system 以外消息按"注水"上限做首尾保留截断，使其
-// 总字节约降到 overflowPruneRatio。最大的消息先被截，短消息（如用户本轮意图）原样保留。
+// pruneForOverflow 把固定前缀之后的 system 以外消息按"注水"上限做首尾保留截断，使其总字节
+// 约降到 overflowPruneRatio。最大的消息先被截，短消息（如用户本轮意图）原样保留。
 // 返回 false 表示没有可修剪内容或无法取得进展。
+//
+// 两段式：先只削减 L0..L2 缓存前缀**之后**的回合内容（L3/L4），目标总字节与旧逻辑相同；
+// 这样溢出恢复不会把 L2 历史截断——否则该次请求的前缀与同回合其它阶段失配，且修剪量取决于
+// 本阶段 L4 的大小，不同阶段的 L2 被截成不同字节。仅当回合内容缩到每条下限仍不足以达标时，
+// 才退回旧逻辑（连 L2 一起截，固定前缀只含开头连续 system）：此时已无别的办法让请求放进窗口。
 func pruneForOverflow(msgs []types.Message) ([]types.Message, bool) {
 	head, body := compact.SplitPinnedHead(msgs)
-	var sizes []int
-	total := 0
-	for _, m := range body {
-		if m.Role != "system" {
-			sizes = append(sizes, len(m.Content))
-			total += len(m.Content)
+	target := int(float64(nonSystemBytes(body)) * overflowPruneRatio)
+	if from := cachedPrefixLen(msgs); from > len(head) {
+		// 前缀内的非 system 消息（L2）原样保留，其字节计入总量，回合内容承担全部削减量。
+		if out, ok := pruneBody(msgs, from, target-nonSystemBytes(msgs[len(head):from]), true); ok {
+			return out, true
 		}
 	}
-	limit := waterLevel(sizes, int(float64(total)*overflowPruneRatio))
+	return pruneBody(msgs, len(head), target, false)
+}
+
+func nonSystemBytes(msgs []types.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Role != "system" {
+			n += len(m.Content)
+		}
+	}
+	return n
+}
+
+// pruneBody 修剪 msgs[from:] 里 system 以外的消息，使其总字节约降到 target。
+// strict 时要求目标可达（自然水位不低于单条下限），否则返回 false 让调用方退回更激进的策略。
+func pruneBody(msgs []types.Message, from, target int, strict bool) ([]types.Message, bool) {
+	var sizes []int
+	for _, m := range msgs[from:] {
+		if m.Role != "system" {
+			sizes = append(sizes, len(m.Content))
+		}
+	}
+	limit := waterLevel(sizes, target)
+	if strict && limit < overflowPruneMinMessageBytes {
+		return nil, false
+	}
 	limit = max(limit, overflowPruneMinMessageBytes)
 
 	out := make([]types.Message, 0, len(msgs))
-	out = append(out, head...)
+	out = append(out, msgs[:from]...)
 	changed := false
-	for _, m := range body {
+	for _, m := range msgs[from:] {
 		if m.Role != "system" && len(m.Content) > limit {
 			m.Content = util.ElideMiddle(m.Content, limit)
 			changed = true

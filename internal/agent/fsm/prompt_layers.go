@@ -91,14 +91,16 @@ func WritePlanHints(b *prompt.PromptBuilder, sCtx *StateContext) {
 
 // FinishLayered 补齐 L0 稳定核与 L3 易变层并按五层输出。
 //
-// 稳定核 = ImmutableCore 稳定层；易变层（日期/扩展连接状态/AmbientContext）放进 L3 末尾——
+// 稳定核 = ImmutableCore 稳定层（契约段 + 可变稳定核两条 system，见 StableMessagesWithContracts）；易变层（日期/扩展连接状态/AmbientContext）放进 L3 末尾——
 // 此前它紧贴稳定层成为第 2 条消息，每次问题变化都使其后全部内容失配。
 // memory 为 nil 时无 L0/易变层（降级路径无 ImmutableCore）。
 func FinishLayered(b *prompt.PromptBuilder, memory protocol.MemoryFacade) []types.Message {
 	if memory != nil {
 		if core := memory.ImmutableCore(); core != nil {
 			if pc := phaseContractCoreOf(memory); pc != nil {
-				b.WriteStable(pc.StableMessageWithContracts())
+				for _, m := range pc.StableMessagesWithContracts() {
+					b.WriteStable(m)
+				}
 			} else {
 				b.WriteStable(core.StableMessage())
 			}
@@ -113,7 +115,7 @@ func FinishLayered(b *prompt.PromptBuilder, memory protocol.MemoryFacade) []type
 // 网关直连等非内核调用方刻意只拿到不含契约段的 StableMessage。
 type phaseContractCore interface {
 	HasPhaseContracts() bool
-	StableMessageWithContracts() types.Message
+	StableMessagesWithContracts() []types.Message
 }
 
 // phaseContractCoreOf 仅当开关开启、存在 ImmutableCore 且其能渲染完整契约库时返回非 nil。

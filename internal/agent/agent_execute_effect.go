@@ -266,16 +266,20 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 					tokens int
 				}
 				candidateCh := make(chan candidateResult, n)
+				// 候选走 JSON DSL 而非原生 function-calling：uniform_tools 关闭时不带 tools（与非 Plan
+				// 阶段一致）；开启时与其它阶段一样带 tools + tool_choice=none，使 tools 前缀不因候选请求而失配。
+				candTools := a.candidateToolOptions(ctx, config.CurrentThresholds().M4Kernel.CacheUniformTools)
 
 				for range n {
 					concurrent.SafeGo(ctx, "agent.prm_candidate_infer", func(ctx context.Context) {
-						cResp, cErr := safecall.Infer(ctx, a.provider, baseMessages,
+						candOpts := append([]types.InferOption{
 							// 池名走 WithModelPool，不得当模型 ID 传（同 e7e7ce6 修复的主路径）。
 							types.WithModelPool(llmEff.ModelPool),
 							types.WithThinkingMode(llmEff.ThinkingMode),
 							types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}),
 							types.WithPurpose(types.PurposePlanPRMCandidate),
-						)
+						}, candTools...)
+						cResp, cErr := safecall.Infer(ctx, a.provider, baseMessages, candOpts...)
 						if cErr != nil {
 							candidateCh <- candidateResult{}
 							return

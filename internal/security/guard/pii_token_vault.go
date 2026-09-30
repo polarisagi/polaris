@@ -6,8 +6,18 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+const (
+	// piiVaultIdleTTL 命名空间闲置多久后被 ReleaseTask 的清扫回收。令牌映射按"会话"而非"回合"
+	// 存活，才能让跨回合的历史/画像/核心记忆字节一致（见 ReleaseTask）；闲置回收防止会话结束后
+	// 仍无界驻留。原文本就驻留在会话历史与本映射里，保留期内未新增暴露面。
+	piiVaultIdleTTL = 6 * time.Hour
+	// piiVaultMaxTasks 同时保留的命名空间数上限（有界），超出按最久未用淘汰。
+	piiVaultMaxTasks = 1024
 )
 
 // tokenPattern 匹配 ⟦PII:xxxxxxxx⟧ 格式令牌，与 Tokenize 生成的格式严格一致。
@@ -45,15 +55,20 @@ type PIITokenVault struct {
 	mu      sync.RWMutex
 	tokens  map[string]map[string]string // taskID -> token -> originalValue
 	reverse map[string]map[string]string // taskID -> originalValue -> token（与 tokens 同锁同生命周期）
+	lastUse map[string]time.Time         // taskID -> 创建/最近一次 ReleaseTask 时间（闲置清扫依据）
 	// randHex 令牌随机源，测试可替换以制造碰撞；生产恒为 secureRandomHex。
 	randHex func(n int) string
+	// now 时钟，测试可替换；生产恒为 time.Now。
+	now func() time.Time
 }
 
 func NewPIITokenVault() *PIITokenVault {
 	return &PIITokenVault{
 		tokens:  make(map[string]map[string]string),
 		reverse: make(map[string]map[string]string),
+		lastUse: make(map[string]time.Time),
 		randHex: secureRandomHex,
+		now:     time.Now,
 	}
 }
 
@@ -77,6 +92,7 @@ func (v *PIITokenVault) TokenizeForTask(taskID string, original string) string {
 	if v.tokens[taskID] == nil {
 		v.tokens[taskID] = make(map[string]string)
 		v.reverse[taskID] = make(map[string]string)
+		v.lastUse[taskID] = v.now()
 	}
 	// 4 字节 → 8 位小写 hex，与 tokenPattern ⟦PII:[0-9a-f]{8}⟧ 严格对应。
 	// 熵源不可用时 secureRandomHex fail-fast，绝不用可预测值生成令牌——
@@ -238,10 +254,48 @@ func (v *PIITokenVault) Clear() {
 	v.ClearTask("")
 }
 
-// ClearTask 清空指定 taskID 的 PII 映射表，防止内存泄漏。
+// ClearTask 立即清空指定 taskID 的 PII 映射表（显式销毁）。
 func (v *PIITokenVault) ClearTask(taskID string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.dropLocked(taskID)
+}
+
+func (v *PIITokenVault) dropLocked(taskID string) {
 	delete(v.tokens, taskID)
 	delete(v.reverse, taskID)
+	delete(v.lastUse, taskID)
+}
+
+// ReleaseTask 回合终态调用：**保留**该 taskID 的映射供同一会话的后续回合复用，只登记"最近使用"
+// 并顺带清扫闲置超过 piiVaultIdleTTL 的命名空间、把总数压回 piiVaultMaxTasks（按最久未用淘汰）。
+//
+// 为什么不在回合终态 ClearTask：Agent 每回合一个新实例，终态即清空令牌映射，下一回合同一
+// PII 原文得到全新随机令牌——会话历史、用户画像、核心记忆里凡含 PII 的消息字节全部改变，
+// L0..L2 前缀缓存在首个 PII 处断开（2026-09-30 真实请求边界门控实测：3 个 PII 原文在 3 回合里
+// 共出现 9 个令牌）。令牌映射因此按会话存活；有界性由闲置 TTL 与数量上限保证。
+func (v *PIITokenVault) ReleaseTask(taskID string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	now := v.now()
+	if _, ok := v.tokens[taskID]; ok {
+		v.lastUse[taskID] = now
+	}
+	for id, at := range v.lastUse {
+		if id != taskID && now.Sub(at) > piiVaultIdleTTL {
+			v.dropLocked(id)
+		}
+	}
+	for len(v.lastUse) > piiVaultMaxTasks {
+		oldest, oldestAt := "", now
+		for id, at := range v.lastUse {
+			if id != taskID && !at.After(oldestAt) {
+				oldest, oldestAt = id, at
+			}
+		}
+		if oldest == "" {
+			break
+		}
+		v.dropLocked(oldest)
+	}
 }

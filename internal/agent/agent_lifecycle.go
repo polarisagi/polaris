@@ -341,12 +341,14 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 			slog.Warn("agent: failed to secure zero PII vault", "err", zeroErr)
 		}
 	}
-	// 清理键必须与 executeEffect 里 tokenizeMessagesForLLM 写入令牌时用的
+	// 释放键必须与 executeEffect 里 tokenizeMessagesForLLM 写入令牌时用的
 	// ctx.Value(protocol.CtxTaskIDKey{}) 同一命名空间（a.sCtx.SessionID，
 	// 不是 a.sCtx.TaskID——二者是不同字段，此处曾误用 TaskID 导致清理打不中
 	// 实际写入的桶，见上方 SessionID 的既有说明）。
+	// 只"释放"不"清空"：同一会话的下一回合须复用同一令牌，否则每回合历史里的 PII 令牌全部换新，
+	// L0..L2 前缀缓存在首个 PII 处断开（见 PIITokenVault.ReleaseTask；闲置 TTL/数量上限防内存泄漏）。
 	if a.Security.TokenVault != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
-		a.Security.TokenVault.ClearTask(a.sCtx.SessionID)
+		a.Security.TokenVault.ReleaseTask(a.sCtx.SessionID)
 	}
 	// 阶段03 R-02：会话终态确定性回收 PIIDesensitizer 的分区映射，而不是
 	// 依赖其内部 LRU 兜底——LRU 只防 OOM，不代表"这个会话已经结束、映射

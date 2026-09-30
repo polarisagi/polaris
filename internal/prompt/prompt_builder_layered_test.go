@@ -107,3 +107,20 @@ func TestBuildLayered_CacheBreakpoints(t *testing.T) {
 		t.Fatalf("无历史时断点应在 L0 末与 L1 末：%+v", out)
 	}
 }
+
+// L0 由多条 system 组成（契约段 + 可变稳定核）时，首条与末条各一处断点：最稳定、可跨会话共享的
+// 首块有自己的缓存条目；总数仍是 L0 首/L0 末/L2 末三处，给末条消息的断点留出名额。
+func TestBuildLayered_MultiMessageL0Breakpoints(t *testing.T) {
+	b := NewPromptBuilder()
+	b.WriteStable(types.Message{Role: "system", Content: "contracts"})
+	b.WriteStable(types.Message{Role: "system", Content: "variable core"})
+	b.WriteHistoryMessage("user", taint.NewTaintedString("hist", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t"))
+	b.WritePhaseSystem("selector")
+	out := b.BuildLayered()
+	want := []bool{true, true, true, false}
+	for i, m := range out {
+		if m.CacheBreakpoint != want[i] {
+			t.Fatalf("msgs[%d]=%q CacheBreakpoint=%v, want %v", i, m.Content, m.CacheBreakpoint, want[i])
+		}
+	}
+}
