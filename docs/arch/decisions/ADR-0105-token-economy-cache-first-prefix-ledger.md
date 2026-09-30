@@ -136,6 +136,7 @@
 **决策**：
 - **确定性会话内令牌**：同一 taskID（会话）内同一原文映射到同一令牌（反向映射复用），跨会话仍随机（不可关联性不变）；持久化/恢复（ADR-0104 `task_pii_vault`）同时恢复反向映射。令牌格式与解析语义不变。
 - **真实请求边界门控**：新增端到端测试——以记录请求的 fake Provider 驱动一个完整回合（Perceive→Plan→Execute→Reflect→Respond，含 PII、核心记忆、召回、历史）及相邻第二回合，断言**实际发往 Provider 的消息**满足：同回合各阶段 L0..L2 字节一致；相邻回合（未跳窗）前缀关系成立。凡在 PromptFn 之后改写消息的步骤（令牌化、压缩、溢出恢复、PRM 候选）都在此门控覆盖下。
+- **勘误（WP10 追加，原文保留）**：上文第一条中"持久化/恢复（ADR-0104 `task_pii_vault`）同时恢复反向映射"与代码不符——`task_pii_vault` 只快照原文，令牌映射从不持久化（见 WP9 实施追记），重启后整段历史本就冷缓存，无需恢复。该句作废，以 WP9/WP10 实施追记为准。另：确定性令牌还要求映射**跨回合存活**；WP10 门控发现回合终态 `handleTerminalState` 每回合 `ClearTask` 清空映射，导致令牌逐回合变化，已改为会话生命周期（`ReleaseTask`）。
 
 ## 后果
 
@@ -188,6 +189,7 @@
 | 2026-09-30 | WP4 落地（决策五、六）：Purpose* 常量集中于 `pkg/types/purposes.go`；`tools/llm_call_opts_lint.go`（L-19）门控；`047_llm_response_cache.sql` + `internal/llm/response_cache.go`（接入 `usageRecordingProvider`，经 `ProviderRegistry.InjectResponseCache`）。实施偏差与补充见下「WP4 实施追记」 |
 | 2026-09-30 | WP6 落地（决策一/三，Anthropic/Gemini 适配器）：新增 `m1_router.anthropic.inline_nonleading_system` / `m1_router.google.inline_nonleading_system`（默认 true）。开启时仅**开头连续**的 system 消息进 `system`/`systemInstruction`，其后的 system（L3 阶段层）原位转 user 角色 `<system_instruction>\n…\n</system_instruction>` 文本块，与相邻 user 内容合并以满足 user/assistant（Gemini：user/model）交替；tool_result/functionResponse 块前置于合并后的 user 轮首，不破坏与 tool_use/functionCall 的相邻关系；`CacheBreakpoint` 落在被合并消息对应的内容块上（末条与层断点同处一条消息时占两个名额，总数仍 ≤4）。适配器对所有非内联来源的 user 文本/tool_result 字符串无条件转义 `<system_instruction>` 标签字面（全角＜）——`taint.Spotlighting` 仅对 TaintMedium+ 生效，TaintLow/None 的 user 输入与 Parts 不经围栏。关闭时请求体与改动前字节一致（有回归测试）。实现见 `internal/llm/adapter/{inline_system,anthropic_inline}.go`、`google_request.go` |
 | 2026-09-30 | WP5 落地（决策七、八）：`GET /v1/usage` + `polaris usage`；`pkg/offpeak` 错峰窗口；llm_calls 保留期。见下「WP5 实施追记」 |
+| 2026-09-30 | WP10 落地（决策十一第二项）：真实请求边界门控 `internal/agent/request_prefix_gate*_test.go`，并修复其暴露的 4 处前缀不稳定（令牌映射逐回合清空、uniform_tools 下 PRM 候选缺 tools、热路径压缩/溢出恢复改写 L0..L2），L0 内部改按稳定度排序（契约段独立为首条 system，`StableMessagesWithContracts` 取代 `StableMessageWithContracts`）；更正决策十一"持久化恢复反向映射"表述。见下「WP10 实施追记」 |
 | 2026-09-30 | WP9 落地（决策十一第一项）：PII 确定性会话内令牌。见下「WP9 实施追记」 |
 | 2026-09-30 | WP8 落地（决策十）：删除第二条召回管线（`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`），回合内召回改 RRF(k=60) 融合 + 可选重排门，L2 语义召回接线，RAG 分透传。见下「WP8 实施追记」 |
 | 2026-09-30 | WP7 落地（决策九）：新增 `m4_kernel.prompt.phase_contracts_in_core`（默认 true）。契约段由 `configs/phase_contracts.go` 渲染（`# PHASE CONTRACTS` + 四段 `## PHASE: <NAME>`，顺序 PERCEIVE→PLAN→REFLECT→RESPOND，正文取 `kernel/<phase>.md`，约 7.9KB，进程内缓存、字节恒定），经 `ImmutableCore.StableMessageWithContracts()` 追加在稳定层末尾；**追加发生在 `maxSystemPromptBytes` 截断之后、不计入该上限**，故超长自定义指令只会截掉可变部分，契约段不会被截。仅内核前缀账本（`fsm.FinishLayered`）使用含契约的 L0；`StableMessage()`/`PrependToMessages`（网关直连、cron/workflow）不含契约段。L3 由 `fsm.WritePhaseContract` 改写 147 字节选择器（契约已在 L0 时），开关关闭、降级路径（无 ImmutableCore）、ImmutableCore 无契约能力或模板读取失败时回退写完整模板，与并入前一致；压力提示与 `respond_reminder.md` 位置不变 |
@@ -225,3 +227,12 @@
 - **L2 语义召回：WIRE**（ADR-0062）。核实：FTS 索引覆盖 SurrealDB 中多类记录，`sement_` 语义实体是 L2 独有数据（实体只有 FTS 索引，无向量），情景与 RAG 已有各自路径，故适配器只取 `sement_` 命中、按 ID 取正文，仅保留 active、未过期、非 `graphrag_ingest` 的实体；`CognitiveSearcher` 去掉无数据支撑的 `VecKNN`。项目隔离经 `projectScopedFTS`，`TestProjectIsolation_RecallCognitiveAdapter` 替代原 Assembler 适配器隔离用例（`memory-isolation-check` 仍 11 条）。已知局限：Tier0（无 SurrealDB）无 L2；FTS 按 BM25 混排多类记录，用 ×3 过量取 + `projectScopedFTS` 的 ×4 缓解；情景源仍是整句子串匹配（分恒 1.0，几乎恒空），FTS+向量的情景模糊检索留作后续。
 - **RAG 分透传**：`KnowledgeBase.Search` 在 `AugmentedContext.Score` 返回检索分（向后兼容），`fsmKnowledgeAdapter` 使用真实分与条目污点。
 - **新增阈值**（`state.yaml` → `thresholds.go` + Validate → `gen-threshold-examples`）：`weight_*`（≥0）、`rerank_top_n`（12，0=关闭）、`rerank_min_prob`（0.5）、`rag_min_surprise`（0.3）。
+
+
+### WP10 实施追记（2026-09-30）
+
+- **门控设计**：`internal/agent/request_prefix_gate{,_fixture,_check}_test.go`。录制式假 Provider（按是否含契约段区分内核请求与压缩摘要/PRM 打分等辅助请求，后者不参与断言）+ 真实 FSM、真实 `store.ImmutableCore`（含契约库）、内存版 MemoryFacade、真实 PII 检测器与 `PIITokenVault`；生产形态为每回合新建 Agent、共享 SessionID/vault/core。场景：三回合（工具任务含重规划 → 追加一句 → 直答）、跳窗、`uniform_tools`、PRM 候选、热路径压缩、溢出恢复。断言在**实际请求**上：(a) 同回合 L0..L2 字节相等；(b) 相邻未跳窗回合互为严格前缀（跳窗回合仅比 L0..L1）；(c) L0 在所有回合/阶段一致，且首条为契约段；(d) tools 同回合字节相同、跨回合只追加；(e) 无 `Relevant Context:` 旁路，召回只在 L2 之后；(f) 同一 PII 原文在所有请求中为同一令牌且可还原。层边界判据：首条含行首 `# ACTIVE PHASE: X` 的 system 消息之前为 L0..L2（L0=前 2 条，L1=其后连续 system，其余为 L2），并以 `CacheBreakpoint` 位置互证。失败信息给出首个分歧的消息下标与所在层。8 个 `negative_*` 子测试（插入随机消息、旁路召回、随机令牌、压缩改写历史、L0 随阶段变化、契约被改、tools 重排、断点丢失）确认门控能失败。
+- **首跑暴露并已修复的问题**（各一个提交）：F1 回合终态 `ClearTask` 每回合清空令牌映射，含 PII 的消息每回合字节都变——改为 `ReleaseTask`（保留映射，仅按 6h 空闲/1024 会话上限回收）；F2 `uniform_tools` 下 PRM 候选请求不带 tools，与其它阶段 tools 不一致；F3 溢出恢复按水位线截断会在不同阶段把 L2 截成不同内容；F4 热路径硬压缩（>90%）把 L2 与 L3 阶段选择器一起并入摘要（选择器丢失）。F3/F4 的修复原则：压缩/截断只动缓存前缀（最后一个 `CacheBreakpoint` 及其前的连续 system）之后的内容，L3 system 原位保留；前缀之后仍不足才退回旧行为（此时本就是跳窗点，且确定性）。
+- **L0 内部顺序（按稳定度）**：[阶段契约库（部署期常量，独立首条 system）] → [身份/模型指引/自定义指令/平台提示/运营指令（配置期）] → [工具提示/扩展（安装期）] → [用户画像/偏好（会话间演进，偏好按键排序）]。理由：前缀缓存在首个分歧字节处断开，越易变的越靠后，画像更新只使其后缀失效；独立契约消息使其可在会话间共享（Anthropic 适配器恒以首个 system 块为断点 1）。`CacheBreakpoint` 在 L0 多于一条时同时标在首条与末条，总数仍 ≤4。32KB 上限不含契约段、只从可变段尾部截断，有测试覆盖（`TestPhaseContracts_TruncationProtectsContracts`、`TestStableMessage_OrderedByVolatility`）。运营指令由原先靠近末尾前移到配置期段之后：内容不变，仅位置与截断次序改变——超长时先被截掉的是画像/偏好（最易变、最不关键），而非运营指令。
+- **API 变更**：`StableMessageWithContracts()` 改为 `StableMessagesWithContracts() []types.Message`（`[契约段, 可变核心]`；契约为空时仅可变核心）。WP7 行所述"追加在稳定层末尾"作废，以本节为准。
+- **风险**：(1) 令牌映射按会话生命周期驻留内存，上限 1024 会话/6h 空闲，进程内原文驻留时间变长（原文本就在正向映射中，无新增暴露面）；(2) 契约段作为独立首条 system 会使不支持多 system 的适配器路径依赖既有合并逻辑，已由 WP6 内联逻辑与 Anthropic 测试覆盖，其它 Provider 由门控的假 Provider 仅验证消息序列，真实 Provider 的命中率需以 `llm_calls` 观察；(3) 硬压缩在前缀之后仍不足时退回旧行为，该回合缓存必然失效（本就是跳窗点）；(4) 门控用固定阈值构造压缩/溢出场景，阈值语义变化时需同步调整 `setGateThresholds`。
