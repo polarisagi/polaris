@@ -15,7 +15,16 @@ import (
 const alphaMarker = "ALPHA-MARKER-7f3c"
 
 // fakeCog 共享 FTS 同时命中：项目 A 的情景事件、项目 B 的情景事件、一条语义实体。
+// FTSEpisodic 是情景来源的检索口（WP11）：同一份共享索引，故同样混有他项目事件与非情景文档。
 type fakeCog struct{}
+
+func (fakeCog) FTSEpisodic(context.Context, string, int) ([]fsm.CogResult, error) {
+	return []fsm.CogResult{
+		{DocID: "evA", Score: 9},
+		{DocID: "sement_Tool_go", Score: 6}, // 非情景文档：情景来源必须丢弃，避免与 L2 来源重复进入 prompt
+		{DocID: "evB", Score: 5},
+	}, nil
+}
 
 func (fakeCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) {
 	return []fsm.CogResult{
@@ -27,7 +36,10 @@ func (fakeCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) 
 
 func scopedMem() *mockMemory {
 	return &mockMemory{
-		episodic:      &mockEpisodicMem{},
+		episodic: &mockEpisodicMem{events: []types.Event{
+			{ID: "evA", ProjectID: "prj_a", Payload: []byte(alphaMarker + " 部署密钥")},
+			{ID: "evB", ProjectID: "prj_b", Payload: []byte("BRAVO 部署流程")},
+		}},
 		working:       &mockWorkingMem{immutable: &mockImmutableCore{}},
 		eventProjects: map[string]string{"evA": "prj_a", "evB": "prj_b"},
 	}
@@ -60,8 +72,11 @@ func TestProjectIsolation_PerceiveContext(t *testing.T) {
 	if strings.Contains(content, alphaMarker) {
 		t.Errorf("perceive: 项目 B 的 Prompt 混入了项目 A 的情景记忆")
 	}
-	if strings.Contains(content, "GLOBAL-ENTITY") || strings.Contains(content, "BRAVO 部署流程") {
+	if strings.Contains(content, "GLOBAL-ENTITY") {
 		t.Errorf("perceive: 不应再以遗留 Goal 查询 L2 共享 FTS")
+	}
+	if !strings.Contains(content, "BRAVO 部署流程") {
+		t.Errorf("perceive: 本项目的情景命中应经 FTS 召回")
 	}
 	if len(mem.episodic.queries) == 0 {
 		t.Fatal("perceive: 未发起情景查询")
@@ -121,6 +136,24 @@ func TestProjectIsolation_UnresolvedProjectFailsClosed(t *testing.T) {
 		}
 	}
 	if out, _ := projectScopedFTS(context.Background(), nil, fakeCog{}, "部署", 5, "prj_a"); len(out) != 0 {
+		t.Fatal("无法反查归属时应整体返回空（fail-closed）")
+	}
+}
+
+// TestProjectIsolation_EpisodicFTS 情景来源自己的项目过滤：他项目事件与非情景文档都不得放行。
+func TestProjectIsolation_EpisodicFTS(t *testing.T) {
+	mem := scopedMem()
+	out, err := projectScopedEpisodicFTS(context.Background(), mem, fakeCog{}, "部署", 5, "prj_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].DocID != "evB" {
+		t.Fatalf("项目 B 只应得到自己的情景事件 evB，got %+v", out)
+	}
+	if out, _ = projectScopedEpisodicFTS(context.Background(), mem, fakeCog{}, "部署", 5, types.DefaultProjectID); len(out) != 0 {
+		t.Fatalf("默认项目不应看到具名项目的事件，got %+v", out)
+	}
+	if out, _ = projectScopedEpisodicFTS(context.Background(), nil, fakeCog{}, "部署", 5, "prj_b"); len(out) != 0 {
 		t.Fatal("无法反查归属时应整体返回空（fail-closed）")
 	}
 }

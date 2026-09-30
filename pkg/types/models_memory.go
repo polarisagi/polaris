@@ -80,9 +80,11 @@ EpisodicQuery struct {
 	SessionID string
 	// ProjectID 非空时只返回归属该项目的事件（Event.EffectiveProjectID，ADR-0097 决策三修订）；
 	// 空 = 不按项目过滤，仅供后台/系统读取方（Consolidation、Reflexion、Durative 聚类）使用。
-	ProjectID     string
-	Topics        []string
-	Semantic      string // 语义搜索文本
+	ProjectID string
+	Topics    []string
+	// IDs 非空时按事件 ID 直取（保持 IDs 顺序），再叠加其余过滤条件。回合内召回先用 FTS（BM25）
+	// 按相关度选出事件 ID，再凭它取正文；此前的整句子串匹配（Semantic）无相关度可言、几乎恒为空，已删除。
+	IDs           []string
 	K             int
 	MaxTaintLevel TaintLevel // 上限（含）；调用方必须显式设置
 }

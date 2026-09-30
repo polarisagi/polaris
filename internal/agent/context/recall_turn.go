@@ -29,7 +29,6 @@ type recallWant struct {
 	episodicQuery string // 空 = 不要情景记忆
 	episodicK     int
 	goal          string // 空 = 不要 反思/L2/RAG
-	withProfile   bool
 }
 
 // recallMaxTaint 召回项污点上限：本轮意图的来源污点；未标注（TaintNone）按 TaintHigh。
@@ -81,7 +80,6 @@ func turnRecallText(
 		episodic:      want.episodicQuery != "" && !cache.EpisodicDone,
 		episodicQuery: want.episodicQuery,
 		episodicK:     want.episodicK,
-		withProfile:   want.withProfile && !cache.ProfileDone,
 		projectID:     projectID,
 		knowledge:     knowledge,
 		knowledgeTopK: ragTopK(metrics.GlobalSurpriseIndex().Current(), th),
@@ -95,7 +93,7 @@ func turnRecallText(
 	if want.goal != "" && !cache.GoalDone {
 		spec.goal = want.goal
 	}
-	if !spec.episodic && spec.goal == "" && !spec.withProfile {
+	if !spec.episodic && spec.goal == "" {
 		if hadCache {
 			return cache.Text, cache.Taint, nil // 全部来源已覆盖：零检索、零 embedding
 		}
@@ -112,7 +110,6 @@ func turnRecallText(
 	}
 	cache.EpisodicDone = cache.EpisodicDone || spec.episodic
 	cache.GoalDone = cache.GoalDone || spec.goal != ""
-	cache.ProfileDone = cache.ProfileDone || spec.withProfile
 
 	gateQuery := want.goal
 	if gateQuery == "" {
@@ -122,7 +119,7 @@ func turnRecallText(
 	fused = applyRerankGate(ctx, rerankGate{
 		reranker: reranker, topN: th.RecallRerankTopN, minProb: th.RecallRerankMinProb, query: gateQuery,
 	}, fused)
-	cache.Text, cache.Taint = packRecall(fused, cache.Items[fsm.RecallProfile], history, th.RecallMaxTokens)
+	cache.Text, cache.Taint = packRecall(fused, th.RecallMaxTokens)
 
 	sCtx.Mu.Lock()
 	sCtx.TurnRecall = cache

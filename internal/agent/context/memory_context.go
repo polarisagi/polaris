@@ -50,12 +50,12 @@ func BuildPerceiveContext( //nolint:gocyclo
 	intent := sCtx.RawIntentTS.UnsafeContent()
 	// ADR-0102 决策一：短确认（好的/ok/同意）的语义完全在对话历史里，长期记忆
 	// 召回对它零信息增益，却要付一轮 episodic 检索（含 embedding）以及随之膨胀的 prompt。
-	// 只保留画像与下方的对话历史。
+	// 只保留下方的对话历史（画像已在 L0 稳定核）。
 	leanAck := fsm.ClassifyIntentWeight(intent) == fsm.IntentAck
 	// 回合内只召一次（ADR-0105 决策四）：结果写入 sCtx.TurnRecall，Plan 只补缺口。
 	// 反思/L2/RAG 以 Goal 为查询词，而本阶段正是产出本回合 Goal 的阶段：此刻 sCtx.TaskModel
 	// 是上一回合遗留（回合起点不清），拿它查既是错主题，又会让 Plan 误判"已覆盖"而不用真正的
-	// Goal 补查。故这三段一律留给 Plan；本阶段只查 episodic（按本轮原话）与画像。
+	// Goal 补查。故这三段一律留给 Plan；本阶段只查 episodic（按本轮原话；用户画像已在 L0 稳定核，不再召回）。
 	episodicQuery := ""
 	if sCtx.TaskID != "" && intent != "" && !leanAck {
 		episodicQuery = intent
@@ -63,7 +63,6 @@ func BuildPerceiveContext( //nolint:gocyclo
 	recalled, recallTaint, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
 		episodicQuery: episodicQuery,
 		episodicK:     perceiveEpisodicK,
-		withProfile:   true,
 	}, "BuildPerceiveContext")
 	if err != nil {
 		return nil, err

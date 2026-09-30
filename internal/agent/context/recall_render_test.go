@@ -66,11 +66,7 @@ func testWeights() recallWeights {
 
 // renderRecall 测试辅助：融合 + 装入，只取正文（生产路径在 turnRecallText 里分步调用，中间夹重排门）。
 func renderRecall(r *fsm.TurnRecall, history string, maxTokens int) string {
-	var profile []fsm.RecallItem
-	if r != nil {
-		profile = r.Items[fsm.RecallProfile]
-	}
-	text, _ := packRecall(fuseRecall(r, history, testWeights()), profile, history, maxTokens)
+	text, _ := packRecall(fuseRecall(r, history, testWeights()), maxTokens)
 	return text
 }
 
@@ -82,15 +78,14 @@ func items(kind fsm.RecallKind, r *fsm.TurnRecall, texts ...string) {
 
 func TestRenderRecall_GroupOrderAndBudget(t *testing.T) {
 	r := &fsm.TurnRecall{}
-	items(fsm.RecallProfile, r, "role: "+strings.Repeat("画像", 40))
 	items(fsm.RecallRAG, r, "rag "+strings.Repeat("知", 60))
 	items(fsm.RecallSemantic, r, "l2 "+strings.Repeat("语", 60))
 	items(fsm.RecallEpisodic, r, "ep "+strings.Repeat("事", 60))
 	items(fsm.RecallReflection, r, "refl "+strings.Repeat("思", 60))
 
-	// 充足预算：五段齐全，且按 反思>情景>L2>RAG>画像 分组输出（组序固定，组内按融合秩）。
+	// 充足预算：四段齐全，且按 反思>情景>L2>RAG 分组输出（组序固定，组内按融合秩）。
 	full := renderRecall(r, "", 100000)
-	order := []string{"Cross-Session Reflections", "Relevant Historical Episodic Memories", "Semantic Memory (L2)", "Knowledge Base (RAG)", "## User Profile"}
+	order := []string{"Cross-Session Reflections", "Relevant Historical Episodic Memories", "Semantic Memory (L2)", "Knowledge Base (RAG)"}
 	last := -1
 	for _, h := range order {
 		i := strings.Index(full, h)
@@ -98,12 +93,11 @@ func TestRenderRecall_GroupOrderAndBudget(t *testing.T) {
 		last = i
 	}
 
-	// 紧预算：按融合秩装（同秩时权重高的来源在前），画像只填剩余预算；总量不超预算。
+	// 紧预算：按融合秩装（同秩时权重高的来源在前）；总量不超预算。
 	const budget = 200
 	tight := renderRecall(r, "", budget)
 	require.LessOrEqual(t, estimateTokens(tight), budget)
 	require.Contains(t, tight, "refl ")
-	require.NotContains(t, tight, "role: ", "画像不参与融合、只填剩余预算，预算紧时最先被挤掉")
 
 	// 预算为 0 等价于无召回。
 	require.Empty(t, renderRecall(r, "", 1))

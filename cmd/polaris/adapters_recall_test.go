@@ -151,3 +151,36 @@ func TestEntitySnippet_Deterministic(t *testing.T) {
 	require.Equal(t, "n", entitySnippet(&types.Entity{Name: "n"}))
 	require.Equal(t, "n", entitySnippet(&types.Entity{Name: "n", Properties: map[string]any{"source_type": "x"}}))
 }
+
+// FTSEpisodic 只返回可能是情景事件的命中 ID + BM25 分（保持降序）；实体/反思/扩展目录由各自来源负责，
+// 不得经情景路径重复进入 prompt；不取任何正文（ADR-0105 决策十 WP11）。
+func TestRecallAdapter_FTSEpisodicFiltersNonEpisodic(t *testing.T) {
+	fts := &fakeFTS{hits: []store.ScoredID{
+		{ID: "ev-1", Score: 9},
+		{ID: "sement_Tool_go", Score: 8},
+		{ID: "her_task-1", Score: 7},
+		{ID: "ext_x", Score: 6},
+		{ID: "ev-2", Score: 5},
+	}}
+	ents := &fakeEntities{byKey: map[string]*types.Entity{}}
+	got, err := newTestRecallAdapter(fts, ents).FTSEpisodic(context.Background(), "部署", 8)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "ev-1", got[0].DocID)
+	require.Equal(t, float32(9), got[0].Score)
+	require.Equal(t, "ev-2", got[1].DocID)
+	require.Equal(t, 8, fts.gotK, "k 原样下传，放大由调用方负责")
+	require.Equal(t, 0, ents.calls)
+}
+
+func TestRecallAdapter_FTSEpisodicErrorsAndNilSafe(t *testing.T) {
+	boom := errors.New("fts down")
+	_, err := newTestRecallAdapter(&fakeFTS{err: boom}, &fakeEntities{}).FTSEpisodic(context.Background(), "q", 3)
+	require.ErrorIs(t, err, boom)
+	got, err := newTestRecallAdapter(&fakeFTS{}, &fakeEntities{}).FTSEpisodic(context.Background(), "q", 0)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	got, err = newRecallCognitiveAdapter(nil, nil).FTSEpisodic(context.Background(), "q", 3)
+	require.NoError(t, err)
+	require.Empty(t, got, "Tier0 无 SurrealDB：返回空")
+}

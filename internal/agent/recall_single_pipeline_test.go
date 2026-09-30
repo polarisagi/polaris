@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -63,8 +64,22 @@ func (r *msgRecorder) StreamInfer(ctx context.Context, msgs []types.Message, opt
 // recallMemory 在集成用 mock 之上提供有内容可召回的情景与反思。
 type recallMemory struct{ *mockMemoryForIntegration }
 
+// EpisodicProjectOf 把 FTS 命中的 ev1 登记为默认项目的情景事件（召回按项目隔离反查归属）。
+func (recallMemory) EpisodicProjectOf(_ context.Context, id string) (string, bool) {
+	return types.DefaultProjectID, id == "ev1"
+}
+
+// recallCog 情景召回经 FTS 选 ID（ADR-0105 决策十 WP11）：共享索引里混有非情景文档，应被丢弃。
+type recallCog struct{}
+
+func (recallCog) FTSSearch(context.Context, string, int) ([]fsm.CogResult, error) { return nil, nil }
+func (recallCog) FTSEpisodic(context.Context, string, int) ([]fsm.CogResult, error) {
+	return []fsm.CogResult{{DocID: "ev1", Score: 7}, {DocID: "sement_Tool_go", Score: 6}}, nil
+}
+
 func (recallMemory) ListEpisodicEvents(context.Context, types.EpisodicQuery) ([]types.ScoredEvent, error) {
 	return []types.ScoredEvent{{Score: 1, Event: &types.Event{
+		ID:        "ev1",
 		Type:      "task_done",
 		Payload:   []byte(`{"summary":"RECALL_EPISODIC_MARKER 上次迁移用了 goose"}`),
 		CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
@@ -100,6 +115,7 @@ func runMemoryTurn(t *testing.T, p protocol.Provider, history []types.Message, i
 	a.InjectProvider(p)
 	a.InjectPolicyGate(&allowPolicyGate{})
 	a.InjectToolExecutor(&mockToolExecutor{})
+	a.SetCognitiveSearcher(recallCog{})
 	a.InjectMemory(recallMemory{&mockMemoryForIntegration{
 		episodic: &mockEpisodicMemForIntegration{},
 		working:  &mockWorkingMemForIntegration{immutable: &mockImmutableCoreForIntegration{}},

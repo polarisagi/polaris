@@ -33,8 +33,6 @@ func recallHeader(kind fsm.RecallKind) string {
 		return "Semantic Memory (L2):\n"
 	case fsm.RecallRAG:
 		return "Knowledge Base (RAG):\n"
-	case fsm.RecallProfile:
-		return "## User Profile (Context)\n"
 	}
 	return ""
 }

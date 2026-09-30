@@ -12,6 +12,11 @@
 - **[契约] `PIITokenVault.ReleaseTask`**：回合终态只释放不清空令牌映射（6h 空闲/1024 会话回收），使同一 PII 跨回合令牌不变；`ClearTask` 保留给显式销毁。
 - **[修复] 前缀稳定**：PRM 候选请求在 `uniform_tools` 下携带与其它阶段一致的 tools；热路径压缩与溢出恢复只改缓存前缀之后的内容，L3 阶段选择器原位保留。
 - **[门控] `internal/agent/request_prefix_gate*_test.go`**：实际请求的 L0..L2 字节相等/相邻回合前缀/tools 一致/无旁路召回/PII 令牌一致，含负向验证。
+## 2026-09-30（ADR-0105 WP11：情景召回按相关度、删除召回画像 — 含**契约变更**）
+
+- **[契约] `types.EpisodicQuery.Semantic` 删除，新增 `IDs`**（按 ID 直取，保持顺序，仍受 ProjectID/MaxTaintLevel/SessionID/Topics 过滤）；子串匹配路径 DELETE。
+- **[契约] 新增消费端接口 `fsm.EpisodicSearcher.FTSEpisodic`**（`recallCognitiveAdapter` 实现）；`fsm.RecallProfile`、`TurnRecall.ProfileDone` 删除，`packRecall` 不再接画像参数。用户画像只走 L0 `ImmutableCore.UserProfile`。
+- 情景召回：FTS(BM25) → 项目隔离 → 按 ID 取正文；无 SurrealDB/FTS 失败降级为空。
 
 ## 2026-09-30（ADR-0105 WP8：召回单一管线、RRF 融合 — 含**契约变更**）
 

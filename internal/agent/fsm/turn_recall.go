@@ -30,8 +30,6 @@ const (
 	RecallSemantic
 	// RecallRAG 外部知识库片段。
 	RecallRAG
-	// RecallProfile 用户画像：与查询无关的常驻小段，无相关度可言，不参与 RRF 融合，只填融合后的剩余预算。
-	RecallProfile
 	recallKindCount
 )
 
@@ -59,11 +57,10 @@ type RecallItem struct {
 // RRF 融合、预算截断与去重在渲染时做（渲染依赖当时的 L2 历史），不改写这里的原始条目。
 type TurnRecall struct {
 	Items [recallKindCount][]RecallItem
-	// EpisodicDone/GoalDone/ProfileDone 记录哪些来源已成功查过（含"查过但为空"）。
+	// EpisodicDone/GoalDone 记录哪些来源已成功查过（含"查过但为空"）。
 	// 召回因预算超时被放弃时不置位，Plan 会补查。GoalDone 覆盖 反思/L2/RAG 三段。
 	EpisodicDone bool
 	GoalDone     bool
-	ProfileDone  bool
 	// Text 最近一次渲染出的召回段正文（已受总预算约束、已去重），Plan 无补查时原样复用。
 	Text string
 	// Taint Text 中已装入条目的最高污点等级（Text 为空时为 TaintNone）。

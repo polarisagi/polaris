@@ -2,9 +2,9 @@ package agentctx
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
@@ -28,7 +28,6 @@ type recallSpec struct {
 	episodicQuery string
 	episodicK     int
 	goal          string // 反思 / L2 语义 / RAG 的查询词；空则三者跳过
-	withProfile   bool
 	projectID     string
 	knowledge     fsm.KnowledgeSearcher
 	// knowledgeTopK RAG 检索条数；0 = 本回合不查 RAG（SurpriseIndex 低于 recall.rag_min_surprise）。
@@ -58,36 +57,29 @@ func degradeOnRecallTimeout(phase string, err error) error {
 // 内部固定 Background+30s，截止时间传不下去（2026-09-25 实测 Perceive 因此卡 30s）。
 // 故在边界处放弃等待；后台 goroutine 受下游 30s 上限约束必然退出（A-13）。
 func recallWithin(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) (*fsm.TurnRecall, error) {
-	type result struct {
-		items *fsm.TurnRecall
-		err   error
-	}
-	done := make(chan result, 1)
+	done := make(chan *fsm.TurnRecall, 1)
 	concurrent.SafeGo(ctx, "agentctx.recall", func(gctx context.Context) {
-		items, err := recall(gctx, memory, cognitive, spec)
-		done <- result{items, err}
+		done <- recall(gctx, memory, cognitive, spec)
 	})
 	select {
 	case r := <-done:
-		return r.items, r.err
+		return r, nil
 	case <-ctx.Done():
 		return nil, apperr.Wrap(apperr.CodeTimeout, "agentctx: memory recall exceeded budget", ctx.Err())
 	}
 }
 
-// recall 逐来源检索（反思、情景、L2、RAG、画像），只返回渲染好的条目，各来源内按原生分降序。
+// recall 逐来源检索（反思、情景、L2、RAG），只返回渲染好的条目，各来源内按原生分降序。
 // 来源间的取舍（RRF 融合）、预算截断与去重留给 fuseRecall/packRecall（它们依赖检索完成后的 L2 历史与总预算）。
-func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) (*fsm.TurnRecall, error) {
+// 用户画像不在此召回：它与 L0 稳定核的 UserProfile 是同一数据（见 ADR-0105 决策十 WP11 追记）。
+// 各来源失败一律按"该来源无结果"降级，不阻断回合。
+func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) *fsm.TurnRecall {
 	out := &fsm.TurnRecall{}
 	if spec.goal != "" {
 		out.Items[fsm.RecallReflection] = collectReflections(ctx, memory, spec)
 	}
 	if spec.episodic {
-		items, err := collectEpisodic(ctx, memory, spec)
-		if err != nil {
-			return nil, err
-		}
-		out.Items[fsm.RecallEpisodic] = items
+		out.Items[fsm.RecallEpisodic] = collectEpisodic(ctx, memory, cognitive, spec)
 	}
 	if cognitive != nil && spec.goal != "" {
 		out.Items[fsm.RecallSemantic] = collectSemantic(ctx, memory, cognitive, spec)
@@ -95,10 +87,7 @@ func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.Cog
 	if spec.knowledge != nil && spec.goal != "" && spec.knowledgeTopK > 0 {
 		out.Items[fsm.RecallRAG] = collectKnowledge(ctx, spec)
 	}
-	if spec.withProfile {
-		out.Items[fsm.RecallProfile] = collectUserProfile(ctx, memory, spec.limits)
-	}
-	return out, nil
+	return out
 }
 
 // withMeta 给召回条目补上污点与来源原生分。
@@ -113,15 +102,54 @@ func sortByScoreDesc(items []fsm.RecallItem) {
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Score > items[j].Score })
 }
 
-func collectEpisodic(ctx context.Context, memory protocol.MemoryFacade, spec recallSpec) ([]fsm.RecallItem, error) {
+// episodicCandidates FTS 选出项目内、过相关度下限的情景事件 ID（BM25 降序）及各自的 BM25 分（键为去掉
+// "episodic:" 前缀的 ID）。任何失败/无命中返回空（降级）。
+func episodicCandidates(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) ([]string, map[string]float64) {
+	es, ok := cognitive.(fsm.EpisodicSearcher)
+	if !ok || es == nil || spec.episodicK <= 0 || spec.episodicQuery == "" {
+		return nil, nil
+	}
+	// 项目隔离（ADR-0097 决策三修订）：共享索引里只保留"确为情景事件且属当前项目"的命中。
+	hits, err := projectScopedEpisodicFTS(ctx, memory, es, spec.episodicQuery, spec.episodicK, spec.projectID)
+	if err != nil {
+		slog.Debug("agentctx: episodic FTS failed, continuing without episodic recall", "err", err)
+		return nil, nil
+	}
+	scores := make([]float64, len(hits))
+	for i, h := range hits {
+		scores[i] = float64(h.Score)
+	}
+	ids := make([]string, 0, len(hits))
+	byID := make(map[string]float64, len(hits))
+	for i, keep := range scoreFilter(scores, spec.limits) {
+		if keep {
+			ids = append(ids, hits[i].DocID)
+			byID[strings.TrimPrefix(hits[i].DocID, "episodic:")] = scores[i]
+		}
+	}
+	return ids, byID
+}
+
+// collectEpisodic 情景事件按相关度召回：SurrealDB 共享 FTS（BM25）选 ID → 项目隔离 → 取正文 → 污点再判。
+//
+// 此前走 ListEpisodicEvents 的整句子串匹配，分数恒 1.0、几乎总空，情景召回形同虚设（WP8 实测）。
+// 降级（均按"情景无结果"，不阻断回合）：cognitive 不支持 EpisodicSearcher（Tier0 / 无 SurrealDB）、
+// FTS 失败、取正文失败。只走 FTS 一路：情景向量由 OnlineReindexer 异步回填、查询侧还要多一次 embedding
+// （Perceive 曾因此卡 30s），而 BM25 已能按词面相关度选出候选，后续还有本地重排门把关。
+func collectEpisodic(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) []fsm.RecallItem {
+	ids, byID := episodicCandidates(ctx, memory, cognitive, spec)
+	if len(ids) == 0 {
+		return nil
+	}
 	events, err := memory.ListEpisodicEvents(ctx, types.EpisodicQuery{
-		Semantic:      spec.episodicQuery,
-		ProjectID:     spec.projectID, // 情景记忆按项目隔离（ADR-0097 决策三修订）
+		IDs:           ids,
+		ProjectID:     spec.projectID, // 取正文时再按项目过滤一次，不信任上游已筛过
 		K:             spec.episodicK,
 		MaxTaintLevel: spec.maxTaint,
 	})
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
+		slog.Debug("agentctx: episodic fetch failed, continuing without episodic recall", "err", err)
+		return nil
 	}
 	var items []fsm.RecallItem
 	for _, e := range events {
@@ -133,13 +161,13 @@ func collectEpisodic(ctx context.Context, memory protocol.MemoryFacade, spec rec
 		if pbEv.TaintLevel > spec.maxTaint {
 			continue
 		}
-		// 不再输出 payload 原始 JSON：payload 形态不一（工具输出/结构化 JSON/纯文本，最长 8KB），
+		// 不输出 payload 原始 JSON：payload 形态不一（工具输出/结构化 JSON/纯文本，最长 8KB），
 		// 取描述性字段或压成单行后按单条上限截断；时间戳只要日期，秒级时间在提示词里无信息量。
 		items = append(items, withMeta(newRecallItem(datePrefix(pbEv.CreatedAt)+string(pbEv.Type)+": ",
-			episodicSummary(pbEv.Payload), spec.limits.itemMaxChars), pbEv.TaintLevel, e.Score))
+			episodicSummary(pbEv.Payload), spec.limits.itemMaxChars), pbEv.TaintLevel, byID[strings.TrimPrefix(pbEv.ID, "episodic:")]))
 	}
 	sortByScoreDesc(items)
-	return items, nil
+	return items
 }
 
 func collectReflections(ctx context.Context, memory protocol.MemoryFacade, spec recallSpec) []fsm.RecallItem {
@@ -199,27 +227,6 @@ func collectKnowledge(ctx context.Context, spec recallSpec) []fsm.RecallItem {
 		items = append(items, withMeta(newRecallItem(prefix, hits[i].Content, spec.limits.itemMaxChars), hits[i].Taint, scores[i]))
 	}
 	sortByScoreDesc(items)
-	return items
-}
-
-// collectUserProfile 消费 default 用户画像（P0-2）。StableFacts/BehavioralPatterns 是 map：
-// 遍历顺序随机会使召回段逐回合字节不同（破坏 L4 内确定性），且此前只输出 value、丢了 key。
-func collectUserProfile(ctx context.Context, memory protocol.MemoryFacade, limits recallLimits) []fsm.RecallItem {
-	p, err := memory.GetUserProfile(ctx, "default")
-	if err != nil || p == nil {
-		return nil
-	}
-	var items []fsm.RecallItem
-	for _, m := range []map[string]any{p.StableFacts, p.BehavioralPatterns} {
-		keys := make([]string, 0, len(m))
-		for k := range m {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			items = append(items, newRecallItem("", k+": "+fmt.Sprint(m[k]), limits.itemMaxChars))
-		}
-	}
 	return items
 }
 

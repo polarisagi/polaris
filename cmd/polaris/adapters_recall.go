@@ -19,10 +19,13 @@ import (
 //   - 反思洞察（docID = "her_"+taskID，reflexion 写入）
 //   - 扩展目录（docID = "ext_"+extID，扩展库员/插件索引器写入，属工具发现而非记忆）
 //
-// 只有语义实体是 L2 独有的数据：情景事件已有情景来源（且命中必须经项目隔离）、反思有反思来源、
-// 扩展目录不是记忆。因此本适配器只放行 "sement_" 命中，并按 ID 回取实体正文——这也是 Snippet 的唯一来源
-// （FTS 命中本身没有正文，spec 09 RAG 清单"禁止用 ID 代替 Content"）。
-// 向量路无实体数据，故适配器只实现 FTS 一路（fsm.CognitiveSearcher 亦只声明 FTSSearch）。
+// 按"同一数据只经一条检索路径进入 prompt"分流（ADR-0105 决策十 WP8/WP11）：
+//   - FTSSearch（fsm.CognitiveSearcher，L2 来源）只放行 "sement_" 语义实体，并按 ID 回取实体正文——这也是
+//     Snippet 的唯一来源（FTS 命中本身没有正文，spec 09 RAG 清单"禁止用 ID 代替 Content"）。
+//   - FTSEpisodic（fsm.EpisodicSearcher，情景来源）只返回情景事件候选 ID + BM25 分，不取正文；
+//     归属项目、正文与污点由调用方经 MemoryFacade 判定（项目隔离）。
+//   - 反思（her_）有反思来源、扩展目录（ext_）不是记忆：两条路径一律不放行。
+// 向量路无实体数据，且情景向量查询侧要多一次 embedding，故适配器只实现 FTS 一路。
 
 const (
 	entityDocPrefix = "sement_"
@@ -45,7 +48,18 @@ type entityReader interface {
 	GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error)
 }
 
-// recallCognitiveAdapter 把 SurrealDB FTS + 语义实体库适配为 fsm.CognitiveSearcher。
+// isNonEpisodicDoc 非情景文档（实体/反思/扩展目录）的 docID：FTSEpisodic 据此预先剔除，省得调用方为它们
+// 白做一次归属反查。这只是优化——是否真为情景事件仍由调用方经 EpisodicProjectOf 判定。
+func isNonEpisodicDoc(id string) bool {
+	return strings.HasPrefix(id, entityDocPrefix) || strings.HasPrefix(id, "her_") || strings.HasPrefix(id, "ext_")
+}
+
+var (
+	_ fsm.CognitiveSearcher = (*recallCognitiveAdapter)(nil)
+	_ fsm.EpisodicSearcher  = (*recallCognitiveAdapter)(nil)
+)
+
+// recallCognitiveAdapter 把 SurrealDB FTS + 语义实体库适配为 fsm.CognitiveSearcher / fsm.EpisodicSearcher。
 type recallCognitiveAdapter struct {
 	fts ftsSearcher
 	sem entityReader
@@ -86,6 +100,26 @@ func (a *recallCognitiveAdapter) FTSSearch(ctx context.Context, query string, k 
 		if len(out) == k {
 			break
 		}
+	}
+	return out, nil
+}
+
+// FTSEpisodic 返回共享 FTS 里可能是情景事件的命中（DocID + BM25 分，保持 BM25 降序）。
+// 失败原样上抛，由情景来源按"无结果"降级；fts 未注入（Tier0）时返回空。
+func (a *recallCognitiveAdapter) FTSEpisodic(_ context.Context, query string, k int) ([]fsm.CogResult, error) {
+	if a.fts == nil || k <= 0 {
+		return nil, nil
+	}
+	hits, err := a.fts.FTSSearch(query, k)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // store 层已用 apperr 包装；召回按"无结果"降级
+	}
+	out := make([]fsm.CogResult, 0, len(hits))
+	for _, h := range hits {
+		if isNonEpisodicDoc(h.ID) {
+			continue
+		}
+		out = append(out, fsm.CogResult{DocID: h.ID, Score: float32(h.Score)})
 	}
 	return out, nil
 }
