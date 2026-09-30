@@ -56,3 +56,10 @@ func (a *Agent) toolInferOptions(ctx context.Context, state types.AgentState, un
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
 	return toolOptionsFor(cata.Schemas(toolCtx, types.TrustCommunity), forbid)
 }
+
+// candidateToolOptions 返回 PRM 候选请求的 tools 选项。候选要求模型输出 JSON DAG（不是原生 tool_calls），
+// 因此形态与"非 Plan 阶段"一致：uniform 开启时 tools + tool_choice=none，关闭时无 tools。
+// 此前候选路径完全不带 tools，uniform 开启时 PRM 回合的候选请求与同回合其它阶段的 tools 前缀失配。
+func (a *Agent) candidateToolOptions(ctx context.Context, uniform bool) []types.InferOption {
+	return a.toolInferOptions(ctx, types.AgentStateReflect, uniform)
+}
