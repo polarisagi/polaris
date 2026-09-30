@@ -12,9 +12,10 @@ import (
 )
 
 // writePhaseInstruction 写入阶段契约模板，并在其后追加上下文压力提示。
+// 契约已并入 L0 时这里只写选择器（fsm.WritePhaseContract），压力提示仍留在 L3。
 // 压力提示由 Go 按预算比例生成（进程内常量拼接），与模板同属 TaintNone 指令。
-func writePhaseInstruction(b *prompt.PromptBuilder, sCtx *fsm.StateContext, name, fallback string) error {
-	fsm.WriteKernelInstruction(b, name, fallback)
+func writePhaseInstruction(b *prompt.PromptBuilder, memory protocol.MemoryFacade, sCtx *fsm.StateContext, name, fallback string) error {
+	fsm.WritePhaseContract(b, memory, name, fallback)
 	hint := contextPressureHint(sCtx)
 	if hint == "" {
 		return nil
@@ -39,6 +40,6 @@ func BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 	if err := fsm.WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildRespondContext", err)
 	}
-	fsm.WriteRespondSections(b, sCtx)
+	fsm.WriteRespondSections(b, memory, sCtx)
 	return fsm.AppendRespondReminder(fsm.FinishLayered(b, memory)), nil
 }

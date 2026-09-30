@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -359,4 +360,53 @@ func TestAnthropicInline_OffDoesNotEscape(t *testing.T) {
 	if body := plainBody(t, raw); !strings.Contains(body, "</system_instruction>") || strings.Contains(body, "＜") {
 		t.Fatalf("关闭时应原样: %s", raw)
 	}
+}
+
+// ADR-0105 决策九：契约库在 L0 → 进入 Anthropic 的 system 参数（可缓存前缀）；
+// L3 只剩选择器与易变量 → 内联进末条 user，且不含任何契约正文。
+func TestAnthropicInline_PhaseContractsInSystemSelectorInUser(t *testing.T) {
+	section := configs.PhaseContractsSection()
+	if section == "" {
+		t.Fatal("契约段不应为空")
+	}
+	req := &types.InferRequest{Model: "claude-test-model", MaxTokens: 1024, Messages: []types.Message{
+		{Role: "system", Content: "L0 persona\n\n" + section, CacheBreakpoint: true},
+		{Role: "system", Content: "L1 session env"},
+		{Role: "user", Content: "L2 user-1"},
+		{Role: "assistant", Content: "L2 assistant-1", CacheBreakpoint: true},
+		{Role: "system", Content: configs.PhaseSelector("PLAN")},
+		{Role: "system", Content: "# VOLATILE CONTEXT\n当前日期：2026-09-30"},
+		{Role: "user", Content: "L4 turn input"},
+	}}
+	p := buildPayload(t, newInlineAnthropic(true), req)
+
+	var sys strings.Builder
+	for _, b := range p.System {
+		sys.WriteString(blockText(b))
+		sys.WriteString("\n")
+	}
+	for _, pc := range configs.PhaseContracts() {
+		if !strings.Contains(sys.String(), configs.PhaseContractHeading(pc.Phase)) {
+			t.Fatalf("system 参数应含 %s 契约", pc.Phase)
+		}
+	}
+	if p.System[0]["cache_control"] == nil {
+		t.Fatal("含契约的 L0 末应带断点（整段契约进入缓存前缀）")
+	}
+
+	last := p.Messages[len(p.Messages)-1]
+	var tail strings.Builder
+	for _, b := range blocksOf(last.Content) {
+		tail.WriteString(blockText(b))
+		tail.WriteString("\n")
+	}
+	if !strings.Contains(tail.String(), "# ACTIVE PHASE: PLAN") || !strings.Contains(tail.String(), "当前日期") {
+		t.Fatalf("末条 user 应含选择器与易变量: %q", tail.String())
+	}
+	for _, pc := range configs.PhaseContracts() {
+		if strings.Contains(tail.String(), configs.PhaseContractHeading(pc.Phase)) {
+			t.Fatalf("user 内联块不应含契约标题 %s", pc.Phase)
+		}
+	}
+	assertAlternating(t, p)
 }

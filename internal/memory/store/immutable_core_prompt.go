@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -154,7 +155,34 @@ const maxSystemPromptBytes = 32_000
 // DeepSeek 前缀缓存以消息为单元整块匹配（api-docs guides/kv_cache："只有完整匹配一个
 // 缓存前缀单元才会命中"）：稳定层任何字节变化都会使其后全部内容失配，因此本函数的输入
 // 必须是确定的（集合有序、无时间/连接状态，见 chat/system_prompt.go）。
+//
+// 本方法**不含**阶段契约段：PrependToMessages（网关直连/cron/workflow 等非内核调用方）
+// 走这里。这些路径不做 Perceive/Plan/Reflect/Respond 阶段调用，多付 ~7.5KB（≈2.5K token
+// 命中价）毫无收益，还会在无选择器的对话里引入互相竞争的输出格式；故只有内核经
+// StableMessageWithContracts 得到含契约段的 L0（ADR-0105 决策九）。
 func (ic *ImmutableCore) StableMessage() types.Message {
+	return ic.stableMessage(false)
+}
+
+// HasPhaseContracts 报告本进程能否渲染出完整的阶段契约段（四个嵌入模板均可读）。
+// 内核据此决定各阶段 L3 写选择器还是回退写完整模板，二者必须与 L0 是否含契约段一致。
+func (ic *ImmutableCore) HasPhaseContracts() bool {
+	return configs.PhaseContractsSection() != ""
+}
+
+// StableMessageWithContracts 渲染含 "# PHASE CONTRACTS" 段的 L0（仅内核前缀账本使用，
+// 开关 m4_kernel.prompt.phase_contracts_in_core，ADR-0105 决策九）。
+//
+// 契约段是部署期常量（configs.PhaseContractsSection，同一二进制字节恒定，与会话/阶段/
+// 时间无关），紧跟在可变的稳定层之后。截断优先级：maxSystemPromptBytes 只约束前面的
+// 可变部分（身份/自定义指令/工具摘要/画像/偏好——截断从尾部开始，即最先牺牲画像与偏好），
+// 契约段在截断**之后**追加、不计入该上限，因此无论用户自定义指令多长都不会被截掉。
+// 契约是四阶段输出格式的唯一来源，被截断会直接导致解析失败，比多付固定 ~7.5KB 严重得多。
+func (ic *ImmutableCore) StableMessageWithContracts() types.Message {
+	return ic.stableMessage(true)
+}
+
+func (ic *ImmutableCore) stableMessage(withContracts bool) types.Message {
 	stable := *ic
 	stable.VolatileBlock = ""
 	stable.AmbientContext = ""
@@ -168,7 +196,7 @@ func (ic *ImmutableCore) StableMessage() types.Message {
 		content = "你是 Polaris AI Agent。"
 	}
 
-	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限 stable 层）
+	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限可变的稳定层部分）
 	if len(content) > maxSystemPromptBytes {
 		originalBytes := len(content)
 		truncated := content[:maxSystemPromptBytes]
@@ -179,6 +207,11 @@ func (ic *ImmutableCore) StableMessage() types.Message {
 		content = truncated + "\n\n[...系统提示词已截断]"
 		slog.Warn("system prompt truncated",
 			"original_bytes", originalBytes, "cap_bytes", maxSystemPromptBytes)
+	}
+	if withContracts {
+		if section := configs.PhaseContractsSection(); section != "" {
+			content += "\n\n" + section
+		}
 	}
 	return types.Message{Role: "system", Content: content}
 }

@@ -3,6 +3,8 @@ package fsm
 import (
 	"context"
 
+	"github.com/polarisagi/polaris/configs"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -95,9 +97,59 @@ func WritePlanHints(b *prompt.PromptBuilder, sCtx *StateContext) {
 func FinishLayered(b *prompt.PromptBuilder, memory protocol.MemoryFacade) []types.Message {
 	if memory != nil {
 		if core := memory.ImmutableCore(); core != nil {
-			b.WriteStable(core.StableMessage())
+			if pc := phaseContractCoreOf(memory); pc != nil {
+				b.WriteStable(pc.StableMessageWithContracts())
+			} else {
+				b.WriteStable(core.StableMessage())
+			}
 			b.WritePhaseSystem(core.VolatileContent())
 		}
 	}
 	return b.BuildLayered()
+}
+
+// phaseContractCore 是 ImmutableCore 的可选能力：渲染含阶段契约段的 L0（ADR-0105 决策九）。
+// 用可选接口而非扩充 protocol.ImmutableCore，是因为只有内核前缀账本需要它，
+// 网关直连等非内核调用方刻意只拿到不含契约段的 StableMessage。
+type phaseContractCore interface {
+	HasPhaseContracts() bool
+	StableMessageWithContracts() types.Message
+}
+
+// phaseContractCoreOf 仅当开关开启、存在 ImmutableCore 且其能渲染完整契约库时返回非 nil。
+// FinishLayered（决定 L0 是否含契约段）与 WritePhaseContract（决定 L3 写选择器还是全文模板）
+// 共用这一个判据，保证二者永不脱节：L0 没有契约而 L3 只有选择器会让模型看不到输出格式。
+func phaseContractCoreOf(memory protocol.MemoryFacade) phaseContractCore {
+	if memory == nil || !config.CurrentThresholds().M4Kernel.PromptPhaseContractsInCore {
+		return nil
+	}
+	core := memory.ImmutableCore()
+	if core == nil {
+		return nil
+	}
+	pc, ok := core.(phaseContractCore)
+	if !ok || !pc.HasPhaseContracts() {
+		return nil
+	}
+	return pc
+}
+
+// PhaseContractsInCore 报告本次 prompt 组装是否把阶段契约放进了 L0。
+func PhaseContractsInCore(memory protocol.MemoryFacade) bool {
+	return phaseContractCoreOf(memory) != nil
+}
+
+// WritePhaseContract 写入阶段 L3 契约位：契约已在 L0 时只写一条简短选择器
+// （configs.PhaseSelector），否则回退写完整模板（开关关闭/降级路径无 ImmutableCore，
+// 行为与并入前完全一致）。name 为 kernel/<phase>.md。
+func WritePhaseContract(b *prompt.PromptBuilder, memory protocol.MemoryFacade, name, fallback string) {
+	if PhaseContractsInCore(memory) {
+		if phase, ok := configs.PhaseOfTemplate(name); ok {
+			safe, _ := taint.SanitizeToSafe(taint.NewTaintedString(
+				configs.PhaseSelector(phase), taint.TaintSource{OriginTaintLevel: types.TaintNone}, "system_prompt"))
+			b.WriteInstruction(safe)
+			return
+		}
+	}
+	WriteKernelInstruction(b, name, fallback)
 }

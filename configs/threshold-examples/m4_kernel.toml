@@ -21,6 +21,7 @@ surprise_hint_threshold = 0.6
 'prm.scorer_model' = ''
 'conversation.history_max_messages' = 20
 'conversation.history_max_bytes' = 24576
+'prompt.phase_contracts_in_core' = true
 'thinking.perceive' = 'low'
 'thinking.plan_initial' = 'high'
 'thinking.reflect' = 'low'

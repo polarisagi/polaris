@@ -190,6 +190,7 @@
 | 2026-09-30 | WP5 落地（决策七、八）：`GET /v1/usage` + `polaris usage`；`pkg/offpeak` 错峰窗口；llm_calls 保留期。见下「WP5 实施追记」 |
 | 2026-09-30 | WP9 落地（决策十一第一项）：PII 确定性会话内令牌。见下「WP9 实施追记」 |
 | 2026-09-30 | WP8 落地（决策十）：删除第二条召回管线（`injectMemoryToMsgs`/`assembleWithBudget`/`Assembler`），回合内召回改 RRF(k=60) 融合 + 可选重排门，L2 语义召回接线，RAG 分透传。见下「WP8 实施追记」 |
+| 2026-09-30 | WP7 落地（决策九）：新增 `m4_kernel.prompt.phase_contracts_in_core`（默认 true）。契约段由 `configs/phase_contracts.go` 渲染（`# PHASE CONTRACTS` + 四段 `## PHASE: <NAME>`，顺序 PERCEIVE→PLAN→REFLECT→RESPOND，正文取 `kernel/<phase>.md`，约 7.9KB，进程内缓存、字节恒定），经 `ImmutableCore.StableMessageWithContracts()` 追加在稳定层末尾；**追加发生在 `maxSystemPromptBytes` 截断之后、不计入该上限**，故超长自定义指令只会截掉可变部分，契约段不会被截。仅内核前缀账本（`fsm.FinishLayered`）使用含契约的 L0；`StableMessage()`/`PrependToMessages`（网关直连、cron/workflow）不含契约段。L3 由 `fsm.WritePhaseContract` 改写 147 字节选择器（契约已在 L0 时），开关关闭、降级路径（无 ImmutableCore）、ImmutableCore 无契约能力或模板读取失败时回退写完整模板，与并入前一致；压力提示与 `respond_reminder.md` 位置不变 |
 
 ### WP4 实施追记（2026-09-30）
 

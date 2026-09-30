@@ -36,7 +36,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 	// L2：对话历史逐条写入，Perceive 据此消解指代、产出自包含 Goal（ADR-0098）。
 	fsm.WriteConversationHistory(b, sCtx)
 	// L3：阶段契约唯一来源 kernel/perceive.md（ADR-0098 决策三）+ 上下文压力提示。
-	if err := writePhaseInstruction(b, sCtx, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object."); err != nil {
+	if err := writePhaseInstruction(b, memory, sCtx, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object."); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext", err)
 	}
 
@@ -127,7 +127,7 @@ func BuildPlanContext( //nolint:gocyclo
 	// L3：系统指令区只放进程内常量（TaintNone）。TaskModel 由 LLM 从外部意图解析而来、
 	// GroundingGap 来自外部知识评估，二者都属数据而非指令：此前拼进 sysPrompt 并以
 	// TaintNone 写入 ZoneImmutable，等于把外部可控文本提权为系统指令（GR-4.1-003）。
-	if err := writePhaseInstruction(b, sCtx, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section."); err != nil {
+	if err := writePhaseInstruction(b, memory, sCtx, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section."); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext", err)
 	}
 
@@ -228,7 +228,7 @@ func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 	fsm.WriteConversationHistory(b, sCtx)
 
 	// L3：阶段契约。
-	fsm.WriteKernelInstruction(b, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
+	fsm.WritePhaseContract(b, memory, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
 
 	// L4：没有目标就无从判定 GoalAchieved：此前反思只看到执行结果。
 	if sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {

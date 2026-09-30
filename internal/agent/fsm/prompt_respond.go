@@ -54,10 +54,11 @@ func WriteConversationHistory(b *prompt.PromptBuilder, sCtx *StateContext) {
 }
 
 // WriteRespondSections 组装 S_RESPOND 的 L2/L3/L4 内容（L1 会话层由 WriteSessionLayer 写入）。
-// 记忆路径（agent/context.BuildRespondContext）与无记忆降级路径共用，两条路径 prompt 同构。
-func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
+// 记忆路径（agent/context.BuildRespondContext）与无记忆降级路径共用，两条路径 prompt 同构；
+// memory 决定 L3 契约位写选择器还是全文模板（见 WritePhaseContract），降级路径传 nil。
+func WriteRespondSections(b *prompt.PromptBuilder, memory protocol.MemoryFacade, sCtx *StateContext) {
 	WriteConversationHistory(b, sCtx) // L2
-	WriteKernelInstruction(b, "kernel/respond.md", "Reply to the user's latest message in natural language.")
+	WritePhaseContract(b, memory, "kernel/respond.md", "Reply to the user's latest message in natural language.")
 
 	sCtx.Mu.RLock()
 	rawIntent := sCtx.RawIntentTS
@@ -126,7 +127,7 @@ func (sm *StateMachine) promptRespond(sCtx *StateContext, pCtx protocol.StateCon
 	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
 		slog.Warn("respond: session layer failed, continuing without it", "err", err)
 	}
-	WriteRespondSections(b, sCtx)
+	WriteRespondSections(b, nil, sCtx)
 	msgs := AppendRespondReminder(FinishLayered(b, nil))
 	if sCtx.EpochTracker != nil {
 		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
