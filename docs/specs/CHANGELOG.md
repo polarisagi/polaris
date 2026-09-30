@@ -12,6 +12,7 @@
 - **[契约] 稳定层字节稳定规则**：进入 ImmutableCore 稳定层的集合必须确定序（`InMemoryToolRegistry.List()` 按名称升序；插件摘要 SQL 带 `ORDER BY`；用户画像 map 按键排序），MCP/插件连接状态标记（✓/~/✗）移入易变层。
 - **[契约] `PromptBuilder.BuildLayered` + `protocol.Layer*`**：内核四阶段 × 两条路径按 L0..L4 输出；`WriteStable/WritePhaseSystem/WriteHistoryMessage/SetLayer` 为层写入器，只改次序不改信任分区。`fsm.WriteSessionLayer/WritePlanHints/FinishLayered` 为公共写入器，新增阶段须经它们写 L1/L2。
 - **[契约] 对话历史**：`fsm.RenderConversationHistory` 删除，改 `fsm.WindowConversationHistory`（分块跳窗 + 确定性锚定摘要）；Plan/Reflect 亦携带同一 L2。`StateContext.PlanHintBlocks` 承载 Plan 运行期提示块，取代对 `msgs[0]` 的追加（会改写 L0）。
+- **[契约] 阶段契约库并入 L0（WP7，ADR-0105 决策九）**：新增 `m4_kernel.prompt.phase_contracts_in_core`（默认 true）；`configs.PhaseContractsSection/PhaseSelector`；`ImmutableCore` 增可选能力 `HasPhaseContracts()/StableMessageWithContracts()`（仅内核 `fsm.FinishLayered` 使用，`protocol.ImmutableCore` 接口不变，`StableMessage()`/`PrependToMessages` 不含契约段）；`fsm.WriteRespondSections` 增 `memory` 参数，各阶段 L3 契约位改经 `fsm.WritePhaseContract`（契约在 L0 时只写选择器，否则写完整模板）。
 - **[契约] 召回预算（WP3，ADR-0105 决策四）**：新增 `m4_kernel.recall.{item_max_chars,max_tokens,min_score,min_score_ratio}`；`StateContext.TurnRecall`（回合内召回复用，回合起点清空）；Perceive 不再以遗留 Goal 查反思/L2/RAG，改由 Plan 用本回合 Goal 补查；Reflect 的执行结果改经 `fsm.ExecuteResultForPrompt` 按观察上限注入；`fsm.HighTaintWarning` 常量取代字符串隐式耦合。
 
 ## 2026-09-29（ADR-0103 决策八：MCP 2026-07-28 客户端 — 含**契约变更**与 **DDL 变更**）
