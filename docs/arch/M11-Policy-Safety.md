@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:233 Cedar / 4:301 KillSwitch / 5:379 隐私 / 6:451 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:478 Factuality / 7:504 审计 / 8:528 多Agent宪法 / 9:564 威胁监控 / 13:578 降级 / 14:610 跨模块契约 / 15:629 任意文件读 / 16:638 流式安全防护 -->
+<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:233 Cedar / 4:301 KillSwitch / 5:379 隐私 / 6:452 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:479 Factuality / 7:505 审计 / 8:529 多Agent宪法 / 9:565 威胁监控 / 13:579 降级 / 14:611 跨模块契约 / 15:630 任意文件读 / 16:639 流式安全防护 -->
 
 ---
 
@@ -409,6 +409,7 @@ approval:
   - **OpaqueToken**（把 PII 在进入 LLM prompt 前替换为占位符 token、模型只见占位符、事后按需把占位符换回原文、原文全程不落盘）——✅ **已完全闭环实现**。
     - **令牌化（输入端）**：`internal/agent/agent_execute_effect.go` 的 `executeEffect` 入口调用 `withTaskScopeCtx` 把 `a.sCtx.SessionID`（不是 `a.sCtx.TaskID`——二者是不同字段，SessionID 贯穿会话生命周期不变，TaskID 随认领的 Blackboard 任务变化）注入 `ctx.Value(protocol.CtxTaskIDKey{})`；主路径和 PRM 候选路径组装好 `types.Message` 之后、调用 `provider.Infer` 之前，通过 `tokenizeMessagesForLLM` 对每条消息 `Content` 做 PII 提取和令牌化。任何提取错误均按 fail-closed 策略阻断，防止敏感信息流出。
     - **隔离与清理**：`guard.PIITokenVault` 内部为 `map[SessionID]map[token]真值` 二维结构，`TokenizeForTask`/`ResolveForTask`/`RestoreForTask` 均严格按 SessionID 命名空间隔离，**不做跨命名空间回退查找**——用错误的 SessionID 还原会 fail-closed 拒绝，而不是静默从其它会话的桶里读到值。`agent.go` 的 `handleTerminalState`（终态触发，`Run()` 即将返回前）调用 `ClearTask(a.sCtx.SessionID)`，与 `SecureZero` 协同执行，仅清理当前会话自己的命名空间，不影响进程内其它并发会话，避免内存泄漏。
+    - **确定性会话内令牌**（ADR-0105 决策十一）：同一 SessionID 内同一原文（按检测器输出的原文精确匹配，不做大小写/空白规范化以免合并不同实体）始终复用同一令牌，由与正向映射同锁、同生命周期的反向映射 `original→token` 实现（`ClearTask` 一并清除）；跨会话令牌仍独立随机、不可关联。令牌生成带碰撞检测重试（4 字节熵，同会话内存在生日碰撞可能，此前会静默覆盖他人映射）。令牌格式与 `ResolveForTask` fail-closed 语义不变。令牌库仅驻内存、不落 `task_pii_vault`，进程重启后重新生成（此时前缀缓存本就冷启动）。
     - **还原（输出端）**：在 `internal/tool/tool.go` 的 `InMemoryToolRegistry.ExecuteTool` 内，通过 `ctx.Value(protocol.CtxTaskIDKey{})` 提取同一 SessionID，并使用 `RestoreForTask` 安全精准还原真值，用后即焚。该 ctx 值与 `dag/executor.go` `DAGExecutor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)` 沿用同一仓库既有惯例，保证令牌化端与还原端使用同一 taskID 命名空间。
     - **已知局限**：目前只会针对 `Message.Content` 进行令牌化保护；`Message.Parts` 中因可能夹杂极其复杂多态的结构与多模态数据，强制文本替换具有高风险性，因此暂不纳入自动令牌化保护层。
   - **`SessionPIIVault.RestoreFromSnapshot`**（`internal/agent/context/pii_vault.go`）解决的是另一个更弱隔离级别的问题：`Snapshot` 把字段**原文**（非占位符）AES-256-GCM 加密写入 `task_pii_vault` 表，`Load` 按 taskID 解密返回；`RestoreFromSnapshot` 唯一调用点是 `internal/agent/recovery.go` 的 Provider 熔断恢复（Suspended→Resume），现仅校验快照存在（不再写 Scratch，恢复后无消费方），本质是"同会话内原文加密落盘 + 按 taskID 解密"，不涉及跨调用边界的占位符替换/换回，也不阻止原文进入 LLM prompt。
