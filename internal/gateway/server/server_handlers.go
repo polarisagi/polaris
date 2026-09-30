@@ -221,6 +221,36 @@ func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, snap)
 }
 
+// handleGetCapabilities 返回系统硬件与音频处理能力（供前端自适应调节预取与录音模式）。
+// GET /v1/system/capabilities
+func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
+	sttAvail := false
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		box := s.chatHandler.AudioService.STTEngine.Load()
+		sttAvail = (box != nil && box.E != nil)
+	}
+
+	prefetchCount := s.tierParams.TTSPrefetchCount
+	if prefetchCount <= 0 {
+		prefetchCount = 1
+	}
+
+	ttsProvider := "edge"
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		tBox := s.chatHandler.AudioService.TTSEngine.Load()
+		if tBox != nil && tBox.P != nil {
+			ttsProvider = "active"
+		}
+	}
+
+	httputil.WriteJSON(w, map[string]any{
+		"tts_prefetch_count": prefetchCount,
+		"stt_available":      sttAvail,
+		"tts_provider":       ttsProvider,
+		"hardware_tier":      int(s.tier),
+	})
+}
+
 // handleGetPendingApprovals/parseInterruptAction/handleAgentInterrupt/
 // handleResolveApproval（HITL 审批 + 中断处理）、agentStateString/
 // handleStatus（WebUI 状态快照）见 server_handlers_hitl.go（R7 拆分）。

@@ -7,6 +7,7 @@ import (
 
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/internal/observability/probe"
 )
 
 func TestHandleStatus(t *testing.T) {
@@ -80,5 +82,30 @@ func TestHandleHealthz(t *testing.T) {
 	s.handleHealthz(w, req)
 	if w.Result().StatusCode != http.StatusOK {
 		t.Errorf("expected 200 OK")
+	}
+}
+
+func TestHandleGetCapabilities(t *testing.T) {
+	s := &Server{}
+	s.SetTier(1, probe.TierParameters{TTSPrefetchCount: 2})
+
+	req := httptest.NewRequest("GET", "/v1/system/capabilities", nil)
+	w := httptest.NewRecorder()
+
+	s.handleGetCapabilities(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Result().StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+
+	if int(res["tts_prefetch_count"].(float64)) != 2 {
+		t.Errorf("expected tts_prefetch_count=2, got %v", res["tts_prefetch_count"])
+	}
+	if int(res["hardware_tier"].(float64)) != 1 {
+		t.Errorf("expected hardware_tier=1, got %v", res["hardware_tier"])
 	}
 }

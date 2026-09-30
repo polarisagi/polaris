@@ -95,6 +95,12 @@ func (c *Config) Validate() error {
 	if c.Inference.TTS.SherpaVersion == "" {
 		c.Inference.TTS.SherpaVersion = c.Inference.STT.SherpaVersion
 	}
+	if c.Inference.STT.Language == "" {
+		c.Inference.STT.Language = "zh"
+	}
+	if c.Inference.TTS.EdgeStyle == "" {
+		c.Inference.TTS.EdgeStyle = "chat"
+	}
 
 	if c.System.Tier < 0 || c.System.Tier > 3 {
 		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: system.tier must be 0-3, got %d", c.System.Tier))

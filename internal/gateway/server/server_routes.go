@@ -14,6 +14,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
+	mux.HandleFunc("GET /v1/system/capabilities", s.handleGetCapabilities)
 	mux.HandleFunc("GET /v1/doctor", s.sysadminHandler.HandleDoctor)
 	// M13 §接口清单：OpenAI 兼容端点（第三方客户端接入）。处理器与单测早已完备但
 	// 路由从未注册，生产 404（GR-9.2-001）。经 /v1/ 前缀统一鉴权中间件保护。

@@ -10,7 +10,13 @@ import (
 
 // ConvertToRawPCM 使用 ffmpeg 将音频转为 16kHz f32le 原始 PCM 流。
 // 此函数属于 internal/tool 工具层，是 exec 调用的合法封装位置。
-func ConvertToRawPCM(ctx context.Context, inPath string) ([]byte, error) {
+// ffmpegPath 为可选的可执行文件路径；若未提供或为空，默认回退至系统 PATH 中的 "ffmpeg"。
+func ConvertToRawPCM(ctx context.Context, inPath string, ffmpegPath ...string) ([]byte, error) {
+	exe := "ffmpeg"
+	if len(ffmpegPath) > 0 && ffmpegPath[0] != "" {
+		exe = ffmpegPath[0]
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	// 注意：这里保留原生 exec.CommandContext，不接入 Rust V2 沙箱（bash.RunSandboxedArgv）。
@@ -18,7 +24,7 @@ func ConvertToRawPCM(ctx context.Context, inPath string) ([]byte, error) {
 	// 而 ffmpeg 的二进制 PCM 音频流必须保持纯净（仅取 stdout）。如果走沙箱，合并的 stderr
 	// 文本会污染二进制流，导致下游 STT/TTS 模块解析失败。此外，inPath 是内部可信路径，
 	// 命令不包含外部输入拼接，本身 shell 注入风险极低。
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", inPath, "-f", "f32le", "-ac", "1", "-ar", "16000", "-")
+	cmd := exec.CommandContext(ctx, exe, "-y", "-i", inPath, "-f", "f32le", "-ac", "1", "-ar", "16000", "-")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "audio_convert: ffmpeg 转码失败", err)

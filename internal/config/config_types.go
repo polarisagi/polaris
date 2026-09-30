@@ -82,6 +82,8 @@ type STTConfig struct {
 	// 空字符串则回退到 SenseVoiceModelURL（向后兼容旧配置）。
 	SenseVoiceModelURLStd string `toml:"sense_voice_model_url_std"`
 	PunctModelURL         string `toml:"punct_model_url"`
+	// Language 指定识别语言："zh"（默认，中文，最准确）、"en"、"ja"、"ko"、"yue"（粤语）或 "auto"（自动检测）。
+	Language string `toml:"language"`
 }
 
 // TTSConfig TTS 引擎配置。支持三种 provider：
@@ -111,6 +113,10 @@ type TTSConfig struct {
 	// 留空时默认 zh-CN-XiaoxiaoNeural（晓晓，中文女声，音质最佳）。
 	// 其他优质中文声线：zh-CN-YunxiNeural（云希，男）/ zh-CN-XiaoYiNeural（晓伊）。
 	EdgeVoice string `toml:"edge_voice"`
+
+	// EdgeStyle Microsoft Edge TTS 情感/语气风格（如 "chat"、"cheerful"、"calm"、"default"）。
+	// 留空时默认 "chat"（自然对话风格）。
+	EdgeStyle string `toml:"edge_style"`
 
 	// ── http provider 专属 ──────────────────────────────────────────────────
 

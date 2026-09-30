@@ -78,6 +78,7 @@ backend = "pebble"
 # 两档均支持 zh/en/ja/ko/yue 多语种，通过 PunctModel 加标点。
 [inference.stt]
 sherpa_version = "1.13.2"
+language = "zh"
 # HQ 档：float32 SenseVoice，精度更高（FeatureHQSTT ≥1GB 时自动选择）
 sense_voice_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09.tar.bz2"
 # 标准档：int8 量化 SenseVoice，体积减半（FeatureLocalSTT ≥512MB 时自动选择）
@@ -94,6 +95,7 @@ provider = "edge"              # 默认 Edge TTS：免费、无需安装模型�
 
 # ── edge provider ────────────────────────────────────────────────────────────
 edge_voice = "zh-CN-XiaoxiaoNeural"  # 晓晓（女）；可选 zh-CN-YunxiNeural（云希，男）
+edge_style = "chat"                  # 风格：chat(对话) / cheerful(愉快) / calm(平静) / default(默认)
 
 # ── http provider ────────────────────────────────────────────────────────────
 http_endpoint = ""   # 填 "http://127.0.0.1:8000/tts" 启用 CosyVoice 2 / Qwen3-TTS

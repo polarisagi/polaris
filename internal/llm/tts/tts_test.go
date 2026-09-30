@@ -155,7 +155,7 @@ func TestNewEngine_NotLoaded(t *testing.T) {
 		libMu.Unlock()
 	}()
 
-	_, err := NewEngine("/some/model/dir")
+	_, err := NewEngine("/some/model/dir", 2)
 	if err == nil {
 		t.Error("expected error when library not loaded, got nil")
 	}
@@ -225,5 +225,32 @@ func TestModelDir(t *testing.T) {
 	got := ModelDir("/tts")
 	if got != "/tts/model" {
 		t.Errorf("got %q, want %q", got, "/tts/model")
+	}
+}
+
+// ── EdgeProvider BuildSSML ────────────────────────────────────────────────
+
+func TestEdgeProvider_BuildSSML(t *testing.T) {
+	// Style: chat (default)
+	p1 := NewEdgeProvider("zh-CN-XiaoxiaoNeural", "chat", nil)
+	ssml1 := buildSSML(p1, "你好，世界！")
+	if !strings.Contains(ssml1, "<mstts:express-as style='chat'>") {
+		t.Errorf("expected mstts:express-as with chat, got: %s", ssml1)
+	}
+	if !strings.Contains(ssml1, "xmlns:mstts='https://www.w3.org/2001/mstts'") {
+		t.Errorf("expected mstts namespace, got: %s", ssml1)
+	}
+	if !strings.Contains(ssml1, "你好，世界！") {
+		t.Errorf("expected text in ssml, got: %s", ssml1)
+	}
+
+	// Style: default (no express-as)
+	p2 := NewEdgeProvider("zh-CN-YunxiNeural", "default", nil)
+	ssml2 := buildSSML(p2, "Hello & <world>")
+	if strings.Contains(ssml2, "<mstts:express-as") {
+		t.Errorf("expected no express-as when style is default, got: %s", ssml2)
+	}
+	if !strings.Contains(ssml2, "Hello &amp; &lt;world&gt;") {
+		t.Errorf("expected XML escaped text, got: %s", ssml2)
 	}
 }

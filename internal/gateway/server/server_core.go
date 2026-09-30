@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/probe"
 
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
@@ -112,6 +113,9 @@ type Server struct {
 
 	// M9 激活的系统提示词（从 DB prompt_versions 表读取，Activate 回调热更新）
 	activatedSystemPrompt string // task_type='general' 的激活版本
+
+	tier       probe.Tier
+	tierParams probe.TierParameters
 
 	// Cron runner 生命周期控制
 	cronCancel context.CancelFunc
@@ -531,6 +535,23 @@ func (s *Server) SetTTSProvider(provider chat.TTSProvider) {
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
 		s.chatHandler.AudioService.SetTTSEngine(provider)
 	}
+}
+
+func (s *Server) SetAudioBinDir(binDir string) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetBinDir(binDir)
+	}
+}
+
+func (s *Server) SetAudioHTTPClient(client *http.Client) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetHTTPClient(client)
+	}
+}
+
+func (s *Server) SetTier(tier probe.Tier, params probe.TierParameters) {
+	s.tier = tier
+	s.tierParams = params
 }
 
 // SetWorktreeManagerFactory 注入工作区管理器工厂

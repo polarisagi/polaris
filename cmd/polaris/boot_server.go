@@ -292,11 +292,20 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 
 	// ─── §11.5 STT/TTS 引擎初始化（FeatureLocalSTT 门控，异步下载，不阻塞启动）
 	var sttGate *probe.FeatureGate
+	var tierParams *probe.TierParameters
 	if sb.AutoConf != nil {
 		sttGate = sb.AutoConf.Gate
+		tierParams = &sb.AutoConf.Config.Params
+		httpServer.SetTier(sb.AutoConf.Config.Tier, sb.AutoConf.Config.Params)
 	}
-	initSTTEngine(ctx, httpServer, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.STT)
-	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.TTS, sb.Dialer)
+	if sb.Layout.Bin != "" {
+		httpServer.SetAudioBinDir(sb.Layout.Bin)
+	}
+	if sb.SafeHTTP != nil {
+		httpServer.SetAudioHTTPClient(sb.SafeHTTP)
+	}
+	initSTTEngine(ctx, httpServer, sb.DataDir, sttGate, tierParams, sb.SafeHTTP, sb.Cfg.Inference.STT)
+	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, tierParams, sb.SafeHTTP, sb.Cfg.Inference.TTS, sb.Dialer)
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
 	// sb.Embedder 经 EmbeddingBatcher 合批接线后已是 *search.SyncBatcherAdapter，

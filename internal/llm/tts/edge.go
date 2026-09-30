@@ -38,16 +38,20 @@ type EdgeProvider struct {
 	voice      string // 声线，如 "zh-CN-XiaoxiaoNeural"
 	rate       string // 语速，如 "+0%"
 	pitch      string // 音调，如 "+0Hz"
+	style      string // 情感风格，如 "chat", "cheerful"
 }
 
 // NewEdgeProvider 返回 EdgeProvider。
 // voice 为空时使用默认中文女声 zh-CN-XiaoxiaoNeural（晓晓，音质最佳）。
-// 其他可选中文声线：zh-CN-YunxiNeural（云希，男）/ zh-CN-XiaoYiNeural（晓伊）。
-func NewEdgeProvider(voice string, safeDialer *network.SafeDialer) *EdgeProvider {
+// style 为空时使用默认对话风格 "chat"（自然生动，避免机械感）。
+func NewEdgeProvider(voice, style string, safeDialer *network.SafeDialer) *EdgeProvider {
 	if voice == "" {
 		voice = "zh-CN-XiaoxiaoNeural"
 	}
-	return &EdgeProvider{voice: voice, rate: "+0%", pitch: "+0Hz", safeDialer: safeDialer}
+	if style == "" {
+		style = "chat"
+	}
+	return &EdgeProvider{voice: voice, rate: "+0%", pitch: "+0Hz", style: style, safeDialer: safeDialer}
 }
 
 // Generate 调用 Edge TTS WebSocket 合成语音并返回 WAV 字节流。
@@ -96,6 +100,24 @@ func (p *EdgeProvider) Generate(ctx context.Context, text string) ([]byte, error
 // Close 实现 Provider 接口（EdgeProvider 无持久连接，空操作）。
 func (p *EdgeProvider) Close() error { return nil }
 
+// buildSSML 构造符合 Edge TTS 协议的 SSML，支持通过 mstts:express-as 控制情感与语气风格。
+func buildSSML(p *EdgeProvider, text string) string {
+	lang := edgeVoiceLang(p.voice)
+	escaped := edgeEscapeXML(text)
+	if p.style != "" && p.style != "default" {
+		return fmt.Sprintf(
+			"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='%s'>"+
+				"<voice name='%s'><mstts:express-as style='%s'>"+
+				"<prosody pitch='%s' rate='%s' volume='+0%%'>%s</prosody>"+
+				"</mstts:express-as></voice></speak>",
+			lang, p.voice, p.style, p.pitch, p.rate, escaped)
+	}
+	return fmt.Sprintf(
+		"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='%s'>"+
+			"<voice name='%s'><prosody pitch='%s' rate='%s' volume='+0%%'>%s</prosody></voice></speak>",
+		lang, p.voice, p.pitch, p.rate, escaped)
+}
+
 // edgeSendRequests 向已建立的 WebSocket 连接发送 speech.config 和 SSML 两条消息。
 func edgeSendRequests(conn *websocket.Conn, p *EdgeProvider, text string) error {
 	ts := edgeTimestamp()
@@ -109,11 +131,7 @@ func edgeSendRequests(conn *websocket.Conn, p *EdgeProvider, text string) error 
 		return apperr.Wrap(apperr.CodeInternal, "edge-tts: write config failed", err)
 	}
 
-	lang := edgeVoiceLang(p.voice)
-	ssml := fmt.Sprintf(
-		"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='%s'>"+
-			"<voice name='%s'><prosody pitch='%s' rate='%s' volume='+0%%'>%s</prosody></voice></speak>",
-		lang, p.voice, p.pitch, p.rate, edgeEscapeXML(text))
+	ssml := buildSSML(p, text)
 	ssmlMsg := fmt.Sprintf(
 		"X-RequestId:%s\r\nContent-Type: application/ssml+xml\r\nX-Timestamp:%s\r\nPath: ssml\r\n\r\n%s",
 		reqID, ts, ssml)

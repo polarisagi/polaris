@@ -114,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'skills')     Alpine.store('skills').load()
   if (page === 'plugins')    Alpine.store('plugins').load()
   if (page === 'automation') { Alpine.store('cron').load(); Alpine.store('approvals').startPolling() }
-  if (page === 'chat') Alpine.store('elicitations').startPolling()
+  if (page === 'chat') { Alpine.store('elicitations').startPolling(); Alpine.store('chat').fetchCapabilities?.(); }
   if (page === 'eval')       { void 0 }
 
   // 首次配置引导（延迟 400ms 等 Alpine reactive 系统就绪）

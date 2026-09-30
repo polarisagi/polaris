@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"net/http"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
@@ -74,6 +75,8 @@ type Dependencies struct {
 	TTSEngine             *atomic.Pointer[TTSProviderBox]
 	ContextRefExpander    *authcontext.ContextRefExpander
 	OutboxWriter          protocol.OutboxWriter
+	BinDir                string
+	HTTPClient            *http.Client
 }
 
 // NewChatHandler 故意不做构造函数级 fail-closed nil 强制校验（2026-07-08 复核
@@ -101,6 +104,12 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 	)
 
 	audio := NewAudioService(deps.STTEngine, deps.TTSEngine)
+	if deps.BinDir != "" {
+		audio.SetBinDir(deps.BinDir)
+	}
+	if deps.HTTPClient != nil {
+		audio.SetHTTPClient(deps.HTTPClient)
+	}
 
 	prompt := NewPromptAssemblyService(
 		deps.PromptMgr,

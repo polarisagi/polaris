@@ -35,6 +35,9 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolBackground = 20
 		p.PoolEval = 6
 		p.PoolCron = 6
+		p.STTNumThreads = 4
+		p.TTSNumThreads = 4
+		p.TTSPrefetchCount = 3
 
 	case probe.Tier2: // 24GB+
 		p.MaxConcurrentDAGNodes = 12
@@ -62,6 +65,9 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolBackground = 15
 		p.PoolEval = 4
 		p.PoolCron = 4
+		p.STTNumThreads = 4
+		p.TTSNumThreads = 4
+		p.TTSPrefetchCount = 3
 
 	case probe.Tier1: // 16GB
 		p.MaxConcurrentDAGNodes = 8
@@ -89,6 +95,9 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolBackground = 10
 		p.PoolEval = 2
 		p.PoolCron = 2
+		p.STTNumThreads = 2
+		p.TTSNumThreads = 2
+		p.TTSPrefetchCount = 2
 
 	default: // probe.Tier0 8GB
 		p.MaxConcurrentDAGNodes = 4
@@ -116,5 +125,8 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolBackground = 10
 		p.PoolEval = 2
 		p.PoolCron = 2
+		p.STTNumThreads = 1
+		p.TTSNumThreads = 2
+		p.TTSPrefetchCount = 1
 	}
 }

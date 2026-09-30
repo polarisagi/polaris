@@ -2,6 +2,7 @@ import Alpine from 'alpinejs'
 import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
 import { SSEClient, dedupeRunID } from '../sse.js'
 import { mcpAppsHost } from '../mcp_apps.js'
+import { WavRecorder } from '../audio/wav_recorder.js'
 // ══════════════════════════════════════════════════════════════════════════
 // store: chat（主对话状态机）
 // ══════════════════════════════════════════════════════════════════════════
@@ -18,8 +19,11 @@ Alpine.store('chat', {
   _historyIdx: -1,
   _inputHistory: [],     // 初始化输入历史数组，防止首次加载时未定义报错
   attachments: [],       // [{ uri, mime_type, name, dataUrl }]
+  capabilities: null,
   ttsEnabled: false,
   isRecording: false,
+  _wavRecorder: null,
+  _checkVADTimeout: null,
   _mediaRecorder: null,
   _audioChunks: [],
   lastAbortedInput: null,  // 上次被中断的用户输入内容，用于恢复编辑按钮
@@ -31,6 +35,17 @@ Alpine.store('chat', {
   approvals: [],         // 本回合待用户确认的操作（status/approval_required 事件）；回合结束即清空
 
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
+
+  async fetchCapabilities() {
+    try {
+      const res = await fetch('/v1/system/capabilities', { headers: authHeaders() })
+      if (res.ok) {
+        this.capabilities = await res.json()
+      }
+    } catch (e) {
+      console.warn('Failed to fetch system capabilities:', e)
+    }
+  },
 
   toggleTTS() {
     this.ttsEnabled = !this.ttsEnabled;
@@ -90,9 +105,7 @@ Alpine.store('chat', {
 
   async toggleRecording() {
     if (this.isRecording) {
-      if (this._globalRecorder && this._globalRecorder.state !== 'inactive') {
-        this._globalRecorder.stop();
-      }
+      await this._stopRecording();
       return;
     }
 
@@ -100,52 +113,21 @@ Alpine.store('chat', {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       window.dispatchEvent(new CustomEvent('stt-start'));
 
-      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-      const audioContext = new AudioContextCtor();
-      const analyser = audioContext.createAnalyser();
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-
-      analyser.fftSize = 512;
-      const bufferLength = analyser.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
+      const recorder = new WavRecorder(stream, 16000);
+      await recorder.init();
+      this._wavRecorder = recorder;
 
       let silenceStart = null;
-      const SILENCE_THRESHOLD = 5;
-      const SHORT_PAUSE_MS = 500;
-      const LONG_PAUSE_MS = 2500;
-
-      this._globalChunks = [];
-      this._currentChunkChunks = [];
-
-      const preferredTypes = ['audio/webm', 'audio/mp4', 'audio/ogg'];
-      let mimeType = '';
-      for (const t of preferredTypes) {
-        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) {
-          mimeType = t;
-          break;
-        }
-      }
-      const recorderOpts = mimeType ? { mimeType } : {};
-
-      // Global Recorder
-      this._globalRecorder = new MediaRecorder(stream, recorderOpts);
-      this._globalRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) this._globalChunks.push(e.data);
-      };
-
-      // Chunk Recorder
-      this._chunkRecorder = new MediaRecorder(stream, recorderOpts);
-      this._chunkRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) this._currentChunkChunks.push(e.data);
-      };
+      // 优化后的 VAD 参数：阈值 8 减少底噪触发，停顿 1200ms 允许自然换气与思考
+      const SILENCE_THRESHOLD = 8;
+      const SHORT_PAUSE_MS = 1200;
+      const LONG_PAUSE_MS = 4000;
 
       let isSpeaking = false;
-      let checkVADTimeout;
 
-      const uploadChunk = async (blob, ext) => {
+      const uploadChunk = async (blob) => {
         const formData = new FormData();
-        formData.append('file', blob, `chunk.${ext}`);
+        formData.append('file', blob, 'chunk.wav');
         try {
           const headers = authHeaders();
           delete headers['Content-Type'];
@@ -157,104 +139,92 @@ Alpine.store('chat', {
             }
           }
         } catch (e) {
-          console.error("Chunk STT Error", e);
+          console.error('Chunk STT Error', e);
         }
       };
 
-      this._chunkRecorder.onstop = () => {
-        if (this._currentChunkChunks.length === 0) return;
-        const actualMime = this._chunkRecorder.mimeType || mimeType || 'audio/webm';
-        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
-        const audioBlob = new Blob(this._currentChunkChunks, { type: actualMime });
-        this._currentChunkChunks = [];
-        uploadChunk(audioBlob, ext);
-      };
-
       const checkVAD = () => {
-        if (!this.isRecording) return;
+        if (!this.isRecording || !this._wavRecorder) return;
 
-        analyser.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < bufferLength; i++) { sum += dataArray[i]; }
-        const average = sum / bufferLength;
-
+        const volume = this._wavRecorder.getVolume();
         const now = Date.now();
-        if (average > SILENCE_THRESHOLD) {
+
+        if (volume > SILENCE_THRESHOLD) {
           if (!isSpeaking) {
             isSpeaking = true;
             silenceStart = null;
-            if (this._chunkRecorder.state === 'inactive') {
-              this._currentChunkChunks = [];
-              this._chunkRecorder.start();
-            }
           } else {
             silenceStart = null;
           }
         } else {
           if (isSpeaking) {
-            if (!silenceStart) silenceStart = now;
-            else if (now - silenceStart > SHORT_PAUSE_MS) {
+            if (!silenceStart) {
+              silenceStart = now;
+            } else if (now - silenceStart > SHORT_PAUSE_MS) {
               isSpeaking = false;
-              if (this._chunkRecorder.state !== 'inactive') {
-                this._chunkRecorder.stop();
+              const chunkBlob = this._wavRecorder.flushChunk();
+              if (chunkBlob && chunkBlob.size > 1000) {
+                uploadChunk(chunkBlob);
               }
             }
           } else {
             if (silenceStart && now - silenceStart > LONG_PAUSE_MS) {
-              this.toggleRecording(); // Auto stop on long silence
+              this.toggleRecording(); // 长时间无声自动结束录音
               return;
             }
           }
         }
-        checkVADTimeout = requestAnimationFrame(checkVAD);
+        this._checkVADTimeout = requestAnimationFrame(checkVAD);
       };
 
-      this._globalRecorder.onstop = async () => {
-        this.isRecording = false;
-        cancelAnimationFrame(checkVADTimeout);
-        if (this._chunkRecorder.state !== 'inactive') {
-          this._chunkRecorder.stop();
-        }
-        stream.getTracks().forEach(track => track.stop());
-        audioContext.close();
-
-        const actualMime = this._globalRecorder.mimeType || mimeType || 'audio/webm';
-        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
-        const audioBlob = new Blob(this._globalChunks, { type: actualMime });
-        this._globalChunks = [];
-
-        if (Alpine.store('toast')) {
-          Alpine.store('toast').show('ok', Alpine.store('i18n').t('chat_stt_global_checking'));
-        }
-
-        const formData = new FormData();
-        formData.append('file', audioBlob, `global.${ext}`);
-
-        try {
-          const headers = authHeaders();
-          delete headers['Content-Type'];
-          const resp = await fetch('/v1/audio/transcriptions', { method: 'POST', headers, body: formData });
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.text) {
-              window.dispatchEvent(new CustomEvent('stt-final', { detail: data }));
-            }
-          } else {
-            throw new Error(`Status ${resp.status}`);
-          }
-        } catch (e) {
-          console.error("Global STT Failed", e);
-          if (Alpine.store('toast')) Alpine.store('toast').show('error', Alpine.store('i18n').t('chat_stt_error'));
-        }
-      };
-
-      this._globalRecorder.start();
       this.isRecording = true;
       checkVAD();
 
     } catch (e) {
-      console.error("Failed to start recording", e);
+      console.error('Failed to start recording', e);
       alert(Alpine.store('i18n').t('chat_stt_mic_error'));
+    }
+  },
+
+  async _stopRecording() {
+    this.isRecording = false;
+    if (this._checkVADTimeout) {
+      cancelAnimationFrame(this._checkVADTimeout);
+      this._checkVADTimeout = null;
+    }
+
+    if (!this._wavRecorder) return;
+
+    const globalWavBlob = this._wavRecorder.flushAll();
+    this._wavRecorder.close();
+    this._wavRecorder = null;
+
+    if (!globalWavBlob || globalWavBlob.size < 1000) {
+      return;
+    }
+
+    if (Alpine.store('toast')) {
+      Alpine.store('toast').show('ok', Alpine.store('i18n').t('chat_stt_global_checking'));
+    }
+
+    const formData = new FormData();
+    formData.append('file', globalWavBlob, 'global.wav');
+
+    try {
+      const headers = authHeaders();
+      delete headers['Content-Type'];
+      const resp = await fetch('/v1/audio/transcriptions', { method: 'POST', headers, body: formData });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.text) {
+          window.dispatchEvent(new CustomEvent('stt-final', { detail: data }));
+        }
+      } else {
+        throw new Error(`Status ${resp.status}`);
+      }
+    } catch (e) {
+      console.error('Global STT Failed', e);
+      if (Alpine.store('toast')) Alpine.store('toast').show('error', Alpine.store('i18n').t('chat_stt_error'));
     }
   },
 
@@ -392,22 +362,15 @@ Alpine.store('chat', {
       .replace(/[*_~`#>]/g, '')
       // 移除行首的无序列表符
       .replace(/^- /gm, '')
-      // 将中文标点统一替换为英文标点，帮助海外核心的 TTS 模型正确识别停顿
-      .replace(/，/g, ', ')
-      .replace(/。/g, '. ')
-      .replace(/！/g, '! ')
-      .replace(/？/g, '? ')
-      .replace(/：/g, ': ')
-      .replace(/；/g, '; ')
+      // 仅规整引号与括号，保留中文标点（，。！？；：、）以保留中文语音合成的自然韵律与停顿
       .replace(/“|”/g, '"')
       .replace(/‘|’/g, "'")
-      .replace(/（/g, ' ( ')
-      .replace(/）/g, ' ) ')
-      .replace(/、/g, ', ')
+      .replace(/（/g, '(')
+      .replace(/）/g, ')')
       .trim();
 
-    // 按句号、感叹号、问号、换行符进行断句，避免长文本生成过慢
-    const regex = /([。？！.?!]|\n+)/;
+    // 按句号、感叹号、问号、换行符等标点断句，避免长文本生成过慢
+    const regex = /([。？！.?!\n]+)/;
     const parts = cleanText.split(regex);
     const sentences = [];
     for (let i = 0; i < parts.length; i += 2) {
@@ -433,32 +396,52 @@ Alpine.store('chat', {
         }
       };
 
+      const fetchAudioBlob = async (sentenceText) => {
+        const resp = await fetch('/v1/audio/speech', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: sentenceText })
+        });
+        if (!resp.ok) throw new Error('TTS Request Failed: ' + resp.status);
+        return resp.blob();
+      };
+
+      // 双缓冲异步预取：根据硬件 capabilities 决策是否开启预取（Tier 1+ 开启双缓冲）
+      const prefetchLimit = this.capabilities?.tts_prefetch_count ?? 2;
+      const shouldPrefetch = prefetchLimit >= 2;
+      let nextBlobPromise = null;
+
       for (let i = 0; i < sentences.length; i++) {
-        // 如果中途被切断或按了停止按钮
         if (isStopped || this.playingMsgIdx !== idx || this._audioPlayer !== audio) {
           break;
         }
 
         const sentence = sentences[i];
-        
-        // 抓取当前句子的音频
-        const resp = await fetch('/v1/audio/speech', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: sentence })
-        });
-        
-        if (!resp.ok) throw new Error('TTS Request Failed');
-        
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
+        let currentBlob;
+
+        if (nextBlobPromise) {
+          try {
+            currentBlob = await nextBlobPromise;
+          } catch (err) {
+            console.warn('TTS prefetch failed, retrying on demand:', err);
+            currentBlob = await fetchAudioBlob(sentence);
+          }
+          nextBlobPromise = null;
+        } else {
+          currentBlob = await fetchAudioBlob(sentence);
+        }
+
+        // 若硬件支持且存在下一句，立即触发后台异步拉取
+        if (shouldPrefetch && i + 1 < sentences.length && !isStopped) {
+          nextBlobPromise = fetchAudioBlob(sentences[i + 1]);
+        }
 
         if (isStopped || this.playingMsgIdx !== idx || this._audioPlayer !== audio) {
-          URL.revokeObjectURL(url);
           break;
         }
 
         // 播放当前句子
+        const url = URL.createObjectURL(currentBlob);
         audio.src = url;
         
         // 包装 play 在 Promise 中等待结束

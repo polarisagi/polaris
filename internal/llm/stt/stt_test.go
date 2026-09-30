@@ -127,7 +127,7 @@ func TestNewEngine_LibraryNotLoaded(t *testing.T) {
 		libMu.Unlock()
 	}()
 
-	e, err := NewEngine("/tmp/model", "")
+	e, err := NewEngine("/tmp/model", "", "zh", 1)
 	if err != nil {
 		t.Fatalf("NewEngine with unloaded library should not error: %v", err)
 	}

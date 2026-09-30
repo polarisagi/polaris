@@ -44,6 +44,11 @@ type TierParameters struct {
 	PoolBackground    int `json:"pool_background"`
 	PoolEval          int `json:"pool_eval"`
 	PoolCron          int `json:"pool_cron"`
+
+	// M13 STT / TTS
+	STTNumThreads    int `json:"stt_num_threads"`
+	TTSNumThreads    int `json:"tts_num_threads"`
+	TTSPrefetchCount int `json:"tts_prefetch_count"`
 }
 
 // computeTierParameters selects tier-appropriate numeric defaults.

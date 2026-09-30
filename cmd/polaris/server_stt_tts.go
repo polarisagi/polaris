@@ -23,7 +23,7 @@ import (
 //  1. 立即注入 mock 引擎（保证 /v1/audio/transcriptions 不返回 503）
 //  2. 若门控禁用，仅打 Info 日志后返回
 //  3. 否则在后台 goroutine：EnsureAssets → LoadLibrary → NewEngine → 替换为真实引擎
-func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, httpClient *http.Client, sttConfig config.STTConfig) {
+func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, params *probe.TierParameters, httpClient *http.Client, sttConfig config.STTConfig) {
 	sttDir := filepath.Join(dataDir, "models", "sensevoice")
 
 	// 立即设置 mock 引擎，保证接口可用
@@ -47,6 +47,15 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 		// SenseVoiceModelURLStd 为空（旧配置）则回退到 SenseVoiceModelURL
 	}
 
+	numThreads := 1
+	if params != nil && params.STTNumThreads > 0 {
+		numThreads = params.STTNumThreads
+	}
+	lang := sttConfig.Language
+	if lang == "" {
+		lang = "zh"
+	}
+
 	// 异步下载 + 重载：不阻塞启动路径
 	concurrent.SafeGo(ctx, "server_stt_tts.stt_download", func(ctx context.Context) {
 		if err := stt.EnsureAssets(ctx, sttDir, httpClient, sttConfig.SherpaVersion, modelURL, sttConfig.PunctModelURL); err != nil {
@@ -61,7 +70,7 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 		}
 
 		modelDir := stt.ModelDir(sttDir)
-		engine, err := stt.NewEngine(modelDir, stt.PunctModelDir(sttDir))
+		engine, err := stt.NewEngine(modelDir, stt.PunctModelDir(sttDir), lang, numThreads)
 		if err != nil {
 			slog.Warn("stt: engine init failed", "err", err)
 			return
@@ -71,6 +80,8 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 			"model_dir", modelDir,
 			"hq", useHQ,
 			"model_url", modelURL,
+			"language", lang,
+			"threads", numThreads,
 		)
 	})
 }
@@ -81,13 +92,13 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 //   - "edge"    → EdgeProvider（Microsoft Edge TTS WebSocket，无需下载，立即可用）
 //   - "http"    → HTTPProvider（外部 sidecar，如 CosyVoice 2 / Qwen3-TTS）
 //   - ""/"sherpa" → SherpaProvider（sherpa-onnx 本地 Kokoro，异步下载后激活）
-func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, httpClient *http.Client, ttsConfig config.TTSConfig, safeDialer *network.SafeDialer) {
+func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, params *probe.TierParameters, httpClient *http.Client, ttsConfig config.TTSConfig, safeDialer *network.SafeDialer) {
 	switch ttsConfig.Provider {
 	case "edge":
 		// Edge TTS：免费、无需下载、立即激活，不受 FeatureGate 门控（无内存开销）
-		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice, safeDialer)
+		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice, ttsConfig.EdgeStyle, safeDialer)
 		s.SetTTSProvider(&ttsAdapter{inner: p})
-		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice)
+		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice, "style", ttsConfig.EdgeStyle)
 		return
 
 	case "http":
@@ -113,6 +124,11 @@ func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 		return
 	}
 
+	ttsNumThreads := 2
+	if params != nil && params.TTSNumThreads > 0 {
+		ttsNumThreads = params.TTSNumThreads
+	}
+
 	ttsDir := filepath.Join(dataDir, "models", "kokoro")
 	concurrent.SafeGo(ctx, "server_stt_tts.tts_download", func(ctx context.Context) {
 		sttDir := filepath.Join(dataDir, "models", "sensevoice")
@@ -128,13 +144,13 @@ func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 		}
 
 		modelDir := tts.ModelDir(ttsDir)
-		engine, err := tts.NewEngine(modelDir)
+		engine, err := tts.NewEngine(modelDir, ttsNumThreads)
 		if err != nil {
 			slog.Warn("tts: engine init failed", "err", err)
 			return
 		}
 		s.SetTTSProvider(&ttsAdapter{inner: engine})
-		slog.Info("tts: sherpa-onnx Kokoro active", "model_dir", modelDir)
+		slog.Info("tts: sherpa-onnx Kokoro active", "model_dir", modelDir, "threads", ttsNumThreads)
 	})
 }
 

@@ -69,13 +69,17 @@ type Engine struct {
 }
 
 // NewEngine 构造新的 Sherpa-ONNX 离线 TTS 引擎 (Kokoro 模型)
-func NewEngine(modelDir string) (*Engine, error) {
+func NewEngine(modelDir string, numThreads int) (*Engine, error) {
 	libMu.Lock()
 	lib := libInst
 	libMu.Unlock()
 
 	if lib == nil {
 		return nil, apperr.New(apperr.CodeInternal, "tts: library not loaded")
+	}
+
+	if numThreads <= 0 {
+		numThreads = 2
 	}
 
 	const (
@@ -112,7 +116,7 @@ func NewEngine(modelDir string) (*Engine, error) {
 	dataDir := filepath.Join(modelDir, "espeak-ng-data")
 	lexiconPath := fmt.Sprintf("%s,%s", filepath.Join(modelDir, "lexicon-zh.txt"), filepath.Join(modelDir, "lexicon-us-en.txt"))
 
-	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelNumThreads)) = 4
+	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelNumThreads)) = int32(numThreads)
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelProvider)) = cString("cpu")
 
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelKokoroModel)) = cString(modelPath)

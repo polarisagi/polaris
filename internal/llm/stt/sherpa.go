@@ -92,13 +92,20 @@ type Engine struct {
 }
 
 // NewEngine 构造新的 Sherpa-ONNX 离线推理引擎
-func NewEngine(modelDir, punctDir string) (*Engine, error) {
+func NewEngine(modelDir, punctDir, language string, numThreads int) (*Engine, error) {
 	libMu.Lock()
 	lib := libInst
 	libMu.Unlock()
 
 	if lib == nil {
 		return &Engine{recognizer: nil}, nil
+	}
+
+	if language == "" {
+		language = "zh"
+	}
+	if numThreads <= 0 {
+		numThreads = 1
 	}
 
 	// 动态构造 SherpaOnnxOfflineRecognizerConfig (v1.13.2 布局)
@@ -136,10 +143,10 @@ func NewEngine(modelDir, punctDir string) (*Engine, error) {
 	modelPath := filepath.Join(modelDir, "model.onnx")
 	tokensPath := filepath.Join(modelDir, "tokens.txt")
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceModel)) = cString(modelPath)
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceLanguage)) = cString("auto")
+	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceLanguage)) = cString(language)
 	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceUseItn)) = 1
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelTokens)) = cString(tokensPath)
-	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelNumThreads)) = 1
+	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelNumThreads)) = int32(numThreads)
 	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelDebug)) = 0
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelProvider)) = cString("cpu")
 
@@ -167,7 +174,7 @@ func NewEngine(modelDir, punctDir string) (*Engine, error) {
 
 		punctModelPath := filepath.Join(punctDir, "model.onnx")
 		*(*uintptr)(unsafe.Pointer(pCfgPtr + PunctOffsetModel)) = cString(punctModelPath)
-		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetNumThreads)) = 1
+		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetNumThreads)) = int32(numThreads)
 		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetDebug)) = 0
 		*(*uintptr)(unsafe.Pointer(pCfgPtr + PunctOffsetProvider)) = cString("cpu")
 

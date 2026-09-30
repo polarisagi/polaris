@@ -156,6 +156,8 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		ActivatedSystemPrompt: s.activatedSystemPrompt,
 		STTEngine:             sttPtr,
 		TTSEngine:             ttsPtr,
+		BinDir:                filepath.Join(s.dataDir, "bin"),
+		HTTPClient:            httpClient,
 		// WithWorkDir 2026-07-21 deadcode 审查修复：此前未传，@file 引用解析退化为
 		// 相对进程 CWD（而非 dataDir）解析路径；同一 Dependencies 结构体的其他字段
 		// 早已能拿到 s.dataDir，此处透传而非发明新配置源。
