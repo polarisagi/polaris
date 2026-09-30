@@ -20,33 +20,79 @@ var ErrUnknownPIIToken = apperr.New(apperr.CodeForbidden, "pii_token_vault: unkn
 
 // PIITokenVault 会话级轻量可逆令牌管理。
 // 作用域限定在单次请求/单个 task 内，只存在内存里，不落盘。
+//
+// 确定性会话内令牌（ADR-0105 决策十一）：同一 taskID 内同一原文始终得到同一令牌，
+// 使 LLM 请求里含 PII 的历史/画像/核心记忆在每次调用间字节一致（Provider 前缀缓存
+// 不在此处断开），模型也能识别"同一个邮箱/同一个人"。跨 taskID 令牌仍由 crypto/rand
+// 独立生成，互不可关联。
+//
+// 安全审查结论（WP9）：
+//  1. 令牌相等性泄露的信息（"这两处是同一个值"）在同一会话内本就可从上下文推断，
+//     且令牌与原文之间无任何可计算关系（纯随机、非哈希/HMAC，无法做字典攻击）；
+//  2. 跨会话不可关联：令牌按 taskID 各自独立随机，同一原文在两个会话里得到不同令牌；
+//  3. ResolveForTask 只查本 taskID 的正向映射，fail-closed 语义不变；
+//  4. 反向映射 original→token 与正向映射同锁、同生命周期（ClearTask 一并删除），
+//     不额外持久化；原文本来就驻留在正向映射里，未新增暴露面；
+//  5. 碰撞：此前令牌重复会静默覆盖另一原文的映射（还原出错误的 PII），
+//     现在碰撞时重试生成（令牌只有 32 bit 熵，n 个不同值的同会话碰撞概率约 n²/2³³，n=1 万时约 1.2%）。
+//
+// 有意不做规范化：按检测器输出的原文精确匹配。检测器为正则规则，对同一实体的
+// 大小写/空白/分隔符不同写法（Alice@X.com vs alice@x.com、138 0000 1111 vs
+// 13800001111）给出不同原文，这些得到不同令牌——代价只是缓存命中略低，而规范化
+// 有把不同实体合并的风险（邮箱本地部分在部分系统大小写敏感），合并是不可逆的
+// 信息损失，宁可保守。
 type PIITokenVault struct {
-	mu     sync.RWMutex
-	tokens map[string]map[string]string // taskID -> token -> originalValue
+	mu      sync.RWMutex
+	tokens  map[string]map[string]string // taskID -> token -> originalValue
+	reverse map[string]map[string]string // taskID -> originalValue -> token（与 tokens 同锁同生命周期）
+	// randHex 令牌随机源，测试可替换以制造碰撞；生产恒为 secureRandomHex。
+	randHex func(n int) string
 }
 
 func NewPIITokenVault() *PIITokenVault {
 	return &PIITokenVault{
-		tokens: make(map[string]map[string]string),
+		tokens:  make(map[string]map[string]string),
+		reverse: make(map[string]map[string]string),
+		randHex: secureRandomHex,
 	}
 }
 
 // TokenizeForTask 记录原始值并返回一个人类可读的短 token，绑定到指定的 taskID。
+// 同一 taskID 内同一原文重复调用返回同一令牌（确定性会话内令牌）。
 func (v *PIITokenVault) TokenizeForTask(taskID string, original string) string {
-	// 4 字节 → 8 位小写 hex，与 tokenPattern ⟦PII:[0-9a-f]{8}⟧ 严格对应。
-	// 熵源不可用时 secureRandomHex fail-fast，绝不用可预测值生成令牌——
-	// 全零 shortID 会让同一 task 内所有 PII 映射塌缩成一个 key 互相覆盖。
-	shortID := secureRandomHex(4)
-
-	token := fmt.Sprintf("⟦PII:%s⟧", shortID)
+	// 快路径：读锁命中反向映射（每次 LLM 调用对全部历史消息都会走到这里）。
+	v.mu.RLock()
+	if tok, ok := v.reverse[taskID][original]; ok {
+		v.mu.RUnlock()
+		return tok
+	}
+	v.mu.RUnlock()
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	// 双检：读锁释放到写锁获取之间可能已被并发写入。
+	if tok, ok := v.reverse[taskID][original]; ok {
+		return tok
+	}
 	if v.tokens[taskID] == nil {
 		v.tokens[taskID] = make(map[string]string)
+		v.reverse[taskID] = make(map[string]string)
+	}
+	// 4 字节 → 8 位小写 hex，与 tokenPattern ⟦PII:[0-9a-f]{8}⟧ 严格对应。
+	// 熵源不可用时 secureRandomHex fail-fast，绝不用可预测值生成令牌——
+	// 全零 shortID 会让同一 task 内所有 PII 映射塌缩成一个 key 互相覆盖。
+	// 碰撞检测：已占用的令牌重新生成，避免覆盖另一原文的映射。
+	var token string
+	// 无上限重试：每次成功概率 ≥ 1 - n/2³²，期望远小于 2 次；熵源损坏时
+	// secureRandomBytes 自身会 panic，不会在此空转。
+	for {
+		token = fmt.Sprintf("⟦PII:%s⟧", v.randHex(4))
+		if _, taken := v.tokens[taskID][token]; !taken {
+			break
+		}
 	}
 	v.tokens[taskID][token] = original
-
+	v.reverse[taskID][original] = token
 	return token
 }
 
@@ -156,15 +202,15 @@ func (v *PIITokenVault) TokenizeKnownValues(taskID string, text string) string {
 		return text
 	}
 	v.mu.RLock()
-	taskTokens, ok := v.tokens[taskID]
-	if !ok || len(taskTokens) == 0 {
+	taskReverse := v.reverse[taskID]
+	if len(taskReverse) == 0 {
 		v.mu.RUnlock()
 		return text
 	}
-	// 复制一份 value→token 反向映射，尽快释放锁，不在持锁期间做字符串替换。
-	reverse := make(map[string]string, len(taskTokens))
-	originals := make([]string, 0, len(taskTokens))
-	for tok, original := range taskTokens {
+	// 复制一份 value→token 映射，尽快释放锁，不在持锁期间做字符串替换。
+	reverse := make(map[string]string, len(taskReverse))
+	originals := make([]string, 0, len(taskReverse))
+	for original, tok := range taskReverse {
 		if original == "" {
 			continue
 		}
@@ -197,4 +243,5 @@ func (v *PIITokenVault) ClearTask(taskID string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.tokens, taskID)
+	delete(v.reverse, taskID)
 }

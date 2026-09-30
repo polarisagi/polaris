@@ -233,3 +233,38 @@ func TestPIITokenVault_ClearTask_OnlyClearsOwnNamespace(t *testing.T) {
 		t.Fatalf("expected session-B token to survive session-A's ClearTask, got val=%q err=%v", val, err)
 	}
 }
+
+// ADR-0105 决策十一：多条消息、多次 tokenizeMessagesForLLM 字节一致——
+// 这是 Provider 前缀缓存在请求边界不被 PII 令牌打断的直接证明。
+func TestTokenizeMessagesForLLM_ByteStableAcrossCalls(t *testing.T) {
+	a := &Agent{Security: SecurityBundle{PIIDetector: guard.NewPIIDetector(), TokenVault: guard.NewPIITokenVault()}}
+	ctx := context.WithValue(context.Background(), protocol.CtxTaskIDKey{}, "sess-stable")
+	msgs := []types.Message{
+		{Role: "system", Content: "profile: contact alice@example.com"},
+		{Role: "user", Content: "mail bob@example.com and alice@example.com"},
+		{Role: "assistant", Content: "no pii here"},
+	}
+	first, err := a.tokenizeMessagesForLLM(ctx, msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 5; round++ {
+		again, err := a.tokenizeMessagesForLLM(ctx, msgs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range first {
+			if first[i].Content != again[i].Content {
+				t.Fatalf("round %d msg %d bytes differ:\n%q\n%q", round, i, first[i].Content, again[i].Content)
+			}
+		}
+	}
+	if !strings.Contains(first[0].Content, "⟦PII:") {
+		t.Fatalf("expected tokenization, got %q", first[0].Content)
+	}
+	// 同一邮箱在不同消息中是同一令牌（模型可识别同一实体）。
+	tokA := first[0].Content[strings.Index(first[0].Content, "⟦PII:"):]
+	if !strings.Contains(first[1].Content, tokA) {
+		t.Fatalf("same email must share token across messages: %q vs %q", first[0].Content, first[1].Content)
+	}
+}
