@@ -146,7 +146,7 @@
   "internal/security/guard/factuality_guard_numeric.go": "133f2bea05ea032ce3fbd6cd9cefb74cb1e44d692d893cf9b46ab486bb654114",
   "internal/security/guard/pii_desensitizer.go": "56563c565899d568b32e88dab12b3b608afd38be7dccc9a76165068621b5fe6d",
   "internal/security/guard/pii_detector.go": "711e7126b97217585c9787fa3fd0b532d36fd39147e9b11771a462ef4553915e",
-  "internal/security/guard/pii_token_vault.go": "56ab0009d2840a7bc8c4c97c5fa2202d7d700425509b5c8a2e92208f6c67d600",
+  "internal/security/guard/pii_token_vault.go": "2d5f79d211ffbb1e1eff40fade2f6553c871ae1af532b409564948b2c86522b7",
   "internal/security/guard/random.go": "3a464656cc508cf47d41e610409e9c228a30e16b3fddb714ff8a8c94ef594cc0",
   "internal/security/guard/sic.go": "4c397a743e6ef7b1a33d2ebd1298f7cd20e1c4132e171da907136e9be8547b4f",
   "internal/security/guard/system_prompt_guard.go": "9334be99f7ad402a1f1fc0aaddd81013ea1c8a0003ff74a8e57770e6223598ac",
