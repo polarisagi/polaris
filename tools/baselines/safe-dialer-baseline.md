@@ -24,7 +24,7 @@
 
 - internal/downloader/proxy.go:162 `raceFastestMirror` 的 `baseClient == nil` 回落。
   当前镜像清单是内置常量，SSRF 面窄；但回落本身无日志、无指标。
-- internal/llm/adapter/anthropic.go:62 `client.Transport == nil` 回落。LLM base URL 可配置，
+- internal/llm/adapter/anthropic.go:83 `client.Transport == nil` 回落。LLM base URL 可配置，
   这条的 SSRF 面比上一条大。
 - internal/llm/rate_tracker.go:195 `RateLimitCapturingTransport.Inner == nil` 回落。
   该 Transport 是包装器，Inner 由装配方注入。

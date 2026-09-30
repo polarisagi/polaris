@@ -72,7 +72,8 @@ The script must implement the deterministic equivalent of this tool call sequenc
 		},
 	}
 
-	resp, err := safecall.Infer(ctx, g.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
+	resp, err := safecall.Infer(ctx, g.provider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposeLogicCollapseCodegen))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "LLM inference failed", err)
 	}

@@ -29,8 +29,12 @@ type AnthropicAdapter struct {
 	client              *http.Client
 	caps                types.ProviderCapabilities
 	enablePromptCaching bool   // 注入 cache_control 标记以激活 prompt caching
-	baseURL             string // 空值 → "https://api.anthropic.com"（测试可覆盖）
-	tbr                 *metrics.TokenBurnRate
+	cacheTTL            string // cache_control.ttl：""|"5m"=API 默认不显式下发，"1h"=长 TTL（写入 2×）
+	// inlineNonLeadingSystem 开启时只有开头连续的 system 消息进 system 参数，其后的 system 转 user 角色
+	// <system_instruction> 块留在原位（ADR-0105 决策一，配置 m1_router.anthropic.inline_nonleading_system）。
+	inlineNonLeadingSystem bool
+	baseURL                string // 空值 → "https://api.anthropic.com"（测试可覆盖）
+	tbr                    *metrics.TokenBurnRate
 }
 
 var _ protocol.Provider = (*AnthropicAdapter)(nil)
@@ -46,6 +50,23 @@ func WithAnthropicPromptCaching() AnthropicOption {
 		a.enablePromptCaching = true
 		a.caps.CostPer1KCacheHit = 0.30 // Anthropic cache read: $0.30/1M tokens
 	}
+}
+
+// WithAnthropicCacheTTL 设置缓存断点 TTL（ADR-0105 决策三，配置 m1_router.anthropic.cache_ttl）。
+// 仅接受 "5m"（API 默认，不显式下发）与 "1h"；其他值忽略，保持默认。
+func WithAnthropicCacheTTL(ttl string) AnthropicOption {
+	return func(a *AnthropicAdapter) {
+		if ttl == "1h" {
+			a.cacheTTL = ttl
+		}
+	}
+}
+
+// WithAnthropicInlineNonLeadingSystem 控制非首部 system 消息的处理（ADR-0105 决策一）：
+// true=原位内联为 user 角色 <system_instruction> 块，使 L3 阶段层位于 L2 历史之后、
+// 缓存断点与五层账本对齐；false=全部提到 system 参数（旧行为，请求体字节不变）。
+func WithAnthropicInlineNonLeadingSystem(on bool) AnthropicOption {
+	return func(a *AnthropicAdapter) { a.inlineNonLeadingSystem = on }
 }
 
 // NewAnthropicAdapter 构造 Anthropic 适配器。
@@ -121,6 +142,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 		Model:          options.Model,
 		MaxTokens:      options.MaxTokens,
 		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
 		ThinkingMode:   options.ThinkingMode,
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
@@ -253,6 +275,7 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 		Model:          options.Model,
 		MaxTokens:      options.MaxTokens,
 		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
 		ThinkingMode:   options.ThinkingMode,
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,

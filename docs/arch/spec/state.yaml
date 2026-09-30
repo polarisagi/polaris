@@ -867,6 +867,12 @@ thresholds:
     semantic_cache_max_entries: 10000
     semantic_cache_similarity_threshold: 0.95
     semantic_cache_ttl_hours: 24
+    response_cache_enabled: true      # toml:"response_cache.enabled"，ADR-0105 决策六：确定性后台调用精确匹配缓存
+    response_cache_ttl_hours: 168     # toml:"response_cache.ttl_hours"
+    response_cache_max_entries: 20000 # toml:"response_cache.max_entries"，写入后淘汰最旧
+    response_cache_purposes: [graphrag_extract, graphrag_summary, graphrag_community, graphrag_concept, rag_summary_tree, rag_query_rewrite, memory_write_filter]  # toml:"response_cache.purposes"；内核阶段 purpose 硬排除
+    offpeak_windows: []               # toml:"offpeak.windows"，ADR-0105 决策七：UTC "HH:MM-HH:MM" 列表（可跨零点/24:00 终点），空=不错峰
+    usage_retention_days: 90          # toml:"usage.retention_days"，ADR-0105 决策八：llm_calls 按 created_at 清理，0=不清理
     l1_target_hit_rate: 0.90
     window_breaker_window_secs: 60
     window_breaker_min_samples: 20
@@ -876,6 +882,10 @@ thresholds:
     embed_high_max_batch_size: 100   # toml:"embed.high_max_batch_size"
     embed_low_max_batch_size: 8      # toml:"embed.low_max_batch_size"，约束后台批在串行后端上的占用（实测 ~0.12s/条 → ≈1s）
     embed_call_timeout_seconds: 30   # toml:"embed.call_timeout_s"，单次下游调用上限
+    anthropic_cache_ttl: 5m          # toml:"anthropic.cache_ttl"，ADR-0105 决策三；5m|1h（写入 1.25×/2×，读 0.1×）；1h 仅在会话间隔常超 5 分钟时划算
+    openai_prompt_cache_retention: "" # toml:"openai.prompt_cache_retention"，ADR-0105 决策三；""=不发送（服务端决定），in_memory|24h；仅对声明 SupportsPromptCacheKey 的 Provider 生效
+    anthropic_inline_nonleading_system: true # toml:"anthropic.inline_nonleading_system"，ADR-0105 决策一；true=仅开头连续 system 进 system 参数，其后 system 转 user 角色 <system_instruction> 块留在原位（阶段层落在历史之后，断点与五层账本对齐）；false=全部提到 system 参数（旧行为）
+    google_inline_nonleading_system: true    # toml:"google.inline_nonleading_system"，同上，对应 systemInstruction
     re_eval_when:
       - embed_low_max_batch_size: ["backend_parallel_embed_supported", "backfill_backlog>1h"]
       - circuit_breaker_failure_count: ["false_open_rate>0.05", "miss_open_drift_p95"]
@@ -983,8 +993,8 @@ thresholds:
     prm_complexity_gate: 0.5 # toml:"prm.complexity_gate"
     prm_max_candidates: 3 # toml:"prm.max_candidates"
     prm_min_threshold: 0.4 # toml:"prm.min_threshold"
-    conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
-    conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
+    conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四；ADR-0105 决策二改为分块跳窗
+    conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，分块跳窗（ADR-0105 决策二）：越界时按 max_messages/2 步长一次丢前若干块
     thinking_perceive: low # toml:"thinking.perceive"，ADR-0101 决策三；"" = Provider 默认（DeepSeek 省略即 high）
     thinking_plan_initial: high # toml:"thinking.plan_initial"，规划阶梯 level 0 档位；升档见 plan_reasoning_complexity（ADR-0102 决策六）
     thinking_reflect: low # toml:"thinking.reflect"
@@ -996,7 +1006,12 @@ thresholds:
     model_pool_respond: default # toml:"model_pool.respond"
     model_pool_validate: default # toml:"model_pool.validate"，L3 看门狗 fail-open
     plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0102 决策六：LLM 判定 complexity ≥ 此值时规划阶梯起点为 level 2（plan_replan 池 + high）
+    cache_uniform_tools: false # toml:"cache.uniform_tools"，ADR-0105 决策三实验开关：true 时 Perceive/Reflect/Respond 也下发 Plan 的 tools 并设 tool_choice=none，使四阶段 tools 前缀一致；须以 llm_calls 实测命中/未命中 token 决定是否默认开启（HE-4）
     reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0102 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭
+    recall_item_max_chars: 400 # toml:"recall.item_max_chars"，ADR-0105 决策四：单条召回渲染后字符（rune）上限，超出截断；情景事件 payload 原可达 8KB
+    recall_max_tokens: 1200 # toml:"recall.max_tokens"，ADR-0105 决策四：召回段总 token 上限，按 反思>情景>L2语义>RAG>画像 装入，装不下即止
+    recall_min_score: 0 # toml:"recall.min_score"，L2 语义/RAG 绝对分下限，0=关闭；L2 分为 BM25 原始分（无界）、RAG 分恒 1.0，均非归一化相似度，故默认不设
+    recall_min_score_ratio: 0.2 # toml:"recall.min_score_ratio"，命中相对本次最高分的比例下限（top 恒保留），尺度无关；0=关闭；默认值待 Eval 校准（HE-4）
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - thinking_*: ["perceive_route_accuracy_drop", "reflect_goal_achieved_false_positive", "plan_schema_fail_rate>0.05"]

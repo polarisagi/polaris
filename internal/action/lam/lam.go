@@ -231,6 +231,8 @@ func (e *ComputerUseEngine) resolveAction(ctx context.Context, intent string, st
 		types.WithMaxTokens(req.MaxTokens),
 		types.WithTemperature(req.Temperature),
 		types.WithResponseFormat(req.ResponseFormat),
+		// 电脑操控动作决策属规划类，保持高档思考并显式声明（ADR-0105 决策五）。
+		types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposeLAMResolveAction),
 	}
 	if req.Model != "" {
 		opts = append(opts, types.WithModel(req.Model))

@@ -1,0 +1,14 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// 直接调用缺 WithThinkingMode：只声明了用途。DeepSeek 省略即 effort=high。
+func selftestMissingThinking(ctx context.Context, p protocol.Provider) {
+	_, _ = safecall.Infer(ctx, p, nil, types.WithMaxTokens(64), types.WithPurpose("selftest"))
+}

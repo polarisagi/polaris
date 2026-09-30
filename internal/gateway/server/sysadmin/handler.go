@@ -38,10 +38,13 @@ type ChatDispatcher interface {
 	SampleAndScoreReply(sessionID, query, response string)
 }
 type SysAdminHandler struct {
-	Chat           ChatDispatcher
-	DB             protocol.SQLQuerier
-	SystemRepo     repo.SystemRepository
-	BudgetRepo     repo.BudgetRepository
+	Chat       ChatDispatcher
+	DB         protocol.SQLQuerier
+	SystemRepo repo.SystemRepository
+	BudgetRepo repo.BudgetRepository
+	// UsageRepo 只读 llm_calls 聚合（GET /v1/usage，ADR-0105 决策八）；nil 时该路由返回 503。
+	UsageRepo      repo.LLMUsageQueryRepository
+	nowFn          func() time.Time // 测试注入时钟；nil = time.Now
 	ChannelRepo    repo.ChannelRepository
 	EventRepo      repo.EventRepository
 	CronRepo       protocol.CronRepository
@@ -110,6 +113,7 @@ type Dependencies struct {
 	DB             protocol.SQLQuerier
 	SystemRepo     repo.SystemRepository
 	BudgetRepo     repo.BudgetRepository
+	UsageRepo      repo.LLMUsageQueryRepository
 	ChannelRepo    repo.ChannelRepository
 	CronRepo       protocol.CronRepository
 	EventRepo      repo.EventRepository
@@ -168,6 +172,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		DB:                   deps.DB,
 		SystemRepo:           deps.SystemRepo,
 		BudgetRepo:           deps.BudgetRepo,
+		UsageRepo:            deps.UsageRepo,
 		ChannelRepo:          deps.ChannelRepo,
 		EventRepo:            deps.EventRepo,
 		CronRepo:             deps.CronRepo,

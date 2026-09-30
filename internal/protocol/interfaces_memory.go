@@ -140,7 +140,13 @@ ImmutableCore interface {
 	// Fields 返回可写字段集合（ImmutableCoreFields）指针，供 gateway 等消费方组装系统提示词。
 	// 取代此前 `.(*store.ImmutableCore)` 类型断言（docs/specs/04-Module-Boundary.md §B2）。
 	Fields() *ImmutableCoreFields
+	// PrependToMessages 供网关直连等非内核调用方：稳定层置前，易变层插在最后一条消息之前。
 	PrependToMessages(msgs []types.Message) []types.Message
+	// StableMessage 返回 L0 稳定核（单条 system 消息，字节确定）；内核前缀账本使用（ADR-0105 决策一）。
+	StableMessage() types.Message
+	// VolatileContent 返回易变层文本（日期/扩展状态/AmbientContext），空串表示无；
+	// 内核把它放入 L3 阶段层，位于对话历史之后。
+	VolatileContent() string
 }
 
 type

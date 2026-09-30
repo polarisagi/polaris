@@ -47,11 +47,18 @@ func TestBuildRespondContext_DirectReply(t *testing.T) {
 	if !strings.Contains(all, "REPLY TO THE USER") {
 		t.Error("缺少 kernel/respond.md 阶段契约")
 	}
-	if !strings.Contains(all, "<conversation_history>") || !strings.Contains(all, "我是 Polaris") {
-		t.Error("缺少对话历史：多轮对话将失忆")
+	// ADR-0105 决策二：历史逐条以真实角色写入，且每条各自围栏（TaintHigh）。
+	var histUser, histAssistant bool
+	for _, m := range msgs {
+		if m.Role == "user" && strings.Contains(m.Content, "你是谁") {
+			histUser = strings.Contains(m.Content, "UNTRUSTED_DATA")
+		}
+		if m.Role == "assistant" && strings.Contains(m.Content, "我是 Polaris") {
+			histAssistant = strings.Contains(m.Content, "UNTRUSTED_DATA")
+		}
 	}
-	if !strings.Contains(all, "UNTRUSTED_DATA") {
-		t.Error("对话历史必须按 TaintHigh 进围栏，不得提升为指令")
+	if !histUser || !histAssistant {
+		t.Error("对话历史必须逐条以真实 user/assistant 角色出现，且按 TaintHigh 进围栏，不得提升为指令")
 	}
 	if strings.Contains(all, "<execution_result>") {
 		t.Error("直答路径不应出现执行结果区")

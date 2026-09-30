@@ -1,0 +1,15 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// 方法值：调用发生在别处，选项无从校验。
+func selftestMethodValue(p protocol.Provider) {
+	infer := p.Infer
+	_ = infer
+}

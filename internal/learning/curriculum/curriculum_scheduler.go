@@ -42,7 +42,9 @@ func (ag *AutoCurriculumGenerator) sicDetectFn(ctx context.Context, text string)
 			"Reply with exactly one word: YES or NO.",
 		text,
 	)
-	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(8))
+	// 注入检测判官走 ThinkingLow；上限 256 而非 8：推理 token 计入 max_tokens，
+	// 8 会被推理耗尽使输出为空，而空输出在此按「非注入」放行（fail-open），必须给推理留足余量。
+	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256), types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeCurriculumSICDetect))
 	if err != nil || resp == nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "curriculum: sicDetectFn LLM call failed", err)
 	}
@@ -63,11 +65,14 @@ func (ag *AutoCurriculumGenerator) llmJudgeSafe(ctx context.Context, desc string
 		desc,
 	)
 	req := &types.InferRequest{
-		Messages:    []types.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   8,
+		Messages: []types.Message{{Role: "user", Content: prompt}},
+		// 256 而非 8：ThinkingLow 的推理 token 计入 max_tokens，8 会被耗尽致输出为空；
+		// 空输出走 fail-closed 拒绝样本，白白丢弃合法课程。
+		MaxTokens:   256,
 		Temperature: 0,
 	}
-	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 安全判官走 ThinkingLow；上限见 llmJudgeSafe 内 req.MaxTokens 注释。
+	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeCurriculumSafetyJudge))
 	if err != nil || resp == nil {
 		slog.Warn("curriculum: llm_judge_safe error, fail-closed",
 			"err", err,
@@ -131,7 +136,16 @@ type BackgroundTaskScheduler struct {
 	surpriseReader SurpriseReader
 	redTeam        RedTeamRunner        // 可选；nil 时跳过 24h 红队探测
 	auditLogger    protocol.AuditLogger // 可 nil，nil 时降级为 slog.Error
+	offPeak        offPeakGate          // 可 nil；非 nil 时课程生成只在错峰窗口内进行（ADR-0105 决策七）
 }
+
+// offPeakGate 是错峰窗口的消费端接口（由 pkg/offpeak.Gate 满足，nil 指针安全）。
+type offPeakGate interface{ Allow() bool }
+
+// InjectOffPeak 注入错峰窗口。窗口外的 2 分钟 tick 直接跳过——课程生成是周期性产出，
+// 跳过的 tick 不会积压，窗口一开下一个 tick 就恢复，等价于"推迟到下一窗口起点"且没有任何待办可丢。
+// 红队探测（24h 安全探针）不受此限：它验证安全边界是否退化，不属于可延迟的批处理。
+func (b *BackgroundTaskScheduler) InjectOffPeak(g offPeakGate) { b.offPeak = g }
 
 // SurpriseReader 读取当前系统 SurpriseIndex。
 type SurpriseReader interface {
@@ -200,6 +214,9 @@ func (b *BackgroundTaskScheduler) startCurriculumLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if b.offPeak != nil && !b.offPeak.Allow() {
+					continue
+				}
 				si := b.readSurprise()
 				b.generator.Generate(ctx, b.bb, si)
 			}

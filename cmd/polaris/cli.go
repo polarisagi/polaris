@@ -162,6 +162,7 @@ func printCLIHelp() {
 	fmt.Println(t("help_desc_cmd"))
 	fmt.Println(t("help_desc_proj"))
 	fmt.Println(t("help_desc_stat"))
+	fmt.Println(t("help_desc_usage"))
 	fmt.Println(t("help_desc_ver"))
 	fmt.Println(t("help_desc_help"))
 	fmt.Println()

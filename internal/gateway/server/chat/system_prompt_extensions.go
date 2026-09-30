@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 )
 
@@ -11,30 +12,93 @@ import (
 // 插件 / MCP 感知摘要构建（R7 拆分自 system_prompt.go）。
 // InjectSystemPrompt 主入口见 system_prompt.go；ambient skills 见
 // system_prompt_ambient.go。
+//
+// 前缀账本（ADR-0105 决策一）：摘要拆成两份——
+//   - 名称清单（extensionNames）：只含名称且确定序，进入 L0 稳定层；
+//   - 连接状态（extensionStatus）：✓/~/✗ 随 MCP 连接/断开变化，属易变量，进入 L3 易变层。
+//
 // ============================================================================
 
-// buildExtensionSummary 构建插件/MCP 感知摘要字符串（单行，| 分隔）。
-// 只注入名称和连接状态；详细工具参数由 BuildToolSchemas() 注入 function schema 传递，避免双重注入。
-func (s *PromptAssemblyService) buildExtensionSummary(ctx context.Context) string {
-	var parts []string
+// extensionEntry 一个已安装扩展（插件或独立 MCP）的名称与连接标记。
+type extensionEntry struct {
+	name string
+	mark string
+}
+
+// extensionSnapshot 是同一时刻插件/独立 MCP 的一致快照，供名称清单与状态摘要各取所需。
+type extensionSnapshot struct {
+	plugins []extensionEntry
+	mcps    []extensionEntry
+}
+
+// snapshotExtensions 采集扩展快照。两类条目均按名称（再按原始序）稳定排序，
+// 使同一安装集合恒得同一渲染字节，与 DB 行序 / map 遍历序无关。
+func (s *PromptAssemblyService) snapshotExtensions(ctx context.Context) extensionSnapshot {
+	var snap extensionSnapshot
 	if s.DB != nil {
-		if plugParts := s.queryPluginSummary(ctx); len(plugParts) > 0 {
-			parts = append(parts, "Plugins: "+strings.Join(plugParts, ", "))
-		}
+		snap.plugins = s.queryPluginEntries(ctx)
 	}
 	if s.MCPMgr != nil {
-		if mcpParts := s.standaloneMCPSummary(); len(mcpParts) > 0 {
-			parts = append(parts, "MCPs: "+strings.Join(mcpParts, ", "))
+		snap.mcps = s.standaloneMCPEntries()
+	}
+	sortEntries(snap.plugins)
+	sortEntries(snap.mcps)
+	return snap
+}
+
+func sortEntries(es []extensionEntry) {
+	sort.SliceStable(es, func(i, j int) bool { return es[i].name < es[j].name })
+}
+
+// extensionNames 渲染稳定层的名称清单（单行，| 分隔），不含任何连接状态。
+func (snap extensionSnapshot) extensionNames() string {
+	var parts []string
+	if len(snap.plugins) > 0 {
+		names := make([]string, len(snap.plugins))
+		for i, e := range snap.plugins {
+			names[i] = e.name
 		}
+		parts = append(parts, "Plugins: "+strings.Join(names, ", "))
+	}
+	if len(snap.mcps) > 0 {
+		names := make([]string, len(snap.mcps))
+		for i, e := range snap.mcps {
+			names[i] = e.name
+		}
+		parts = append(parts, "MCPs: "+strings.Join(names, ", "))
 	}
 	return strings.Join(parts, " | ")
 }
 
-// queryPluginSummary 查询已安装插件名称与 MCP 整体连接状态（格式："PluginName(✓)"）。
-// ✓ = 所有 MCP 已连接；~ = 部分连接；✗ = 未连接。
-func (s *PromptAssemblyService) queryPluginSummary(ctx context.Context) []string {
+// extensionStatus 渲染易变层的连接状态摘要；无扩展时返回空串。
+// ✓ = 全部已连接；~ = 部分连接；✗ = 未连接。
+func (snap extensionSnapshot) extensionStatus() string {
+	var parts []string
+	if len(snap.plugins) > 0 {
+		items := make([]string, len(snap.plugins))
+		for i, e := range snap.plugins {
+			items[i] = e.name + "(" + e.mark + ")"
+		}
+		parts = append(parts, "Plugins: "+strings.Join(items, ", "))
+	}
+	if len(snap.mcps) > 0 {
+		items := make([]string, len(snap.mcps))
+		for i, e := range snap.mcps {
+			items[i] = e.name + " " + e.mark
+		}
+		parts = append(parts, "MCPs: "+strings.Join(items, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Extension connection status: " + strings.Join(parts, " | ")
+}
+
+// queryPluginEntries 查询已安装插件名称与 MCP 整体连接状态。
+// SQL 必须带 ORDER BY：无排序时 SQLite 行序不保证，插件安装/更新后行序漂移会打断前缀缓存。
+func (s *PromptAssemblyService) queryPluginEntries(ctx context.Context) []extensionEntry {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, name, display_name, mcp_policy FROM plugins WHERE enabled=1`)
+		`SELECT id, name, display_name, mcp_policy FROM plugins WHERE enabled=1 ORDER BY name, id`)
 	if err != nil {
 		return nil
 	}
@@ -47,7 +111,7 @@ func (s *PromptAssemblyService) queryPluginSummary(ctx context.Context) []string
 		}
 	}
 
-	var result []string
+	var result []extensionEntry
 	for rows.Next() {
 		var plugID, plugName, displayName, policyJSON string
 		if rows.Scan(&plugID, &plugName, &displayName, &policyJSON) != nil {
@@ -68,7 +132,7 @@ func (s *PromptAssemblyService) queryPluginSummary(ctx context.Context) []string
 				"plugin_id", plugID, "err", err)
 		}
 
-		result = append(result, label+"("+pluginConnectMark(plugID, policy, connectedSet)+")")
+		result = append(result, extensionEntry{name: label, mark: pluginConnectMark(plugID, policy, connectedSet)})
 	}
 	if err := rows.Err(); err != nil {
 		// 迭代中途出错会让摘要静默少插件；摘要非阻断路径，留痕后返回已读部分。
@@ -100,10 +164,12 @@ func pluginConnectMark(plugID string, policy map[string]map[string]any, connecte
 	}
 }
 
-// standaloneMCPSummary 返回非插件独立 MCP 服务的名称+连接状态列表。
-func (s *PromptAssemblyService) standaloneMCPSummary() []string {
-	result := make([]string, 0, len(s.MCPMgr.ListServers()))
-	for _, srv := range s.MCPMgr.ListServers() {
+// standaloneMCPEntries 返回非插件独立 MCP 服务的名称+连接标记（ListServers 遍历 map，
+// 顺序由调用方 sortEntries 固定）。
+func (s *PromptAssemblyService) standaloneMCPEntries() []extensionEntry {
+	servers := s.MCPMgr.ListServers()
+	result := make([]extensionEntry, 0, len(servers))
+	for _, srv := range servers {
 		if strings.HasPrefix(srv.ID, "plugin_") {
 			continue
 		}
@@ -111,7 +177,7 @@ func (s *PromptAssemblyService) standaloneMCPSummary() []string {
 		if srv.Connected {
 			mark = "✓"
 		}
-		result = append(result, srv.Name+" "+mark)
+		result = append(result, extensionEntry{name: srv.Name, mark: mark})
 	}
 	return result
 }

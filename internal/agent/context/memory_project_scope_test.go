@@ -55,7 +55,23 @@ func TestProjectIsolation_PerceiveContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertScoped(t, "perceive", mem, allContent(msgs))
+	// ADR-0105 决策四：Perceive 只查情景（按本轮原话）与画像；以 Goal 为查询词的 L2 共享 FTS
+	// 留给 Plan（此刻 sCtx.TaskModel 是上一回合遗留），故共享 FTS 的项目剔除由 Plan 用例覆盖。
+	content := allContent(msgs)
+	if strings.Contains(content, alphaMarker) {
+		t.Errorf("perceive: 项目 B 的 Prompt 混入了项目 A 的情景记忆")
+	}
+	if strings.Contains(content, "GLOBAL-ENTITY") || strings.Contains(content, "BRAVO 部署流程") {
+		t.Errorf("perceive: 不应再以遗留 Goal 查询 L2 共享 FTS")
+	}
+	if len(mem.episodic.queries) == 0 {
+		t.Fatal("perceive: 未发起情景查询")
+	}
+	for _, q := range mem.episodic.queries {
+		if q.ProjectID != "prj_b" {
+			t.Errorf("perceive: 情景查询未限定项目，got ProjectID=%q", q.ProjectID)
+		}
+	}
 }
 
 // TestProjectIsolation_PlanContext 读取面 P2 与 P4。

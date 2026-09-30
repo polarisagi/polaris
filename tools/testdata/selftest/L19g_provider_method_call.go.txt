@@ -1,0 +1,14 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// 绕过 safecall 直接调 Provider 方法且不带任何选项。
+func selftestProviderCall(ctx context.Context, p protocol.Provider) {
+	_, _ = p.Infer(ctx, nil)
+}

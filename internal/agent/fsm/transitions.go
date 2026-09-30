@@ -114,6 +114,7 @@ func (sm *StateMachine) registerTransitions() {
 			// 感知路径（System-1 旁路、FastPath、寒暄旁路）都不得发布陈旧回复。
 			sCtx.Mu.Lock()
 			sCtx.PreparedReply = ""
+			sCtx.TurnRecall = nil // 召回结果只在回合内复用（ADR-0105 决策四），不得带入下一回合
 			sCtx.Mu.Unlock()
 			if bypassEffect := sm.trySystem1Bypass(ctx, sCtx); bypassEffect != nil {
 				return []protocol.Effect{bypassEffect}, nil

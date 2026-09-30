@@ -23,6 +23,7 @@ type mockMemory struct {
 	episodic      *mockEpisodicMem
 	working       *mockWorkingMem
 	eventProjects map[string]string // EpisodicProjectOf 反查表：事件 ID → 项目；缺席 = 非情景事件
+	coreBlocks    []types.CoreMemoryBlock
 }
 
 func (m *mockMemory) GetMemoryPressure() *budget.ResourceBudget {
@@ -54,7 +55,7 @@ func (m *mockMemory) EpisodicProjectOf(ctx context.Context, id string) (string, 
 func (m *mockMemory) AddWorkingContext(ctx context.Context, text string) error { return nil }
 func (m *mockMemory) ImmutableCore() protocol.ImmutableCore                    { return m.working.Immutable() }
 func (m *mockMemory) ListCoreMemory(ctx context.Context, agentID, sessionID string) ([]types.CoreMemoryBlock, error) {
-	return nil, nil
+	return m.coreBlocks, nil
 }
 func (m *mockMemory) ListReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error) {
 	return nil, nil
@@ -107,7 +108,7 @@ func (m *mockWorkingMem) Context() protocol.ContextWindow   { return nil }
 func (m *mockWorkingMem) Scratch() protocol.ScratchPad      { return nil }
 func (m *mockWorkingMem) Notes() protocol.NotesStore        { return nil }
 
-type mockImmutableCore struct{}
+type mockImmutableCore struct{ volatile string }
 
 func (m *mockImmutableCore) Load(ctx context.Context, userID, sessionID string) (types.ImmutableCoreView, error) {
 	return types.ImmutableCoreView{}, nil
@@ -116,6 +117,12 @@ func (m *mockImmutableCore) Load(ctx context.Context, userID, sessionID string) 
 func (m *mockImmutableCore) PrependToMessages(msgs []types.Message) []types.Message {
 	return append([]types.Message{{Role: "system", Content: "[Immutable Core Rule: NO HARMFUL ACT]"}}, msgs...)
 }
+
+func (m *mockImmutableCore) StableMessage() types.Message {
+	return types.Message{Role: "system", Content: "[Immutable Core Rule: NO HARMFUL ACT]"}
+}
+
+func (m *mockImmutableCore) VolatileContent() string { return m.volatile }
 
 func (m *mockImmutableCore) Fields() *protocol.ImmutableCoreFields {
 	return &protocol.ImmutableCoreFields{}

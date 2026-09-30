@@ -1,0 +1,15 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// 豁免注释缺理由：豁免本身必须可审计。
+func selftestExemptNoReason(ctx context.Context, p protocol.Provider, opts ...types.InferOption) {
+	//llmopts:exempt
+	_, _ = safecall.Infer(ctx, p, nil, opts...)
+}

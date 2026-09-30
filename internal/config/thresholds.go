@@ -2,6 +2,7 @@ package config
 
 import (
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/offpeak"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -46,10 +47,19 @@ type M1RouterThresholds struct {
 	SemanticCacheMaxEntries       int     `toml:"semantic_cache.max_entries"`           // 10000
 	SemanticCacheSimilarity       float64 `toml:"semantic_cache.similarity_threshold"`  // 0.95
 	SemanticCacheTTLHours         int     `toml:"semantic_cache.ttl_hours"`             // 24
-	WindowBreakerWindowSecs       int     `toml:"window_breaker_window_secs"`
-	WindowBreakerMinSamples       int     `toml:"window_breaker_min_samples"`
-	WindowBreakerThreshold        float64 `toml:"window_breaker_threshold"`
-	WindowBreakerCooldownSec      int     `toml:"window_breaker_cooldown_sec"`
+
+	// 确定性后台调用的精确匹配响应缓存（ADR-0105 决策六）。仅对 ResponseCachePurposes 白名单内、
+	// Temperature==0 且 ThinkingDisabled 且无 Tools 的调用生效；内核阶段 purpose 即使误配也被
+	// 硬性排除（types.IsKernelPurpose）。默认开启：命中要求 provider/模型/purpose/全部消息逐字节一致，
+	// 白名单用途均为「同输入同输出」的抽取/摘要/过滤，且条目有 TTL 与条数上限。
+	ResponseCacheEnabled     bool     `toml:"response_cache.enabled"`     // true
+	ResponseCacheTTLHours    int      `toml:"response_cache.ttl_hours"`   // 168
+	ResponseCacheMaxEntries  int      `toml:"response_cache.max_entries"` // 20000
+	ResponseCachePurposes    []string `toml:"response_cache.purposes"`
+	WindowBreakerWindowSecs  int      `toml:"window_breaker_window_secs"`
+	WindowBreakerMinSamples  int      `toml:"window_breaker_min_samples"`
+	WindowBreakerThreshold   float64  `toml:"window_breaker_threshold"`
+	WindowBreakerCooldownSec int      `toml:"window_breaker_cooldown_sec"`
 
 	// EmbeddingBatcher 调度（ADR-0099）：High/Low 独立 flush；Low 单批上限约束其在
 	// 串行后端上的占用；每次下游调用独立超时，后端挂起不冻结队列。
@@ -57,6 +67,45 @@ type M1RouterThresholds struct {
 	EmbedHighMaxBatchSize   int `toml:"embed.high_max_batch_size"` // 100
 	EmbedLowMaxBatchSize    int `toml:"embed.low_max_batch_size"`  // 8
 	EmbedCallTimeoutSeconds int `toml:"embed.call_timeout_s"`      // 30
+
+	// 错峰调度（ADR-0105 决策七）：可延迟后台任务（GraphRAG 建图/社区摘要、合成评测/技能、课程生成、
+	// prompt 优化器、rag_summary_tree）只在这些 UTC 窗口内执行，窗口外推迟到下一个窗口起点。
+	// 格式 "HH:MM-HH:MM"（可跨零点，终点可写 24:00），空 = 不错峰。窗口来自配置，不硬编码任何厂商时刻表。
+	OffpeakWindows []string `toml:"offpeak.windows"` // 默认空
+
+	// llm_calls 保留期（ADR-0105 决策八）：按 created_at 随既有 6h 周期清理，0 = 不清理。
+	UsageRetentionDays int `toml:"usage.retention_days"` // 90
+
+	// Provider 缓存接线（ADR-0105 决策三）。
+	// AnthropicCacheTTL: cache_control.ttl，"5m"|"1h"；"5m" 为 API 默认，不显式下发。
+	AnthropicCacheTTL string `toml:"anthropic.cache_ttl"` // "5m"
+	// OpenAIPromptCacheRetention: prompt_cache_retention，""=不发送，"in_memory"|"24h"。
+	OpenAIPromptCacheRetention string `toml:"openai.prompt_cache_retention"` // ""
+	// 非首部 system 消息内联（ADR-0105 决策一）：true=只有开头连续的 system 进 system/systemInstruction 参数，
+	// 其后的 system（L3 阶段层）原位转 user 角色 <system_instruction> 块，使阶段模板落在 L2 历史之后。
+	AnthropicInlineNonLeadingSystem bool `toml:"anthropic.inline_nonleading_system"` // true
+	GoogleInlineNonLeadingSystem    bool `toml:"google.inline_nonleading_system"`    // true
+}
+
+// Validate 校验 M1 中的缓存枚举字段，错误在加载时失败而非运行时被上游拒绝。
+func (t M1RouterThresholds) Validate() error {
+	switch t.AnthropicCacheTTL {
+	case "", "5m", "1h":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.anthropic.cache_ttl: invalid "+t.AnthropicCacheTTL+" (want 5m|1h)")
+	}
+	switch t.OpenAIPromptCacheRetention {
+	case "", "in_memory", "24h":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.openai.prompt_cache_retention: invalid "+t.OpenAIPromptCacheRetention+" (want in_memory|24h or empty)")
+	}
+	if err := offpeak.Validate(t.OffpeakWindows); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "m1_router.offpeak.windows", err)
+	}
+	if t.UsageRetentionDays < 0 {
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.usage.retention_days: must be >= 0 (0 = keep forever)")
+	}
+	return nil
 }
 
 type M2StorageThresholds struct {
@@ -111,7 +160,8 @@ type M4KernelThresholds struct {
 	PRMMinThreshold   float64 `toml:"prm.min_threshold"`   // 0.4 — 全部候选低于此分数时兜底取第一个候选
 	PRMScorerModel    string  `toml:"prm.scorer_model"`    // "" — 留空则沿用 Provider 默认路由，不强制指定 budget-tier 模型名
 
-	// 对话历史进入内核的上限（ADR-0098 决策四），自尾部截取；Perceive 与 Respond 各渲染一次。
+	// 对话历史进入内核的上限（ADR-0098 决策四；ADR-0105 决策二改为分块跳窗）：越界时一次丢弃前若干块
+	// （步长 = max_messages/2），四个阶段共用同一 L2。
 	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
 	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
 
@@ -140,6 +190,22 @@ type M4KernelThresholds struct {
 	// ReflectSkipComplexity 反思跳过阈值（ADR-0102 决策四 4a）：首轮执行全部成功且
 	// 0 < TaskModel.Complexity < 此值时不调 Reflect LLM，直接回复。0 = 关闭跳过。
 	ReflectSkipComplexity float64 `toml:"reflect.skip_complexity"` // 0.4
+
+	// CacheUniformTools 实验开关（ADR-0105 决策三，默认 false）：true 时 Perceive/Reflect/Respond
+	// 也下发与 Plan 相同的 tools 并要求 Provider 不调用工具（tool_choice=none），四阶段 tools 前缀一致。
+	CacheUniformTools bool `toml:"cache.uniform_tools"` // false
+
+	// 记忆召回预算（ADR-0105 决策四）。召回段位于 L4，每回合都按未命中价计费，必须有上限。
+	// RecallItemMaxChars 单条召回（情景/反思/L2 语义/RAG/画像）渲染后的字符（rune）上限，超出截断。
+	RecallItemMaxChars int `toml:"recall.item_max_chars"` // 400
+	// RecallMaxTokens 召回段总 token 上限；按段优先级（反思>情景>L2>RAG>画像）逐条装入，装不下即止。
+	RecallMaxTokens int `toml:"recall.max_tokens"` // 1200
+	// RecallMinScore L2 语义/RAG 命中的绝对分下限（低于丢弃）。0 = 关闭。L2 分是 SurrealDB BM25 原始分
+	// （无界、随语料与查询漂移），RAG 分当前恒为 1.0，二者都不是归一化相似度，故默认不设绝对下限。
+	RecallMinScore float64 `toml:"recall.min_score"` // 0
+	// RecallMinScoreRatio L2 语义/RAG 命中相对本次最高分的比例下限（低于 ratio×top 丢弃，最高分命中恒保留）。
+	// 尺度无关，对 BM25 这类无界分数成立；0 = 关闭。
+	RecallMinScoreRatio float64 `toml:"recall.min_score_ratio"` // 0.2
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -162,6 +228,23 @@ func (t M4KernelThresholds) Validate() error {
 		default:
 			return apperr.New(apperr.CodeInvalidInput, "m4_kernel."+key+": invalid model pool "+v+" (want default|general|reasoning|budget)")
 		}
+	}
+	return t.validateRecall()
+}
+
+// validateRecall 召回预算阈值校验：非正的上限会让召回段恒为空或不设防，配置错误在加载时失败。
+func (t M4KernelThresholds) validateRecall() error {
+	if t.RecallItemMaxChars < 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.item_max_chars: must be >= 1")
+	}
+	if t.RecallMaxTokens < 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.max_tokens: must be >= 1")
+	}
+	if t.RecallMinScore < 0 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.min_score: must be >= 0")
+	}
+	if t.RecallMinScoreRatio < 0 || t.RecallMinScoreRatio > 1 {
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.recall.min_score_ratio: must be within [0,1]")
 	}
 	return nil
 }
@@ -359,14 +442,26 @@ func DefaultThresholds() Thresholds {
 			SemanticCacheMaxEntries:       10000,
 			SemanticCacheSimilarity:       0.95,
 			SemanticCacheTTLHours:         24,
-			WindowBreakerWindowSecs:       60,
-			WindowBreakerMinSamples:       20,
-			WindowBreakerThreshold:        0.5,
-			WindowBreakerCooldownSec:      30,
-			EmbedBatchWindowMs:            10,
-			EmbedHighMaxBatchSize:         100,
-			EmbedLowMaxBatchSize:          8,
-			EmbedCallTimeoutSeconds:       30,
+			UsageRetentionDays:            90,
+			ResponseCacheEnabled:          true,
+			ResponseCacheTTLHours:         168,
+			ResponseCacheMaxEntries:       20000,
+			ResponseCachePurposes: []string{
+				"graphrag_extract", "graphrag_summary", "graphrag_community", "graphrag_concept",
+				"rag_summary_tree", "rag_query_rewrite", "memory_write_filter",
+			},
+			WindowBreakerWindowSecs:  60,
+			WindowBreakerMinSamples:  20,
+			WindowBreakerThreshold:   0.5,
+			WindowBreakerCooldownSec: 30,
+			EmbedBatchWindowMs:       10,
+			EmbedHighMaxBatchSize:    100,
+			EmbedLowMaxBatchSize:     8,
+			EmbedCallTimeoutSeconds:  30,
+			AnthropicCacheTTL:        "5m",
+
+			AnthropicInlineNonLeadingSystem: true,
+			GoogleInlineNonLeadingSystem:    true,
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,
@@ -430,6 +525,10 @@ func DefaultThresholds() Thresholds {
 			ModelPoolValidate:              "default",
 			PlanReasoningComplexity:        0.7,
 			ReflectSkipComplexity:          0.4,
+			RecallItemMaxChars:             400,
+			RecallMaxTokens:                1200,
+			RecallMinScore:                 0,
+			RecallMinScoreRatio:            0.2,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

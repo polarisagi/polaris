@@ -1,0 +1,14 @@
+package sandbox
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// opts... 展开一个函数参数：来源不可见，且本处没有任何可见的声明。
+func selftestSpreadParam(ctx context.Context, p protocol.Provider, opts ...types.InferOption) {
+	_, _ = safecall.Infer(ctx, p, nil, opts...)
+}

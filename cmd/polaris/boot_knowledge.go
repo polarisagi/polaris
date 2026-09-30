@@ -109,7 +109,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	if dr, ok := retriever.(*knowledgepkg.DefaultHybridRetriever); ok {
 		searchEngine = dr.Engine()
 	}
-	ingester := knowledgepkg.NewDefaultIngestionPipeline(sb.StorageRouter, sb.Router, sb.Outbox, searchEngine, ragTaintSerializer)
+	ingester := knowledgepkg.NewDefaultIngestionPipeline(sb.StorageRouter, sb.Router, sb.Outbox, searchEngine, ragTaintSerializer).WithOffPeak(sb.OffPeak)
 
 	// ─── §7.5 知识图谱构建管线（GraphBuildPipeline，M10 §2.7）────────────────
 	var graphLLMClient graphrag.LLMClient
@@ -149,7 +149,9 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		tb.ConsolidationPipeline.WithEntityExtractor(graphPipeline)
 	}
 	if graphPipeline != nil {
-		sb.Outbox.RegisterHandler(protocol.TopicGraphBuild, func(ctx context.Context, rec *store.OutboxRecord) error {
+		// 建图（graphrag_extract/concept/community）与文档摘要（graphrag_summary）是可延迟批处理：
+		// 配置了错峰窗口时经 deferOffPeak 推迟到窗口起点（ADR-0105 决策七）；摄取本身与检索不受影响。
+		sb.Outbox.RegisterHandler(protocol.TopicGraphBuild, deferOffPeak(sb.OffPeak, func(ctx context.Context, rec *store.OutboxRecord) error {
 			var payload struct {
 				DocID string `json:"doc_id"`
 			}
@@ -157,14 +159,14 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 				return apperr.Wrap(apperr.CodeInternal, "boot_knowledge: 解析 graph_build payload 失败", err)
 			}
 			return graphPipeline.Run(ctx, payload.DocID)
-		})
-		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocIngested, graphrag.NewGraphBuildOutboxHandler(graphPipeline).Handle)
+		}))
+		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocIngested, deferOffPeak(sb.OffPeak, graphrag.NewGraphBuildOutboxHandler(graphPipeline).Handle))
 		// S-05：注入 ragTaintSerializer 同源的 ChunkTaintSealerAdapter，使摘要写入
 		// 与 ingester.go 的 canonical 写法一致签发 taint_hmac；ragTaintSerializer
 		// 为 nil 时 adapter 内部 sealChunkTaint 也按既有语义降级返回空串。
 		summaryGenHandler := graphrag.NewSummaryGenOutboxHandler(sb.Store.DB(), sb.Router,
 			&knowledgepkg.ChunkTaintSealerAdapter{Ser: ragTaintSerializer})
-		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocSummaryNeeded, summaryGenHandler.Handle)
+		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocSummaryNeeded, deferOffPeak(sb.OffPeak, summaryGenHandler.Handle))
 		slog.Info("polaris: SummaryGenOutboxHandler registered for rag_doc_summary_needed")
 		slog.Info("polaris: GraphBuildPipeline registered to outbox for graph_build and rag_doc_ingested")
 	}

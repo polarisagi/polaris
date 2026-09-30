@@ -412,7 +412,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// ─── GapFillWorker（M9 能力缺口探测，OutboxWorker handler）────────────
 	gapFillWorker := curriculum.NewGapFillWorker(sb.Store.DB(), sb.Router, toolReg)
-	sb.Outbox.RegisterHandler(protocol.TopicCapabilityGap, gapFillWorker.HandleOutbox)
+	// 能力缺口合成技能（synthetic_skill_gen）产出的是"待审候选"，没有任何调用方在等结果，属可延迟批处理。
+	sb.Outbox.RegisterHandler(protocol.TopicCapabilityGap, deferOffPeak(sb.OffPeak, gapFillWorker.HandleOutbox))
 	slog.Info("polaris: GapFillWorker registered to outbox for m9_capability_gap")
 
 	// ─── M1 CircuitBreaker 恢复 handler ─────────────────────────────────────
@@ -430,7 +431,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			// 机械性任务：走便宜档 default 池并关闭思考——DeepSeek 省略 thinking 即按 effort=high
 			// 计推理 token（ADR-0101 决策三/七）。
 			// 调用方显式传入的 ThinkingMode 排在后面，仍可覆盖。
-			inferOpts := append([]types.InferOption{types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("background_llm_infer")}, opts...)
+			inferOpts := append([]types.InferOption{types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposeBackgroundLLMInfer)}, opts...)
 			resp, err := sb.Router.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, inferOpts...)
 			if err != nil {
 				return "", apperr.Wrap(apperr.CodeInternal, "boot_tools: llmInfer 失败", err)
@@ -669,7 +670,16 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			sb.Cfg.Thresholds.M2Storage.EventlogHotRowLimit,
 			sb.Cfg.Thresholds.M2Storage.EventlogHotSizeMB,
 		)
+	// llm_calls 保留期（ADR-0105 决策八）：写连接清理。启动时先跑一次——桌面外壳/开发机常在 6h 内
+	// 重启，只挂 ticker 会让保留期永远不生效；清理分批，不会长时间独占单写连接。
+	llmCallRepo := repo.NewSQLiteLLMCallRepository(sb.Store.DB())
+	pruneLLMCalls := func(ctx context.Context) {
+		if _, err := pruneLLMCallsByRetention(ctx, llmCallRepo, sb.Cfg.Thresholds.M1Router.UsageRetentionDays, time.Now()); err != nil {
+			slog.Warn("polaris: llm_calls retention prune failed", "err", err)
+		}
+	}
 	concurrent.SafeGo(ctx, "boot_tools.memory_forgetting", func(ctx context.Context) {
+		pruneLLMCalls(ctx)
 		forgettingTicker := time.NewTicker(6 * time.Hour)
 		defer forgettingTicker.Stop()
 		for {
@@ -685,6 +695,15 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 				}
 				if err := eventArchiver.Archive(context.Background()); err != nil {
 					slog.Warn("polaris: event archiver failed", "err", err)
+				}
+				pruneLLMCalls(ctx)
+				// LLM 精确响应缓存的过期行清理（ADR-0105 决策六）；条数上限由写入时的淘汰保证，这里只回收 TTL 过期行。
+				if sb.InfReg != nil {
+					if n, err := sb.InfReg.PruneResponseCache(ctx); err != nil {
+						slog.Warn("polaris: llm response cache prune failed", "err", err)
+					} else if n > 0 {
+						slog.Info("polaris: llm response cache pruned", "expired_rows", n)
+					}
 				}
 			}
 		}

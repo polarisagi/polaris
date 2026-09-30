@@ -83,3 +83,17 @@ patch | L-18 | tools/memory_isolation_check.go | internal/memory/retrieval/retri
 patch | L-18 | tools/memory_isolation_check.go | internal/memory/store/episodic_mem.go | if q.ProjectID != "" && ev.EffectiveProjectID() != q.ProjectID { | if false {
 # L-18（续）：感知/规划阶段直读共享 FTS 时不再剔除他项目事件（P3/P4）。
 patch | L-18 | tools/memory_isolation_check.go | internal/agent/context/memory_project_scope.go | isEpisodic && owner != projectID { | false && isEpisodic && owner != projectID {
+
+# ── L-19：Provider 调用必须显式声明 purpose 与 thinking（ADR-0105 决策五）──────────────
+# 判据历史教训（gate-blind-spots，2026-08-17）：只认某一种 AST 形态会永远绿灯。故用例覆盖五种形态：
+# 直接调用缺项（a/b/i）、opts... 展开参数（c）、展开本地切片缺项（d）、条件块内追加（e）、方法值（f）、
+# 绕过 safecall 的 X.Infer 无选项调用（g）、缺理由的豁免（h）。
+add | L-19 | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_a.go | tools/testdata/selftest/L19_missing_purpose.go.txt
+add | L-19b | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_b.go | tools/testdata/selftest/L19b_missing_thinking.go.txt
+add | L-19c | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_c.go | tools/testdata/selftest/L19c_spread_param.go.txt
+add | L-19d | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_d.go | tools/testdata/selftest/L19d_spread_local_missing.go.txt
+add | L-19e | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_e.go | tools/testdata/selftest/L19e_spread_conditional_append.go.txt
+add | L-19f | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_f.go | tools/testdata/selftest/L19f_method_value.go.txt
+add | L-19g | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_g.go | tools/testdata/selftest/L19g_provider_method_call.go.txt
+add | L-19h | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_h.go | tools/testdata/selftest/L19h_exempt_no_reason.go.txt
+add | L-19i | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_i.go | tools/testdata/selftest/L19i_empty_purpose.go.txt

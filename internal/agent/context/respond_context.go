@@ -35,16 +35,10 @@ func writePhaseInstruction(b *prompt.PromptBuilder, sCtx *fsm.StateContext, name
 // （人格 + 用户偏好）与核心记忆保留——它们决定"以谁的口吻、按什么偏好"回答。
 func BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
-	if memory != nil {
-		if blocks, err := memory.ListCoreMemory(ctx, sCtx.AgentID, sCtx.SessionID); err == nil && len(blocks) > 0 {
-			b.WriteCoreMemory(blocks)
-		}
+	// L1 会话层（含核心记忆）与 L2 历史和其它阶段共用，见 fsm.WriteSessionLayer。
+	if err := fsm.WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "BuildRespondContext", err)
 	}
 	fsm.WriteRespondSections(b, sCtx)
-
-	msgs := b.Build()
-	if memory != nil {
-		msgs = memory.ImmutableCore().PrependToMessages(msgs)
-	}
-	return fsm.AppendRespondReminder(msgs), nil
+	return fsm.AppendRespondReminder(fsm.FinishLayered(b, memory)), nil
 }

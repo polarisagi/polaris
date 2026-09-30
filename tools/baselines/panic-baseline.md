@@ -3,8 +3,8 @@ internal/extension/mcp/mcp_client.go:190:NewMCPClient
 internal/extension/mcp/mcp_manager.go:135:NewMCPManagerWithContext
 internal/extension/mcp/mcp_manager.go:138:NewMCPManagerWithContext
 internal/ffi/dylib.go:127:verifyABI
-internal/gateway/server/server_lifecycle.go:80:NewServer
-internal/gateway/server/server_lifecycle.go:88:NewServer
+internal/gateway/server/server_lifecycle.go:81:NewServer
+internal/gateway/server/server_lifecycle.go:89:NewServer
 internal/llm/adapter/http_client.go:21:defaultHTTPClient
 internal/llm/tts/http.go:40:NewHTTPProvider
 internal/security/guard/random.go:34:secureRandomBytes

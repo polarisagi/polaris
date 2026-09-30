@@ -9,7 +9,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
-<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 1.1:100 输出通道+S_RESPOND / 2:125 Suspend-on-Idle / 3:141 S_VALIDATE / 4:195 DAG（Directed Acyclic Graph，有向无环图） / 5:292 System1/2 / 6:320 WorldModel / 7:331 推理预算 / 8:390 CrashRecovery / 8-bis:440 Handoff唤醒事件化+无损续跑 / 12:450 已知Bug修复记录 / 13:459 (SOFT)降级 / 14:477 跨模块契约 / 15:501 默认参数 -->
+<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 1.1:100 输出通道+S_RESPOND / 2:127 Suspend-on-Idle / 3:143 S_VALIDATE / 4:197 DAG（Directed Acyclic Graph，有向无环图） / 5:294 System1/2 / 6:322 WorldModel / 7:333 推理预算 / 8:392 CrashRecovery / 8-bis:442 Handoff唤醒事件化+无损续跑 / 12:452 已知Bug修复记录 / 13:461 (SOFT)降级 / 14:479 跨模块契约 / 15:503 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -115,8 +115,10 @@ ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1
 - **重规划耗尽转回复**（决策九）：进入 S_REPLAN 时预算已满 → S_RESPOND（`TurnDegraded=true`，任务结果按失败计），回复阶段据失败原因如实说明。
 - **步数上限**：`m4_kernel.max_steps=24`（回合内 FSM 触发次数），覆盖 7 步完整工具回合 + 观察循环 2 次 + 校验失败重规划 + 2 次空输出重试 + 耗尽转回复；截断经 `abortTurn` 收尾。
 - **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不以 S_FAILED 丢弃已执行回合的回复。
-- **回复上下文**：ImmutableCore + `kernel/respond.md` + 对话历史（TaintHigh）+ 本轮意图 +（执行路径）目标/执行结果/反思（TaintMedium 起）。无 tools。`agent/context/respond_context.go`。
-- **对话历史**：`AgentController.SetConversationHistory` 由 session 在 `SetTaskIntent` 前注入（剔除 system）；Perceive 与 Respond 使用，Plan 只消费自包含 Goal。上限 `thresholds.m4_kernel.conversation.history_max_messages/bytes`，自尾部截取。
+- **回复上下文**：五层前缀账本（ADR-0105 决策一，见下）中 L3 为 `kernel/respond.md`，L4 为（执行路径）目标/执行结果/反思（TaintMedium 起）+ 本轮意图压轴。无 tools。`agent/context/respond_context.go`。
+- **五层前缀账本**（ADR-0105 决策一，2026-09-29）：四阶段 × 两条路径（`agent/context` 记忆路径 / `agent/fsm` 降级路径）消息顺序统一为 L0 稳定核（`ImmutableCore.StableMessage`）→ L1 会话层（核心记忆、子 Agent 画像、可信工作区指令、扩展目录、不可信工作区上下文，`fsm.WriteSessionLayer`）→ L2 历史层 → L3 阶段层（阶段模板 + 压力提示 + 工具目录/Plan 提示块 + 易变层 `ImmutableCore.VolatileContent`）→ L4 回合层（召回、TaskModel、GroundingGap、观测、重规划反馈、执行结果、本轮意图）。`PromptBuilder.BuildLayered` 只改输出次序，Zone 信任分区与围栏不变；旧 `Build` 供非内核调用方。字节稳定规则：L0/L1 内集合必须确定序、不得含时间/连接状态（MCP ✓/~/✗ 在 L3）。门控测试：`agent/context/prefix_ledger_test.go`、`agent/fsm/prompt_layers_test.go`。
+- **召回预算与回合内复用**（ADR-0105 决策四，`agent/context/recall*.go` + `fsm/turn_recall.go`）：召回段在 L4 首位，受 `m4_kernel.recall.{item_max_chars=400,max_tokens=1200,min_score=0,min_score_ratio=0.2}` 约束。渲染：情景事件取 payload 的 `summary/description/content/text/message/goal/result/output` 字段，无则压成单行 JSON，时间戳只到日期（UTC），单条超限按 rune 截断；反思/L2/RAG/画像同受单条上限；L2 分数不再写入提示词；画像 map 按键排序。装入优先级 反思 > 情景 > L2 语义 > RAG > 画像（画像与 L1 核心记忆的用户偏好重复，最先被挤掉），按段内相关度顺序装、装不下即止，总量以 rune 感知估算（CJK 1 token/字，其余 ⌈字节/3⌉）不超 `max_tokens`。去重：正文（规范化空白后，≥12 字符）被当前 L2 历史包含则丢弃；召回段内同正文只留优先级最高者。低分过滤：L2 分是 SurrealDB BM25 原始分（无界）、RAG 分当前恒 1.0，均非归一化相似度，故绝对下限 `min_score` 默认关闭，默认只做每来源相对最高分的 `min_score_ratio` 过滤（最高分恒保留，默认值待 Eval 校准）。复用：`StateContext.TurnRecall`（分来源条目 + `EpisodicDone/GoalDone/ProfileDone` 覆盖标记 + 渲染文本）在 IDLE→PERCEIVE 回合起点与 `PreparedReply` 同处清空；Perceive 只查情景（K=4，按本轮原话）与画像，反思/L2/RAG 以 Goal 为查询词、Perceive 时 `TaskModel` 是上一回合遗留，一律留给 Plan 用本回合 Goal 补查；Plan 情景已覆盖则不再查（Perceive 被跳过/召回被预算放弃、Goal 非空时才补查，K=5）。读写 `TurnRecall` 须持 `sCtx.Mu`，召回 goroutine 不得触碰 sCtx。查询向量：`search.SyncBatcherAdapter` 内置 32 条/60s 的有界缓存（仅高优先级交互路径）。Reflect/Respond 的执行结果经 `fsm.ExecuteResultForPrompt` 收敛到 `ObservationMaxBytes`（优先取带 `read_tool_ref` 提示的最近观察，污点告警原样保留）。
+- **对话历史**（ADR-0105 决策二）：`AgentController.SetConversationHistory` 由 session 在 `SetTaskIntent` 前注入（剔除 system）；四个阶段共用同一 L2（Plan/Reflect 亦携带）。逐条以真实 user/assistant 角色写入，每条独立 TaintHigh 围栏（标记按单条内容哈希）。`fsm.WindowConversationHistory` 分块跳窗：超过 `thresholds.m4_kernel.conversation.history_max_messages/bytes` 时按 max/2 步长一次丢前若干块，被丢部分以一条确定性锚定摘要（条数 + 最近 8 条首行截断，无 LLM 调用）置于 L2 首位；切点是历史的纯函数，跳窗之间 L2 纯追加。不带 `ReasoningContent`（同回合 tool_call 往返的思考内容不经会话历史）。
 - **重规划闭环**（ADR-0098 决策六）：S_VALIDATE 拒绝 / S_EXECUTE 失败的原因写入 `StateContext.ReplanFeedback`（最近 3 条，每条 ≤400 字节），S_PLAN 与 S_RESPOND 的 prompt 均携带（TaintMedium 数据区）。无允许方案时 Plan 返回空计划 → S_RESPOND 说明限制，而非耗尽重试后报错。
 - **阶段契约 SSoT**：`configs/prompts/kernel/{perceive,plan,reflect,respond}.md`，记忆路径与降级路径同源加载；Perceive/Reflect 请求 `json_object` 约束解码。
 

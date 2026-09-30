@@ -98,8 +98,12 @@ type StateContext struct {
 	AgentProfile *types.AgentProfileSpec
 	RawIntentTS  taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
 	// ConversationHistory 本轮之前的对话（ADR-0098 决策四），已剔除 system 角色；
-	// 仅 Perceive/Respond 渲染进 prompt，按 TaintHigh 围栏。
+	// 四个阶段共用同一 L2 历史层（ADR-0105 决策二），逐条按 TaintHigh 围栏。
 	ConversationHistory []types.Message
+	// PlanHintBlocks S_PLAN 阶段层（L3）的运行期提示块（重规划新增工具、<tool-hints>）。
+	// 每次构造 Plan prompt 前由状态机刷新；此前它们被追加到 msgs[0]，会改写 L0 稳定核，
+	// 使 Plan 请求的前缀与其它阶段失配（ADR-0105 决策一）。
+	PlanHintBlocks []string
 	// ReplanFeedback 规划被拒 / 执行失败的原因（ADR-0098 决策六），经 RecordReplanFeedback 写入。
 	ReplanFeedback []string
 	// Observations 本回合各轮执行结果（ADR-0098 决策八），经 RecordObservation 写入。
@@ -108,6 +112,9 @@ type StateContext struct {
 	// 结果落地时重写（含失败/寒暄旁路清空），只由 Perceive→Respond 边消费，
 	// 其它入边（Plan 空计划/反思/耗尽）一律走 Respond LLM，杜绝陈旧回复被发布。
 	PreparedReply string
+	// TurnRecall 本回合的记忆召回结果（ADR-0105 决策四）。Perceive 写入，Plan 复用并只补
+	// 未覆盖的来源；与 PreparedReply 同一处在回合起点清空。读写均须持 Mu，召回 goroutine 不得触碰。
+	TurnRecall *TurnRecall
 	// ExecAllSucceeded 最近一次 S_EXECUTE 全部节点返回 Success（无 Go 错误、无工具软失败、
 	// 未降级重规划）。每次执行开始置 false，仅作 Reflect 可跳过的判据（ADR-0102 决策四）。
 	ExecAllSucceeded bool

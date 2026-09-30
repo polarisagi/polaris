@@ -51,6 +51,7 @@ type Engine struct {
 	l4TriggerCh     <-chan Change // admin 主动触发 L4，非自动检测
 	evolutionGate   EvolutionGate // M12: EvolutionGate instance
 	gate            backgroundGate
+	offPeak         offPeakGate // 可 nil；见 WithOffPeak
 
 	incidentConverter func(ctx context.Context, payload []byte) (string, error)
 
@@ -72,6 +73,13 @@ type backgroundGate interface {
 }
 
 func (e *Engine) WithBackgroundGate(g backgroundGate) { e.gate = g }
+
+// offPeakGate 是错峰窗口的消费端接口（由 pkg/offpeak.Gate 满足，nil 指针安全）。
+type offPeakGate interface{ Allow() bool }
+
+// WithOffPeak 启用错峰（ADR-0105 决策七）：中环的周期性课程生成只在窗口内触发，窗口外的 tick 跳过、
+// 不积压。管理员/安全冻结显式触发的 TriggerCurriculum 不受限——那是响应事件，不是可延迟的批处理。
+func (e *Engine) WithOffPeak(g offPeakGate) { e.offPeak = g }
 
 // SetSurpriseIndexProvider 注入 SurpriseIndex 读取函数（Tier1+ 从 M3 Metrics 读取）。
 func (e *Engine) SetSurpriseIndexProvider(fn func() float64) { e.surpriseIndexFn = fn }
@@ -288,6 +296,9 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 		case <-midTicker.C:
 			if e.gate != nil && !e.gate.BackgroundPermit(2) {
 				continue // skip 本轮
+			}
+			if e.offPeak != nil && !e.offPeak.Allow() {
+				continue // 错峰窗口外：跳过本轮（ADR-0105 决策七）
 			}
 			if e.curriculum != nil {
 				concurrent.SafeGo(ctx, "learning-curriculum-generate", func(ctx context.Context) {

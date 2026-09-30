@@ -284,7 +284,8 @@ func (ag *AutoCurriculumGenerator) generateDescriptionsLLM(ctx context.Context, 
 		MaxTokens:   256,
 		Temperature: 0.8,
 	}
-	resp, err := safecall.Infer(ctx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 创作/规划类调用保持高档思考并显式声明（ADR-0105 决策五）：省略即 Provider 默认，无法归因也无法审计。
+	resp, err := safecall.Infer(ctx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingHigh), types.WithPurpose(types.PurposeCurriculumGenerate))
 	if err != nil || resp == nil {
 		return nil
 	}

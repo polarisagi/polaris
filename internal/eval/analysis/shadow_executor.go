@@ -179,7 +179,14 @@ func (e *ShadowExecutor) processSingleSample(ctx context.Context, s sampleData, 
 		timeoutSec = 30
 	}
 	inferCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
-	shadowResp, err := safecall.Infer(inferCtx, e.llmProvider, msgs, candidateOpts...)
+	// 候选回放是「被测配置」，不降档：沿用被回放请求当时记录的思考档位（未记录则为空串，即 Provider
+	// 默认，与本处此前未声明时的行为等价），只把 purpose 与档位显式化以便归因与过门控。
+	// candidateOpts 排在后面，候选版本仍可显式覆盖二者（ADR-0105 决策五）。
+	replayOpts := append([]types.InferOption{
+		types.WithThinkingMode(eventPayload.Request.ThinkingMode),
+		types.WithPurpose(types.PurposeShadowCandidate),
+	}, candidateOpts...)
+	shadowResp, err := safecall.Infer(inferCtx, e.llmProvider, msgs, replayOpts...)
 	cancel()
 
 	if err != nil {
@@ -308,7 +315,8 @@ func (e *ShadowExecutor) scoreShadow(ctx context.Context, req *types.InferReques
 	tCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	resp, err := safecall.Infer(tCtx, e.llmProvider, msgs)
+	// 评审判官降到 ThinkingLow（ADR-0105 决策五）；候选回放调用不降档，见 processSingleSample。
+	resp, err := safecall.Infer(tCtx, e.llmProvider, msgs, types.WithThinkingMode(types.ThinkingLow), types.WithPurpose(types.PurposeShadowJudge))
 	if err != nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "shadow judge failed", err)
 	}

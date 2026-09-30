@@ -36,6 +36,7 @@ var cliDict = map[string][2]string{
 	"help_desc_cmd":   {"  polaris chat <msg>       单次问答后退出", "  polaris chat <msg>       One-shot chat and exit"},
 	"help_desc_proj":  {"  polaris project          项目管理（list / new / rm）；chat 在项目目录内自动归属", "  polaris project          Manage projects (list / new / rm); chat auto-binds inside a project dir"},
 	"help_desc_stat":  {"  polaris status           查看服务运行状态", "  polaris status           Check server status"},
+	"help_desc_usage": {"  polaris usage            LLM 用量与缓存命中率（--since 24h --by purpose|model|provider|day）", "  polaris usage            LLM usage & cache-hit report (--since 24h --by purpose|model|provider|day)"},
 	"help_desc_ver":   {"  polaris version          显示版本号", "  polaris version          Show version"},
 	"help_desc_help":  {"  polaris help             显示此帮助", "  polaris help             Show this help message"},
 	"help_repl":       {"Chat REPL 内建命令:", "Chat REPL built-in commands:"},

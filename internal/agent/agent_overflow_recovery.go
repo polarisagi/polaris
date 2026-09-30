@@ -60,6 +60,7 @@ func (a *Agent) streamInferWithOverflowRecovery(ctx context.Context, preTokenize
 
 func (a *Agent) streamInferOnce(ctx context.Context, msgs []types.Message, opts []types.InferOption,
 	audience protocol.LLMAudience) (*types.ProviderResponse, error) {
+	//llmopts:exempt streamInferOnce 是纯转发：opts 由唯一调用方 streamInferWithOverflowRecovery ← agent_execute_effect 按 llmEff 构造，purpose/thinking 在那里声明
 	ch, err := safecall.StreamInfer(ctx, a.provider, msgs, opts...)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // 保持错误链原样，调用方以 errors.Is 判别 ErrContextOverflow

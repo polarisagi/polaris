@@ -12,7 +12,7 @@ type LLMUsageRecord struct {
 	ModelPool       string
 	ThinkingMode    string
 	Streaming       bool
-	Status          string // LLMUsageStatusOK / Error / Cancelled
+	Status          string // LLMUsageStatusOK / Error / Cancelled / CacheHit
 	InputTokens     int    // 含缓存命中
 	CacheHitTokens  int
 	OutputTokens    int // 含推理
@@ -27,4 +27,6 @@ const (
 	LLMUsageStatusOK        = "ok"
 	LLMUsageStatusError     = "error"
 	LLMUsageStatusCancelled = "cancelled"
+	// LLMUsageStatusCacheHit 命中精确响应缓存（ADR-0105 决策六）：未调用 Provider，token 与费用为 0。
+	LLMUsageStatusCacheHit = "cache_hit"
 )

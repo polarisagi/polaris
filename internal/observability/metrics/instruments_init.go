@@ -57,6 +57,19 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	)
 	ie.capture("polaris.tokens.consumed_total", err)
 
+	// 按 purpose/provider 的输入 token 与缓存命中 token（ADR-0105 决策八）。
+	// input 已归一为"全部输入（含命中）"，见 internal/llm/usage_recorder.go fillUsage。
+	InstrLLMInputTokens, err = meter.Int64Counter(
+		"polaris.llm.input_tokens_total",
+		metric.WithDescription("LLM 全部输入 token，含缓存命中 (label: purpose, provider)"),
+	)
+	ie.capture("polaris.llm.input_tokens_total", err)
+	InstrLLMCacheHitTokens, err = meter.Int64Counter(
+		"polaris.llm.cache_hit_tokens_total",
+		metric.WithDescription("LLM 输入中命中前缀缓存的 token (label: purpose, provider)"),
+	)
+	ie.capture("polaris.llm.cache_hit_tokens_total", err)
+
 	InstrSystem1BypassTotal, err = meter.Int64Counter(
 		"polaris.system1_bypass_total",
 		metric.WithDescription("System 1 Bypass 次数 (label: matched=true/false)"),

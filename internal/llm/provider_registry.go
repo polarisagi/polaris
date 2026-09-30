@@ -80,9 +80,10 @@ func (e *providerEntry) recordOutcome(success bool, onRecovery func()) {
 type ProviderRegistry struct {
 	mu         sync.RWMutex
 	entries    map[string]*providerEntry
-	onRecovery func(providerName string) // 可选：Provider 熔断恢复时的回调
-	cfg        config.M1RouterThresholds // 熔断器配置（来自 M1RouterThresholds TOML）
-	usage      atomic.Pointer[usageSink] // llm_calls 记账队列；nil 时只跳过记账（见 InjectUsageRecorder）
+	onRecovery func(providerName string)     // 可选：Provider 熔断恢复时的回调
+	cfg        config.M1RouterThresholds     // 熔断器配置（来自 M1RouterThresholds TOML）
+	usage      atomic.Pointer[usageSink]     // llm_calls 记账队列；nil 时只跳过记账（见 InjectUsageRecorder）
+	cache      atomic.Pointer[responseCache] // 确定性后台调用精确响应缓存；nil 时不缓存（见 InjectResponseCache）
 }
 
 func NewProviderRegistry(cfg config.M1RouterThresholds) *ProviderRegistry {
@@ -108,7 +109,7 @@ func (r *ProviderRegistry) Register(name, displayName string, p protocol.Provide
 
 // newEntry 构造条目并套上 llm_calls 记账包装。记账队列经原子指针读取，注入顺序无关。
 func (r *ProviderRegistry) newEntry(name, displayName, role string, p protocol.Provider) *providerEntry {
-	e := newProviderEntry(name, displayName, &usageRecordingProvider{Provider: p, name: name, sink: &r.usage}, r.cfg)
+	e := newProviderEntry(name, displayName, &usageRecordingProvider{Provider: p, name: name, sink: &r.usage, cache: &r.cache, inputExcludesCache: usageExcludesCache(p)}, r.cfg)
 	e.raw = p
 	e.role = role
 	return e

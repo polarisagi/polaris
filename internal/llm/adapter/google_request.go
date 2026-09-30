@@ -89,7 +89,9 @@ type geminiFunctionResponse struct {
 }
 
 // buildGeminiRequest 将 InferRequest 转换为 Gemini 原生 JSON 格式。
-func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocyclo
+// inlineSystem=true 时只有开头连续的 system 进 systemInstruction，其后的 system 原位转成 user 角色的
+// <system_instruction> 文本并与相邻 user 内容合并（见 inline_system.go；ADR-0105 决策一）。
+func buildGeminiRequest(req *types.InferRequest, inlineSystem bool) ([]byte, error) { //nolint:gocyclo
 	type InlineData struct {
 		MimeType string `json:"mimeType"`
 		Data     string `json:"data"`
@@ -125,10 +127,18 @@ func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocy
 
 	var sysText string
 	var contents []Content
+	leading := true
+	lastInline := false // contents 末条是否含内联 system（允许与相邻 user 合并）
 	for _, m := range req.Messages {
+		inlineSys := false
 		if m.Role == "system" {
-			sysText += m.Content + "\n"
-			continue
+			if leading || !inlineSystem {
+				sysText += m.Content + "\n"
+				continue
+			}
+			inlineSys = true
+		} else {
+			leading = false
 		}
 		role := m.Role
 		if role == "assistant" {
@@ -136,7 +146,13 @@ func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocy
 		}
 
 		var parts []Part
-		if len(m.Parts) > 0 { //nolint:nestif
+		escapeUser := inlineSystem && !inlineSys && role == "user"
+		if inlineSys { //nolint:nestif
+			role = "user"
+			if body := wrapInlineSystem(m.Content); body != "" {
+				parts = append(parts, Part{Text: body})
+			}
+		} else if len(m.Parts) > 0 {
 			for _, p := range m.Parts {
 				if ip, ok := p.(types.ImagePart); ok {
 					parts = append(parts, Part{
@@ -165,6 +181,9 @@ func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocy
 				switch pm["type"] {
 				case "text":
 					if text, ok := pm["text"].(string); ok {
+						if escapeUser {
+							text = escapeSystemInstructionTag(text)
+						}
 						parts = append(parts, Part{Text: text})
 					}
 				case "tool_use":
@@ -191,6 +210,9 @@ func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocy
 						name = "unknown_tool"
 					}
 					contentStr, _ := pm["content"].(string)
+					if escapeUser {
+						contentStr = escapeSystemInstructionTag(contentStr)
+					}
 					respData := map[string]any{}
 					if err := json.Unmarshal([]byte(contentStr), &respData); err != nil {
 						respData["result"] = contentStr
@@ -203,17 +225,29 @@ func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocy
 					})
 				}
 			}
-		} else {
-			if m.Content != "" {
-				parts = append(parts, Part{Text: m.Content})
+		} else if m.Content != "" {
+			text := m.Content
+			if escapeUser {
+				text = escapeSystemInstructionTag(text)
 			}
+			parts = append(parts, Part{Text: text})
 		}
 
 		// 修正 Gemini 要求的角色名称（tool_result 在 gemini 里其实不需要变 role=function，而是 role=user 就可以？或者 function，这里统一转）
 		// 其实根据 Gemini 文档，functionResponse 应该是在 role="function" 或 user 都可以。Gemini 通常用 user。
-		if len(parts) > 0 {
-			contents = append(contents, Content{Role: role, Parts: parts})
+		if len(parts) == 0 {
+			continue
 		}
+		// 内联 system 与相邻 user 内容合并（Gemini 要求 user/model 交替）；functionResponse 前置，
+		// 保证它紧随对应 functionCall 轮次且位于该 user 轮之首。
+		if inlineSystem && role == "user" && len(contents) > 0 && contents[len(contents)-1].Role == "user" && (inlineSys || lastInline) {
+			last := &contents[len(contents)-1]
+			last.Parts = stablePartition(append(last.Parts, parts...), func(p Part) bool { return p.FunctionResponse != nil })
+			lastInline = true
+			continue
+		}
+		contents = append(contents, Content{Role: role, Parts: parts})
+		lastInline = inlineSys
 	}
 
 	p := Payload{Contents: contents}

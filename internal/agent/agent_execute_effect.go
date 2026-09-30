@@ -15,6 +15,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -274,7 +275,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 							types.WithModelPool(llmEff.ModelPool),
 							types.WithThinkingMode(llmEff.ThinkingMode),
 							types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}),
-							types.WithPurpose("plan_prm_candidate"),
+							types.WithPurpose(types.PurposePlanPRMCandidate),
 						)
 						if cErr != nil {
 							candidateCh <- candidateResult{}
@@ -356,18 +357,12 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			if llmEff.ResponseFormat != nil {
 				inferOpts = append(inferOpts, types.WithResponseFormat(llmEff.ResponseFormat))
 			}
-			// 原生 LLM function-calling 并行通路（2026-07-14）：仅在 S_PLAN 阶段、且
-			// 工具目录非空时附加 Tools——resp.ToolCalls 非空时由下方 toolCallsToDAGJSON
-			// 转换为 DAGModel JSON 再喂给既有 OnSuccess，两条通路收敛到同一张 DAG 上，
-			// 不新增第二条执行路径。TaskID 注入方式与 promptPlan 里 BuildToolListSection
-			// 保持一致（懒加载工具激活作用域需要同一个 TaskID，否则上一轮 search_tools
-			// 激活的工具在本轮 Schemas() 重建时对不上，见 catalog/composite.go）。
-			if cata := a.visibleCatalog(); a.sm.Current() == types.AgentStatePlan && cata != nil {
-				toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
-				if schemas := cata.Schemas(toolCtx, types.TrustCommunity); len(schemas) > 0 {
-					inferOpts = append(inferOpts, types.WithTools(schemas))
-				}
-			}
+			// 原生 LLM function-calling 并行通路（2026-07-14）：S_PLAN 阶段、且工具目录非空时
+			// 附加 Tools——resp.ToolCalls 非空时由下方 toolCallsToDAGJSON 转换为 DAGModel JSON 再喂给
+			// 既有 OnSuccess，两条通路收敛到同一张 DAG 上，不新增第二条执行路径。
+			// uniform_tools 实验开关（ADR-0105 决策三，默认 false=行为不变）见 agent_tool_opts.go。
+			inferOpts = append(inferOpts, a.toolInferOptions(ctx, a.sm.Current(),
+				config.CurrentThresholds().M4Kernel.CacheUniformTools)...)
 			// [M04 §8 崩溃恢复回放] 全局回放模式下优先按顺序消费注入的历史 LLM
 			// 调用录像，不发起真实 Provider 调用（g_inv_08 零 LLM 重放约束）。
 			// 队列耗尽的瞬间立即翻转全局 ReplayMode=false 并落入真实调用分支——

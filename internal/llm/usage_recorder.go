@@ -2,12 +2,15 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -53,6 +56,9 @@ func (r *ProviderRegistry) InjectUsageRecorder(ctx context.Context, rec UsageRec
 }
 
 func (s *usageSink) push(row protocol.LLMUsageRecord) {
+	// Prometheus 在这里打点而非 fillUsage：流式调用每个带用量的事件都会调 fillUsage（取最后一个非零值），
+	// 只有 push 时的行才是终态，才不会重复累计；先于入队，队列满丢行也不丢指标（记账可丢，指标不该少算）。
+	metrics.RecordLLMPromptTokens(context.Background(), row.Purpose, row.Provider, row.InputTokens, row.CacheHitTokens)
 	select {
 	case s.ch <- row:
 	default:
@@ -68,11 +74,36 @@ type usageRecordingProvider struct {
 	protocol.Provider
 	name string
 	sink *atomic.Pointer[usageSink]
+	// cache 为 nil（测试直接构造）或其指向 nil 时不缓存。
+	cache *atomic.Pointer[responseCache]
+	// inputExcludesCache：该 Provider 的 InputTokens 不含缓存命中部分（Anthropic 语义：input_tokens 只计
+	// 未命中缓存的输入，cache_read/cache_creation 另计）。OpenAI/DeepSeek/Google 的 prompt_tokens 已含命中。
+	inputExcludesCache bool
+}
+
+// usageExcludesCache 判定 Provider 的 Usage.InputTokens 口径。适配器（internal/llm/adapter）不可依赖，
+// 也没有口径声明字段，这里按具体类型名识别 Anthropic 适配器；运行期另有 CacheCreationTokens>0 的
+// 口径信号兜底（只有 Anthropic 会填该字段）。
+func usageExcludesCache(p protocol.Provider) bool {
+	return strings.Contains(fmt.Sprintf("%T", p), "AnthropicAdapter")
 }
 
 func (p *usageRecordingProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
 	start := time.Now()
+	// 精确响应缓存（ADR-0105 决策六）：命中时不调用 Provider，只记一行 status=cache_hit、token 为 0 的 llm_calls。
+	rc, cc, hit := p.probeResponseCache(ctx, msgs, opts)
+	if hit != nil {
+		if sink := p.sink.Load(); sink != nil {
+			row := p.baseRecord(ctx, start, opts, false)
+			row.Status = protocol.LLMUsageStatusCacheHit
+			sink.push(row)
+		}
+		return hit, nil
+	}
 	resp, err := p.Provider.Infer(ctx, msgs, opts...)
+	if err == nil && cc != nil {
+		rc.put(ctx, cc, resp)
+	}
 	if sink := p.sink.Load(); sink != nil {
 		row := p.baseRecord(ctx, start, opts, false)
 		if resp != nil {
@@ -162,11 +193,21 @@ func (p *usageRecordingProvider) baseRecord(ctx context.Context, start time.Time
 }
 
 // fillUsage 写入用量与按 ProviderCapabilities 费率（每 1K token）估算的费用。
+//
+// 口径归一（llm_calls.input_tokens 一律 = 全部输入，含缓存命中，见 039_llm_calls.sql）：
+//   - OpenAI/DeepSeek/Google 的 toUsage 直接给出含命中的 prompt_tokens，原样写入；
+//   - Anthropic 的 input_tokens 只计未命中缓存的部分，cache_read/cache_creation 另计，
+//     必须加回才与其余 Provider 同口径——否则 cache_hit/input 会 >1，且下面的 miss 被夹成 0、
+//     按输入计费的部分整体漏算。cache_creation 按输入费率计（Anthropic 实际为 1.25x/2x，估算取下界）。
 func (p *usageRecordingProvider) fillUsage(row *protocol.LLMUsageRecord, u types.Usage) {
-	row.InputTokens, row.CacheHitTokens = u.InputTokens, u.CacheHitTokens
+	input, miss := u.InputTokens, max(u.InputTokens-u.CacheHitTokens, 0)
+	if p.inputExcludesCache || u.CacheCreationTokens > 0 {
+		input = u.InputTokens + u.CacheHitTokens + u.CacheCreationTokens
+		miss = u.InputTokens + u.CacheCreationTokens
+	}
+	row.InputTokens, row.CacheHitTokens = input, u.CacheHitTokens
 	row.OutputTokens, row.ReasoningTokens = u.OutputTokens, u.ReasoningTokens
 	caps := p.Capabilities()
-	miss := max(u.InputTokens-u.CacheHitTokens, 0)
 	row.CostUSD = (float64(miss)*caps.CostPer1KInput +
 		float64(u.CacheHitTokens)*caps.CostPer1KCacheHit +
 		float64(u.OutputTokens)*caps.CostPer1KOutput) / 1000

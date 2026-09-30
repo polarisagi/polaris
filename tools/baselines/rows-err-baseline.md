@@ -1,7 +1,7 @@
 internal/agent/context/pii_vault.go:61:rows
 internal/automation/cost_report.go:157:rows
 internal/channel/manager.go:95:rows
-internal/eval/analysis/shadow_executor.go:246:rows
+internal/eval/analysis/shadow_executor.go:253:rows
 internal/execute/orchestrator/sqlite_blackboard_reaper.go:46:rows
 internal/execute/orchestrator/sqlite_blackboard_reaper.go:120:rows
 internal/extension/skill/skill_evolution.go:104:rows

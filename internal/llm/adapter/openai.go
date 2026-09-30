@@ -5,6 +5,8 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -23,15 +25,65 @@ type OpenAIAdapter struct {
 	client   *OpenAICompatibleClient
 	caps     types.ProviderCapabilities
 	tbr      *metrics.TokenBurnRate
+	// cacheRetention 对应 prompt_cache_retention（in_memory|24h）；空=不发送。
+	// 仅在 caps.SupportsPromptCacheKey 为真时才会下发（ADR-0105 决策三）。
+	cacheRetention string
 }
 
 var _ protocol.Provider = (*OpenAIAdapter)(nil)
+
+// OpenAIOption OpenAIAdapter 可选项。
+type OpenAIOption func(*OpenAIAdapter)
+
+// WithOpenAIPromptCacheRetention 设置 prompt_cache_retention（"in_memory"|"24h"，其他值忽略）。
+// 只有端点声明支持 prompt_cache_key 时才会被发送。
+func WithOpenAIPromptCacheRetention(retention string) OpenAIOption {
+	return func(a *OpenAIAdapter) {
+		if retention == "in_memory" || retention == "24h" {
+			a.cacheRetention = retention
+		}
+	}
+}
+
+// WithOpenAIPromptCacheKey 显式声明端点是否认识 prompt_cache_key/prompt_cache_retention。
+// 默认仅 OpenAI 官方端点为 true；确认支持该字段的其他兼容端点可显式开启。
+func WithOpenAIPromptCacheKey(supported bool) OpenAIOption {
+	return func(a *OpenAIAdapter) { a.caps.SupportsPromptCacheKey = supported }
+}
+
+// openAIOfficialBase 官方端点前缀，用于默认开启 SupportsPromptCacheKey。
+const openAIOfficialBase = "https://api.openai.com"
+
+// promptCacheKeyFromCtx 由会话标识派生 prompt_cache_key：sha256 前 16 hex，不含任何原文。
+// ctx 无会话标识（后台调用等）时返回空串，调用方据此不发送该字段。
+func promptCacheKeyFromCtx(ctx context.Context) string {
+	sid, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	if sid == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("polaris-prompt-cache-key:" + sid))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// applyPromptCacheFields 仅对声明支持的端点写入 prompt_cache_key / prompt_cache_retention，
+// 避免给不认识该字段的兼容端点发送未知参数。retention 只在存在 key 时才有意义，一并省略。
+func (a *OpenAIAdapter) applyPromptCacheFields(ctx context.Context, apiReq *OpenAIRequest) {
+	if !a.caps.SupportsPromptCacheKey {
+		return
+	}
+	key := promptCacheKeyFromCtx(ctx)
+	if key == "" {
+		return
+	}
+	apiReq.PromptCacheKey = key
+	apiReq.PromptCacheRetention = a.cacheRetention
+}
 
 // NewOpenAIAdapter 初始化一个 OpenAI 适配器。
 // baseURL 默认为 "https://api.openai.com/v1"（如果传入空串）。
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
 // llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
-func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate) *OpenAIAdapter {
+func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate, opts ...OpenAIOption) *OpenAIAdapter {
 	if client == nil {
 		client = defaultHTTPClient()
 	}
@@ -45,7 +97,7 @@ func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool,
 		HTTPClient: client,
 	}
 
-	return &OpenAIAdapter{
+	a := &OpenAIAdapter{
 		model:    model,
 		credPool: credPool,
 		client:   c,
@@ -58,9 +110,15 @@ func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool,
 			MaxContextTokens: 128000,
 			CostPer1KInput:   0.15,
 			CostPer1KOutput:  0.60,
+			// 仅官方端点认识 prompt_cache_key；Ollama/自建/其他兼容端点默认不发（见 WithOpenAIPromptCacheKey）。
+			SupportsPromptCacheKey: strings.HasPrefix(baseURL, openAIOfficialBase),
 		},
 		tbr: tbr,
 	}
+	for _, o := range opts {
+		o(a)
+	}
+	return a
 }
 
 func (a *OpenAIAdapter) ModelID() string {
@@ -90,11 +148,13 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 		Model:          options.Model,
 		MaxTokens:      options.MaxTokens,
 		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
 		ThinkingMode:   options.ThinkingMode,
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
 	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
+	a.applyPromptCacheFields(ctx, apiReq)
 	apiReq.Model = resolveOpenAIModel(a.model)
 	if req.Model != "" {
 		apiReq.Model = resolveOpenAIModel(req.Model)
@@ -170,11 +230,13 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 		Model:          options.Model,
 		MaxTokens:      options.MaxTokens,
 		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
 		ThinkingMode:   options.ThinkingMode,
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
 	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
+	a.applyPromptCacheFields(ctx, apiReq)
 	apiReq.Model = resolveOpenAIModel(a.model)
 	if req.Model != "" {
 		apiReq.Model = resolveOpenAIModel(req.Model)

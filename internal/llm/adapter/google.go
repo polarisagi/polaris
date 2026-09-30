@@ -32,19 +32,32 @@ type GoogleAgentPlatformAdapter struct {
 	client    *http.Client
 	caps      types.ProviderCapabilities
 	tbr       *metrics.TokenBurnRate
+	// inlineNonLeadingSystem 开启时只有开头连续的 system 进 systemInstruction，其后的 system 转 user 角色
+	// <system_instruction> 文本 part 留在原位（ADR-0105 决策一，配置 m1_router.google.inline_nonleading_system）。
+	inlineNonLeadingSystem bool
 }
 
 var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
+
+// GoogleOption 适配器选项函数。
+type GoogleOption func(*GoogleAgentPlatformAdapter)
+
+// WithGoogleInlineNonLeadingSystem 控制非首部 system 消息的处理（ADR-0105 决策一）：
+// true=原位内联为 user 角色 <system_instruction> 文本，使 L3 阶段层位于 L2 历史之后、
+// 历史前缀在阶段间共享；false=全部提到 systemInstruction（旧行为，请求体字节不变）。
+func WithGoogleInlineNonLeadingSystem(on bool) GoogleOption {
+	return func(a *GoogleAgentPlatformAdapter) { a.inlineNonLeadingSystem = on }
+}
 
 // NewGoogleAgentPlatformAdapter 构造 Google Agent Platform 适配器。
 //
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
 // llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
-func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate) *GoogleAgentPlatformAdapter {
+func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate, opts ...GoogleOption) *GoogleAgentPlatformAdapter {
 	if client == nil {
 		client = defaultHTTPClient()
 	}
-	return &GoogleAgentPlatformAdapter{
+	a := &GoogleAgentPlatformAdapter{
 		model:     model,
 		projectID: projectID,
 		location:  location,
@@ -61,6 +74,10 @@ func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *
 		},
 		tbr: tbr,
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 func (a *GoogleAgentPlatformAdapter) ModelID() string                          { return a.model }
@@ -91,7 +108,7 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
 	}
-	body, err := buildGeminiRequest(req)
+	body, err := buildGeminiRequest(req, a.inlineNonLeadingSystem)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
@@ -237,7 +254,7 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
 	}
-	body, err := buildGeminiRequest(req)
+	body, err := buildGeminiRequest(req, a.inlineNonLeadingSystem)
 	if err != nil {
 		if outerCancel != nil {
 			outerCancel()
