@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -19,6 +18,11 @@ import (
 // downloadChunk 向 url 发起 Range GET，将响应体写入 partPath。
 // offset>0 时携带 Range 头；服务端返回 206 则追加，返回 200 则覆写（服务端不支持 Range）。
 func downloadChunk(ctx context.Context, client *http.Client, url, partPath string, offset int64) error {
+	return downloadChunkP(ctx, client, url, partPath, offset, nil)
+}
+
+// downloadChunkP 是 downloadChunk 的带进度版本；prog 为 nil 时行为与原版完全一致。
+func downloadChunkP(ctx context.Context, client *http.Client, url, partPath string, offset int64, prog *progressSink) error {
 	if client == nil {
 		return apperr.New(apperr.CodeInternal, "downloader: http.Client is required; use substrate.NewSafeHTTPClient")
 	}
@@ -52,8 +56,26 @@ func downloadChunk(ctx context.Context, client *http.Client, url, partPath strin
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	var dst io.Writer = f
+	if prog != nil {
+		// 206 追加：已有 offset 字节；200 覆写：从 0 重来。总量取响应声明的长度，
+		// 缺失（-1，如分块传输）时退回调用方给的提示值（清单里的字节数）。
+		base := int64(0)
+		if resp.StatusCode == http.StatusPartialContent {
+			base = offset
+		}
+		total := prog.hint
+		if resp.ContentLength > 0 {
+			total = base + resp.ContentLength
+		}
+		prog.begin(base, total)
+		dst = &countWriter{w: f, sink: prog}
+	}
+	if _, err := io.Copy(dst, resp.Body); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "downloader: write failed", err)
+	}
+	if prog != nil {
+		prog.flush()
 	}
 	return nil
 }
@@ -67,10 +89,19 @@ type partMeta struct {
 // downloadResume 按候选地址顺序将 rawURL 下载到 destPath，支持跨源断点续传。
 // 临时文件为 destPath+".part"；完成后原子重命名。
 // 若 destPath 已存在则幂等返回。
+func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath string) error {
+	return downloadResumeP(ctx, client, rawURL, destPath, nil)
+}
+
+// downloadResumeP 是 downloadResume 的带进度版本；prog 为 nil 时行为与原版完全一致。
 //
 //nolint:gocyclo
-func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath string) error {
+func downloadResumeP(ctx context.Context, client *http.Client, rawURL, destPath string, prog *progressSink) error {
 	if _, err := os.Stat(destPath); err == nil {
+		if prog != nil {
+			prog.begin(prog.hint, prog.hint) // 缓存命中：无需下载，进度直接满格
+			prog.flush()
+		}
 		return nil
 	}
 
@@ -125,7 +156,7 @@ func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath s
 			}
 		}
 
-		if err := downloadChunk(ctx, client, url, partPath, offset); err != nil {
+		if err := downloadChunkP(ctx, client, url, partPath, offset, prog); err != nil {
 			slog.Warn("downloader: source failed, trying fallback", "url", url, "err", err)
 			lastErr = err
 			continue
@@ -153,21 +184,7 @@ func getDlLock(destPath string) *sync.Mutex {
 // downloadExtract 下载归档到临时目录（支持断点续传），完成后提取。
 // 提取成功后删除归档；提取失败保留归档，下次重试时无需重新下载。
 func downloadExtract(ctx context.Context, client *http.Client, rawURL string, extract func(string) error) error {
-	archiveName := urlBaseName(rawURL)
-	archivePath := filepath.Join(os.TempDir(), "polaris-dl-"+archiveName)
-
-	mu := getDlLock(archivePath)
-	mu.Lock()
-	defer mu.Unlock()
-
-	if err := downloadResume(ctx, client, rawURL, archivePath); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "downloadExtract", err)
-	}
-	if err := extract(archivePath); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "downloadExtract", err)
-	}
-	os.Remove(archivePath) //nolint:errcheck
-	return nil
+	return downloadExtractOpts(ctx, client, rawURL, Options{}, extract)
 }
 
 // DownloadFile 将 rawURL 内容写入 destPath，支持断点续传。
@@ -178,7 +195,12 @@ func DownloadFile(ctx context.Context, client *http.Client, rawURL, destPath str
 
 // DownloadExtractTarBz2 下载 .tar.bz2 并调用 mapper 选择性提取，支持断点续传。
 func DownloadExtractTarBz2(ctx context.Context, client *http.Client, rawURL string, destDir string, mapper func(string) (string, bool)) error {
-	return downloadExtract(ctx, client, rawURL, func(path string) error {
+	return DownloadExtractTarBz2Opts(ctx, client, rawURL, destDir, mapper, Options{})
+}
+
+// DownloadExtractTarBz2Opts 同 DownloadExtractTarBz2，附带 sha256 校验与进度回调（见 Options）。
+func DownloadExtractTarBz2Opts(ctx context.Context, client *http.Client, rawURL string, destDir string, mapper func(string) (string, bool), opts Options) error {
+	return downloadExtractOpts(ctx, client, rawURL, opts, func(path string) error {
 		f, err := os.Open(path)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "DownloadExtractTarBz2", err)
@@ -190,17 +212,22 @@ func DownloadExtractTarBz2(ctx context.Context, client *http.Client, rawURL stri
 
 // DownloadExtractLibs 下载动态库压缩包，将所有 .so/.dylib/.dll 提取到 destDir，支持断点续传。
 func DownloadExtractLibs(ctx context.Context, client *http.Client, rawURL, destDir string) error {
+	return DownloadExtractLibsOpts(ctx, client, rawURL, destDir, Options{})
+}
+
+// DownloadExtractLibsOpts 同 DownloadExtractLibs，附带 sha256 校验与进度回调（见 Options）。
+func DownloadExtractLibsOpts(ctx context.Context, client *http.Client, rawURL, destDir string, opts Options) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "downloader: mkdir "+destDir+" failed", err)
 	}
-	return DownloadExtractTarBz2(ctx, client, rawURL, destDir, func(name string) (string, bool) {
+	return DownloadExtractTarBz2Opts(ctx, client, rawURL, destDir, func(name string) (string, bool) {
 		base := lastSegment(name)
 		if strings.HasSuffix(base, ".dylib") || strings.HasSuffix(base, ".so") ||
 			strings.HasSuffix(base, ".dll") {
 			return joinPath(destDir, base), true
 		}
 		return "", false
-	})
+	}, opts)
 }
 
 // urlBaseName 从 URL 中提取文件名（去掉查询参数和 fragment）。

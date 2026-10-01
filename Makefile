@@ -323,10 +323,10 @@ generate-manifest:
 	env GOOS= GOARCH= $(GO) run tools/generate_manifest.go
 
 # 音频外部坐标契约（依赖外网，不进默认 CI / check-all）：
-# 对 sherpa 全平台库 URL + defaults.toml 3 个 STT 模型 URL 做 HEAD 断言 200，
-# 并对 Edge TTS 做真实握手与合成。改动音频资产坐标或 Edge 协议后必须跑。
+# 遍历 internal/llm/audioassets 清单（5 个平台 sherpa 库 + SenseVoice/标点/Kokoro 三个模型），
+# 对每项做 HEAD 断言 200 且 Content-Length 与清单字节数一致。改动音频资产清单后必须跑。
 audio-nettest:
-	$(GO) test -tags nettest -count=1 -v -run 'TestNet_' ./internal/llm/stt/ ./internal/llm/tts/
+	$(GO) test -tags nettest -count=1 -v -run 'TestNet_' ./internal/llm/audioassets/
 
 # CI 用：只校验内核完整性清单与源码是否一致，drift 时退出非零，不写回文件。
 #
