@@ -1,6 +1,6 @@
 # ADR-0106: 语音 STT/TTS 修复：外部资产坐标契约化、ABI 钉死、Provider MIME 化、资产状态机
 
-- **状态**: Accepted
+- **状态**: Accepted（Edge TTS、`model_precision`、STT 启动期下载与退避重试部分被 ADR-0107 取代；ABI 钉死/资产坐标契约/消除静默兜底仍有效）
 - **日期**: 2026-10-01
 - **决策者**: Opus（实测取证）/ Sonnet（实现）
 - **相关模块**: M13 Gateway / `internal/llm/stt/` / `internal/llm/tts/` / `cmd/polaris/server_stt_tts.go`

@@ -136,7 +136,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 - **网络**：`fetch_url`（SafeDialer 出站保护）、`web_search`（原生网页检索）
 - **执行**：`bash`（平台原生沙箱）、`run_command`（受限构建，如 `go test`）、`data_query`（工作区结构化数据查询）
 - **数据/文本处理**：`csv_parse`（CSV 解析）、`diff_text`（文本差异）、`template_render`（模板渲染）
-- **多媒体**：`video_analysis`（视频内容分析）、`tts_edge`（Edge TTS 语音合成）
+- **多媒体**：`video_analysis`（视频内容分析）、`tts`（本地 Kokoro 语音合成，经网关 `Synthesize`，ADR-0107）
 - **系统**：`get_datetime`（当前时间）、`sys_probe`（硬件探针，M03 §5）
 - **辅助**：`todo_read`/`todo_write`（任务列表按会话持久化于 `session_todos` 表，会话 ID 取 `CtxTaskIDKey`，缺失即报错；ADR-0104 决策三）、`notebook_read`/`notebook_edit`（Jupyter Notebook）、`read_tool_ref`（工具定义自省）
 - **Git**：`git_diff`、`git_commit`（`git_text_tools.go`，Agent 可直接调用无需 MCP 扩展）
@@ -163,7 +163,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 
 ### 3.2 平台原生进程沙箱（Rust V2 统一沙箱）
 
-`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/bash/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts_edge` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/sandbox/native_os_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
+`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/bash/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/sandbox/native_os_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
 
 `runSandboxedArgv(ctx, callerType, execPath, execArgs, workDir, allowedPaths, netAllow, timeoutMs, sandboxEnabled, bwrapPath)` 构造 `protocol.SandboxContext`（`ExecPath`+`ExecArgs` argv 模式，不经 shell 解释，杜绝命令注入）并调用 `native_sandbox_exec_v2`，按平台分发：
 

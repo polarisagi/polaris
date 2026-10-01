@@ -228,7 +228,6 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 |------|----------|------------|-----------|
 | FeatureLocalInference | Tier1 | 2 GB | — |
 | FeatureLocalEmbedding | Tier0 | 256 MB | — |
-| FeatureLocalSTT | Tier0 | 128 MB | — |
 | FeatureQLoRA | Tier1 | 4 GB | — |
 | FeaturePRMTraining | Tier2 | 8 GB | — |
 | FeatureL3Sandbox | Tier0 | 512 MB | 平台检测 |

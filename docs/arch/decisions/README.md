@@ -109,6 +109,7 @@ ADR 被代码引用时，源文件头部加：
 | 0104 | State-in-DB 补齐：启动期孤儿运行对账、工作流断点续跑入口、session_todos、预算以 llm_calls 为账本、hitl_requests、subagent_runs/planner_sessions 写入、session_trajectory 取代 KV 轨迹并派生学习状态、PII 快照独立表、统一 consumer_cursors | Accepted | 2026-09-29 |
 | 0105 | Token 经济第三批：缓存优先五层前缀账本（修复稳定层 map 乱序）、历史只追加分块跳窗、Provider 缓存接线、召回预算与回合内复用、Provider 调用用途/思考档位门控、确定性后台调用精确缓存、错峰调度、用量可见性 | Proposed | 2026-09-29 |
 | 0106 | 语音 STT/TTS 修复：外部资产坐标契约化（audio-nettest）、sherpa FFI ABI 版本钉死、默认 int8、消除静默兜底、TTS Provider 携带 MIME（Edge 改 MP3，追记 ADR-0031）、STT 资产状态机与退避重试 | Accepted | 2026-10-01 |
+| 0107 | 语音 v2：本地离线 STT（SenseVoice int8）+ 服务端 TTS（Kokoro fp32）、按需下载 + 懒加载/空闲卸载、最低配置门控（STT 2GB/2 核，TTS 4GB/4 核，RTF>0.7 不支持）、前端系统语音兜底；取代 ADR-0106 的 Edge/precision/启动期下载部分，取代 ADR-0031 | Accepted | 2026-10-02 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

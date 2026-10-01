@@ -1,6 +1,6 @@
 # polaris
 
-> 开源自托管 AI Agent | Go 1.26+ + Rust 1.94+ | 29 internal module / 4 layer | 最低 2GB VPS 可运行，Tier 0 (8GB) 为开发推荐地板 | provider-agnostic (`configs/defaults.toml` 推荐 DeepSeek V4)
+> 开源自托管 AI Agent | Go 1.26+ + Rust 1.94+ | 29 internal module / 4 layer | 主形态桌面端 + 浏览器，同一守护进程亦可部署 VPS（核心路径最低 2GB），Tier 0 (8GB) 为开发推荐地板 | provider-agnostic (`configs/defaults.toml` 推荐 DeepSeek V4)
 >
 > **本文件及全部 `docs/` 的读者定位：AI 优先**（2026-08-09 裁决）。人类可读性不是维护目标；`§跳读` 行、`[HE-Rule-x]`/`[Concept]` 标签、`inv_` 编号表、紧凑表格均为一等公民导航结构，不得以"人类阅读噪音"为由删除。
 
@@ -40,7 +40,7 @@
 | HE-6 | **State-in-DB** — 持久化落盘，跨模块走异步事件 | 状态仅内存、DB 连接期间发起 LLM 调用（R1.16） |
 | HE-7 | **防退化边界** — 守住核心体系 (五防线与 Memory-Write-Tool) | 绕过 ExecuteTool 写记忆、弱化 Taint/Cedar/KillSwitch/SSRFGuard |
 
-**[Tier-0]** 核心路径（含 SurrealDB kv-mem + Embedding + STT + Wasm 沙箱）必须在 2GB+ VPS 可运行；8GB 为推荐开发地板（Tier0），本地推理需 Tier1（16GB+）。超限能力走硬件门控解锁，不得作硬依赖。
+**[Tier-0]** 核心路径（含 SurrealDB kv-mem + Embedding + Wasm 沙箱）必须在 2GB+ VPS 可运行；语音按 ADR-0107：STT 需 2GB/2 核，服务端 TTS（Kokoro）需 4GB/4 核，低于此由前端系统语音兜底，资产均按需下载、空闲卸载，启动不下载；麦克风需安全上下文（127.0.0.1/localhost 可用，远程 VPS 须 HTTPS）；8GB 为推荐开发地板（Tier0），本地推理需 Tier1（16GB+）。超限能力走硬件门控解锁，不得作硬依赖。
 
 ## 项目结构
 
@@ -124,7 +124,7 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
 - **[强制] 提交前自检**：在执行 `git commit` 之前，必须先执行 `make lint`（或 `make fmt && make lint`）确保代码风格、圈复杂度等检查全部绿灯。**若本次改动涉及 `docs/arch/` 或包路径迁移，追加 `make docs-refs`**（失效路径引用门控，ADR-0081；白名单 `tools/baselines/docs-refs-allowlist.txt` 仅收"文档在记载已删除/已迁移路径"的历史注记）。
 - **[强制] 新增/修改门控规则**：`tools/*_lint.go`、`tools/*_check.go` 必须在 `tools/lint-selftest.txt` 登记负向用例，并使 `make lint-selftest` 通过（注入违规样例→报红→还原→转绿）。**未经负向验证的规则不算 landed**——一个永远不报警的门控与没有门控在 CI 输出上长得一模一样。判定由门控做，不接受自述（2026-08-12 实测：12 条自述 landed 的门控里 6 条抓不到它们声称要防的缺陷）。
 - **[强制] 配置变更策略**：凡修改 `internal/config/` 中的结构体定义，**必须**执行 `make gen-threshold-examples` 重新生成 TOML 配置文件并提交。禁止代码与配置模板脱节。
-- **[强制] 音频外部坐标**：改动 `internal/llm/stt|tts` 的下载 URL / 资产名 / `configs/defaults.toml [inference.stt|tts]` 的模型 URL，或 Edge TTS 协议（端点、`Sec-MS-GEC`、输出格式、SSML）后，必须在本机跑 `make audio-nettest`（依赖外网，不进 CI；ADR-0106——硬编码的外部假设曾让 6 个平台 5 个 URL 404 而单测全绿）。升级 sherpa-onnx 版本须先重测 FFI 偏移并改 `stt.SherpaABIVersion`。
+- **[强制] 音频外部坐标**：改动 `internal/llm/stt|tts` 的下载 URL / 资产名 / `configs/defaults.toml [inference.stt|tts]` 的模型 URL，`internal/llm/audioassets` 清单后，必须在本机跑 `make audio-nettest`（HEAD 校验全部资产 URL 与 Content-Length，依赖外网，不进 CI；ADR-0106/0107——硬编码的外部假设曾让 6 个平台 5 个 URL 404 而单测全绿）。升级 sherpa-onnx 版本须先重测 FFI 偏移并改 `stt.SherpaABIVersion`。
 - **[强制] DDL 修改策略**：`internal/protocol/schema/NNN_*.sql` 是 Schema SSoT，禁止以 ALTER TABLE / ADD COLUMN 补丁文件打补丁。
   - **上线前**（`§当前阶段` 未标注"上线后"）：Schema 变更**直接修改原始建表文件**；开发库删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。
   - **上线后**（存在生产数据）：新增编号迁移文件（ALTER TABLE / 数据迁移），不得修改已应用历史文件。

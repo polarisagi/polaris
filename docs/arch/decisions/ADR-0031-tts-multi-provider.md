@@ -1,6 +1,6 @@
 # ADR-0031: TTS 三路 Provider 架构（Edge / HTTP / Sherpa）
 
-- **状态**: Accepted | **日期**: 2026-06-27 | **模块**: M13 Gateway / `internal/llm/tts/`
+- **状态**: Superseded by ADR-0107（Edge/云端 Provider 已移除；服务端仅 Kokoro + 可选 HTTP sidecar）| **日期**: 2026-06-27 | **模块**: M13 Gateway / `internal/llm/tts/`
 
 ## 决策
 
