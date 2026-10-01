@@ -3,7 +3,6 @@ package tts
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -97,9 +96,9 @@ func edgeMajor(full string) string {
 
 // edgeMuid 生成 32 位随机大写十六进制，充当 Cookie 里的 muid。
 func edgeMuid() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return strings.ToUpper(hex.EncodeToString(b))
+	// uuid v4 取自 crypto/rand 且无错误返回路径；去掉连字符正好 32 位十六进制，
+	// 比手写 rand.Read 再丢弃 error 更不易出错（HE-1 禁止静默丢弃返回值）。
+	return strings.ToUpper(strings.ReplaceAll(uuid.New().String(), "-", ""))
 }
 
 // dial 建立 WebSocket 连接。返回的 *http.Response 在握手失败时可能非 nil，供调用方取状态码与 Date。
