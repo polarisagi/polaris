@@ -109,6 +109,15 @@ Alpine.store('chat', {
       return;
     }
 
+    // 开始录音前刷新一次 capabilities：STT 模型可能仍在下载/失败重试中。
+    // 此时开麦只会让用户说完话后得到一个静默的 503，必须在开麦前就告知状态与原因。
+    await this.fetchCapabilities();
+    const sttSt = this.capabilities?.stt_status;
+    if (sttSt && sttSt.state !== 'ready') {
+      this._toastSTTState(sttSt);
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       window.dispatchEvent(new CustomEvent('stt-start'));
@@ -124,6 +133,7 @@ Alpine.store('chat', {
       const LONG_PAUSE_MS = 4000;
 
       let isSpeaking = false;
+      let chunkErrorShown = false; // 同一次录音内分段失败只弹一次 toast，避免刷屏
 
       const uploadChunk = async (blob) => {
         const formData = new FormData();
@@ -137,6 +147,10 @@ Alpine.store('chat', {
             if (data.text) {
               window.dispatchEvent(new CustomEvent('stt-chunk', { detail: data.text }));
             }
+          } else if (!chunkErrorShown) {
+            chunkErrorShown = true;
+            const msg = await this._readErrMessage(resp);
+            if (Alpine.store('toast')) Alpine.store('toast').show('error', msg || Alpine.store('i18n').t('chat_stt_error'));
           }
         } catch (e) {
           console.error('Chunk STT Error', e);
@@ -220,12 +234,40 @@ Alpine.store('chat', {
           window.dispatchEvent(new CustomEvent('stt-final', { detail: data }));
         }
       } else {
-        throw new Error(`Status ${resp.status}`);
+        throw new Error((await this._readErrMessage(resp)) || `Status ${resp.status}`);
       }
     } catch (e) {
       console.error('Global STT Failed', e);
-      if (Alpine.store('toast')) Alpine.store('toast').show('error', Alpine.store('i18n').t('chat_stt_error'));
+      if (Alpine.store('toast')) {
+        Alpine.store('toast').show('error', e?.message || Alpine.store('i18n').t('chat_stt_error'));
+      }
     }
+  },
+
+  // 读取服务端错误文本：优先 JSON 的 message/error 字段，否则取纯文本；失败返回空串。
+  async _readErrMessage(resp) {
+    try {
+      const raw = await resp.text();
+      try {
+        const j = JSON.parse(raw);
+        return j.message || j.error || raw;
+      } catch {
+        return raw;
+      }
+    } catch {
+      return '';
+    }
+  },
+
+  // 按 stt_status 显示"为什么现在不能录音"。detail 是服务端给出的当前步骤（如下载 SenseVoice int8 166MB）。
+  _toastSTTState(st) {
+    if (!Alpine.store('toast')) return;
+    const t = (k) => Alpine.store('i18n').t(k);
+    const why = [st.detail, st.error].filter(Boolean).join(' - ') || st.state;
+    let key = 'chat_stt_not_ready';
+    if (st.state === 'failed') key = 'chat_stt_prep_failed';
+    else if (st.state === 'disabled') key = 'chat_stt_disabled';
+    Alpine.store('toast').show('error', t(key).replace('{0}', why), 6000);
   },
 
   async submit(input) {
@@ -404,7 +446,10 @@ Alpine.store('chat', {
           headers: headers,
           body: JSON.stringify({ input: sentenceText })
         });
-        if (!resp.ok) throw new Error('TTS Request Failed: ' + resp.status);
+        if (!resp.ok) {
+          const msg = await this._readErrMessage(resp);
+          throw new Error(msg || ('TTS Request Failed: ' + resp.status));
+        }
         return resp.blob();
       };
 
@@ -461,6 +506,9 @@ Alpine.store('chat', {
 
     } catch (e) {
       console.error('Audio playback failed:', e);
+      if (Alpine.store('toast')) {
+        Alpine.store('toast').show('error', Alpine.store('i18n').t('chat_tts_error').replace('{0}', e?.message || ''), 6000);
+      }
       if (this.playingMsgIdx === idx) {
         this.playingMsgIdx = null;
         this._audioPlayer = null;
