@@ -1,8 +1,10 @@
 package chat
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +21,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 type AudioService struct {
@@ -30,12 +33,31 @@ type AudioService struct {
 	// STTStatus / TTSStatus 资产状态机快照（经 /v1/system/capabilities 暴露给前端）。
 	STTStatus *AudioStatusTracker
 	TTSStatus *AudioStatusTracker
-	// sttRetry 容量 1 的唤醒信号：STT 处于 failed 状态时，转写请求非阻塞地投递一次，
-	// 让后台重试循环跳过退避立即重试；重复信号直接丢弃。
-	sttRetry chan struct{}
+
+	// installer 由 cmd 层在装配时注入（语音资产按需下载，ADR-0107）；nil 时 install 端点返回 503。
+	installer atomic.Pointer[installerBox]
 
 	ffmpegSF singleflight.Group
 }
+
+// AudioInstaller 是 chat 包对"语音资产按需安装"的消费端接口。
+// kind 为 "stt" 或 "tts"。started=false 表示无需安装或已在进行中；不支持的机器返回
+// 满足 audioNotReady 的错误。实现：cmd 层的 audioRuntime（包装 audiorun 服务）。
+type AudioInstaller interface {
+	Install(kind string) (started bool, err error)
+}
+
+type installerBox struct{ i AudioInstaller }
+
+// audioNotReady 是引擎层"此刻不能服务"错误的消费端契约（HTTP 层据此选状态码与 JSON 错误码）。
+// 由 audiorun.NotReadyError 满足；chat 不 import audiorun，保持层间只通过接口耦合。
+type audioNotReady interface {
+	error
+	AudioReason() (code, message string)
+}
+
+// SetInstaller 注入安装器。
+func (s *AudioService) SetInstaller(i AudioInstaller) { s.installer.Store(&installerBox{i: i}) }
 
 func NewAudioService(stt *atomic.Pointer[STTEngineBox], tts *atomic.Pointer[TTSProviderBox], binDir string, httpClient *http.Client) *AudioService {
 	return &AudioService{
@@ -45,18 +67,6 @@ func NewAudioService(stt *atomic.Pointer[STTEngineBox], tts *atomic.Pointer[TTSP
 		httpClient: httpClient,
 		STTStatus:  NewAudioStatusTracker("stt"),
 		TTSStatus:  NewAudioStatusTracker("tts"),
-		sttRetry:   make(chan struct{}, 1),
-	}
-}
-
-// STTRetrySignal 返回 STT 重试唤醒通道（只读端），供后台准备循环 select。
-func (s *AudioService) STTRetrySignal() <-chan struct{} { return s.sttRetry }
-
-// kickSTTRetry 非阻塞投递一次重试信号（通道满则丢弃，不堆积）。
-func (s *AudioService) kickSTTRetry() {
-	select {
-	case s.sttRetry <- struct{}{}:
-	default:
 	}
 }
 
@@ -76,9 +86,18 @@ func (s *AudioService) SetTTSEngine(p TTSProvider, name string) {
 	s.TTSEngine.Store(&TTSProviderBox{P: p, Name: name})
 }
 
-func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
+// Synthesize 用当前注入的 TTS Provider 合成一段文本（HTTP 接口与 tts 内置工具共用）。
+// Provider 未注入时返回 audioNotReady 之外的普通错误由调用方处理。
+func (s *AudioService) Synthesize(ctx context.Context, text string) (TTSAudio, error) {
 	box := s.TTSEngine.Load()
-	if box == nil {
+	if box == nil || box.P == nil {
+		return TTSAudio{}, apperr.New(apperr.CodeUnimplemented, "TTS 引擎未初始化")
+	}
+	return box.P.Generate(ctx, text) //nolint:wrapcheck // 原样透传 NotReady，由 HTTP 层映射 503
+}
+
+func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
+	if box := s.TTSEngine.Load(); box == nil || box.P == nil {
 		http.Error(w, "TTS Engine not initialized", http.StatusServiceUnavailable)
 		return
 	}
@@ -95,14 +114,17 @@ func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	audio, err := box.P.Generate(r.Context(), req.Input)
+	audio, err := s.Synthesize(r.Context(), req.Input)
 	if err != nil {
+		if s.writeNotReady(w, "tts", s.TTSStatus.Get(), err) {
+			return
+		}
 		slog.Error("audio: tts generation failed", "err", err)
 		http.Error(w, "internal server error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// MIME 由 Provider 给出（Edge=audio/mpeg，Sherpa=audio/wav）；缺省按 wav 兜底。
+	// MIME 由 Provider 给出（Sherpa=audio/wav，HTTP sidecar 取其响应头）；缺省按 wav 兜底。
 	mime := audio.MIME
 	if mime == "" {
 		mime = "audio/wav"
@@ -111,6 +133,72 @@ func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audio.Data)))
 	if _, err := w.Write(audio.Data); err != nil {
 		slog.Warn("audio: failed to write response", "err", err)
+	}
+}
+
+// writeNotReady 若 err 是引擎层的"此刻不能服务"（未安装/正在下载/不支持/内存不足/加载超时），
+// 写出 503 JSON 并返回 true。JSON 形如 {error,state,detail,message}：
+//   - 未安装/正在下载 → error="<kind>_not_ready"（与既有前端约定一致）
+//   - 不支持/内存不足/加载超时 → error 即原因码（unsupported / insufficient_memory / loading_timeout）
+//
+// 为什么不用纯文本：前端要据 error/state 决定弹"需要下载"确认框还是"硬件不支持"提示。
+func (s *AudioService) writeNotReady(w http.ResponseWriter, kind string, st AudioAssetStatus, err error) bool {
+	var nr audioNotReady
+	if !errors.As(err, &nr) {
+		return false
+	}
+	code, msg := nr.AudioReason()
+	errCode := code
+	if code == "not_installed" || code == "installing" {
+		errCode = kind + "_not_ready"
+	}
+	httputil.WriteJSONStatus(w, http.StatusServiceUnavailable, map[string]string{
+		"error":   errCode,
+		"state":   st.State,
+		"detail":  st.Detail,
+		"message": msg,
+	})
+	return true
+}
+
+// HandleAudioInstall 返回 POST /v1/audio/{stt|tts}/install 的处理器：触发语音资产后台下载。
+//   - 202 {started:true,status}：已开始（进度经 /v1/system/capabilities 的 *_status.progress 轮询）
+//   - 200 {started:false,status}：无需安装或已在进行中
+//   - 422 {error:"unsupported",...}：本机硬件低于最低配置
+func (s *AudioService) HandleAudioInstall(kind string) http.HandlerFunc {
+	tracker := s.STTStatus
+	if kind == "tts" {
+		tracker = s.TTSStatus
+	}
+	return func(w http.ResponseWriter, _ *http.Request) {
+		box := s.installer.Load()
+		if box == nil || box.i == nil {
+			httputil.WriteJSONStatus(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "audio_installer_unavailable", "message": "语音资产安装器未接线",
+			})
+			return
+		}
+		started, err := box.i.Install(kind)
+		if err != nil {
+			var nr audioNotReady
+			if errors.As(err, &nr) {
+				code, msg := nr.AudioReason()
+				httputil.WriteJSONStatus(w, http.StatusUnprocessableEntity, map[string]any{
+					"error": code, "message": msg, "status": tracker.Get(),
+				})
+				return
+			}
+			slog.Error("audio: install request failed", "kind", kind, "err", err)
+			httputil.WriteJSONStatus(w, http.StatusInternalServerError, map[string]string{
+				"error": "install_failed", "message": err.Error(),
+			})
+			return
+		}
+		code := http.StatusOK
+		if started {
+			code = http.StatusAccepted
+		}
+		httputil.WriteJSONStatus(w, code, map[string]any{"started": started, "status": tracker.Get()})
 	}
 }
 
@@ -224,6 +312,9 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 
 	res, err := engine.Transcribe(samples, sampleRate)
 	if err != nil {
+		if s.writeNotReady(w, "stt", s.STTStatus.Get(), err) {
+			return
+		}
 		slog.Error("audio: stt transcribe failed", "err", err)
 		httputil.WriteJSONStatus(w, http.StatusInternalServerError, map[string]string{
 			"error":   "stt_failed",
@@ -238,9 +329,6 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 // writeSTTNotReady 返回 503 JSON，携带状态机的 state/detail/message，让前端能说清"为什么现在不能用"。
 func (s *AudioService) writeSTTNotReady(w http.ResponseWriter) {
 	st := s.STTStatus.Get()
-	if st.State == AudioStateFailed {
-		s.kickSTTRetry() // 用户正在使用：跳过退避立即重试一次
-	}
 	msg := "语音识别引擎尚未就绪"
 	if st.Detail != "" {
 		msg += "：" + st.Detail

@@ -1,70 +1,63 @@
-package tts_edge
+// Package tts 是 `tts` 内置工具：把文本合成为语音，返回 data URI。
+//
+// 它不自带任何引擎，只调用调用方注入的本地 TTS Provider（Kokoro，经 AudioService）。
+// 此前的 tts_edge 靠外部 `edge-tts` CLI 访问微软在线端点，ADR-0107 随 Edge 整条删除。
+package tts
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"fmt"
+	"unicode/utf8"
 
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// MakeExecuteEdgeTTSFn 返回文本转语音工具。元数据由 builtin/tts_edge/tool.yaml + schema.json 定义。
-func MakeExecuteEdgeTTSFn(sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
+// Synthesizer 是本工具对 TTS 引擎的消费端接口（HE-3：接口在调用方定义）。
+// 引擎未安装/不支持/内存不足时必须返回错误，不得返回空音频。
+type Synthesizer func(ctx context.Context, text string) (data []byte, mime string, err error)
+
+// maxTextRunes 限制单次合成的文本长度：Kokoro 在 RTF≈0.5 时 1000 个汉字约 4 分钟音频、
+// 2 分钟推理，更长的文本会让一次工具调用占住推理引擎（同一引擎串行服务所有朗读请求）。
+const maxTextRunes = 1000
+
+// MakeTTSFn 返回文本转语音工具。元数据由 builtin/tts/tool.yaml + schema.json 定义。
+// synth 为 nil（装配遗漏）时每次调用都如实报错，而不是回出假音频。
+func MakeTTSFn(synth Synthesizer) sandbox.InProcessFn {
 	return func(ctx context.Context, args []byte) ([]byte, error) {
 		var req struct {
-			Text  string `json:"text"`
-			Voice string `json:"voice"`
-			Rate  string `json:"rate"`
+			Text string `json:"text"`
 		}
 		if err := json.Unmarshal(args, &req); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid args", err)
 		}
-		if req.Voice == "" {
-			req.Voice = "en-US-AriaNeural"
+		if req.Text == "" {
+			return nil, apperr.New(apperr.CodeInvalidInput, "tts: text is required")
 		}
-		if req.Rate == "" {
-			req.Rate = "+0%"
+		if n := utf8.RuneCountInString(req.Text); n > maxTextRunes {
+			return nil, apperr.New(apperr.CodeInvalidInput,
+				fmt.Sprintf("tts: text too long (%d characters, max %d)", n, maxTextRunes))
+		}
+		if synth == nil {
+			return nil, apperr.New(apperr.CodeUnimplemented, "tts: 本地 TTS 引擎未接线")
 		}
 
-		// 调用真实的 edge-tts CLI 工具。失败必须如实返回错误：此前这里回出一段写死的假 MP3
-		// 并报 success，调用方（Agent）无从得知语音根本没合成出来（静默兜底）。
-		tmpFile, err := os.CreateTemp("", "polaris_tts_*.mp3")
+		data, mime, err := synth(ctx, req.Text)
 		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "tts_edge: create temp file failed", err)
-		}
-		tmpPath := tmpFile.Name()
-		tmpFile.Close()
-		defer os.Remove(tmpPath)
-
-		// 调用 sandbox 执行 edge-tts，允许网络（edge-tts 需要访问微软接口）。
-		// 路径白名单收紧到 tmpPath 所在目录（临时目录），不放行整个文件系统——
-		// edge-tts 只需要写这一个 mp3 文件，没有理由拿到全盘读写权限。
-		edgeArgs := []string{"--text", req.Text, "--voice", req.Voice, "--rate", req.Rate, "--write-media", tmpPath}
-		tmpDir := filepath.Dir(tmpPath)
-
-		// netAllow = true (edge-tts 需要网络)
-		if _, err := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "edge-tts", edgeArgs, tmpDir, []string{tmpDir}, true, 30000, sandboxEnabled, bwrapPath); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "tts_edge: edge-tts execution failed (is the edge-tts CLI installed?)", err)
-		}
-		data, err := os.ReadFile(tmpPath)
-		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "tts_edge: read synthesized audio failed", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "tts: synthesis failed", err)
 		}
 		if len(data) == 0 {
-			return nil, apperr.New(apperr.CodeInternal, "tts_edge: edge-tts produced an empty audio file")
+			return nil, apperr.New(apperr.CodeInternal, "tts: engine produced empty audio")
 		}
-		audioURI := "data:audio/mp3;base64," + base64.StdEncoding.EncodeToString(data)
-
-		result := map[string]string{
-			"audio_uri": audioURI,
+		if mime == "" {
+			mime = "audio/wav"
+		}
+		return json.Marshal(map[string]string{
+			"audio_uri": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
 			"status":    "success",
 			"message":   "Text converted to speech successfully",
-		}
-		return json.Marshal(result)
+		})
 	}
 }

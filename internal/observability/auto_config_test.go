@@ -364,8 +364,10 @@ func TestAutoConfig_FeatureMap_AllFeatures(t *testing.T) {
 	ac := &AutoConfig{Probe: hp, Guard: guard, Gate: fg}
 	ac.computeConfig()
 
-	// 22 features: 原 17 + Embedding 阶梯(HQ/Ultra/Max) + STT/TTS 分级(HQSTT/LocalTTS)
-	expectedFeatures := 22
+	// 19 features: 原 16 + Embedding 阶梯(HQ/Ultra/Max)。
+	// ADR-0107：STT/TTS 三个按瞬时空闲内存升降档的特性（LocalSTT/HQSTT/LocalTTS）已删除，
+	// 语音支持与否改由稳定硬件画像判定（audiorun.AudioSupport）。
+	expectedFeatures := 19
 	if len(ac.Config.Features) != expectedFeatures {
 		t.Errorf("FeatureMap size: got %d, want %d", len(ac.Config.Features), expectedFeatures)
 	}

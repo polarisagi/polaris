@@ -67,13 +67,13 @@ func Load(path string) (*Config, error) {
 	}
 
 	// 2. 若用户 config.toml 存在，叠加覆盖（仅写入的字段生效，其余保留 defaults）
-	defaultSTT := cfg.Inference.STT // 迁移用：旧错误默认值要换成的新默认值
 	userData, readErr := os.ReadFile(path)
 	if readErr == nil {
 		if err := toml.Unmarshal(userData, cfg); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("Load: parse %s", path), err)
 		}
-		migrateLegacySTTDefaults(&cfg.Inference.STT, defaultSTT)
+		warnLegacyAudioKeys(userData)
+		migrateLegacyTTSProvider(&cfg.Inference.TTS)
 	} else {
 		// 用户配置不存在，导出 defaults 供后续手动编辑（幂等，失败忽略）
 		if errMkdir := os.MkdirAll(filepath.Dir(path), 0755); errMkdir == nil {
@@ -87,28 +87,45 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// 旧版 defaults.toml 模板里的两条错误 URL（会被首次启动原样写进用户 config.toml）：
-//   - int8 SenseVoice 的 URL 把 "int8" 放在日期之后，实际归档名是 "...-int8-2025-09-09"，旧 URL 404；
-//   - 标点模型是 fp32 版（279MB），而代码按 int8 归档的文件名假设处理。
-//
-// 用户 config.toml 是旧模板生成的副本，升级后若不迁移，新默认值被旧文件覆盖，STT 仍然是坏的。
-const (
-	legacySTTModelURLStd = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09-int8.tar.bz2"
-	legacySTTPunctURL    = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
-)
+// legacyAudioKeys 是 ADR-0107 之前 [inference.stt] / [inference.tts] 里的配置键，现已无效：
+// 资产 URL 改由代码内清单（含 sha256）管理，STT 固定 int8，Edge TTS 整条删除。
+// 用户 config.toml 是首次启动时由旧模板导出的副本，这些键会一直留在里面。
+func legacyAudioKeys() (stt, tts []string) {
+	return []string{"sense_voice_model_url", "sense_voice_model_url_std", "punct_model_url", "model_precision"},
+		[]string{"edge_voice", "edge_style", "edge_client_version", "model_url", "tokens_url"}
+}
 
-// migrateLegacySTTDefaults 仅在字段值与旧错误默认值精确相等时替换为新默认值并告警；
-// 用户自定义过的 URL 一律不动。
-func migrateLegacySTTDefaults(stt *STTConfig, def STTConfig) {
-	if stt.SenseVoiceModelURLStd == legacySTTModelURLStd {
-		slog.Warn("config: inference.stt.sense_voice_model_url_std 是已知错误的旧默认值（404），已迁移为新默认值",
-			"old", legacySTTModelURLStd, "new", def.SenseVoiceModelURLStd)
-		stt.SenseVoiceModelURLStd = def.SenseVoiceModelURLStd
+// warnLegacyAudioKeys 对用户 config.toml 里出现的已失效音频配置键各打一条 Warn（忽略而非报错：
+// 报错会让升级后的老用户无法启动）。toml.Unmarshal 对未知键静默忽略，所以必须单独探测。
+func warnLegacyAudioKeys(userData []byte) {
+	var probe struct {
+		Inference struct {
+			STT map[string]any `toml:"stt"`
+			TTS map[string]any `toml:"tts"`
+		} `toml:"inference"`
 	}
-	if stt.PunctModelURL == legacySTTPunctURL {
-		slog.Warn("config: inference.stt.punct_model_url 是旧默认值（fp32 279MB），已迁移为 int8 新默认值",
-			"old", legacySTTPunctURL, "new", def.PunctModelURL)
-		stt.PunctModelURL = def.PunctModelURL
+	if err := toml.Unmarshal(userData, &probe); err != nil {
+		return // 解析错误已由上层 Unmarshal 报告，这里只做尽力探测
+	}
+	sttKeys, ttsKeys := legacyAudioKeys()
+	for _, k := range sttKeys {
+		if _, ok := probe.Inference.STT[k]; ok {
+			slog.Warn("config: inference.stt 配置键已失效，被忽略（资产改由内置清单管理，STT 固定 int8）", "key", k)
+		}
+	}
+	for _, k := range ttsKeys {
+		if _, ok := probe.Inference.TTS[k]; ok {
+			slog.Warn("config: inference.tts 配置键已失效，被忽略（Edge TTS 已删除，资产改由内置清单管理）", "key", k)
+		}
+	}
+}
+
+// migrateLegacyTTSProvider 把已删除的 provider="edge" 迁移为 "sherpa" 并 Warn。
+// 为什么不是直接报错：旧默认 config.toml 就是 provider="edge"，升级即报错等于让全部老用户起不来。
+func migrateLegacyTTSProvider(tts *TTSConfig) {
+	if tts.Provider == "edge" {
+		slog.Warn("config: inference.tts.provider=\"edge\" 已删除（ADR-0107），迁移为 \"sherpa\"（本地 Kokoro，按需下载）")
+		tts.Provider = "sherpa"
 	}
 }
 
@@ -125,13 +142,31 @@ func (c *Config) Validate() error {
 	if c.Inference.STT.Language == "" {
 		c.Inference.STT.Language = "zh"
 	}
-	switch c.Inference.STT.ModelPrecision {
+	switch c.Inference.TTS.Provider {
 	case "":
-		c.Inference.STT.ModelPrecision = "int8"
-	case "int8", "fp32":
+		c.Inference.TTS.Provider = "sherpa"
+	case "sherpa", "http":
 	default:
 		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
-			"config: inference.stt.model_precision must be \"int8\" or \"fp32\", got %q", c.Inference.STT.ModelPrecision))
+			"config: inference.tts.provider must be \"sherpa\" or \"http\", got %q", c.Inference.TTS.Provider))
+	}
+	switch c.Inference.TTS.Engine {
+	case "":
+		c.Inference.TTS.Engine = "auto"
+	case "auto", "server", "system":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: inference.tts.engine must be \"auto\", \"server\" or \"system\", got %q", c.Inference.TTS.Engine))
+	}
+	if c.Inference.TTS.KokoroSID < 0 {
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: inference.tts.kokoro_sid must be >= 0, got %d", c.Inference.TTS.KokoroSID))
+	}
+	if c.Inference.TTS.Speed <= 0 {
+		c.Inference.TTS.Speed = 1.0
+	}
+	if c.Inference.Audio.IdleUnloadMinutes < 0 {
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: inference.audio.idle_unload_minutes must be >= 0 (0 = never unload), got %d", c.Inference.Audio.IdleUnloadMinutes))
 	}
 
 	if c.System.Tier < 0 || c.System.Tier > 3 {

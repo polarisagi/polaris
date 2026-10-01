@@ -225,22 +225,21 @@ func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
 // handleGetCapabilities 返回系统硬件与音频处理能力（供前端自适应调节预取与录音模式）。
 // GET /v1/system/capabilities
 func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
-	sttAvail := false
 	sttStatus := chat.AudioAssetStatus{State: chat.AudioStateDisabled}
 	ttsStatus := chat.AudioAssetStatus{State: chat.AudioStateDisabled}
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		box := s.chatHandler.AudioService.STTEngine.Load()
-		sttAvail = (box != nil && box.E != nil)
 		sttStatus = s.chatHandler.AudioService.STTStatus.Get()
 		ttsStatus = s.chatHandler.AudioService.TTSStatus.Get()
 	}
+	// 引擎改为懒加载后 box 恒非空，"可用"只能看资产状态：ready = 已安装可用（首次请求时加载）。
+	sttAvail := sttStatus.State == chat.AudioStateReady
 
 	prefetchCount := s.tierParams.TTSPrefetchCount
 	if prefetchCount <= 0 {
 		prefetchCount = 1
 	}
 
-	ttsProvider := "edge"
+	ttsProvider := "none"
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
 		tBox := s.chatHandler.AudioService.TTSEngine.Load()
 		if tBox != nil && tBox.P != nil {
@@ -252,9 +251,15 @@ func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ttsEngine := "auto"
+	if p := s.ttsEnginePref.Load(); p != nil && *p != "" {
+		ttsEngine = *p
+	}
+
 	httputil.WriteJSON(w, map[string]any{
 		"tts_prefetch_count": prefetchCount,
-		"stt_available":      sttAvail, // 兼容旧前端；新前端读 stt_status
+		"tts_engine":         ttsEngine, // auto|server|system：前端朗读引擎偏好（inference.tts.engine）
+		"stt_available":      sttAvail,  // 兼容旧前端；新前端读 stt_status
 		"stt_status":         sttStatus,
 		"tts_status":         ttsStatus,
 		"tts_provider":       ttsProvider,

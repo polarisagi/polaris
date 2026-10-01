@@ -286,7 +286,7 @@ func (ac *AutoConfig) computeMemoryBudget(c *AutoConfigResult) {
 func (ac *AutoConfig) computeFeatureMap(c *AutoConfigResult) {
 	c.Features = make(map[probe.Feature]probe.FeatureState)
 	allFeatures := []probe.Feature{
-		probe.FeatureLocalInference, probe.FeatureLocalEmbedding, probe.FeatureLocalSTT, probe.FeatureQLoRA, probe.FeaturePRMTraining,
+		probe.FeatureLocalInference, probe.FeatureLocalEmbedding, probe.FeatureQLoRA, probe.FeaturePRMTraining,
 		probe.FeatureL3Sandbox, probe.FeatureL2Sandbox, probe.FeatureGraphRAGFull,
 		probe.FeatureSurrealDBCore, probe.FeatureLargeLocalLLM,
 		probe.FeatureLogicCollapse, probe.FeatureComputerUseGUI, probe.FeaturePresidioPII,
@@ -294,8 +294,6 @@ func (ac *AutoConfig) computeFeatureMap(c *AutoConfigResult) {
 		probe.FeatureOTelExporter, probe.FeatureDeepRAG,
 		// Embedding 阶梯
 		probe.FeatureHQEmbedding, probe.FeatureUltraEmbedding, probe.FeatureMaxEmbedding,
-		// STT/TTS 分级
-		probe.FeatureHQSTT, probe.FeatureLocalTTS,
 	}
 	for _, f := range allFeatures {
 		c.Features[f] = ac.Gate.State(f)

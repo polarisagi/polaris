@@ -2,10 +2,13 @@ package tts
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -61,15 +64,53 @@ func LoadLibrary(libPath string) error {
 	return nil
 }
 
-// Engine 是 Sherpa-ONNX 本地 TTS 引擎（Kokoro 模型），实现 Provider 接口。
-type Engine struct {
-	mu  sync.Mutex
-	tts uintptr
-	lib *Library
+// Options 是 Kokoro 引擎的运行参数。
+type Options struct {
+	// NumThreads 推理线程数；<=0 取 2。
+	NumThreads int
+	// SID 说话人编号（Kokoro v1.1 的 voices.bin 索引；3 = zf_001 中文女声，0 = af_maple 美音）。
+	SID int32
+	// Speed 语速倍率；<=0 取 1.0。
+	Speed float32
 }
 
-// NewEngine 构造新的 Sherpa-ONNX 离线 TTS 引擎 (Kokoro 模型)
-func NewEngine(modelDir string, numThreads int) (*Engine, error) {
+// Engine 是 Sherpa-ONNX 本地 TTS 引擎（Kokoro 模型），实现 Provider 接口。
+type Engine struct {
+	mu    sync.Mutex
+	tts   uintptr
+	lib   *Library
+	sid   int32
+	speed float32
+}
+
+// Kokoro v1.1 TTS 配置结构体布局（SherpaOnnxOfflineTtsConfig，v1.13.2，总长 448B）。
+// 全部偏移按 c-api.h 经 clang offsetof 实测（audio-v2-spec §2.3），升级 sherpa 版本必须重测。
+const (
+	ttsConfigSize                = 448
+	offsetModelNumThreads        = 56
+	offsetModelDebug             = 60
+	offsetModelProvider          = 64
+	offsetModelKokoroModel       = 128
+	offsetModelKokoroVoices      = 136
+	offsetModelKokoroTokens      = 144
+	offsetModelKokoroDataDir     = 152
+	offsetModelKokoroLengthScale = 160
+	offsetModelKokoroDictDir     = 168 // v1.1 不使用（legacy），置空
+	offsetModelKokoroLexicon     = 176
+	offsetModelKokoroLang        = 184 // v1.1 自动判定语种，置空
+	offsetRuleFsts               = 416
+	offsetMaxNumSentences        = 424
+	offsetRuleFars               = 432
+	offsetSilenceScale           = 440
+)
+
+// ruleFstFiles 是 Kokoro 中文文本规整所需的 FST（电话/日期/数字）。
+// 缺失时数字、日期会按字面逐字读错（"下午3点"→"下午三点" 失败），所以必须传给引擎。
+func ruleFstFiles() []string { return []string{"phone-zh.fst", "date-zh.fst", "number-zh.fst"} }
+
+// NewEngine 构造新的 Sherpa-ONNX 离线 TTS 引擎（Kokoro v1.1）。
+// 库未加载或必需文件缺失时返回错误，不构造"空壳引擎"。
+func NewEngine(modelDir string, opts Options) (*Engine, error) {
 	libMu.Lock()
 	lib := libInst
 	libMu.Unlock()
@@ -77,25 +118,17 @@ func NewEngine(modelDir string, numThreads int) (*Engine, error) {
 	if lib == nil {
 		return nil, apperr.New(apperr.CodeInternal, "tts: library not loaded")
 	}
-
-	if numThreads <= 0 {
-		numThreads = 2
+	if miss := ModelMissing(modelDir); miss != "" {
+		return nil, apperr.New(apperr.CodeInternal, "tts: 模型目录 "+modelDir+" 缺少必需文件 "+miss)
+	}
+	if opts.NumThreads <= 0 {
+		opts.NumThreads = 2
+	}
+	if opts.Speed <= 0 {
+		opts.Speed = 1.0
 	}
 
-	const (
-		ConfigSize                   = 448
-		OffsetModelNumThreads        = 56
-		OffsetModelProvider          = 64
-		OffsetModelKokoroModel       = 128
-		OffsetModelKokoroVoices      = 136
-		OffsetModelKokoroTokens      = 144
-		OffsetModelKokoroDataDir     = 152
-		OffsetModelKokoroLengthScale = 160
-		OffsetModelKokoroLexicon     = 176
-		OffsetMaxNumSentences        = 424
-	)
-
-	configData := make([]byte, ConfigSize)
+	configData := make([]byte, ttsConfigSize)
 	cfgPtr := uintptr(unsafe.Pointer(&configData[0]))
 
 	var refs [][]byte
@@ -110,30 +143,44 @@ func NewEngine(modelDir string, numThreads int) (*Engine, error) {
 	defer runtime.KeepAlive(refs)
 	defer runtime.KeepAlive(configData)
 
-	modelPath := filepath.Join(modelDir, "model.onnx")
-	voicesPath := filepath.Join(modelDir, "voices.bin")
-	tokensPath := filepath.Join(modelDir, "tokens.txt")
-	dataDir := filepath.Join(modelDir, "espeak-ng-data")
-	lexiconPath := fmt.Sprintf("%s,%s", filepath.Join(modelDir, "lexicon-zh.txt"), filepath.Join(modelDir, "lexicon-us-en.txt"))
+	// 双语词典顺序：先英文后中文（audio-v2-spec §2.3 实测顺序）。
+	lexicon := filepath.Join(modelDir, "lexicon-us-en.txt") + "," + filepath.Join(modelDir, "lexicon-zh.txt")
 
-	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelNumThreads)) = int32(numThreads)
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelProvider)) = cString("cpu")
+	var fsts []string
+	for _, f := range ruleFstFiles() {
+		p := filepath.Join(modelDir, f)
+		if _, err := os.Stat(p); err != nil {
+			// 不是致命错误（引擎仍可合成），但数字/日期读法会退化，必须留痕而非静默。
+			slog.Warn("tts: 规则 FST 缺失，数字/日期读法可能不正确", "file", p, "err", err)
+			continue
+		}
+		fsts = append(fsts, p)
+	}
 
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelKokoroModel)) = cString(modelPath)
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelKokoroVoices)) = cString(voicesPath)
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelKokoroTokens)) = cString(tokensPath)
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelKokoroDataDir)) = cString(dataDir)
-	*(*float32)(unsafe.Pointer(cfgPtr + OffsetModelKokoroLengthScale)) = 1.0
-	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelKokoroLexicon)) = cString(lexiconPath)
+	*(*int32)(unsafe.Pointer(cfgPtr + offsetModelNumThreads)) = int32(opts.NumThreads)
+	*(*int32)(unsafe.Pointer(cfgPtr + offsetModelDebug)) = 0
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelProvider)) = cString("cpu")
 
-	*(*int32)(unsafe.Pointer(cfgPtr + OffsetMaxNumSentences)) = 1
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroModel)) = cString(filepath.Join(modelDir, "model.onnx"))
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroVoices)) = cString(filepath.Join(modelDir, "voices.bin"))
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroTokens)) = cString(filepath.Join(modelDir, "tokens.txt"))
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroDataDir)) = cString(filepath.Join(modelDir, "espeak-ng-data"))
+	*(*float32)(unsafe.Pointer(cfgPtr + offsetModelKokoroLengthScale)) = 1.0
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroDictDir)) = 0
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroLexicon)) = cString(lexicon)
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelKokoroLang)) = 0
+
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetRuleFsts)) = cString(strings.Join(fsts, ","))
+	*(*int32)(unsafe.Pointer(cfgPtr + offsetMaxNumSentences)) = 1
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetRuleFars)) = 0
+	*(*float32)(unsafe.Pointer(cfgPtr + offsetSilenceScale)) = 0.2
 
 	tts := lib.funcs.CreateOfflineTts(cfgPtr)
 	if tts == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "tts: failed to create offline tts engine")
 	}
 
-	return &Engine{tts: tts, lib: lib}, nil
+	return &Engine{tts: tts, lib: lib, sid: opts.SID, speed: opts.Speed}, nil
 }
 
 // Generate 实现 Provider 接口，生成给定文本的 WAV 音频（ctx 由 sherpa 同步推理忽略）。
@@ -147,8 +194,7 @@ func (e *Engine) Generate(_ context.Context, text string) (Audio, error) {
 
 	cText := append([]byte(text), 0)
 	textPtr := uintptr(unsafe.Pointer(&cText[0]))
-	// 使用 voice 3（zf_001，高质量中文女声）；voice 0 为 af_maple（美音）。
-	audioPtr := e.lib.funcs.OfflineTtsGenerate(e.tts, textPtr, 3, 1.0)
+	audioPtr := e.lib.funcs.OfflineTtsGenerate(e.tts, textPtr, e.sid, e.speed)
 	runtime.KeepAlive(cText) // 防 GC 在 FFI 调用期间回收 cText 底层内存
 	if audioPtr == 0 {
 		return Audio{}, apperr.New(apperr.CodeInternal, "tts: failed to generate audio")
@@ -159,7 +205,7 @@ func (e *Engine) Generate(_ context.Context, text string) (Audio, error) {
 	n := *(*int32)(unsafe.Pointer(audioPtr + 8))
 	sampleRate := *(*int32)(unsafe.Pointer(audioPtr + 12))
 
-	if n <= 0 || samplesPtr == 0 {
+	if n <= 0 || samplesPtr == 0 || sampleRate <= 0 {
 		return Audio{}, apperr.New(apperr.CodeInternal, "tts: generated audio is empty")
 	}
 
@@ -169,7 +215,8 @@ func (e *Engine) Generate(_ context.Context, text string) (Audio, error) {
 	if err != nil {
 		return Audio{}, err
 	}
-	return Audio{Data: wav, MIME: MIMEWav}, nil
+	dur := time.Duration(float64(n) / float64(sampleRate) * float64(time.Second))
+	return Audio{Data: wav, MIME: MIMEWav, Duration: dur}, nil
 }
 
 // Close 实现 Provider 接口，销毁引擎实例。

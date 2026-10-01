@@ -65,12 +65,9 @@ func (fg *FeatureGate) DegradationOrder() []Feature {
 		FeatureLocalInference,      // 20: local model
 		FeatureOTelExporter,        // 18: OTel exporter
 		FeatureWebUI,               // 15: Web dashboard
-		FeatureHQSTT,               // 17: float32 SenseVoice（优先降为 int8 标准档，再禁 STT）
 		FeatureMaxEmbedding,        // 13: qwen3-embedding:8b（Tier2 ≥12GB free，先降级）
 		FeatureUltraEmbedding,      // 12: qwen3-embedding:4b（Tier1 ≥6GB free）
-		FeatureLocalSTT,            // 12: int8 SenseVoice（标准 STT，次于 HQ 档降级）
 		FeatureHQEmbedding,         // 11: qwen3-embedding:0.6b（Tier0 ≥3GB free）
-		FeatureLocalTTS,            // 11: Kokoro TTS（与 HQ Embedding 同档降级）
 		FeatureLocalEmbedding,      // 10: nomic-embed-text（基础，最后降级）
 		FeatureSurrealDBCore,       // 8: 认知轴存储，次于 L2Sandbox 降级
 		FeatureL2Sandbox,           // 5: Wasmtime, last to disable

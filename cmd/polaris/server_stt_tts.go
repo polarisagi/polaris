@@ -6,235 +6,184 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/gateway/server"
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
+	"github.com/polarisagi/polaris/internal/llm/audiorun"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/internal/observability/probe"
-	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-// sttRetryBackoff 返回第 attempt 次失败（从 0 起）后的退避时长：1m → 5m → 15m → 之后每 1h。
-func sttRetryBackoff(attempt int) time.Duration {
-	steps := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
-	if attempt < len(steps) {
-		return steps[attempt]
-	}
-	return time.Hour
+// audioInit 是语音装配所需的全部输入。
+type audioInit struct {
+	Server        *server.Server
+	DataDir       string
+	TierParams    *probe.TierParameters // 可 nil（无 AutoConf）
+	HTTPClient    *http.Client
+	Cfg           config.InferenceConfig
+	Prefs         audiorun.PrefStore // 持久化首次 TTS 基准（HE-6）
+	TotalRAMBytes uint64
 }
 
-// initSTTEngine 按 FeatureGate 门控初始化 STT 引擎。
-// 流程：
-//  1. 门控禁用 → 状态置 disabled 后返回（不存在任何"mock 引擎"：引擎未就绪时转写接口返回 503 JSON）
-//  2. 否则后台循环：EnsureAssets → LoadLibrary → NewEngine → 注入真实引擎；
-//     任一步失败 → 状态 failed + 退避重试（1m/5m/15m/之后每 1h）；
-//     failed 期间收到转写请求会唤醒立即重试（见 AudioService.kickSTTRetry）。
-func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, params *probe.TierParameters, httpClient *http.Client, sttConfig config.STTConfig) {
-	sttDir := filepath.Join(dataDir, "models", "sensevoice")
+// audioRuntime 聚合语音服务，实现 chat.AudioInstaller（POST /v1/audio/{stt|tts}/install 的后端）。
+type audioRuntime struct {
+	stt *audiorun.STTService
+	tts *audiorun.TTSService // provider="http" 时为 nil（外部 sidecar 无需安装）
+}
 
-	// 门控检查：FeatureLocalSTT 是最低档（int8），未开启则无法运行 STT
-	if gate != nil && gate.State(probe.FeatureLocalSTT) == probe.FeatureDisabled {
-		slog.Info("stt: FeatureLocalSTT disabled by FeatureGate (need ≥512MB free)")
-		s.SetSTTStatus(chat.AudioStateDisabled, "可用内存不足 512MB，语音识别被禁用", "")
-		return
+// Install 实现 chat.AudioInstaller。
+func (a *audioRuntime) Install(kind string) (bool, error) {
+	switch kind {
+	case "stt":
+		return a.stt.Install() //nolint:wrapcheck // audiorun 已用 apperr 包装
+	case "tts":
+		if a.tts == nil {
+			return false, nil
+		}
+		return a.tts.Install() //nolint:wrapcheck // audiorun 已用 apperr 包装
+	}
+	return false, apperr.New(apperr.CodeInvalidInput, "unknown audio kind: "+kind)
+}
+
+// Close 卸载全部引擎（进程关停时调用）。
+func (a *audioRuntime) Close() {
+	a.stt.Close()
+	if a.tts != nil {
+		if err := a.tts.Close(); err != nil {
+			slog.Warn("audio: tts close failed", "err", err)
+		}
+	}
+}
+
+// initAudio 装配 STT/TTS 语音服务（ADR-0107）：
+//   - 不在启动时下载任何语音资产：状态机初始为 not_installed / unsupported / ready（已装但未加载），
+//     由前端首次使用时调用 install 触发下载；
+//   - 引擎首次请求时才加载，空闲 inference.audio.idle_unload_minutes 分钟后卸载；
+//   - "是否支持"只看稳定硬件画像（总内存/逻辑核/arch），空闲内存只决定此刻能否加载。
+func initAudio(ctx context.Context, in audioInit) *audioRuntime {
+	s := in.Server
+	profile := audiorun.HostProfile(in.TotalRAMBytes)
+	support := audiorun.AudioSupport(profile)
+	idle := time.Duration(in.Cfg.Audio.IdleUnloadMinutes) * time.Minute
+	sttDir := filepath.Join(in.DataDir, "models", "sensevoice")
+
+	sttThreads := 1
+	if in.TierParams != nil && in.TierParams.STTNumThreads > 0 {
+		sttThreads = in.TierParams.STTNumThreads
+	}
+	// 本包已有同名 min（float64 版）遮蔽内建，这里手写钳位。
+	ttsThreads := runtime.NumCPU()
+	if ttsThreads > 4 {
+		ttsThreads = 4
+	}
+	if ttsThreads < 1 {
+		ttsThreads = 1
+	}
+	if in.TierParams != nil && in.TierParams.TTSNumThreads > 0 {
+		ttsThreads = in.TierParams.TTSNumThreads
 	}
 
-	// 默认 int8（166MB）；仅 model_precision="fp32" 且 FeatureHQSTT 开启时才用 fp32（886MB）。
-	// 旧逻辑"HQ 门控开启就自动选 fp32"会让首次使用下载 1.16GB，而 int8 实测中文识别正确。
-	useFP32 := sttConfig.ModelPrecision == "fp32" && gate != nil && gate.State(probe.FeatureHQSTT) != probe.FeatureDisabled
-	modelURL := sttConfig.SenseVoiceModelURLStd
-	if useFP32 || modelURL == "" {
-		modelURL = sttConfig.SenseVoiceModelURL
-	}
+	slog.Info("audio: support judged from stable hardware profile",
+		"total_ram_mb", in.TotalRAMBytes/(1024*1024), "cores", profile.LogicalCores, "arch", profile.GOARCH,
+		"stt_supported", support.STT.Supported, "tts_supported", support.TTS.Supported,
+		"idle_unload", idle.String())
 
-	numThreads := 1
-	if params != nil && params.STTNumThreads > 0 {
-		numThreads = params.STTNumThreads
-	}
-	lang := sttConfig.Language
-	if lang == "" {
-		lang = "zh"
-	}
-
-	s.SetSTTStatus(chat.AudioStatePending, "等待准备语音识别资产", "")
-
-	p := sttPrep{
-		s: s, sttDir: sttDir, httpClient: httpClient, cfg: sttConfig,
-		modelURL: modelURL, lang: lang, numThreads: numThreads, useFP32: useFP32,
-	}
-	concurrent.SafeGo(ctx, "server_stt_tts.stt_prepare", func(ctx context.Context) {
-		p.loop(ctx)
+	rt := &audioRuntime{}
+	rt.stt = audiorun.NewSTTService(ctx, audiorun.STTOptions{
+		Dir:           sttDir,
+		SherpaVersion: in.Cfg.STT.SherpaVersion,
+		Language:      in.Cfg.STT.Language,
+		NumThreads:    sttThreads,
+		UseITN:        in.Cfg.STT.UseITN,
+		IdleUnload:    idle,
+		HTTPClient:    in.HTTPClient,
+		FreeMemMB:     probe.ProbeAvailableMemoryMB,
+		Support:       support.STT,
+		Sink:          audioSink{publish: s.PublishSTTStatus},
 	})
+	s.SetSTTProvider(&sttAdapter{inner: rt.stt})
+
+	initTTS(ctx, in, rt, profile, support.TTS, idle, ttsThreads, sttDir)
+
+	s.SetTTSEnginePref(in.Cfg.TTS.Engine)
+	s.SetAudioInstaller(rt)
+	// 进程关停时释放原生引擎（推理中的请求持有引用，Slot.Close 不会在其使用期间卸载）。
+	concurrent.SafeGo(ctx, "server_stt_tts.close_on_shutdown", func(ctx context.Context) {
+		<-ctx.Done()
+		rt.Close()
+	})
+	return rt
 }
 
-// loop 反复执行 run 直到成功或 ctx 取消：失败 → 状态 failed + 退避；
-// 退避期间若收到转写请求的唤醒信号则立即重试。
-func (p sttPrep) loop(ctx context.Context) {
-	retry := p.s.STTRetrySignal()
-	for attempt := 0; ; attempt++ {
-		err := p.run(ctx)
-		if err == nil || ctx.Err() != nil {
-			return
-		}
-		wait := sttRetryBackoff(attempt)
-		slog.Warn("stt: asset preparation failed, will retry", "err", err, "retry_in", wait.String())
-		p.s.SetSTTStatus(chat.AudioStateFailed, "", err.Error())
+// initTTS 按 provider 装配 TTS：http sidecar 立即就绪；sherpa 走按需安装 + 懒加载 + 首次基准。
+func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audiorun.HardwareProfile,
+	support audiorun.Capability, idle time.Duration, threads int, libDir string) {
+	s := in.Server
+	cfg := in.Cfg.TTS
 
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		case <-retry:
-			timer.Stop()
-			slog.Info("stt: retry triggered by a transcription request")
-		}
-	}
-}
-
-// sttPrep 封装一次 STT 资产准备所需的全部输入，使重试循环与单次准备解耦。
-type sttPrep struct {
-	s          *server.Server
-	sttDir     string
-	httpClient *http.Client
-	cfg        config.STTConfig
-	modelURL   string
-	lang       string
-	numThreads int
-	useFP32    bool
-}
-
-// run 执行一次完整准备：EnsureAssets → LoadLibrary → NewEngine → 注入真实引擎。
-// 每步通过状态机汇报当前步骤；任一步失败返回 error（由调用方退避重试）。
-func (p sttPrep) run(ctx context.Context) error {
-	p.s.SetSTTStatus(chat.AudioStateDownloading, "检查语音识别资产", "")
-	onStep := func(step string) { p.s.SetSTTStatus(chat.AudioStateDownloading, step, "") }
-	if err := stt.EnsureAssets(ctx, p.sttDir, p.httpClient, p.cfg.SherpaVersion, p.modelURL, p.cfg.PunctModelURL, onStep); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "stt: ensure assets failed", err)
-	}
-
-	p.s.SetSTTStatus(chat.AudioStateDownloading, "加载引擎", "")
-	if err := stt.LoadLibrary(filepath.Join(p.sttDir, stt.LibName())); err != nil {
-		if runtime.GOOS == "darwin" {
-			// sherpa-onnx 1.13.2 自带 libonnxruntime（arm64 与 x64）minos=15.5，
-			// macOS < 15.5 上 dlopen 必然失败，给出可操作的原因而不是裸 dlopen 错误。
-			return apperr.Wrap(apperr.CodeInternal, "stt: 动态库加载失败（需要 macOS ≥ 15.5：onnxruntime 1.24.4 minos）", err)
-		}
-		return apperr.Wrap(apperr.CodeInternal, "stt: 动态库加载失败", err)
-	}
-
-	modelDir := stt.ModelDir(p.sttDir)
-	engine, err := stt.NewEngine(modelDir, stt.PunctModelDir(p.sttDir), p.lang, p.numThreads, p.cfg.UseITN)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "stt: engine init failed", err)
-	}
-	p.s.SetSTTProvider(&sttAdapter{inner: engine})
-	p.s.SetSTTStatus(chat.AudioStateReady, "", "")
-	slog.Info("stt: real engine active (sherpa-onnx SenseVoice)",
-		"model_dir", modelDir,
-		"fp32", p.useFP32,
-		"model_url", p.modelURL,
-		"language", p.lang,
-		"threads", p.numThreads,
-		"use_itn", p.cfg.UseITN,
-	)
-	return nil
-}
-
-// initTTSEngine 初始化 TTS Provider 并注入 ChatHandler。
-//
-// 三条路径由 ttsConfig.Provider 决定：
-//   - "edge"    → EdgeProvider（Microsoft Edge TTS WebSocket，无需下载，立即可用）
-//   - "http"    → HTTPProvider（外部 sidecar，如 CosyVoice 2 / Qwen3-TTS）
-//   - ""/"sherpa" → SherpaProvider（sherpa-onnx 本地 Kokoro，异步下载后激活）
-func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, params *probe.TierParameters, httpClient *http.Client, ttsConfig config.TTSConfig, safeDialer *network.SafeDialer) {
-	switch ttsConfig.Provider {
-	case "edge":
-		// Edge TTS：免费、无需下载、立即激活，不受 FeatureGate 门控（无内存开销）。
-		// 它是在线服务，状态恒为 ready；单次合成失败只记日志，不改状态。
-		if ttsConfig.EdgeStyle != "" && ttsConfig.EdgeStyle != "default" {
-			slog.Warn("tts: Edge 免费端点不支持 express-as（服务端返回 SSML is invalid），edge_style 已忽略",
-				"edge_style", ttsConfig.EdgeStyle)
-		}
-		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice, ttsConfig.EdgeClientVersion, safeDialer)
-		s.SetTTSProvider(&ttsAdapter{inner: p}, "edge")
-		s.SetTTSStatus(chat.AudioStateReady, "Edge TTS（在线）", "")
-		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice)
-		return
-
-	case "http":
-		// HTTP sidecar：同样立即激活，连通性由首次调用时发现
-		if ttsConfig.HTTPEndpoint == "" {
+	if cfg.Provider == "http" {
+		if cfg.HTTPEndpoint == "" {
 			slog.Warn("tts: provider=http but http_endpoint is empty, TTS disabled")
-			s.SetTTSStatus(chat.AudioStateDisabled, "provider=http 但 http_endpoint 为空", "")
+			s.PublishTTSStatus(chat.AudioAssetStatus{State: chat.AudioStateDisabled, Detail: "provider=http 但 http_endpoint 为空"})
 			return
 		}
-		p := tts.NewHTTPProvider(ttsConfig.HTTPEndpoint, httpClient)
-		s.SetTTSProvider(&ttsAdapter{inner: p}, "http")
-		s.SetTTSStatus(chat.AudioStateReady, "HTTP sidecar", "")
-		slog.Info("tts: HTTP sidecar TTS active", "endpoint", ttsConfig.HTTPEndpoint)
+		s.SetTTSProvider(&ttsAdapter{inner: tts.NewHTTPProvider(cfg.HTTPEndpoint, in.HTTPClient)}, "http")
+		s.PublishTTSStatus(chat.AudioAssetStatus{State: chat.AudioStateReady, Detail: "HTTP sidecar"})
+		slog.Info("tts: HTTP sidecar TTS active", "endpoint", cfg.HTTPEndpoint)
 		return
 	}
 
-	// ── Sherpa 本地路径（provider="" 或 "sherpa"）──────────────────────────────
-	// 修复 bug：原代码错误使用 FeatureLocalSTT 门控 TTS，现改为独立的 FeatureLocalTTS。
-	if gate != nil && gate.State(probe.FeatureLocalTTS) == probe.FeatureDisabled {
-		slog.Info("tts: FeatureLocalTTS disabled by FeatureGate (need ≥512MB free)")
-		s.SetTTSStatus(chat.AudioStateDisabled, "可用内存不足 512MB，本地朗读被禁用", "")
-		return
-	}
-	if ttsConfig.ModelURL == "" {
-		slog.Info("tts: sherpa provider but model_url is empty, TTS disabled")
-		s.SetTTSStatus(chat.AudioStateDisabled, "sherpa provider 未配置 model_url", "")
-		return
-	}
-
-	ttsNumThreads := 2
-	if params != nil && params.TTSNumThreads > 0 {
-		ttsNumThreads = params.TTSNumThreads
-	}
-
-	s.SetTTSStatus(chat.AudioStatePending, "等待准备本地朗读资产", "")
-	ttsDir := filepath.Join(dataDir, "models", "kokoro")
-	concurrent.SafeGo(ctx, "server_stt_tts.tts_download", func(ctx context.Context) {
-		fail := func(msg string, err error) {
-			slog.Warn(msg, "err", err)
-			s.SetTTSStatus(chat.AudioStateFailed, "", err.Error())
-		}
-		s.SetTTSStatus(chat.AudioStateDownloading, "下载本地朗读资产", "")
-		sttDir := filepath.Join(dataDir, "models", "sensevoice")
-		if err := tts.EnsureAssets(ctx, sttDir, ttsDir, httpClient, ttsConfig.SherpaVersion, ttsConfig.ModelURL); err != nil {
-			fail("tts: asset download failed", err)
-			return
-		}
-
-		libPath := filepath.Join(sttDir, stt.LibName())
-		if err := tts.LoadLibrary(libPath); err != nil {
-			fail("tts: library load failed", err)
-			return
-		}
-
-		modelDir := tts.ModelDir(ttsDir)
-		engine, err := tts.NewEngine(modelDir, ttsNumThreads)
-		if err != nil {
-			fail("tts: engine init failed", err)
-			return
-		}
-		s.SetTTSProvider(&ttsAdapter{inner: engine}, "sherpa")
-		s.SetTTSStatus(chat.AudioStateReady, "", "")
-		slog.Info("tts: sherpa-onnx Kokoro active", "model_dir", modelDir, "threads", ttsNumThreads)
+	rt.tts = audiorun.NewTTSService(ctx, audiorun.TTSOptions{
+		LibDir:        libDir,
+		Dir:           filepath.Join(in.DataDir, "models", "kokoro"),
+		SherpaVersion: cfg.SherpaVersion,
+		SID:           int32(cfg.KokoroSID),
+		Speed:         float32(cfg.Speed),
+		NumThreads:    threads,
+		IdleUnload:    idle,
+		HTTPClient:    in.HTTPClient,
+		FreeMemMB:     probe.ProbeAvailableMemoryMB,
+		Support:       support,
+		Sink:          audioSink{publish: s.PublishTTSStatus},
+		Prefs:         in.Prefs,
+		Profile:       profile,
 	})
+	s.SetTTSProvider(&ttsAdapter{inner: rt.tts}, "sherpa")
 }
 
-// sttAdapter 将 llm/stt.Engine 适配为 chat.STTTranscriber
+// audioSink 把 audiorun 的状态快照适配为 chat 状态机的快照（audiorun 不 import gateway 层）。
+type audioSink struct {
+	publish func(chat.AudioAssetStatus)
+}
+
+func (k audioSink) Publish(st audiorun.Status) { k.publish(toChatStatus(st)) }
+
+// toChatStatus 做字段映射。状态字符串两侧字面一致，由 server_stt_tts_test.go 守住不漂移。
+func toChatStatus(st audiorun.Status) chat.AudioAssetStatus {
+	out := chat.AudioAssetStatus{
+		State: st.State, Detail: st.Detail, Error: st.Error, Reason: st.Reason,
+		InstallSizeBytes: st.InstallSizeBytes, Loaded: st.Loaded,
+	}
+	if st.BytesDone > 0 || st.BytesTotal > 0 {
+		out.Progress = &chat.AudioProgress{BytesDone: st.BytesDone, BytesTotal: st.BytesTotal}
+	}
+	return out
+}
+
+// sttTranscriber 是 sttAdapter 对转写引擎的依赖（由 *audiorun.STTService 满足）。
+type sttTranscriber interface {
+	Transcribe(samples []float32, sampleRate int) (stt.Result, error)
+}
+
+// sttAdapter 将转写服务适配为 chat.STTTranscriber。
 type sttAdapter struct {
-	inner *stt.Engine
+	inner sttTranscriber
 }
 
 func (a *sttAdapter) Transcribe(samples []float32, sampleRate int) (chat.STTResult, error) {
@@ -243,16 +192,12 @@ func (a *sttAdapter) Transcribe(samples []float32, sampleRate int) (chat.STTResu
 	}
 	res, err := a.inner.Transcribe(samples, sampleRate)
 	if err != nil {
+		if _, ok := audiorun.AsNotReady(err); ok {
+			return chat.STTResult{}, err //nolint:wrapcheck // 原样透传：HTTP 层据此给出 503 + 原因，不能被包成 500
+		}
 		return chat.STTResult{}, apperr.Wrap(apperr.CodeInternal, "transcribe failed", err)
 	}
-	return chat.STTResult{
-		Text:     res.Text,
-		Language: res.Lang,
-	}, nil
-}
-
-func (a *sttAdapter) IsAvailable() bool {
-	return a.inner != nil
+	return chat.STTResult{Text: res.Text, Language: res.Lang}, nil
 }
 
 // ttsAdapter 将 llm/tts.Provider 适配为 chat.TTSProvider
@@ -266,11 +211,34 @@ func (a *ttsAdapter) Generate(ctx context.Context, text string) (chat.TTSAudio, 
 	}
 	res, err := a.inner.Generate(ctx, text)
 	if err != nil {
+		if _, ok := audiorun.AsNotReady(err); ok {
+			return chat.TTSAudio{}, err //nolint:wrapcheck // NotReady 原样透传，HTTP 层据此给 503
+		}
 		return chat.TTSAudio{}, apperr.Wrap(apperr.CodeInternal, "generate failed", err)
 	}
 	return chat.TTSAudio{Data: res.Data, MIME: res.MIME}, nil
 }
 
-func (a *ttsAdapter) IsAvailable() bool {
-	return a.inner != nil
+// ttsBridge 是 tts 内置工具与 TTS 引擎之间的晚绑定：工具在 bootTools 注册，
+// 而承载引擎的 Server 到 bootServer 才创建，两者之间只能经此桥接。
+type ttsBridge struct {
+	fn atomic.Pointer[func(ctx context.Context, text string) (chat.TTSAudio, error)]
+}
+
+// Bind 在 Server 创建后接入合成函数。
+func (b *ttsBridge) Bind(fn func(ctx context.Context, text string) (chat.TTSAudio, error)) {
+	b.fn.Store(&fn)
+}
+
+// Synthesize 满足 tts 工具的 Synthesizer 签名；未 Bind 时如实报错，不回出假音频。
+func (b *ttsBridge) Synthesize(ctx context.Context, text string) ([]byte, string, error) {
+	fn := b.fn.Load()
+	if fn == nil {
+		return nil, "", apperr.New(apperr.CodeUnimplemented, "tts: 引擎尚未接线（服务启动中）")
+	}
+	a, err := (*fn)(ctx, text)
+	if err != nil {
+		return nil, "", err
+	}
+	return a.Data, a.MIME, nil
 }

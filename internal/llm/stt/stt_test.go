@@ -28,33 +28,49 @@ func TestLibName_Platform(t *testing.T) {
 	}
 }
 
-// ── libDownloadURL ────────────────────────────────────────────────────────────
+// ── 清单 ──────────────────────────────────────────────────────────────────────
 
-// 资产名是对 GitHub API 资产清单实测的结果（v1.13.2）；此表若与真实清单漂移，
-// 由 make audio-nettest 的 HEAD 校验兜底（单测不联网，只钉死拼接逻辑）。
-func TestLibDownloadURL_ExactNames(t *testing.T) {
-	const base = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.2/"
-	cases := []struct{ goos, goarch, file string }{
-		{"darwin", "arm64", "sherpa-onnx-v1.13.2-osx-arm64-shared-lib.tar.bz2"},
-		{"darwin", "amd64", "sherpa-onnx-v1.13.2-osx-x64-shared-lib.tar.bz2"},
-		{"linux", "amd64", "sherpa-onnx-v1.13.2-linux-x64-shared-lib.tar.bz2"},
-		{"linux", "arm64", "sherpa-onnx-v1.13.2-linux-aarch64-shared-cpu-lib.tar.bz2"},
-		{"windows", "amd64", "sherpa-onnx-v1.13.2-win-x64-shared-MT-Release-lib.tar.bz2"},
+// 当前平台必须有库清单项（否则语音在该平台永远 unsupported，应由此测试提前暴露）。
+func TestLibAssetForHost(t *testing.T) {
+	a, err := LibAssetForHost()
+	if err != nil {
+		t.Skipf("当前平台 %s/%s 无库清单项: %v", runtime.GOOS, runtime.GOARCH, err)
 	}
-	for _, c := range cases {
-		got, err := libDownloadURL(c.goos, c.goarch, "1.13.2")
-		if err != nil {
-			t.Fatalf("%s/%s: %v", c.goos, c.goarch, err)
+	if !strings.Contains(a.File, "v"+SherpaABIVersion) {
+		t.Errorf("库资产未绑定 ABI 版本: %s", a.File)
+	}
+}
+
+// 缺失资产清单：空目录应列出库+模型+标点三项；补齐后为空。
+func TestMissingAssets_AndInstalled(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LibAssetForHost(); err != nil {
+		t.Skip("平台无库清单项")
+	}
+	if Installed(dir) {
+		t.Fatal("空目录不应判为已安装")
+	}
+	if got := len(MissingAssets(dir)); got != 3 {
+		t.Errorf("空目录应缺 3 项（库/模型/标点），got %d", got)
+	}
+	mustWrite := func(rel string) {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
 		}
-		if want := base + c.file; got != want {
-			t.Errorf("%s/%s:\n got  %s\n want %s", c.goos, c.goarch, got, want)
+		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err := libDownloadURL("plan9", "amd64", "1.13.2"); err == nil {
-		t.Error("unsupported platform should return error")
+	mustWrite(LibName())
+	mustWrite("model/model.onnx")
+	mustWrite("model/tokens.txt")
+	if Installed(dir) {
+		t.Error("缺标点模型不应判为已安装")
 	}
-	if _, err := libDownloadURL("linux", "amd64", ""); err == nil {
-		t.Error("empty version should return error")
+	mustWrite("punct_model/model.onnx")
+	if !Installed(dir) {
+		t.Errorf("三项齐备应判为已安装，missing=%v", MissingAssets(dir))
 	}
 }
 
@@ -73,7 +89,7 @@ func TestResolveSherpaVersion(t *testing.T) {
 
 // EnsureAssets 对版本不一致的配置必须在任何下载前就报错。
 func TestEnsureAssets_RejectsABIMismatch(t *testing.T) {
-	err := EnsureAssets(context.Background(), t.TempDir(), nil, "9.9.9", "http://invalid/m.tar.bz2", "", nil)
+	err := EnsureAssets(context.Background(), t.TempDir(), nil, "9.9.9", nil)
 	if err == nil {
 		t.Fatal("expected ABI mismatch error")
 	}

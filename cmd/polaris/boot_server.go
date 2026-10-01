@@ -290,16 +290,28 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetEvalAdmin(ab.EvalStore, ab.MetaEvalSentinel, ab.EvalRunner)
 	httpServer.SetToolRefOffloader(tb.ToolRefOffloader)
 
-	// ─── §11.5 STT/TTS 引擎初始化（FeatureLocalSTT 门控，异步下载，不阻塞启动）
-	var sttGate *probe.FeatureGate
+	// ─── §11.5 STT/TTS 语音服务装配（ADR-0107）：启动时不下载任何资产，
+	// 首次使用由前端触发 install；引擎懒加载、空闲卸载。
 	var tierParams *probe.TierParameters
 	if sb.AutoConf != nil {
-		sttGate = sb.AutoConf.Gate
 		tierParams = &sb.AutoConf.Config.Params
 		httpServer.SetTier(sb.AutoConf.Config.Tier, sb.AutoConf.Config.Params)
 	}
-	initSTTEngine(ctx, httpServer, sb.DataDir, sttGate, tierParams, sb.SafeHTTP, sb.Cfg.Inference.STT)
-	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, tierParams, sb.SafeHTTP, sb.Cfg.Inference.TTS, sb.Dialer)
+	totalRAM, _ := probe.MemoryProbe()
+	if sb.AutoConf != nil && sb.AutoConf.Probe != nil {
+		totalRAM = sb.AutoConf.Probe.TotalRAM
+	}
+	initAudio(ctx, audioInit{
+		Server:        httpServer,
+		DataDir:       sb.DataDir,
+		TierParams:    tierParams,
+		HTTPClient:    sb.SafeHTTP,
+		Cfg:           sb.Cfg.Inference,
+		Prefs:         tb.SysRepo,
+		TotalRAMBytes: totalRAM,
+	})
+	// tts 内置工具与 Provider 同源：工具调用与 /v1/audio/speech 走同一套懒加载/不支持/未安装语义。
+	tb.TTSBridge.Bind(httpServer.SynthesizeSpeech)
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
 	// sb.Embedder 经 EmbeddingBatcher 合批接线后已是 *search.SyncBatcherAdapter，

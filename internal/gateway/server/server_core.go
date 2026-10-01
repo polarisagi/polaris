@@ -35,6 +35,7 @@ import (
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -116,6 +117,10 @@ type Server struct {
 
 	tier       probe.Tier
 	tierParams probe.TierParameters
+
+	// ttsEnginePref 前端朗读引擎偏好 auto|server|system（inference.tts.engine）。
+	// 后端不据此行事，只经 capabilities 下发；用 atomic：装配期写、请求期读。
+	ttsEnginePref atomic.Pointer[string]
 
 	// Cron runner 生命周期控制
 	cronCancel context.CancelFunc
@@ -485,27 +490,37 @@ func (s *Server) SetTTSProvider(provider chat.TTSProvider, name string) {
 	}
 }
 
-// SetSTTStatus 更新 STT 资产状态（供 cmd 层后台准备循环汇报；经 capabilities 暴露给前端）。
-func (s *Server) SetSTTStatus(state, detail, errMsg string) {
+// PublishSTTStatus 整体替换 STT 资产状态快照（供 cmd 层语音服务汇报；经 capabilities 暴露给前端）。
+func (s *Server) PublishSTTStatus(st chat.AudioAssetStatus) {
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		s.chatHandler.AudioService.STTStatus.Set(state, detail, errMsg)
+		s.chatHandler.AudioService.STTStatus.Replace(st)
 	}
 }
 
-// SetTTSStatus 更新 TTS 资产状态。
-func (s *Server) SetTTSStatus(state, detail, errMsg string) {
+// PublishTTSStatus 整体替换 TTS 资产状态快照。
+func (s *Server) PublishTTSStatus(st chat.AudioAssetStatus) {
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		s.chatHandler.AudioService.TTSStatus.Set(state, detail, errMsg)
+		s.chatHandler.AudioService.TTSStatus.Replace(st)
 	}
 }
 
-// STTRetrySignal 返回 STT 重试唤醒通道：failed 状态下收到转写请求时会投递一次信号。
-// chatHandler 缺失时返回 nil 通道（select 永不就绪）。
-func (s *Server) STTRetrySignal() <-chan struct{} {
+// SetTTSEnginePref 注入前端朗读引擎偏好（auto|server|system），经 /v1/system/capabilities 下发。
+func (s *Server) SetTTSEnginePref(pref string) { s.ttsEnginePref.Store(&pref) }
+
+// SetAudioInstaller 注入语音资产安装器（POST /v1/audio/{stt|tts}/install 的后端）。
+func (s *Server) SetAudioInstaller(i chat.AudioInstaller) {
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
-		return s.chatHandler.AudioService.STTRetrySignal()
+		s.chatHandler.AudioService.SetInstaller(i)
 	}
-	return nil
+}
+
+// SynthesizeSpeech 用当前 TTS Provider 合成文本，供 tts 内置工具等进程内调用方复用，
+// 与 HTTP 接口走同一 Provider（含懒加载/不支持/未安装的同一套错误）。
+func (s *Server) SynthesizeSpeech(ctx context.Context, text string) (chat.TTSAudio, error) {
+	if s.chatHandler == nil || s.chatHandler.AudioService == nil {
+		return chat.TTSAudio{}, apperr.New(apperr.CodeUnimplemented, "音频服务未初始化")
+	}
+	return s.chatHandler.AudioService.Synthesize(ctx, text) //nolint:wrapcheck // 原样透传 NotReady
 }
 
 func (s *Server) SetTier(tier probe.Tier, params probe.TierParameters) {

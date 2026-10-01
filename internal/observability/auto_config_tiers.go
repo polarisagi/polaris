@@ -36,7 +36,6 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolEval = 6
 		p.PoolCron = 6
 		p.STTNumThreads = 4
-		p.TTSNumThreads = 4
 		p.TTSPrefetchCount = 3
 
 	case probe.Tier2: // 24GB+
@@ -66,7 +65,6 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolEval = 4
 		p.PoolCron = 4
 		p.STTNumThreads = 4
-		p.TTSNumThreads = 4
 		p.TTSPrefetchCount = 3
 
 	case probe.Tier1: // 16GB
@@ -96,7 +94,6 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolEval = 2
 		p.PoolCron = 2
 		p.STTNumThreads = 2
-		p.TTSNumThreads = 2
 		p.TTSPrefetchCount = 2
 
 	default: // probe.Tier0 8GB
@@ -126,7 +123,11 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.PoolEval = 2
 		p.PoolCron = 2
 		p.STTNumThreads = 1
-		p.TTSNumThreads = 2
 		p.TTSPrefetchCount = 1
 	}
+
+	// TTS 线程数不随内存档位走，只取决于逻辑核数：min(4, 核数)（audio-v2-spec §2.3）。
+	// Kokoro fp32 实测 RTF 0.42@4 线程 / 0.59@2 线程，核数充足时 4 线程是性价比拐点；
+	// 内存档位高并不代表核多（16GB 的 2 核云主机开 4 线程只会互相抢核）。
+	p.TTSNumThreads = min(4, max(1, ac.Probe.CPUCores))
 }

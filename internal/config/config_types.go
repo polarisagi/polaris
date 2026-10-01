@@ -62,6 +62,15 @@ type InferenceConfig struct {
 	Cache             CacheConfig `toml:"cache"`
 	STT               STTConfig   `toml:"stt"`
 	TTS               TTSConfig   `toml:"tts"`
+	Audio             AudioConfig `toml:"audio"`
+}
+
+// AudioConfig 是 STT/TTS 共用的运行时生命周期配置（ADR-0107）。
+type AudioConfig struct {
+	// IdleUnloadMinutes 引擎最后一次使用后空闲多久卸载以释放内存；0 = 不卸载。
+	// 为什么默认卸载：桌面场景与用户其他应用共享内存，STT≈420MB + Kokoro≈600MB 不应常驻；
+	// 2GB VPS 上更是核心路径之外的纯开销。下次请求自动重新加载。
+	IdleUnloadMinutes int `toml:"idle_unload_minutes"`
 }
 
 // EmbeddingConfig 向量化服务配置。
@@ -74,22 +83,12 @@ type EmbeddingConfig struct {
 	Threshold float64 `toml:"similarity_threshold"` // 余弦阈值，默认 0.60
 }
 
+// STTConfig 语音识别配置。模型与动态库的 URL/sha256 不在此配置，统一见
+// internal/llm/audioassets 清单（URL 可配置则 sha256 无法钉死，校验形同虚设）。
 type STTConfig struct {
-	// SherpaVersion 留空取代码内 stt.SherpaABIVersion；填写且与之不同则 STT/TTS 资产初始化
+	// SherpaVersion 留空取代码内 audioassets.SherpaABIVersion；填写且与之不同则 STT/TTS 资产初始化
 	// 报错（FFI 结构体偏移按该版本钉死，换版本会内存破坏）。
 	SherpaVersion string `toml:"sherpa_version"`
-	// SenseVoiceModelURL float32 模型（实测归档 886MB，仅 model_precision="fp32" 且
-	// FeatureHQSTT 开启时使用）。
-	SenseVoiceModelURL string `toml:"sense_voice_model_url"`
-	// SenseVoiceModelURLStd int8 量化模型（实测 166MB，默认档位）。
-	// 空字符串则回退到 SenseVoiceModelURL（向后兼容旧配置）。
-	SenseVoiceModelURLStd string `toml:"sense_voice_model_url_std"`
-	// PunctModelURL 标点模型（int8，65MB）。
-	PunctModelURL string `toml:"punct_model_url"`
-	// ModelPrecision 模型精度档位："int8"（默认）| "fp32"。
-	// 默认 int8：fp32 归档 886MB 且无可测精度收益（int8 实测中文识别正确），
-	// 不应让首次体验承担 5 倍下载量；fp32 仅显式 opt-in。
-	ModelPrecision string `toml:"model_precision"`
 	// UseITN 是否启用 SenseVoice 逆文本规范化。默认 false：实测 use_itn=1 会丢首字、
 	// 错词（"开放时间"→"放时间"、"FIFTY"→"FIFT"），官方 sherpa-onnx-offline 同模型同参数
 	// 输出逐字节一致，属模型 ITN 路径缺陷。
@@ -98,41 +97,30 @@ type STTConfig struct {
 	Language string `toml:"language"`
 }
 
-// TTSConfig TTS 引擎配置。支持三种 provider：
-//   - ""/"sherpa" 本地 sherpa-onnx Kokoro 模型（离线，无网络依赖）
-//   - "edge"      Microsoft Edge TTS WebSocket（免费无密钥，中国大陆可用）
-//   - "http"      外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理服务）
+// TTSConfig TTS 引擎配置。服务端 provider 两种：
+//   - ""/"sherpa" 本地 sherpa-onnx Kokoro v1.1 fp32（离线，需 4GB/4 核；按需下载）
+//   - "http"      外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理服务，高级可选）
+//
+// Edge TTS 已于 ADR-0107 删除；旧配置 provider="edge" 加载时迁移为 "sherpa" 并 Warn。
 type TTSConfig struct {
-	// Provider 指定 TTS 引擎类型：""/"sherpa" | "edge" | "http"。
-	// 留空等价于 "sherpa"（向后兼容）。
+	// Provider 指定服务端 TTS 引擎类型：""/"sherpa" | "http"。留空等价于 "sherpa"。
 	Provider string `toml:"provider"`
+
+	// Engine 前端朗读引擎偏好："auto"（默认：服务端就绪则用服务端，否则退回系统语音）|
+	// "server"（只用服务端）| "system"（只用浏览器/WebView 内置系统语音，声音在用户设备上
+	// 合成，服务器零开销）。后端不据此行事，只经 capabilities 下发给前端。
+	Engine string `toml:"engine"`
 
 	// ── sherpa provider 专属 ─────────────────────────────────────────────────
 
 	// SherpaVersion 与 STT 共用同一 sherpa-onnx 版本（共享动态库）。
-	// 留空时自动复用 llm.stt.sherpa_version。
+	// 留空时自动复用 inference.stt.sherpa_version。
 	SherpaVersion string `toml:"sherpa_version"`
-	// ModelURL sherpa-onnx TTS 模型 tar.bz2 下载地址（GitHub Releases）。
-	// 留空时 sherpa provider 不启动。
-	ModelURL string `toml:"model_url"`
-	// TokensURL 词表文件单独下载地址（部分模型将 tokens.txt 独立发布）。
-	// 留空时假设 model URL 的归档中已包含 tokens.txt。
-	TokensURL string `toml:"tokens_url"`
-
-	// ── edge provider 专属 ──────────────────────────────────────────────────
-
-	// EdgeVoice Microsoft Edge TTS 声线名称。
-	// 留空时默认 zh-CN-XiaoxiaoNeural（晓晓，中文女声，音质最佳）。
-	// 其他优质中文声线：zh-CN-YunxiNeural（云希，男）/ zh-CN-XiaoYiNeural（晓伊）。
-	EdgeVoice string `toml:"edge_voice"`
-
-	// EdgeStyle Deprecated：Edge 免费端点不支持 mstts:express-as（服务端返回 "SSML is invalid"），
-	// 该配置被忽略；保留字段只为兼容旧 config.toml 不解析失败。
-	EdgeStyle string `toml:"edge_style"`
-
-	// EdgeClientVersion 伪装的 Edge/Chromium 完整版本号（如 "143.0.3650.75"），进入 UA 与
-	// Sec-MS-GEC-Version。留空取代码内默认值；微软升版本导致 403 时可在此覆盖，免发版。
-	EdgeClientVersion string `toml:"edge_client_version"`
+	// KokoroSID Kokoro v1.1 说话人编号（voices.bin 索引）。默认 3 = zf_001（中文女声，用户试听选定）；
+	// 0 = af_maple（美音）。
+	KokoroSID int `toml:"kokoro_sid"`
+	// Speed 语速倍率，默认 1.0。
+	Speed float64 `toml:"speed"`
 
 	// ── http provider 专属 ──────────────────────────────────────────────────
 

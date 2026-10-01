@@ -155,67 +155,104 @@ func TestNewEngine_NotLoaded(t *testing.T) {
 		libMu.Unlock()
 	}()
 
-	_, err := NewEngine("/some/model/dir", 2)
+	_, err := NewEngine("/some/model/dir", Options{NumThreads: 2})
 	if err == nil {
 		t.Error("expected error when library not loaded, got nil")
 	}
 }
 
-// ── ttsModelPresent ────────────────────────────────────────────────────────
+// ── 模型必需文件 ───────────────────────────────────────────────────────────
 
-func TestTTSModelPresent_NoDirOrEmpty(t *testing.T) {
-	if ttsModelPresent("/nonexistent/dir") {
-		t.Error("expected false for nonexistent directory")
-	}
-
-	dir := t.TempDir()
-	if ttsModelPresent(dir) {
-		t.Error("expected false for empty directory")
+// writeModelFiles 在 dir 下按 requiredFiles 造一份"完整"模型目录（内容为占位）。
+func writeModelFiles(t *testing.T, dir string, skip string) {
+	t.Helper()
+	for _, rel := range requiredFiles() {
+		if rel == skip {
+			continue
+		}
+		full := filepath.Join(dir, strings.TrimSuffix(rel, "/"))
+		if strings.HasSuffix(rel, "/") {
+			if err := os.MkdirAll(filepath.Join(full, "en"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-func TestTTSModelPresent_WithOnnxFile(t *testing.T) {
+func TestModelMissing(t *testing.T) {
+	if ModelMissing("/nonexistent/dir") == "" {
+		t.Error("不存在的目录必须报缺失")
+	}
 	dir := t.TempDir()
-	f, err := os.Create(filepath.Join(dir, "model.onnx"))
-	if err != nil {
+	if got := ModelMissing(dir); got != "model.onnx" {
+		t.Errorf("空目录应首先报缺 model.onnx，got %q", got)
+	}
+	writeModelFiles(t, dir, "")
+	if got := ModelMissing(dir); got != "" {
+		t.Errorf("齐备目录不应报缺失，got %q", got)
+	}
+	// 逐项缺失：espeak-ng-data / lexicon 缺任何一项引擎都会读错音或创建失败。
+	for _, skip := range requiredFiles() {
+		d := t.TempDir()
+		writeModelFiles(t, d, skip)
+		if got := ModelMissing(d); got != skip {
+			t.Errorf("缺 %q 时应报该项，got %q", skip, got)
+		}
+	}
+}
+
+// espeak-ng-data 必须是目录：同名普通文件不算数。
+func TestModelMissing_DirVsFile(t *testing.T) {
+	dir := t.TempDir()
+	writeModelFiles(t, dir, "espeak-ng-data/")
+	if err := os.WriteFile(filepath.Join(dir, "espeak-ng-data"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_ = f.Close()
-
-	if !ttsModelPresent(dir) {
-		t.Error("expected true when .onnx file present")
+	if got := ModelMissing(dir); got != "espeak-ng-data/" {
+		t.Errorf("espeak-ng-data 是文件而非目录，应判缺失，got %q", got)
 	}
 }
 
 // ── ttsModelMapper ─────────────────────────────────────────────────────────
 
-func TestTTSModelMapper_OnnxFile(t *testing.T) {
+// 保留归档内完整目录结构，只剥掉顶层目录（espeak-ng-data/dict/多份 lexicon+fst 都要）。
+func TestTTSModelMapper_KeepsStructureStripsTopDir(t *testing.T) {
 	mapper := ttsModelMapper("/models")
-	path, ok := mapper("kokoro/model.onnx")
-	if !ok {
-		t.Error("expected .onnx to be accepted")
+	cases := map[string]string{
+		"kokoro-multi-lang-v1_1/model.onnx":                   "/models/model.onnx",
+		"kokoro-multi-lang-v1_1/espeak-ng-data/en/rules":      "/models/espeak-ng-data/en/rules",
+		"kokoro-multi-lang-v1_1/dict/pos_dict/prob_emit.utf8": "/models/dict/pos_dict/prob_emit.utf8",
+		"kokoro-multi-lang-v1_1/number-zh.fst":                "/models/number-zh.fst",
+		"./kokoro-multi-lang-v1_1/lexicon-zh.txt":             "/models/lexicon-zh.txt",
 	}
-	if !strings.HasSuffix(path, "model.onnx") {
-		t.Errorf("unexpected path: %q", path)
+	for in, want := range cases {
+		got, ok := mapper(in)
+		if !ok || got != want {
+			t.Errorf("mapper(%q) = %q, %v; want %q, true", in, got, ok, want)
+		}
 	}
 }
 
-func TestTTSModelMapper_EspeakNgData(t *testing.T) {
+func TestTTSModelMapper_DropsTopLevelAndEscapes(t *testing.T) {
 	mapper := ttsModelMapper("/models")
-	path, ok := mapper("kokoro/espeak-ng-data/en/rules")
-	if !ok {
-		t.Error("expected espeak-ng-data to be accepted")
+	for _, in := range []string{"loose.txt", "kokoro-multi-lang-v1_1/", "kokoro-multi-lang-v1_1"} {
+		if got, ok := mapper(in); ok {
+			t.Errorf("mapper(%q) 应丢弃，got %q", in, got)
+		}
 	}
-	if !strings.Contains(path, "espeak-ng-data") {
-		t.Errorf("expected espeak-ng-data in path, got %q", path)
-	}
-}
-
-func TestTTSModelMapper_UnknownFile(t *testing.T) {
-	mapper := ttsModelMapper("/models")
-	_, ok := mapper("kokoro/README.md")
-	if ok {
-		t.Error("expected README.md to be rejected")
+	// 路径逃逸：无论如何都不得映射到 modelDir 之外。
+	for _, in := range []string{"x/../../etc/passwd", "/etc/passwd", "a/../../../b"} {
+		got, ok := mapper(in)
+		if ok && !strings.HasPrefix(got, "/models/") {
+			t.Errorf("mapper(%q) = %q 逃出了 modelDir", in, got)
+		}
 	}
 }
 
@@ -228,56 +265,17 @@ func TestModelDir(t *testing.T) {
 	}
 }
 
-// ── EdgeProvider BuildSSML ────────────────────────────────────────────────
-
-// SSML 恒为 <voice><prosody>：免费端点遇 mstts:express-as 会以 1007 "SSML is invalid" 拒绝（T4）。
-func TestEdgeProvider_BuildSSML_NoExpressAs(t *testing.T) {
-	p1 := NewEdgeProvider("zh-CN-XiaoxiaoNeural", "", nil)
-	ssml1 := buildSSML(p1, "你好，世界！")
-	for _, bad := range []string{"express-as", "mstts"} {
-		if strings.Contains(ssml1, bad) {
-			t.Errorf("SSML must not contain %q, got: %s", bad, ssml1)
+// 缺失资产清单与 Installed 一致。
+func TestInstalled_And_MissingAssets(t *testing.T) {
+	libDir, ttsDir := t.TempDir(), t.TempDir()
+	if Installed(libDir, ttsDir) {
+		t.Fatal("空目录不应判为已安装")
+	}
+	writeModelFiles(t, ModelDir(ttsDir), "")
+	missing := MissingAssets(libDir, ttsDir)
+	for _, a := range missing {
+		if strings.Contains(a.File, "kokoro") {
+			t.Error("模型已齐备，不应再列 Kokoro")
 		}
-	}
-	if !strings.Contains(ssml1, "<voice name='zh-CN-XiaoxiaoNeural'><prosody") {
-		t.Errorf("expected <voice><prosody>, got: %s", ssml1)
-	}
-	if !strings.Contains(ssml1, "xml:lang='zh-CN'") || !strings.Contains(ssml1, "你好，世界！") {
-		t.Errorf("expected lang and text, got: %s", ssml1)
-	}
-
-	p2 := NewEdgeProvider("zh-CN-YunxiNeural", "", nil)
-	ssml2 := buildSSML(p2, "Hello & <world>")
-	if !strings.Contains(ssml2, "Hello &amp; &lt;world&gt;") {
-		t.Errorf("expected XML escaped text, got: %s", ssml2)
-	}
-}
-
-// Sec-MS-GEC 固定向量：用参考实现 edge-tts 7.2.8 的同一算法（drm.generate_sec_ms_gec：
-// unix + 11644473600 向下取整到 300 秒、×1e7 tick、拼 TrustedClientToken 取 SHA256 大写）
-// 对固定时间戳算出后写死。同一 5 分钟窗口内（…000 与 …299）结果必须相同，…300 进入下一窗口。
-func TestEdgeSecMSGEC_KnownVectors(t *testing.T) {
-	cases := []struct {
-		unix int64
-		want string
-	}{
-		{1759320000, "72F961A9B628D5138BE223025CA01B412CB75CFEEA8374B7EA1480CD75D9ADDF"},
-		{1759320299, "72F961A9B628D5138BE223025CA01B412CB75CFEEA8374B7EA1480CD75D9ADDF"},
-		{1759320300, "8B75C8018175CFB527B695779AFDEC34A7EE5C7149F357F595849F43E4F17688"},
-	}
-	for _, c := range cases {
-		if got := edgeSecMSGEC(c.unix, 0); got != c.want {
-			t.Errorf("edgeSecMSGEC(%d) = %s, want %s", c.unix, got, c.want)
-		}
-	}
-	// 时钟偏差：本机慢 300 秒，加 skew 后应落到下一窗口。
-	if edgeSecMSGEC(1759320000, 300) != edgeSecMSGEC(1759320300, 0) {
-		t.Error("skew should shift the window")
-	}
-}
-
-func TestEdgeMajor(t *testing.T) {
-	if got := edgeMajor("143.0.3650.75"); got != "143" {
-		t.Errorf("edgeMajor = %q, want 143", got)
 	}
 }

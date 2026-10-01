@@ -55,6 +55,7 @@ import (
 
 // ToolBundle 持有 §6~§6.8 所有工具层产物。
 type ToolBundle struct {
+	TTSBridge             *ttsBridge                // tts 内置工具 ↔ TTS 引擎的晚绑定（bootServer 里 Bind）
 	ContainerSandbox      *sandbox.ContainerSandbox // 可 nil（<Tier1 或 FeatureL3Sandbox 未启用）
 	InProcSandbox         *sandbox.InProcessSandbox
 	SandboxRouter         *sandbox.SandboxRouter
@@ -346,6 +347,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	installMgr.WithOutbox(sb.Outbox)
 
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
+	// tts 工具在此注册，而承载 TTS 引擎的 Server 到 bootServer 才创建：经晚绑定桥接，
+	// bootServer 里 Bind 之前调用工具会如实报"未接线"，不会回出假音频。
+	ttsBr := &ttsBridge{}
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,
 		sb.Cfg.Sandbox.Enabled,
 		sb.Cfg.Sandbox.NetworkPolicy,
@@ -356,6 +360,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		&mcpAsyncTaskAdapter{inner: mcpMgr},
 		hitlGateway,
 		repo.NewSQLiteTodoRepository(sb.Store.DB()),
+		ttsBr.Synthesize,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
@@ -717,6 +722,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	disp.Use(dispatch.AuditInterceptor(sb.AuditTrail))
 
 	return &ToolBundle{
+		TTSBridge:             ttsBr,
 		ContainerSandbox:      containerSandbox,
 		InProcSandbox:         inProcSandbox,
 		SandboxRouter:         sandboxRouter,

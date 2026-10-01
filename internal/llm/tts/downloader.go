@@ -1,4 +1,4 @@
-// Package tts 提供本地 TTS 模型（sherpa-onnx）的资产下载与路径管理。
+// Package tts 提供本地 TTS 模型（sherpa-onnx Kokoro）的资产下载与路径管理。
 package tts
 
 import (
@@ -6,10 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/downloader"
+	"github.com/polarisagi/polaris/internal/llm/audioassets"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -17,20 +19,23 @@ import (
 // ModelDir 返回 TTS 模型目录（ttsDir/model）。
 func ModelDir(ttsDir string) string { return filepath.Join(ttsDir, "model") }
 
-// EnsureAssets 确保 ttsDir 下存在可用的动态库与 TTS 模型文件，幂等。
-// 动态库与 STT 共用，优先复用 libDir（通常 = sttDir）；中国大陆网络自动走 ghproxy。
-//
-//   - libDir:   sherpa-onnx 动态库目录（通常复用 STT 目录，避免重复下载）
-//   - ttsDir:   TTS 专属目录，模型文件写入 ttsDir/model/
-//   - version:  sherpa-onnx 版本；空则取 stt.SherpaABIVersion，与之不同则报错
-//   - modelURL: kokoro / piper 等模型 .tar.bz2 下载地址（留空则跳过）
-func EnsureAssets(ctx context.Context, libDir, ttsDir string, httpClient *http.Client, version, modelURL string) error {
-	if modelURL == "" {
-		return nil // 未配置本地 TTS，跳过（继续使用 edge-tts 云端 API）
+// requiredFiles 是 Kokoro 引擎运行必需的归档内文件（相对模型目录）；末尾带 "/" 的是目录。
+// 缺任何一项引擎都会创建失败或读错音（espeak-ng-data 缺失→英文词无法发音）。
+func requiredFiles() []string {
+	return []string{
+		"model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data/",
+		"lexicon-zh.txt", "lexicon-us-en.txt",
 	}
+}
+
+// EnsureAssets 确保 libDir 下存在 sherpa-onnx 动态库、ttsDir/model 下存在完整 Kokoro 模型，幂等。
+// 动态库与 STT 共用，优先复用 libDir（通常 = sttDir）；中国大陆网络自动走 ghproxy。
+// 全部下载经清单 sha256 校验，进度经 progress 汇报（nil 安全）。
+//
+//   - version: sherpa-onnx 版本；空则取 stt.SherpaABIVersion，与之不同则报错
+func EnsureAssets(ctx context.Context, libDir, ttsDir string, httpClient *http.Client, version string, progress audioassets.ProgressFunc) error {
 	// 版本与 STT 共用同一套 ABI 钉死校验：不一致即报错，不下载、不加载。
-	ver, err := stt.ResolveSherpaVersion(version)
-	if err != nil {
+	if _, err := stt.ResolveSherpaVersion(version); err != nil {
 		return apperr.Wrap(apperr.CodeInvalidInput, "tts: sherpa version check failed", err)
 	}
 	if err := os.MkdirAll(ttsDir, 0o755); err != nil {
@@ -38,65 +43,79 @@ func EnsureAssets(ctx context.Context, libDir, ttsDir string, httpClient *http.C
 	}
 
 	// ── 1. sherpa-onnx 动态库（复用 STT 目录，幂等） ─────────────────────────
-	libPath := filepath.Join(libDir, stt.LibName())
-	if _, err := os.Stat(libPath); os.IsNotExist(err) {
-		libURL, err := stt.SherpaLibURL(ver)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "tts: download sherpa-onnx failed", err)
-		}
-		slog.Info("tts: downloading sherpa-onnx library", "dest", libPath)
-		if err := downloader.DownloadExtractLibs(ctx, httpClient, libURL, libDir); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "tts: library download failed", err)
-		}
-		slog.Info("tts: library ready", "path", libPath)
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "tts: mkdir "+libDir+" failed", err)
+	}
+	if err := stt.EnsureLib(ctx, libDir, httpClient, progress); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "tts: library ensure failed", err)
 	}
 
 	// ── 2. TTS 模型文件 ────────────────────────────────────────────────────────
+	asset := audioassets.KokoroModel()
 	modelDir := ModelDir(ttsDir)
-	if !ttsModelPresent(modelDir) {
-		slog.Info("tts: downloading TTS model", "dest", modelDir)
-		if err := downloader.DownloadExtractTarBz2(ctx, httpClient, modelURL, modelDir, ttsModelMapper(modelDir)); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "tts: model download failed", err)
-		}
-		slog.Info("tts: model ready", "dir", modelDir)
-	} else {
-		slog.Info("tts: model already present, skipping download", "dir", modelDir)
+	if ModelMissing(modelDir) == "" {
+		return nil
 	}
-
+	slog.Info("tts: downloading TTS model", "dest", modelDir, "asset", asset.File, "bytes", asset.Size)
+	if err := downloader.DownloadExtractTarBz2Opts(ctx, httpClient, asset.URL(), modelDir,
+		ttsModelMapper(modelDir), stt.AssetOptions(asset, progress)); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "tts: model download failed", err)
+	}
+	// 解压后复核必需文件：归档结构与预期不符时 extractTar 仍可能因写出了其他文件而判成功。
+	if miss := ModelMissing(modelDir); miss != "" {
+		return apperr.New(apperr.CodeInternal, "tts: 归档 "+asset.File+" 解压后缺少必需文件 "+miss+"（目录 "+modelDir+"）")
+	}
+	slog.Info("tts: model ready", "dir", modelDir)
 	return nil
 }
 
-// ttsModelPresent 检查 TTS 模型目录是否存在至少一个 .onnx 文件。
-func ttsModelPresent(modelDir string) bool {
-	entries, err := os.ReadDir(modelDir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".onnx") {
-			return true
+// ModelMissing 返回模型目录中第一个缺失的必需文件（相对路径）；齐备返回 ""。
+func ModelMissing(modelDir string) string {
+	for _, rel := range requiredFiles() {
+		isDir := strings.HasSuffix(rel, "/")
+		fi, err := os.Stat(filepath.Join(modelDir, strings.TrimSuffix(rel, "/")))
+		if err != nil || fi.IsDir() != isDir {
+			return rel
 		}
 	}
-	return false
+	return ""
 }
 
+// Installed 报告 TTS 资产（动态库 + 完整 Kokoro 模型）是否齐备。
+// 只看文件存在性：已解压文件无法再对归档 sha256 复验，完整性由下载时的校验保证。
+func Installed(libDir, ttsDir string) bool {
+	return len(MissingAssets(libDir, ttsDir)) == 0
+}
+
+// MissingAssets 返回缺失的清单项（顺序：库、Kokoro 模型）。平台无库清单时不计库。
+func MissingAssets(libDir, ttsDir string) []audioassets.Asset {
+	var missing []audioassets.Asset
+	if lib, err := stt.LibAssetForHost(); err == nil {
+		if _, statErr := os.Stat(filepath.Join(libDir, stt.LibName())); statErr != nil {
+			missing = append(missing, lib)
+		}
+	}
+	if ModelMissing(ModelDir(ttsDir)) != "" {
+		missing = append(missing, audioassets.KokoroModel())
+	}
+	return missing
+}
+
+// ttsModelMapper 返回 Kokoro 归档的 mapper：保留归档内完整目录结构，只剥掉顶层目录。
+// 为什么不再按文件名白名单挑文件：v1.1 需要 espeak-ng-data/、dict/、多份 lexicon 与 fst，
+// 白名单漏一项就是"能加载但读错音"这类难排查的缺陷；全量保留最不易错（归档里没有可执行文件）。
 func ttsModelMapper(modelDir string) func(string) (string, bool) {
 	return func(name string) (string, bool) {
-		// Kokoro 等模型依赖 espeak-ng-data，必须保留完整的子目录结构
-		if idx := strings.Index(name, "espeak-ng-data"); idx != -1 {
-			relPath := name[idx:]
-			return filepath.Join(modelDir, relPath), true
+		clean := path.Clean(strings.TrimPrefix(name, "./"))
+		_, rel, ok := strings.Cut(clean, "/")
+		if !ok || rel == "" || rel == "." {
+			return "", false // 顶层散文件或目录项本身：无顶层目录可剥，丢弃
 		}
-
-		base := filepath.Base(name)
-		switch {
-		case strings.HasSuffix(base, ".onnx"),
-			strings.HasSuffix(base, ".bin"),
-			base == "tokens.txt",
-			strings.HasPrefix(base, "lexicon") && strings.HasSuffix(base, ".txt"),
-			strings.HasSuffix(base, ".json"):
-			return filepath.Join(modelDir, base), true
+		// 剥掉顶层后仍以 ".." 开头（如 "a/../../b"）或为绝对路径即属逃逸，直接丢弃；
+		// extractTar 另有一道前缀校验，这里是第一道，不依赖下游兜底。
+		if rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(clean, "/") {
+			return "", false
 		}
-		return "", false
+		return filepath.Join(modelDir, filepath.FromSlash(rel)), true
 	}
 }

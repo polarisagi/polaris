@@ -128,6 +128,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 语音识别 API
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)
 	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.AudioService.HandleAudioSpeech)
+	// 语音资产按需安装（ADR-0107）：首次点麦克风/朗读时由前端触发，进度经 capabilities 轮询。
+	mux.HandleFunc("POST /v1/audio/stt/install", s.chatHandler.AudioService.HandleAudioInstall("stt"))
+	mux.HandleFunc("POST /v1/audio/tts/install", s.chatHandler.AudioService.HandleAudioInstall("tts"))
 
 	// VFS 通用文件上传（对话附件）。
 	// 2026-08-12 接线：此前 handler 已实现但从未注册，而 web/src/js/store/chat.js

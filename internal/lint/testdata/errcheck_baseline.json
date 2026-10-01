@@ -68,7 +68,6 @@
   "internal/llm/adapter/google_request.go:buildGeminiRequest:Unmarshal#1": true,
   "internal/llm/ollamamgr/manager.go:StartOllama:Kill#0": true,
   "internal/llm/router.go:InferenceRouter.recordInferSuccess:Put#0": true,
-  "internal/llm/tts/edge.go:EdgeProvider.Generate:SetReadDeadline#0": true,
   "internal/memory/consolidation/consolidation_background.go:ForgettingManager.deleteCognitiveIndex:FTSDelete#0": true,
   "internal/memory/consolidation/consolidation_background.go:ForgettingManager.deleteCognitiveIndex:VecDelete#0": true,
   "internal/memory/retrieval/retriever_construct.go:HybridRetrieverImpl.InjectEmbedder:InitPrototypes#0": true,
