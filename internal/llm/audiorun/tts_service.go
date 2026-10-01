@@ -93,6 +93,11 @@ func (t *TTSService) restoreBench(ctx context.Context) {
 		slog.Warn("audio: tts bench record unreadable, will re-measure on first load", "err", err)
 		return
 	}
+	if ok && !rec.Supported && rec.RetryOnStart {
+		// 上次的过慢结论可能是瞬时负载造成：本次启动不采信，用户触发朗读/安装时重测一次。
+		slog.Info("audio: tts previously judged too slow, will re-measure once on next use", "rtf", rec.RTF)
+		return
+	}
 	if ok && !rec.Supported {
 		t.slow.Store(&rec)
 		slog.Info("audio: tts previously judged too slow on this hardware", "rtf", rec.RTF, "fingerprint", rec.Fingerprint)
@@ -152,16 +157,18 @@ func (t *TTSService) loadEngine(ctx context.Context) (*tts.Engine, error) {
 	slog.Info("audio: tts engine created (sherpa-onnx Kokoro v1.1 fp32)",
 		"threads", t.o.NumThreads, "sid", t.o.SID, "speed", t.o.Speed)
 
-	if _, ok, lerr := GetBench(ctx, t.o.Prefs, t.fp); lerr != nil {
+	prev, ok, lerr := GetBench(ctx, t.o.Prefs, t.fp)
+	if lerr != nil {
 		slog.Warn("audio: tts bench record unreadable, re-measuring", "err", lerr)
-	} else if ok {
-		return eng, nil // 同指纹已测过且支持（过慢的在 restoreBench 里就拦下了）
+	} else if ok && prev.Supported {
+		return eng, nil // 同指纹已测过且支持（确定过慢的在 restoreBench 里就拦下了）
 	}
-	return t.firstBench(ctx, eng)
+	// 走到这里：无记录/损坏，或上次为待重测的 unsupported（retried=true，本次是那次重测）。
+	return t.firstBench(ctx, eng, ok && !prev.Supported)
 }
 
 // firstBench 在首次加载后测 RTF 并持久化；过慢则卸载并置 unsupported(too_slow)。
-func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine) (*tts.Engine, error) {
+func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine, retried bool) (*tts.Engine, error) {
 	t.o.Sink.Publish(Status{State: StateLoading, Detail: "首次启用：运行语音合成速度基准"})
 	rtf, err := RunBench(ctx, eng)
 	if err != nil {
@@ -170,7 +177,11 @@ func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine) (*tts.Engi
 		}
 		return nil, err
 	}
-	rec := BenchRecord{Fingerprint: t.fp, RTF: rtf, Supported: rtf <= MaxTTSRTF, MeasuredAt: time.Now().UTC()}
+	supported := rtf <= MaxTTSRTF
+	rec := BenchRecord{
+		Fingerprint: t.fp, RTF: rtf, Supported: supported, MeasuredAt: time.Now().UTC(),
+		RetryOnStart: !supported && !retried, // 首次判慢给一次重测机会；重测仍慢则定论
+	}
 	slog.Info("audio: tts first-load benchmark",
 		"rtf", rtf, "max_rtf", MaxTTSRTF, "supported", rec.Supported,
 		"threads", t.o.NumThreads, "fingerprint", t.fp)

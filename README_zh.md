@@ -163,12 +163,22 @@ Polaris 的每一次自我改进——无论是 Prompt 优化、技能蒸馏还�
 
 | Tier | RAM | 能力 |
 |------|-----|------|
-| VPS-min | 2GB+ | 远程 API + SurrealDB(kv-mem) + 核心功能；高并发负载下部分特性可能触发降级 |
-| VPS-stable | 4GB+ | 以上 + SurrealDB / Embedding / STT / L2+L3 Wasm 沙箱可稳定并发，不触发 `DegradeMemoryMB` |
+| VPS-min | 2GB / 1 vCPU | 核心路径：远程 API + SurrealDB(kv-mem) + 核心功能；高并发负载下部分特性可能触发降级 |
+| VPS-stable | 4GB+ | 以上 + SurrealDB / Embedding / L2+L3 Wasm 沙箱可稳定并发，不触发 `DegradeMemoryMB` |
 | Tier 0（开发地板） | 8GB | 所有 VPS 特性 + SurrealDB rocksdb（自动）+ GraphRAG + DeepRAG + LogicCollapse + ComputerUseGUI；内存充裕，无压力振荡 |
 | Tier 1（甜点） | 16GB | 以上 + 本地小模型推理(3B) + WebUI + OTel + Presidio PII |
 | Tier 2 | 24GB+ | 以上 + 大型本地 LLM(7-14B) + QLoRA 梯度训练 |
 | Tier 3 | 64GB+（Apple Silicon） | 全本地推理，零云端依赖 |
+
+**语音（ADR-0107）**——模型按需下载（启动时绝不下载），空闲后自动卸载：
+
+| 能力 | 最低配置 | 低于最低配置 |
+|------|----------|--------------|
+| 核心路径（不含语音） | 2GB 内存 / 1 vCPU | - |
+| 语音输入（STT，SenseVoice int8，约 230MB 下载） | 2GB 内存 / 2 逻辑核 | 不可用 |
+| 服务端朗读（TTS，Kokoro fp32，约 365MB 下载；首次加载基准须 RTF ≤ 0.8） | 4GB 内存 / 4 逻辑核 | 客户端系统语音（`speechSynthesis`，仅本地中文语音） |
+
+麦克风需要安全上下文：`localhost` / `127.0.0.1` 直接可用；远程浏览器访问 VPS 必须使用 HTTPS。
 
 ---
 

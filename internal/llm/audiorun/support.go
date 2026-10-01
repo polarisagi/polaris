@@ -28,9 +28,11 @@ const (
 	sttMinFreeMB = 600
 	ttsMinFreeMB = 900
 
-	// MaxTTSRTF 是服务端 TTS 可接受的最大实时率（合成耗时/音频时长）：>0.7 时
-	// 连续朗读会越播越卡，退回系统语音体验更好。
-	MaxTTSRTF = 0.7
+	// MaxTTSRTF 是服务端 TTS 可接受的最大实时率（合成耗时/音频时长）。
+	// 前端按句预取、边播边合成，只要 RTF<1 就不会断流，0.8 在此基础上留 20% 余量；
+	// 原先的 0.7 过严：空闲 i9-9880H 上实测 Kokoro fp32 为 0.65，几乎贴线，
+	// 稍有后台负载就会被误判（嵌入 runner 抢占 CPU 时实测 1.07）。
+	MaxTTSRTF = 0.8
 )
 
 // 不支持原因码（Capability.Reason）。

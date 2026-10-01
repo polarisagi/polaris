@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/tts"
@@ -31,6 +32,10 @@ type BenchRecord struct {
 	RTF         float64   `json:"rtf"`
 	Supported   bool      `json:"supported"`
 	MeasuredAt  time.Time `json:"measured_at"`
+	// RetryOnStart 仅在 unsupported 结论上为 true：该结论可能来自瞬时 CPU 争抢（实测 0.65 vs 1.07），
+	// 下次守护进程启动后不直接采信，等用户再次触发朗读/安装时重测一次；
+	// 重测仍过慢则写入 false，此后同指纹不再重测。supported 结论同指纹始终复用。
+	RetryOnStart bool `json:"retry_on_start,omitempty"`
 }
 
 // Fingerprint 返回硬件指纹（arch + 逻辑核 + 总内存 GiB 取整）。
@@ -78,21 +83,28 @@ func SaveBench(ctx context.Context, store PrefStore, rec BenchRecord) error {
 	return nil
 }
 
-// RunBench 用固定句合成一次并返回 RTF = 合成耗时 / 音频时长。
+// benchTimedRuns 是计时合成次数；取最小 RTF，排除偶发的 CPU 抢占尖峰（最小值最接近硬件真实能力）。
+const benchTimedRuns = 2
+
+// RunBench 用固定句合成并返回 RTF = 合成耗时 / 音频时长（计时 benchTimedRuns 次取最小）。
 // 先用同一句预热一次丢弃：首次推理含 ORT 图优化与内存池建立，计入会把 RTF 系统性高估，
 // 让本来够快的机器被误判为 too_slow。
 func RunBench(ctx context.Context, p tts.Provider) (float64, error) {
 	if _, err := p.Generate(ctx, BenchSentence); err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "audiorun: TTS 基准预热失败", err)
 	}
-	start := time.Now()
-	a, err := p.Generate(ctx, BenchSentence)
-	elapsed := time.Since(start)
-	if err != nil {
-		return 0, apperr.Wrap(apperr.CodeInternal, "audiorun: TTS 基准合成失败", err)
+	best := math.MaxFloat64
+	for i := 0; i < benchTimedRuns; i++ {
+		start := time.Now()
+		a, err := p.Generate(ctx, BenchSentence)
+		elapsed := time.Since(start)
+		if err != nil {
+			return 0, apperr.Wrap(apperr.CodeInternal, "audiorun: TTS 基准合成失败", err)
+		}
+		if a.Duration <= 0 {
+			return 0, apperr.New(apperr.CodeInternal, "audiorun: TTS 基准未得到音频时长，无法计算 RTF")
+		}
+		best = math.Min(best, elapsed.Seconds()/a.Duration.Seconds())
 	}
-	if a.Duration <= 0 {
-		return 0, apperr.New(apperr.CodeInternal, "audiorun: TTS 基准未得到音频时长，无法计算 RTF")
-	}
-	return elapsed.Seconds() / a.Duration.Seconds(), nil
+	return best, nil
 }

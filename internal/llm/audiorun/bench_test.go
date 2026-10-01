@@ -126,8 +126,8 @@ func TestRunBench_ComputesRTFAfterWarmup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.calls != 2 {
-		t.Errorf("应预热 1 次 + 测量 1 次，calls=%d", p.calls)
+	if p.calls != 1+benchTimedRuns {
+		t.Errorf("应预热 1 次 + 计时 %d 次，calls=%d", benchTimedRuns, p.calls)
 	}
 	for _, s := range p.sentence {
 		if s != BenchSentence {

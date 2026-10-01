@@ -95,3 +95,11 @@ func TestTTSBridge_UnboundReportsErrorThenDelegates(t *testing.T) {
 		t.Error("下游错误必须上报")
 	}
 }
+
+func TestTrimLangTag(t *testing.T) {
+	for in, want := range map[string]string{"<|yue|>": "yue", "<|zh|>": "zh", "en": "en", "": "", " <|ja|> ": "ja"} {
+		if got := trimLangTag(in); got != want {
+			t.Errorf("trimLangTag(%q)=%q want %q", in, got, want)
+		}
+	}
+}

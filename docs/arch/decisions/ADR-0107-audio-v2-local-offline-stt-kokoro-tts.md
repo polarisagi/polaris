@@ -25,10 +25,10 @@
 ## 决策
 
 1. **模型**：STT 仅 SenseVoice int8（标点 int8）；服务端 TTS 仅 Kokoro v1.1 fp32，默认 `kokoro_sid=3`。Edge、Matcha、Piper 等全部移除。HTTP sidecar Provider 保留为可选高级项。
-2. **最低配置**：STT 2GB 内存 + 2 逻辑核心；服务端 TTS 4GB + 4 核；首次加载基准 RTF > 0.7 判不支持。"是否支持"只看稳定的硬件画像（架构 + 核数 + 总内存，同时作为基准指纹）；空闲内存只决定"现在能否加载"（STT ≥ 600MB，TTS ≥ 900MB）。
+2. **最低配置**：STT 2GB 内存 + 2 逻辑核心；服务端 TTS 4GB + 4 核；首次加载基准 RTF > 0.8 判不支持（阈值理由：前端按句预取、边播边合成，RTF<1 即不断流，0.8 留 20% 余量；原定 0.7 在空闲 i9-9880H 上实测 0.65，几乎贴线，过严）。"是否支持"只看稳定的硬件画像（架构 + 核数 + 总内存，同时作为基准指纹）；空闲内存只决定"现在能否加载"（STT ≥ 600MB，TTS ≥ 900MB）。
 3. **按需下载**：启动不下载任何语音资产；状态 `not_installed` 起步，已存在的资产识别为已安装但未加载。用户确认后经 `POST /v1/audio/{stt|tts}/install` 异步安装（202/200/422/503），进度由 `*_status.progress` 轮询。所有资产在 `audioassets` 清单中带 sha256 + size，下载后强校验，归档缓存的坏文件自动丢弃重下一次。
 4. **懒加载 + 空闲卸载**：引擎首次使用时加载（并发共享一次加载，30s 等待超时但后台继续），`inference.audio.idle_unload_minutes`（默认 10，0 为不卸载）后卸载，使用中引用计数保证不被关闭。
-5. **TTS 首次基准**：加载后跑固定句"你好，这是一次语音合成速度测试，今天是二零二六年十月二日。"（预热 + 计时），RTF 与硬件指纹持久化到 `preferences` 键 `audio.tts_bench`；指纹一致则不重测。
+5. **TTS 首次基准**：加载后跑固定句"你好，这是一次语音合成速度测试，今天是二零二六年十月二日。"：1 次预热（丢弃）+ 2 次计时，取**最小 RTF**（滤掉偶发 CPU 抢占）。结果与硬件指纹持久化到 `preferences` 键 `audio.tts_bench`；supported 结论同指纹始终复用。unsupported 结论带 `retry_on_start:true`：下次守护进程启动后不直接采信，等用户再次触发朗读/安装时重测一次；重测仍过慢则 `retry_on_start` 置 false 定论（同指纹不再重测）。实测依据：空闲机器 RTF 0.65；Polaris 嵌入 runner（llama-server）占满 CPU 时 RTF 1.07——单次结论可能是瞬时负载所致。
 6. **Kokoro 文本规整**：`rule_fsts=phone-zh.fst,date-zh.fst,number-zh.fst`，`max_num_sentences=1`，`silence_scale=0.2`，双词典（英 + 中）。结构偏移见 `internal/llm/tts/sherpa.go`（ConfigSize 448）。
 7. **系统语音兜底（前端）**：服务端 TTS 不支持/失败/用户拒绝下载，或 `inference.tts.engine=system` 时用 `speechSynthesis`，仅限 `voice.localService && voice.lang.startsWith('zh')` 的本地语音，没有则明确提示不可用，不使用云端语音。`engine`：`auto|server|system`。
 8. **错误契约**：未就绪时 `/v1/audio/speech` 与 `/v1/audio/transcriptions` 返回 503 JSON `{error,state,detail,message}`，不返回假音频或假文本。
@@ -45,6 +45,7 @@
 
 | 方案 | 驳回理由 |
 |------|---------|
+| 阈值 0.7 | 空闲 i9 实测 0.65 贴线；预取播放只需 RTF<1，改 0.8 |
 | Matcha 作默认（RTF 0.044） | 速度最佳但英文词含糊，技术词汇场景不可接受 |
 | Kokoro int8 | 无 VNNI 机器 RTF 1.44–1.76，慢于实时 |
 | 启动期预下载 | 违反 2GB 核心路径与离线按需原则 |

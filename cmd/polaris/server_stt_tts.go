@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -197,7 +198,7 @@ func (a *sttAdapter) Transcribe(samples []float32, sampleRate int) (chat.STTResu
 		}
 		return chat.STTResult{}, apperr.Wrap(apperr.CodeInternal, "transcribe failed", err)
 	}
-	return chat.STTResult{Text: res.Text, Language: res.Lang}, nil
+	return chat.STTResult{Text: res.Text, Language: trimLangTag(res.Lang)}, nil
 }
 
 // ttsAdapter 将 llm/tts.Provider 适配为 chat.TTSProvider
@@ -241,4 +242,10 @@ func (b *ttsBridge) Synthesize(ctx context.Context, text string) ([]byte, string
 		return nil, "", err
 	}
 	return a.Data, a.MIME, nil
+}
+
+// trimLangTag 去掉 SenseVoice 语言标签的 "<|" "|>" 包裹（"<|yue|>" -> "yue"）。
+// 这是模型内部 token 的写法，不应泄露到 API；空串原样返回，由 JSON omitempty 省略该字段。
+func trimLangTag(l string) string {
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(l), "<|"), "|>"))
 }

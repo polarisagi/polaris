@@ -163,12 +163,22 @@ Every improvement in Polaris — prompt tuning, skill distillation, config chang
 
 | Tier | RAM | Capabilities |
 |------|-----|-------------|
-| VPS-min | 2GB+ | Remote API + SurrealDB (kv-mem) + core features; some features may degrade under load |
-| VPS-stable | 4GB+ | Above, all VPS features (SurrealDB + embedding + STT + L2/L3 Wasm sandbox) stable under concurrent load |
+| VPS-min | 2GB / 1 vCPU | Core path: remote API + SurrealDB (kv-mem) + core features; some features may degrade under load |
+| VPS-stable | 4GB+ | Above, all VPS features (SurrealDB + embedding + L2/L3 Wasm sandbox) stable under concurrent load |
 | Tier 0 (dev floor) | 8GB | All VPS features + SurrealDB rocksdb (auto) + GraphRAG + DeepRAG + LogicCollapse + ComputerUseGUI; comfortable headroom |
 | Tier 1 (sweet spot) | 16GB | Above + local small-model inference (3B) + WebUI + OTel + Presidio PII |
 | Tier 2 | 24GB+ | Above + large local LLM (7–14B) + QLoRA gradient training |
 | Tier 3 | 64GB+ (Apple Silicon) | Fully local inference, zero cloud dependency |
+
+**Voice (ADR-0107)** — models are downloaded on demand (never at startup) and unloaded when idle:
+
+| Capability | Minimum | Below the minimum |
+|------------|---------|-------------------|
+| Core path (no voice) | 2GB RAM / 1 vCPU | n/a |
+| Voice input (STT, SenseVoice int8, ~230MB download) | 2GB RAM / 2 logical cores | Unavailable |
+| Server read-aloud (TTS, Kokoro fp32, ~365MB download; first-load benchmark must reach RTF ≤ 0.8) | 4GB RAM / 4 logical cores | Client-side system voice (`speechSynthesis`, local Chinese voices only) |
+
+Microphone access needs a secure context: `localhost` / `127.0.0.1` work as-is; a remote browser reaching a VPS must use HTTPS.
 
 ---
 
