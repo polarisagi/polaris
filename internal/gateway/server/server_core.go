@@ -485,6 +485,29 @@ func (s *Server) SetTTSProvider(provider chat.TTSProvider, name string) {
 	}
 }
 
+// SetSTTStatus 更新 STT 资产状态（供 cmd 层后台准备循环汇报；经 capabilities 暴露给前端）。
+func (s *Server) SetSTTStatus(state, detail, errMsg string) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.STTStatus.Set(state, detail, errMsg)
+	}
+}
+
+// SetTTSStatus 更新 TTS 资产状态。
+func (s *Server) SetTTSStatus(state, detail, errMsg string) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.TTSStatus.Set(state, detail, errMsg)
+	}
+}
+
+// STTRetrySignal 返回 STT 重试唤醒通道：failed 状态下收到转写请求时会投递一次信号。
+// chatHandler 缺失时返回 nil 通道（select 永不就绪）。
+func (s *Server) STTRetrySignal() <-chan struct{} {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		return s.chatHandler.AudioService.STTRetrySignal()
+	}
+	return nil
+}
+
 func (s *Server) SetTier(tier probe.Tier, params probe.TierParameters) {
 	s.tier = tier
 	s.tierParams = params

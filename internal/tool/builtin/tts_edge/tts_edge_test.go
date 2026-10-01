@@ -2,31 +2,22 @@ package tts_edge
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 )
 
-func TestExecuteEdgeTTS(t *testing.T) {
+func TestExecuteEdgeTTS_InvalidArgs(t *testing.T) {
 	fn := MakeExecuteEdgeTTSFn(false, "")
-	_, err := fn(context.Background(), []byte("invalid"))
-	if err == nil {
+	if _, err := fn(context.Background(), []byte("invalid")); err == nil {
 		t.Fatal("expected error")
 	}
+}
 
-	// Test fallback/mock
+// edge-tts CLI 不可用时必须如实返回错误，不得回出假 MP3 并报 success（静默兜底）。
+func TestExecuteEdgeTTS_FailureIsNotMasked(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // 保证找不到 edge-tts
+	fn := MakeExecuteEdgeTTSFn(false, "")
 	out, err := fn(context.Background(), []byte(`{"text":"test"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var res map[string]string
-	if err := json.Unmarshal(out, &res); err != nil {
-		t.Fatalf("invalid json response: %v", err)
-	}
-	if res["status"] != "success" {
-		t.Fatalf("expected success")
-	}
-	if res["audio_uri"] == "" {
-		t.Fatalf("expected audio uri")
+	if err == nil {
+		t.Fatalf("expected error when edge-tts is unavailable, got output: %s", out)
 	}
 }

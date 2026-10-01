@@ -27,6 +27,13 @@ type AudioService struct {
 	binDir     string
 	httpClient *http.Client
 
+	// STTStatus / TTSStatus 资产状态机快照（经 /v1/system/capabilities 暴露给前端）。
+	STTStatus *AudioStatusTracker
+	TTSStatus *AudioStatusTracker
+	// sttRetry 容量 1 的唤醒信号：STT 处于 failed 状态时，转写请求非阻塞地投递一次，
+	// 让后台重试循环跳过退避立即重试；重复信号直接丢弃。
+	sttRetry chan struct{}
+
 	ffmpegSF singleflight.Group
 }
 
@@ -36,6 +43,20 @@ func NewAudioService(stt *atomic.Pointer[STTEngineBox], tts *atomic.Pointer[TTSP
 		TTSEngine:  tts,
 		binDir:     binDir,
 		httpClient: httpClient,
+		STTStatus:  NewAudioStatusTracker("stt"),
+		TTSStatus:  NewAudioStatusTracker("tts"),
+		sttRetry:   make(chan struct{}, 1),
+	}
+}
+
+// STTRetrySignal 返回 STT 重试唤醒通道（只读端），供后台准备循环 select。
+func (s *AudioService) STTRetrySignal() <-chan struct{} { return s.sttRetry }
+
+// kickSTTRetry 非阻塞投递一次重试信号（通道满则丢弃，不堆积）。
+func (s *AudioService) kickSTTRetry() {
+	select {
+	case s.sttRetry <- struct{}{}:
+	default:
 	}
 }
 
@@ -74,16 +95,21 @@ func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	wavData, err := box.P.Generate(r.Context(), req.Input)
+	audio, err := box.P.Generate(r.Context(), req.Input)
 	if err != nil {
 		slog.Error("audio: tts generation failed", "err", err)
 		http.Error(w, "internal server error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(wavData)))
-	if _, err := w.Write(wavData); err != nil {
+	// MIME 由 Provider 给出（Edge=audio/mpeg，Sherpa=audio/wav）；缺省按 wav 兜底。
+	mime := audio.MIME
+	if mime == "" {
+		mime = "audio/wav"
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audio.Data)))
+	if _, err := w.Write(audio.Data); err != nil {
 		slog.Warn("audio: failed to write response", "err", err)
 	}
 }
@@ -99,7 +125,7 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 	// 原子 Load，与 SetSTTEngine 的 Store 不存在 data race
 	box := s.STTEngine.Load()
 	if box == nil || box.E == nil {
-		http.Error(w, "STT Engine not initialized", http.StatusServiceUnavailable)
+		s.writeSTTNotReady(w)
 		return
 	}
 	engine := box.E
@@ -198,11 +224,36 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 
 	res, err := engine.Transcribe(samples, sampleRate)
 	if err != nil {
-		http.Error(w, "stt failed: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("audio: stt transcribe failed", "err", err)
+		httputil.WriteJSONStatus(w, http.StatusInternalServerError, map[string]string{
+			"error":   "stt_failed",
+			"message": "语音识别失败: " + err.Error(),
+		})
 		return
 	}
 
 	respondJSON(w, res)
+}
+
+// writeSTTNotReady 返回 503 JSON，携带状态机的 state/detail/message，让前端能说清"为什么现在不能用"。
+func (s *AudioService) writeSTTNotReady(w http.ResponseWriter) {
+	st := s.STTStatus.Get()
+	if st.State == AudioStateFailed {
+		s.kickSTTRetry() // 用户正在使用：跳过退避立即重试一次
+	}
+	msg := "语音识别引擎尚未就绪"
+	if st.Detail != "" {
+		msg += "：" + st.Detail
+	}
+	if st.Error != "" {
+		msg += "（" + st.Error + "）"
+	}
+	httputil.WriteJSONStatus(w, http.StatusServiceUnavailable, map[string]string{
+		"error":   "stt_not_ready",
+		"state":   st.State,
+		"detail":  st.Detail,
+		"message": msg,
+	})
 }
 
 func respondJSON(w http.ResponseWriter, data any) {

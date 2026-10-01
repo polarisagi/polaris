@@ -1,6 +1,8 @@
 package stt
 
 import (
+	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -91,14 +93,20 @@ type Engine struct {
 	lib        *Library
 }
 
-// NewEngine 构造新的 Sherpa-ONNX 离线推理引擎
-func NewEngine(modelDir, punctDir, language string, numThreads int) (*Engine, error) {
+// NewEngine 构造新的 Sherpa-ONNX 离线推理引擎。
+// 库未加载时返回错误而非"空壳引擎"：空壳会让调用方误以为引擎已就绪，并在 Transcribe
+// 时回出假文本（S7）。
+//
+// useITN 控制 SenseVoice 的逆文本规范化。实测（官方 sherpa-onnx-offline 同模型同参数
+// 输出与本实现逐字节一致）itn=1 会丢首字、错词（zh.wav "开放时间…"→"放时间…"），
+// 属模型 ITN 路径缺陷而非 FFI 问题，故默认应传 false。
+func NewEngine(modelDir, punctDir, language string, numThreads int, useITN bool) (*Engine, error) {
 	libMu.Lock()
 	lib := libInst
 	libMu.Unlock()
 
 	if lib == nil {
-		return &Engine{recognizer: nil}, nil
+		return nil, apperr.New(apperr.CodeUnimplemented, "stt: sherpa-onnx library not loaded")
 	}
 
 	if language == "" {
@@ -144,7 +152,11 @@ func NewEngine(modelDir, punctDir, language string, numThreads int) (*Engine, er
 	tokensPath := filepath.Join(modelDir, "tokens.txt")
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceModel)) = cString(modelPath)
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceLanguage)) = cString(language)
-	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceUseItn)) = 1
+	var itn int32
+	if useITN {
+		itn = 1
+	}
+	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelSenseVoiceUseItn)) = itn
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetModelTokens)) = cString(tokensPath)
 	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelNumThreads)) = int32(numThreads)
 	*(*int32)(unsafe.Pointer(cfgPtr + OffsetModelDebug)) = 0
@@ -160,7 +172,15 @@ func NewEngine(modelDir, punctDir, language string, numThreads int) (*Engine, er
 	}
 
 	// 实例化 Punctuation 模型（若有）
+	// 仅当 model.onnx 实际存在才创建：把不存在的路径传进 C 侧会得到不可诊断的失败。
 	var punct *SherpaOnnxOfflinePunctuation
+	punctModelPath := filepath.Join(punctDir, "model.onnx")
+	if punctDir != "" {
+		if _, statErr := os.Stat(punctModelPath); statErr != nil {
+			slog.Warn("stt: punctuation model missing, continuing without punctuation", "path", punctModelPath)
+			punctDir = ""
+		}
+	}
 	if punctDir != "" {
 		const PunctConfigSize = 24
 		const PunctOffsetModel = 0
@@ -172,13 +192,16 @@ func NewEngine(modelDir, punctDir, language string, numThreads int) (*Engine, er
 		pCfgPtr := uintptr(unsafe.Pointer(&punctConfigData[0]))
 		defer runtime.KeepAlive(punctConfigData)
 
-		punctModelPath := filepath.Join(punctDir, "model.onnx")
 		*(*uintptr)(unsafe.Pointer(pCfgPtr + PunctOffsetModel)) = cString(punctModelPath)
 		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetNumThreads)) = int32(numThreads)
 		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetDebug)) = 0
 		*(*uintptr)(unsafe.Pointer(pCfgPtr + PunctOffsetProvider)) = cString("cpu")
 
 		punct = lib.funcs.CreateOfflinePunctuation(pCfgPtr)
+		if punct == nil {
+			// 标点只是后处理增强，创建失败不应阻断 STT。
+			slog.Warn("stt: CreateOfflinePunctuation returned nil, continuing without punctuation", "path", punctModelPath)
+		}
 	}
 
 	return &Engine{
@@ -207,18 +230,19 @@ func (e *Engine) Close() {
 	}
 }
 
-// Result 包含语音识别的文字和扩展（情感、事件）信息
+// Result 包含语音识别的文字和扩展（语言、情感、事件）信息
 type Result struct {
 	Text    string `json:"text"`
+	Lang    string `json:"lang"`
 	Emotion string `json:"emotion"`
 	Event   string `json:"event"`
 }
 
-// Transcribe 传入 16000Hz 16-bit PCM 单声道音频数据并返回文本
+// Transcribe 传入 16000Hz 16-bit PCM 单声道音频数据并返回文本。
+// 引擎未初始化时返回错误，绝不回出假文本（S7）。
 func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
-	if e.lib == nil || e.recognizer == nil {
-		// Mock 回退：如果未正确初始化，返回模拟文本
-		return Result{Text: "（未连接真实引擎，此为本地 Mock 语音转文字）"}, nil
+	if e == nil || e.lib == nil || e.recognizer == nil {
+		return Result{}, apperr.New(apperr.CodeUnimplemented, "stt: engine not initialized")
 	}
 
 	e.mu.Lock()
@@ -248,16 +272,24 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 		return Result{}, nil
 	}
 
-	// 提取 Emotion 和 Event (offset 40, 48)
-	emotionPtr := *(**byte)(unsafe.Pointer(resPtr + 40))
-	eventPtr := *(**byte)(unsafe.Pointer(resPtr + 48))
-	var emotionText, eventText string
-	if emotionPtr != nil {
-		emotionText = parseCString(uintptr(unsafe.Pointer(emotionPtr)))
+	// 提取 Lang / Emotion / Event。偏移取自 sherpa-onnx v1.13.2 c-api.h 经 clang
+	// offsetof 实测：json=40, lang=48, emotion=56, event=64。
+	// 旧代码按 emotion@40 / event@48 读取，实际装进去的是整段 JSON 与语言标签。
+	const (
+		offsetResultLang    = 48
+		offsetResultEmotion = 56
+		offsetResultEvent   = 64
+	)
+	cStrAt := func(off uintptr) string {
+		p := *(**byte)(unsafe.Pointer(resPtr + off))
+		if p == nil {
+			return ""
+		}
+		return parseCString(uintptr(unsafe.Pointer(p)))
 	}
-	if eventPtr != nil {
-		eventText = parseCString(uintptr(unsafe.Pointer(eventPtr)))
-	}
+	langText := cStrAt(offsetResultLang)
+	emotionText := cStrAt(offsetResultEmotion)
+	eventText := cStrAt(offsetResultEvent)
 
 	// 简单的 C 字符串转 Go 字符串
 	rawText := parseCString(uintptr(unsafe.Pointer(textPtr)))
@@ -273,7 +305,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 		runtime.KeepAlive(cRawText)
 	}
 
-	return Result{Text: rawText, Emotion: emotionText, Event: eventText}, nil
+	return Result{Text: rawText, Lang: langText, Emotion: emotionText, Event: eventText}, nil
 }
 
 func parseCString(ptr uintptr) string {

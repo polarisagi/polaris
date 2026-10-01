@@ -3,10 +3,16 @@ package tts
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/security/network"
@@ -20,44 +26,88 @@ import (
 
 const (
 	// edgeTTSWSURL Microsoft Edge TTS WebSocket 端点。
+	// 路径必须是 readaloud（旧代码写成 readspeaker 会直接 HTTP 400，T1）。
 	// TrustedClientToken 为 Edge 浏览器内置的公开常量，已被众多开源项目使用。
-	edgeTTSWSURL  = "wss://speech.platform.bing.com/consumer/speech/synthesize/readspeaker/edge/v1"
+	edgeTTSWSURL  = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
 	edgeTTSToken  = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
 	edgeTTSOrigin = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
 
-	// edgeTTSOutputFmt 请求 24kHz 16-bit 单声道原始 PCM，避免引入 MP3 解码依赖。
-	edgeTTSOutputFmt  = "raw-24khz-16bit-mono-pcm"
-	edgeTTSSampleRate = 24000
+	// edgeChromiumFullVersion 是伪装的 Edge/Chromium 完整版本号，同时进入 UA 与
+	// Sec-MS-GEC-Version。微软升版本时可经 inference.tts.edge_client_version 覆盖，免发版。
+	edgeChromiumFullVersion = "143.0.3650.75"
+
+	// edgeTTSOutputFmt 该免费端点唯一实测可用的格式（T3）：raw-*-pcm 会被 1007 拒绝
+	// （Unsupported Edge output format），因此输出直接是 MP3，不再做 PCM→WAV 封装。
+	edgeTTSOutputFmt = "audio-24khz-48kbitrate-mono-mp3"
+
+	// winEpochSeconds 是 1601-01-01 到 1970-01-01 的秒数（Windows FILETIME 纪元）。
+	winEpochSeconds = 11644473600
 )
 
 // EdgeProvider 通过 Microsoft Edge TTS WebSocket API 合成语音。
 // 特性：免费、无需 API 密钥、中国大陆可正常访问（speech.platform.bing.com 未被封锁）。
-// 输出：标准 WAV（16-bit PCM 单声道 24kHz）。
+// 输出：MP3（audio-24khz-48kbitrate-mono-mp3）。
 type EdgeProvider struct {
-	safeDialer *network.SafeDialer
-	voice      string // 声线，如 "zh-CN-XiaoxiaoNeural"
-	rate       string // 语速，如 "+0%"
-	pitch      string // 音调，如 "+0Hz"
-	style      string // 情感风格，如 "chat", "cheerful"
+	safeDialer    *network.SafeDialer
+	voice         string // 声线，如 "zh-CN-XiaoxiaoNeural"
+	rate          string // 语速，如 "+0%"
+	pitch         string // 音调，如 "+0Hz"
+	clientVersion string // 伪装的 Chromium 完整版本号
+
+	// clockSkew 是本机时钟相对微软服务器的偏差（秒）。Sec-MS-GEC 按 5 分钟取整的服务器
+	// 时间计算，本机时钟偏差超过窗口即 403；收到 403 后按响应 Date 头校正并重试一次。
+	// 放在实例上而非包级变量（internal/ 禁全局可变变量）：进程内只有一个 EdgeProvider，
+	// 校准状态天然进程唯一；atomic 保证 Generate 并发安全。
+	clockSkew atomic.Int64
 }
 
 // NewEdgeProvider 返回 EdgeProvider。
 // voice 为空时使用默认中文女声 zh-CN-XiaoxiaoNeural（晓晓，音质最佳）。
-// style 为空时使用默认对话风格 "chat"（自然生动，避免机械感）。
-func NewEdgeProvider(voice, style string, safeDialer *network.SafeDialer) *EdgeProvider {
+// clientVersion 为空时使用 edgeChromiumFullVersion。
+// 不再接收 style：免费端点不支持 mstts:express-as（服务端返回 "SSML is invalid"，T4）。
+func NewEdgeProvider(voice, clientVersion string, safeDialer *network.SafeDialer) *EdgeProvider {
 	if voice == "" {
 		voice = "zh-CN-XiaoxiaoNeural"
 	}
-	if style == "" {
-		style = "chat"
+	if clientVersion == "" {
+		clientVersion = edgeChromiumFullVersion
 	}
-	return &EdgeProvider{voice: voice, rate: "+0%", pitch: "+0Hz", style: style, safeDialer: safeDialer}
+	return &EdgeProvider{voice: voice, rate: "+0%", pitch: "+0Hz", clientVersion: clientVersion, safeDialer: safeDialer}
 }
 
-// Generate 调用 Edge TTS WebSocket 合成语音并返回 WAV 字节流。
-func (p *EdgeProvider) Generate(ctx context.Context, text string) ([]byte, error) {
+// edgeSecMSGEC 计算 Sec-MS-GEC 反滥用令牌（2024-11 起强制，缺失即 403，T2）。
+// 算法与 edge-tts 7.2.8 的 drm.generate_sec_ms_gec 一致：
+// 时间换算到 Windows FILETIME 纪元，向下取整到 5 分钟，换算为 100ns tick，
+// 与 TrustedClientToken 拼接后取 SHA256 大写十六进制。
+func edgeSecMSGEC(unixSec, skewSec int64) string {
+	t := unixSec + winEpochSeconds + skewSec
+	t -= t % 300
+	ticks := t * 10_000_000
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d%s", ticks, edgeTTSToken)))
+	return strings.ToUpper(hex.EncodeToString(sum[:]))
+}
+
+// edgeMajor 从完整版本号取主版本号（"143.0.3650.75" → "143"）。
+func edgeMajor(full string) string {
+	if i := strings.IndexByte(full, '.'); i > 0 {
+		return full[:i]
+	}
+	return full
+}
+
+// edgeMuid 生成 32 位随机大写十六进制，充当 Cookie 里的 muid。
+func edgeMuid() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return strings.ToUpper(hex.EncodeToString(b))
+}
+
+// dial 建立 WebSocket 连接。返回的 *http.Response 在握手失败时可能非 nil，供调用方取状态码与 Date。
+func (p *EdgeProvider) dial(ctx context.Context) (*websocket.Conn, *http.Response, error) {
 	connID := strings.ReplaceAll(uuid.New().String(), "-", "")
-	wsURL := fmt.Sprintf("%s?TrustedClientToken=%s&ConnectionId=%s", edgeTTSWSURL, edgeTTSToken, connID)
+	gec := edgeSecMSGEC(time.Now().Unix(), p.clockSkew.Load())
+	wsURL := fmt.Sprintf("%s?TrustedClientToken=%s&ConnectionId=%s&Sec-MS-GEC=%s&Sec-MS-GEC-Version=1-%s",
+		edgeTTSWSURL, edgeTTSToken, connID, gec, p.clientVersion)
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
@@ -65,13 +115,48 @@ func (p *EdgeProvider) Generate(ctx context.Context, text string) ([]byte, error
 	if p.safeDialer != nil {
 		dialer.NetDialContext = p.safeDialer.DialContext // A-2：注入 SafeDialer，防 SSRF
 	}
+	major := edgeMajor(p.clientVersion)
 	hdr := http.Header{}
-	hdr.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0")
+	hdr.Set("User-Agent", fmt.Sprintf("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s.0.0.0 Safari/537.36 Edg/%s.0.0.0", major, major))
 	hdr.Set("Origin", edgeTTSOrigin)
+	hdr.Set("Pragma", "no-cache")
+	hdr.Set("Cache-Control", "no-cache")
+	hdr.Set("Accept-Language", "en-US,en;q=0.9")
+	hdr.Set("Cookie", "muid="+edgeMuid()+";")
 
-	conn, _, err := dialer.DialContext(ctx, wsURL, hdr)
+	// 错误由唯一调用方 dialWithSkewRetry 统一包装并附 HTTP 状态码；此处保持原样以保留 resp。
+	return dialer.DialContext(ctx, wsURL, hdr) //nolint:wrapcheck // 调用方 dialWithSkewRetry 统一 apperr.Wrap
+}
+
+// dialWithSkewRetry 握手；403 时按响应 Date 头校正时钟偏差后重试一次。
+func (p *EdgeProvider) dialWithSkewRetry(ctx context.Context) (*websocket.Conn, error) {
+	conn, resp, err := p.dial(ctx)
+	if err == nil {
+		return conn, nil
+	}
+	if resp != nil && resp.StatusCode == http.StatusForbidden {
+		if serverTime, perr := http.ParseTime(resp.Header.Get("Date")); perr == nil {
+			skew := serverTime.Unix() - time.Now().Unix()
+			p.clockSkew.Store(skew)
+			slog.Warn("edge-tts: 403，按服务器 Date 校正时钟偏差后重试", "skew_sec", skew)
+			conn, resp, err = p.dial(ctx)
+			if err == nil {
+				return conn, nil
+			}
+		}
+	}
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("edge-tts: dial failed (HTTP %d)", status), err)
+}
+
+// Generate 调用 Edge TTS WebSocket 合成语音并返回 MP3 字节流。
+func (p *EdgeProvider) Generate(ctx context.Context, text string) (Audio, error) {
+	conn, err := p.dialWithSkewRetry(ctx)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "edge-tts: dial failed", err)
+		return Audio{}, err
 	}
 	defer conn.Close()
 
@@ -87,31 +172,24 @@ func (p *EdgeProvider) Generate(ctx context.Context, text string) ([]byte, error
 	})
 
 	if err := edgeSendRequests(conn, p, text); err != nil {
-		return nil, err
+		return Audio{}, err
 	}
 
-	pcm, err := edgeReadAudio(ctx, conn)
+	mp3, err := edgeReadAudio(ctx, conn)
 	if err != nil {
-		return nil, err
+		return Audio{}, err
 	}
-	return encodeWAVFromPCM16(pcm, edgeTTSSampleRate)
+	return Audio{Data: mp3, MIME: MIMEMP3}, nil
 }
 
 // Close 实现 Provider 接口（EdgeProvider 无持久连接，空操作）。
 func (p *EdgeProvider) Close() error { return nil }
 
-// buildSSML 构造符合 Edge TTS 协议的 SSML，支持通过 mstts:express-as 控制情感与语气风格。
+// buildSSML 构造符合 Edge 免费端点的 SSML：只含 <voice><prosody>。
+// 刻意不含 mstts:express-as——该端点会以 1007 "SSML is invalid" 拒绝（T4）。
 func buildSSML(p *EdgeProvider, text string) string {
 	lang := edgeVoiceLang(p.voice)
 	escaped := edgeEscapeXML(text)
-	if p.style != "" && p.style != "default" {
-		return fmt.Sprintf(
-			"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='%s'>"+
-				"<voice name='%s'><mstts:express-as style='%s'>"+
-				"<prosody pitch='%s' rate='%s' volume='+0%%'>%s</prosody>"+
-				"</mstts:express-as></voice></speak>",
-			lang, p.voice, p.style, p.pitch, p.rate, escaped)
-	}
 	return fmt.Sprintf(
 		"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='%s'>"+
 			"<voice name='%s'><prosody pitch='%s' rate='%s' volume='+0%%'>%s</prosody></voice></speak>",
@@ -124,7 +202,7 @@ func edgeSendRequests(conn *websocket.Conn, p *EdgeProvider, text string) error 
 	reqID := strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	configMsg := fmt.Sprintf(
-		"X-Timestamp:%s\r\nContent-Type: application/json; charset=utf-8\r\nPath: speech.config\r\n\r\n"+
+		"X-Timestamp:%s\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"+
 			`{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":%q}}}}`,
 		ts, edgeTTSOutputFmt)
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(configMsg)); err != nil {
@@ -133,7 +211,7 @@ func edgeSendRequests(conn *websocket.Conn, p *EdgeProvider, text string) error 
 
 	ssml := buildSSML(p, text)
 	ssmlMsg := fmt.Sprintf(
-		"X-RequestId:%s\r\nContent-Type: application/ssml+xml\r\nX-Timestamp:%s\r\nPath: ssml\r\n\r\n%s",
+		"X-RequestId:%s\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:%s\r\nPath:ssml\r\n\r\n%s",
 		reqID, ts, ssml)
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(ssmlMsg)); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "edge-tts: write ssml failed", err)
@@ -142,7 +220,7 @@ func edgeSendRequests(conn *websocket.Conn, p *EdgeProvider, text string) error 
 }
 
 // edgeReadAudio 从 WebSocket 连接中读取所有音频帧，直到收到 "Path:turn.end"。
-// 返回原始 PCM16 字节流（尚未包装 WAV 头）。
+// 返回拼接后的 MP3 字节流。
 func edgeReadAudio(ctx context.Context, conn *websocket.Conn) ([]byte, error) {
 	var audioBuf bytes.Buffer
 loop:
@@ -157,6 +235,13 @@ loop:
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				break loop
+			}
+			// 服务端关闭原因（如 1007 "Unsupported Edge output format" / "SSML is invalid"）
+			// 必须进错误信息，否则只剩一句 read failed，无法定位协议层拒绝原因。
+			var ce *websocket.CloseError
+			if errors.As(err, &ce) {
+				return nil, apperr.New(apperr.CodeInternal,
+					fmt.Sprintf("edge-tts: server closed connection: code=%d reason=%q", ce.Code, ce.Text))
 			}
 			return nil, apperr.Wrap(apperr.CodeInternal, "edge-tts: read failed", err)
 		}
@@ -175,8 +260,8 @@ loop:
 	return audioBuf.Bytes(), nil
 }
 
-// edgeAppendAudioFrame 解析二进制帧并将 PCM 数据追加到 buf。
-// 帧格式：2字节 header 长度（big-endian）+ header 文本 + 音频 PCM 字节。
+// edgeAppendAudioFrame 解析二进制帧并将音频数据追加到 buf。
+// 帧格式：2字节 header 长度（big-endian）+ header 文本 + 音频字节。
 func edgeAppendAudioFrame(buf *bytes.Buffer, msg []byte) {
 	if len(msg) < 2 {
 		return

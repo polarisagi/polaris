@@ -22,11 +22,16 @@ func ModelDir(ttsDir string) string { return filepath.Join(ttsDir, "model") }
 //
 //   - libDir:   sherpa-onnx 动态库目录（通常复用 STT 目录，避免重复下载）
 //   - ttsDir:   TTS 专属目录，模型文件写入 ttsDir/model/
-//   - version:  sherpa-onnx 版本（与 STT 保持一致）
+//   - version:  sherpa-onnx 版本；空则取 stt.SherpaABIVersion，与之不同则报错
 //   - modelURL: kokoro / piper 等模型 .tar.bz2 下载地址（留空则跳过）
 func EnsureAssets(ctx context.Context, libDir, ttsDir string, httpClient *http.Client, version, modelURL string) error {
 	if modelURL == "" {
 		return nil // 未配置本地 TTS，跳过（继续使用 edge-tts 云端 API）
+	}
+	// 版本与 STT 共用同一套 ABI 钉死校验：不一致即报错，不下载、不加载。
+	ver, err := stt.ResolveSherpaVersion(version)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "tts: sherpa version check failed", err)
 	}
 	if err := os.MkdirAll(ttsDir, 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "tts: mkdir "+ttsDir+" failed", err)
@@ -35,7 +40,7 @@ func EnsureAssets(ctx context.Context, libDir, ttsDir string, httpClient *http.C
 	// ── 1. sherpa-onnx 动态库（复用 STT 目录，幂等） ─────────────────────────
 	libPath := filepath.Join(libDir, stt.LibName())
 	if _, err := os.Stat(libPath); os.IsNotExist(err) {
-		libURL, err := stt.SherpaLibURL(version)
+		libURL, err := stt.SherpaLibURL(ver)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "tts: download sherpa-onnx failed", err)
 		}

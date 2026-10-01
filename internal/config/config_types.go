@@ -75,13 +75,25 @@ type EmbeddingConfig struct {
 }
 
 type STTConfig struct {
+	// SherpaVersion 留空取代码内 stt.SherpaABIVersion；填写且与之不同则 STT/TTS 资产初始化
+	// 报错（FFI 结构体偏移按该版本钉死，换版本会内存破坏）。
 	SherpaVersion string `toml:"sherpa_version"`
-	// SenseVoiceModelURL float32 高质量模型（~170MB，FeatureHQSTT 开启时使用，WER 更低）。
+	// SenseVoiceModelURL float32 模型（实测归档 886MB，仅 model_precision="fp32" 且
+	// FeatureHQSTT 开启时使用）。
 	SenseVoiceModelURL string `toml:"sense_voice_model_url"`
-	// SenseVoiceModelURLStd int8 量化标准模型（~87MB，FeatureLocalSTT 开启但 FeatureHQSTT 未开启时使用）。
+	// SenseVoiceModelURLStd int8 量化模型（实测 166MB，默认档位）。
 	// 空字符串则回退到 SenseVoiceModelURL（向后兼容旧配置）。
 	SenseVoiceModelURLStd string `toml:"sense_voice_model_url_std"`
-	PunctModelURL         string `toml:"punct_model_url"`
+	// PunctModelURL 标点模型（int8，65MB）。
+	PunctModelURL string `toml:"punct_model_url"`
+	// ModelPrecision 模型精度档位："int8"（默认）| "fp32"。
+	// 默认 int8：fp32 归档 886MB 且无可测精度收益（int8 实测中文识别正确），
+	// 不应让首次体验承担 5 倍下载量；fp32 仅显式 opt-in。
+	ModelPrecision string `toml:"model_precision"`
+	// UseITN 是否启用 SenseVoice 逆文本规范化。默认 false：实测 use_itn=1 会丢首字、
+	// 错词（"开放时间"→"放时间"、"FIFTY"→"FIFT"），官方 sherpa-onnx-offline 同模型同参数
+	// 输出逐字节一致，属模型 ITN 路径缺陷。
+	UseITN bool `toml:"use_itn"`
 	// Language 指定识别语言："zh"（默认，中文，最准确）、"en"、"ja"、"ko"、"yue"（粤语）或 "auto"（自动检测）。
 	Language string `toml:"language"`
 }
@@ -114,9 +126,13 @@ type TTSConfig struct {
 	// 其他优质中文声线：zh-CN-YunxiNeural（云希，男）/ zh-CN-XiaoYiNeural（晓伊）。
 	EdgeVoice string `toml:"edge_voice"`
 
-	// EdgeStyle Microsoft Edge TTS 情感/语气风格（如 "chat"、"cheerful"、"calm"、"default"）。
-	// 留空时默认 "chat"（自然对话风格）。
+	// EdgeStyle Deprecated：Edge 免费端点不支持 mstts:express-as（服务端返回 "SSML is invalid"），
+	// 该配置被忽略；保留字段只为兼容旧 config.toml 不解析失败。
 	EdgeStyle string `toml:"edge_style"`
+
+	// EdgeClientVersion 伪装的 Edge/Chromium 完整版本号（如 "143.0.3650.75"），进入 UA 与
+	// Sec-MS-GEC-Version。留空取代码内默认值；微软升版本导致 403 时可在此覆盖，免发版。
+	EdgeClientVersion string `toml:"edge_client_version"`
 
 	// ── http provider 专属 ──────────────────────────────────────────────────
 

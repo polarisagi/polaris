@@ -20,8 +20,8 @@ import (
 //	Body: {"text": "要合成的文本"}
 //
 //	Response: 200 OK
-//	Content-Type: audio/wav
-//	Body: WAV 字节流
+//	Content-Type: audio/wav（缺省视为 wav；其他类型原样透传给上层）
+//	Body: 音频字节流
 //
 // 推荐 sidecar：
 //   - CosyVoice 2（阿里达摩院，中文顶级质量，需 GPU）
@@ -42,39 +42,44 @@ func NewHTTPProvider(endpoint string, client *http.Client) *HTTPProvider {
 	return &HTTPProvider{endpoint: endpoint, httpClient: client}
 }
 
-// Generate 向 sidecar 发送合成请求并返回 WAV 字节流。
-func (p *HTTPProvider) Generate(ctx context.Context, text string) ([]byte, error) {
+// Generate 向 sidecar 发送合成请求并返回音频；MIME 取 sidecar 响应的 Content-Type，
+// 缺省按约定视为 audio/wav。
+func (p *HTTPProvider) Generate(ctx context.Context, text string) (Audio, error) {
 	body, err := json.Marshal(map[string]string{"text": text})
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "http-tts: marshal failed", err)
+		return Audio{}, apperr.Wrap(apperr.CodeInternal, "http-tts: marshal failed", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "http-tts: build request failed", err)
+		return Audio{}, apperr.Wrap(apperr.CodeInternal, "http-tts: build request failed", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "audio/wav")
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "http-tts: request failed", err)
+		return Audio{}, apperr.Wrap(apperr.CodeInternal, "http-tts: request failed", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, apperr.New(apperr.CodeInternal,
+		return Audio{}, apperr.New(apperr.CodeInternal,
 			fmt.Sprintf("http-tts: sidecar returned HTTP %d", resp.StatusCode))
 	}
 
-	wav, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "http-tts: read response failed", err)
+		return Audio{}, apperr.Wrap(apperr.CodeInternal, "http-tts: read response failed", err)
 	}
-	if len(wav) == 0 {
-		return nil, apperr.New(apperr.CodeInternal, "http-tts: sidecar returned empty body")
+	if len(data) == 0 {
+		return Audio{}, apperr.New(apperr.CodeInternal, "http-tts: sidecar returned empty body")
 	}
-	return wav, nil
+	mime := resp.Header.Get("Content-Type")
+	if mime == "" {
+		mime = MIMEWav
+	}
+	return Audio{Data: data, MIME: mime}, nil
 }
 
 // Close 实现 Provider 接口（HTTPProvider 无持久连接，空操作）。

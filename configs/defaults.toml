@@ -71,19 +71,25 @@ embedder_dim = 1536
 enabled = true
 backend = "pebble"
 
-# STT 模型由 FeatureGate 按可用内存自动选择档位，无需手动修改：
-#   FeatureHQSTT  （Tier0, ≥1GB  free）→ float32 SenseVoice（~170MB）→ sense_voice_model_url
-#   FeatureLocalSTT（Tier0, ≥512MB free）→ int8    SenseVoice（~87MB） → sense_voice_model_url_std
-#   < 512MB free   → STT 禁用
-# 两档均支持 zh/en/ja/ko/yue 多语种，通过 PunctModel 加标点。
+# STT 默认 int8 SenseVoice（归档 166MB）；fp32 归档实测 886MB 且无可测精度收益，仅显式 opt-in：
+#   model_precision = "int8"（默认）→ sense_voice_model_url_std
+#   model_precision = "fp32" 且 FeatureHQSTT（Tier0, ≥1GB free）开启 → sense_voice_model_url
+#   FeatureLocalSTT 未开启（< 512MB free）→ STT 禁用
+# 支持 zh/en/ja/ko/yue 多语种，通过 PunctModel 加标点。
 [inference.stt]
+# 留空 = 代码内钉死的 ABI 版本（1.13.2）。填其他值会让 STT/TTS 资产初始化报错：
+# FFI 结构体偏移按 1.13.2 的 c-api.h 实测手写，换版本会内存破坏。
 sherpa_version = "1.13.2"
 language = "zh"
-# HQ 档：float32 SenseVoice，精度更高（FeatureHQSTT ≥1GB 时自动选择）
+model_precision = "int8"   # "int8" | "fp32"
+# 实测 use_itn=1 会丢首字、错词（"开放时间"→"放时间"），官方二进制同参数输出一致，属模型缺陷。
+use_itn = false
+# fp32 SenseVoice，归档 886MB（仅 model_precision="fp32" 且 FeatureHQSTT 开启时使用）
 sense_voice_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09.tar.bz2"
-# 标准档：int8 量化 SenseVoice，体积减半（FeatureLocalSTT ≥512MB 时自动选择）
-sense_voice_model_url_std = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09-int8.tar.bz2"
-punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
+# int8 SenseVoice，归档 166MB（默认；注意实际归档名 int8 在日期之前）
+sense_voice_model_url_std = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2"
+# int8 标点模型，归档 65MB（含 model.int8.onnx + tokens.json）
+punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2"
 
 # ── TTS 配置 ────────────────────────────────────────────────────────────────
 # provider 三选一：
@@ -95,7 +101,11 @@ provider = "edge"              # 默认 Edge TTS：免费、无需安装模型�
 
 # ── edge provider ────────────────────────────────────────────────────────────
 edge_voice = "zh-CN-XiaoxiaoNeural"  # 晓晓（女）；可选 zh-CN-YunxiNeural（云希，男）
-edge_style = "chat"                  # 风格：chat(对话) / cheerful(愉快) / calm(平静) / default(默认)
+# edge_style 已废弃：Edge 免费端点不支持 mstts:express-as（服务端返回 "SSML is invalid"），设置会被忽略。
+edge_style = ""
+# edge_client_version 留空用代码内默认（Chromium 完整版本号，进 UA 与 Sec-MS-GEC-Version）；
+# 微软升版本导致握手 403 时在此覆盖，免发版。
+edge_client_version = ""
 
 # ── http provider ────────────────────────────────────────────────────────────
 http_endpoint = ""   # 填 "http://127.0.0.1:8000/tts" 启用 CosyVoice 2 / Qwen3-TTS

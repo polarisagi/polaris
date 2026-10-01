@@ -31,35 +31,34 @@ func MakeExecuteEdgeTTSFn(sandboxEnabled bool, bwrapPath string) sandbox.InProce
 			req.Rate = "+0%"
 		}
 
-		audioURI := ""
-
-		// 尝试调用真实的 edge-tts CLI 工具
+		// 调用真实的 edge-tts CLI 工具。失败必须如实返回错误：此前这里回出一段写死的假 MP3
+		// 并报 success，调用方（Agent）无从得知语音根本没合成出来（静默兜底）。
 		tmpFile, err := os.CreateTemp("", "polaris_tts_*.mp3")
-		if err == nil {
-			tmpPath := tmpFile.Name()
-			tmpFile.Close()
-			defer os.Remove(tmpPath)
-
-			// 调用 sandbox 执行 edge-tts，允许网络（edge-tts 需要访问微软接口）。
-			// 路径白名单收紧到 tmpPath 所在目录（临时目录），不放行整个文件系统——
-			// edge-tts 只需要写这一个 mp3 文件，没有理由拿到全盘读写权限。
-			edgeArgs := []string{"--text", req.Text, "--voice", req.Voice, "--rate", req.Rate, "--write-media", tmpPath}
-			tmpDir := filepath.Dir(tmpPath)
-
-			// netAllow = true (edge-tts 需要网络)
-			_, err := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "edge-tts", edgeArgs, tmpDir, []string{tmpDir}, true, 30000, sandboxEnabled, bwrapPath)
-			if err == nil {
-				if data, err := os.ReadFile(tmpPath); err == nil {
-					audioURI = "data:audio/mp3;base64," + base64.StdEncoding.EncodeToString(data)
-				}
-			}
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "tts_edge: create temp file failed", err)
 		}
+		tmpPath := tmpFile.Name()
+		tmpFile.Close()
+		defer os.Remove(tmpPath)
 
-		// 优雅降级：如果 edge-tts 不可用或失败，返回 mock 音频以确保测试/MVP 稳定
-		if audioURI == "" {
-			// Mock 真实的极短有效 MP3 编码 (包含 ID3 header) 或者直接模拟
-			audioURI = "data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU5LjI3LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD//v0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBcHBsZSB2MTIuMTAuMC4xMDcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//OEAAQAAAAARAAAB4AAAI2eA3IAAAAAAAAAAAAAAAAAAAAA"
+		// 调用 sandbox 执行 edge-tts，允许网络（edge-tts 需要访问微软接口）。
+		// 路径白名单收紧到 tmpPath 所在目录（临时目录），不放行整个文件系统——
+		// edge-tts 只需要写这一个 mp3 文件，没有理由拿到全盘读写权限。
+		edgeArgs := []string{"--text", req.Text, "--voice", req.Voice, "--rate", req.Rate, "--write-media", tmpPath}
+		tmpDir := filepath.Dir(tmpPath)
+
+		// netAllow = true (edge-tts 需要网络)
+		if _, err := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "edge-tts", edgeArgs, tmpDir, []string{tmpDir}, true, 30000, sandboxEnabled, bwrapPath); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "tts_edge: edge-tts execution failed (is the edge-tts CLI installed?)", err)
 		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "tts_edge: read synthesized audio failed", err)
+		}
+		if len(data) == 0 {
+			return nil, apperr.New(apperr.CodeInternal, "tts_edge: edge-tts produced an empty audio file")
+		}
+		audioURI := "data:audio/mp3;base64," + base64.StdEncoding.EncodeToString(data)
 
 		result := map[string]string{
 			"audio_uri": audioURI,

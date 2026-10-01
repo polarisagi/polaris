@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/version"
 
@@ -225,9 +226,13 @@ func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
 // GET /v1/system/capabilities
 func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
 	sttAvail := false
+	sttStatus := chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+	ttsStatus := chat.AudioAssetStatus{State: chat.AudioStateDisabled}
 	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
 		box := s.chatHandler.AudioService.STTEngine.Load()
 		sttAvail = (box != nil && box.E != nil)
+		sttStatus = s.chatHandler.AudioService.STTStatus.Get()
+		ttsStatus = s.chatHandler.AudioService.TTSStatus.Get()
 	}
 
 	prefetchCount := s.tierParams.TTSPrefetchCount
@@ -249,7 +254,9 @@ func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	httputil.WriteJSON(w, map[string]any{
 		"tts_prefetch_count": prefetchCount,
-		"stt_available":      sttAvail,
+		"stt_available":      sttAvail, // 兼容旧前端；新前端读 stt_status
+		"stt_status":         sttStatus,
+		"tts_status":         ttsStatus,
 		"tts_provider":       ttsProvider,
 		"hardware_tier":      int(s.tier),
 	})

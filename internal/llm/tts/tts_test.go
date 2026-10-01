@@ -230,27 +230,54 @@ func TestModelDir(t *testing.T) {
 
 // ── EdgeProvider BuildSSML ────────────────────────────────────────────────
 
-func TestEdgeProvider_BuildSSML(t *testing.T) {
-	// Style: chat (default)
-	p1 := NewEdgeProvider("zh-CN-XiaoxiaoNeural", "chat", nil)
+// SSML 恒为 <voice><prosody>：免费端点遇 mstts:express-as 会以 1007 "SSML is invalid" 拒绝（T4）。
+func TestEdgeProvider_BuildSSML_NoExpressAs(t *testing.T) {
+	p1 := NewEdgeProvider("zh-CN-XiaoxiaoNeural", "", nil)
 	ssml1 := buildSSML(p1, "你好，世界！")
-	if !strings.Contains(ssml1, "<mstts:express-as style='chat'>") {
-		t.Errorf("expected mstts:express-as with chat, got: %s", ssml1)
+	for _, bad := range []string{"express-as", "mstts"} {
+		if strings.Contains(ssml1, bad) {
+			t.Errorf("SSML must not contain %q, got: %s", bad, ssml1)
+		}
 	}
-	if !strings.Contains(ssml1, "xmlns:mstts='https://www.w3.org/2001/mstts'") {
-		t.Errorf("expected mstts namespace, got: %s", ssml1)
+	if !strings.Contains(ssml1, "<voice name='zh-CN-XiaoxiaoNeural'><prosody") {
+		t.Errorf("expected <voice><prosody>, got: %s", ssml1)
 	}
-	if !strings.Contains(ssml1, "你好，世界！") {
-		t.Errorf("expected text in ssml, got: %s", ssml1)
+	if !strings.Contains(ssml1, "xml:lang='zh-CN'") || !strings.Contains(ssml1, "你好，世界！") {
+		t.Errorf("expected lang and text, got: %s", ssml1)
 	}
 
-	// Style: default (no express-as)
-	p2 := NewEdgeProvider("zh-CN-YunxiNeural", "default", nil)
+	p2 := NewEdgeProvider("zh-CN-YunxiNeural", "", nil)
 	ssml2 := buildSSML(p2, "Hello & <world>")
-	if strings.Contains(ssml2, "<mstts:express-as") {
-		t.Errorf("expected no express-as when style is default, got: %s", ssml2)
-	}
 	if !strings.Contains(ssml2, "Hello &amp; &lt;world&gt;") {
 		t.Errorf("expected XML escaped text, got: %s", ssml2)
+	}
+}
+
+// Sec-MS-GEC 固定向量：用参考实现 edge-tts 7.2.8 的同一算法（drm.generate_sec_ms_gec：
+// unix + 11644473600 向下取整到 300 秒、×1e7 tick、拼 TrustedClientToken 取 SHA256 大写）
+// 对固定时间戳算出后写死。同一 5 分钟窗口内（…000 与 …299）结果必须相同，…300 进入下一窗口。
+func TestEdgeSecMSGEC_KnownVectors(t *testing.T) {
+	cases := []struct {
+		unix int64
+		want string
+	}{
+		{1759320000, "72F961A9B628D5138BE223025CA01B412CB75CFEEA8374B7EA1480CD75D9ADDF"},
+		{1759320299, "72F961A9B628D5138BE223025CA01B412CB75CFEEA8374B7EA1480CD75D9ADDF"},
+		{1759320300, "8B75C8018175CFB527B695779AFDEC34A7EE5C7149F357F595849F43E4F17688"},
+	}
+	for _, c := range cases {
+		if got := edgeSecMSGEC(c.unix, 0); got != c.want {
+			t.Errorf("edgeSecMSGEC(%d) = %s, want %s", c.unix, got, c.want)
+		}
+	}
+	// 时钟偏差：本机慢 300 秒，加 skew 后应落到下一窗口。
+	if edgeSecMSGEC(1759320000, 300) != edgeSecMSGEC(1759320300, 0) {
+		t.Error("skew should shift the window")
+	}
+}
+
+func TestEdgeMajor(t *testing.T) {
+	if got := edgeMajor("143.0.3650.75"); got != "143" {
+		t.Errorf("edgeMajor = %q, want 143", got)
 	}
 }

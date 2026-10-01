@@ -137,12 +137,12 @@ func NewEngine(modelDir string, numThreads int) (*Engine, error) {
 }
 
 // Generate 实现 Provider 接口，生成给定文本的 WAV 音频（ctx 由 sherpa 同步推理忽略）。
-func (e *Engine) Generate(_ context.Context, text string) ([]byte, error) {
+func (e *Engine) Generate(_ context.Context, text string) (Audio, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if e.tts == 0 {
-		return nil, apperr.New(apperr.CodeInternal, "tts: engine not initialized")
+		return Audio{}, apperr.New(apperr.CodeInternal, "tts: engine not initialized")
 	}
 
 	cText := append([]byte(text), 0)
@@ -151,7 +151,7 @@ func (e *Engine) Generate(_ context.Context, text string) ([]byte, error) {
 	audioPtr := e.lib.funcs.OfflineTtsGenerate(e.tts, textPtr, 3, 1.0)
 	runtime.KeepAlive(cText) // 防 GC 在 FFI 调用期间回收 cText 底层内存
 	if audioPtr == 0 {
-		return nil, apperr.New(apperr.CodeInternal, "tts: failed to generate audio")
+		return Audio{}, apperr.New(apperr.CodeInternal, "tts: failed to generate audio")
 	}
 	defer e.lib.funcs.DestroyOfflineTtsGeneratedAudio(audioPtr)
 
@@ -160,12 +160,16 @@ func (e *Engine) Generate(_ context.Context, text string) ([]byte, error) {
 	sampleRate := *(*int32)(unsafe.Pointer(audioPtr + 12))
 
 	if n <= 0 || samplesPtr == 0 {
-		return nil, apperr.New(apperr.CodeInternal, "tts: generated audio is empty")
+		return Audio{}, apperr.New(apperr.CodeInternal, "tts: generated audio is empty")
 	}
 
 	samples := unsafe.Slice((*float32)(unsafe.Pointer(samplesPtr)), n)
 
-	return encodeWAV(samples, int(sampleRate))
+	wav, err := encodeWAV(samples, int(sampleRate))
+	if err != nil {
+		return Audio{}, err
+	}
+	return Audio{Data: wav, MIME: MIMEWav}, nil
 }
 
 // Close 实现 Provider 接口，销毁引擎实例。

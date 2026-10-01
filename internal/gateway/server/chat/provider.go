@@ -58,7 +58,13 @@ type ToolRefOffloader interface {
 
 // TTSProvider Chat包对 TTS 引擎的消费端接口。
 type TTSProvider interface {
-	Generate(ctx context.Context, text string) ([]byte, error)
+	Generate(ctx context.Context, text string) (TTSAudio, error)
+}
+
+// TTSAudio 一次合成的产物：音频字节 + 真实 MIME（Edge=audio/mpeg，Sherpa=audio/wav）。
+type TTSAudio struct {
+	Data []byte
+	MIME string
 }
 
 // TTSProviderBox 包装 TTSProvider
