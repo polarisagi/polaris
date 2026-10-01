@@ -1,4 +1,4 @@
-.PHONY: build run test test-ci lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest manifest-check build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
+.PHONY: audio-nettest build run test test-ci lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest manifest-check build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
 
 GO := go
 CARGO := cargo
@@ -321,6 +321,12 @@ gen-threshold-examples:
 
 generate-manifest:
 	env GOOS= GOARCH= $(GO) run tools/generate_manifest.go
+
+# 音频外部坐标契约（依赖外网，不进默认 CI / check-all）：
+# 对 sherpa 全平台库 URL + defaults.toml 3 个 STT 模型 URL 做 HEAD 断言 200，
+# 并对 Edge TTS 做真实握手与合成。改动音频资产坐标或 Edge 协议后必须跑。
+audio-nettest:
+	$(GO) test -tags nettest -count=1 -v -run 'TestNet_' ./internal/llm/stt/ ./internal/llm/tts/
 
 # CI 用：只校验内核完整性清单与源码是否一致，drift 时退出非零，不写回文件。
 #
