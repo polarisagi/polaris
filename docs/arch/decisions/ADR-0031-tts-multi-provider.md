@@ -26,3 +26,8 @@
 > 无法满足基本可用性且无替代离线方案，才重议是否放宽"不打包 GPU 推理进主进程"
 > 的边界；HTTPProvider sidecar 模式已把 GPU 依赖隔离在外，非亲手验证过 sidecar
 > 方案不可行前不重议。
+
+> 2026-10-01 追记：Edge 免费端点实测（见 ADR-0106）——输出格式改为 `audio-24khz-48kbitrate-mono-mp3`
+> 直接以 MP3 返回（raw PCM 被 1007 拒绝，不再封装 WAV）；`mstts:express-as` 不可用（1007
+> "SSML is invalid"），`edge_style` 废弃；需 `Sec-MS-GEC` 令牌且路径为 `readaloud`。
+> `Provider.Generate` 现返回 `Audio{Data, MIME}`，不再假设一律 WAV。

@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:491 对内调度 / 3:614 MCP / 6:632 (SOFT)降级 / 6-bis:645 已知Bug修复记录 / 7:657 跨模块契约 / 8:674 Web UI 规约 / 8.6:820 插件聚合市场DB+流 / 8.7:856 自动化中心DB+流+工作流 / 8.8:973 电脑操控权限+Preferences / 8.9:1013 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:492 对内调度 / 3:615 MCP / 6:633 (SOFT)降级 / 6-bis:646 已知Bug修复记录 / 7:658 跨模块契约 / 8:675 Web UI 规约 / 8.6:821 插件聚合市场DB+流 / 8.7:857 自动化中心DB+流+工作流 / 8.8:974 电脑操控权限+Preferences / 8.9:1014 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -438,6 +438,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/skills/injections/trust` | `pluginHandler.HandleTrustSkillInjection` |
 | POST | `/v1/skills/install` | `sysadminHandler.HandleInstallSkill` |
 | GET | `/v1/status` | `handleStatus` |
+| GET | `/v1/system/capabilities` | `handleGetCapabilities` |
 | POST | `/v1/system/update` | `sysadminHandler.HandleTriggerUpdate` |
 | GET | `/v1/system/version` | `sysadminHandler.HandleGetVersion` |
 | GET | `/v1/tools` | `sysadminHandler.HandleListTools` |
@@ -456,7 +457,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 148 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 149 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
@@ -787,8 +788,8 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | **键盘快捷键** | `Enter` 提交，`Shift+Enter` 换行，`Ctrl+C` 中断流，`/` 唤出斜杠补全。 |
 | **主题切换** | `--color-surface` 变量系（Tailwind `@theme`）。支持 system/dark/light/terminal，持久化至 localStorage。 |
 | **语言切换** | `$store.i18n.setLang('zh'|'en')`，i18n 数据集中在 `js/i18n.js`，涵盖全量 UI key。 |
-| **语音输入 (STT)** | 录音流（WebM/MP4）经 `multipart/form-data` 提交至 `/v1/audio/transcriptions`。技术选型后端强制绑定 Sherpa-ONNX + SenseVoice 极速本地推理，以零 Python 依赖满足 Tier 0 约束并触发 `stt-result` 事件回填输入框。 |
-| **语音合成 (TTS)** | POST `/v1/audio/speech` → `{"input": "..."}` → 返回 WAV 字节流（`audio/wav`）。后端走 `tts.Provider` 接口，三路实现按 `configs/defaults.toml [inference.tts] provider` 切换：**`edge`**（默认，Microsoft Edge TTS WebSocket，`zh-CN-XiaoxiaoNeural`，免费无密钥，中国大陆可用）/ **`http`**（外部 HTTP sidecar，如 CosyVoice 2 / Qwen3-TTS，需 GPU，Tier-1+）/ **`sherpa`**（本地 Sherpa-ONNX Kokoro 离线，FeatureLocalTTS ≥512MB 门控，异步下载）。Provider 实例经 `atomic.Pointer[tts.ProviderBox]` 热注入，InitTTSEngine 按 provider 值同步或异步注册。见 ADR-0031（Architecture Decision Record，架构决策记录）。 |
+| **语音输入 (STT)** | 录音流（WebM/MP4）经 `multipart/form-data` 提交至 `/v1/audio/transcriptions`。技术选型后端强制绑定 Sherpa-ONNX + SenseVoice 极速本地推理，以零 Python 依赖满足 Tier 0 约束并触发 `stt-result` 事件回填输入框。默认 int8 模型（`model_precision="int8"`，归档 166MB；fp32 886MB 仅显式 opt-in），`use_itn` 默认关闭；sherpa 库版本钉死为 `stt.SherpaABIVersion`（FFI 偏移实测值）。资产经状态机（disabled/pending/downloading/ready/failed）后台准备，失败按 1m/5m/15m/1h 退避重试；未就绪时该接口返回 503 JSON `{"error":"stt_not_ready","state","detail","message"}`，状态经 `GET /v1/system/capabilities` 的 `stt_status`/`tts_status` 暴露。见 ADR-0106。 |
+| **语音合成 (TTS)** | POST `/v1/audio/speech` → `{"input": "..."}` → 返回音频字节流，`Content-Type` 取自 Provider 返回的 MIME（Edge=`audio/mpeg`，Sherpa=`audio/wav`，HTTP sidecar=其响应类型，缺省 `audio/wav`）。后端走 `tts.Provider` 接口，三路实现按 `configs/defaults.toml [inference.tts] provider` 切换：**`edge`**（默认，Microsoft Edge TTS WebSocket，`zh-CN-XiaoxiaoNeural`，免费无密钥，中国大陆可用）/ **`http`**（外部 HTTP sidecar，如 CosyVoice 2 / Qwen3-TTS，需 GPU，Tier-1+）/ **`sherpa`**（本地 Sherpa-ONNX Kokoro 离线，FeatureLocalTTS ≥512MB 门控，异步下载）。Provider 实例经 `atomic.Pointer[tts.ProviderBox]` 热注入，InitTTSEngine 按 provider 值同步或异步注册。见 ADR-0031（Architecture Decision Record，架构决策记录）与 ADR-0106（Edge 协议：`readaloud` 端点 + `Sec-MS-GEC` + MP3 输出，`mstts:express-as` 不可用）。 |
 
 ---
 

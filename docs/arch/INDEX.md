@@ -98,7 +98,7 @@
 <!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `M13-Interface-Scheduler.md` | L3 接口 | 38K | 见下方 [M13 补充](#m13-补充) |
+| `M13-Interface-Scheduler.md` | L3 接口 | 39K | 见下方 [M13 补充](#m13-补充) |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 32K | 见下方 [M07 补充](#m07-补充) |
 | `M04-Agent-Kernel.md` | L1 内核 | 30K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `M05-Memory-System.md` | L1 记忆 | 28K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
