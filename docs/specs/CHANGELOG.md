@@ -6,6 +6,11 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-02（R7 文件行数软硬上限调整）
+
+- **[阈值] R7 文件行数**：由软 500 / 硬 550 调整为软 800 / 硬 850。801–850 门控仅告警（`go test -v` 可见），> 850 拦截须拆分（`00-Constitution.md §R7`，`internal/lint/naming_and_size_test.go`）。
+- 存量名单 `file_line_limit_baseline.json` 中的文件均已满足 ≤ 850 硬上限，名单清空。
+
 ## 2026-09-30（ADR-0105 WP10：真实请求边界门控 — 含**契约变更**）
 
 - **[契约] `ImmutableCore.StableMessageWithContracts()` → `StableMessagesWithContracts() []types.Message`**：返回 `[契约段, 可变核心]`（契约为空时仅可变核心）；L0 改按稳定度排序（契约 → 身份/指令/平台/运营指令 → 工具提示 → 画像/偏好），契约段独立首条且不计入 32KB 上限。`BuildLayered` 在 L0 多于一条时首条也置 `CacheBreakpoint`。

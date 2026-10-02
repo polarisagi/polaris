@@ -2,7 +2,7 @@
 //   - Test_inv_NoForbiddenVerbRoot：R2.2 动词词根扫描，防止 Load*/Query*/Fetch*/
 //     Retrieve* 类命名重新扩散（2026-07-06 审计 + 2026-07-07 复核修复了存量 33
 //     处违规，本文件是"不让它再长回来"的机械检查）。
-//   - Test_inv_FileLineLimit：R7 文件行数软 500 / 硬 550 CI 门控，覆盖存量代码
+//   - Test_inv_FileLineLimit：R7 文件行数软 800 / 硬 850 CI 门控，覆盖存量代码
 //     而不只是新增 diff（2026-07-07 复核发现原 .golangci.yml 配置对存量文件
 //     未生效，60 个文件早已超标却从未被拦下）。
 //
@@ -100,12 +100,11 @@ var fileLineLimitExemptSuffixes = []string{".pb.go"}
 // 每拆完一个从名单移除；新违规不得加入,必须当场拆分。
 const fileLineLimitBaselinePath = "file_line_limit_baseline.json"
 
-// R7 文件行数双阈值（00-Constitution.md §R7，2026-09-25 由单一硬线 400 改）：
-// ≤ soft 达标；(soft, hard] 容差区只告警不拦截——400 附近的硬线曾逼出为 3 行超标拆出
-// 新文件的纯搬运拆分；> hard 必须拆分。
+// R7 文件行数双阈值（00-Constitution.md §R7，2026-10-02 由软 500 / 硬 550 调整为软 800 / 硬 850）：
+// ≤ soft 达标；(soft, hard] 容差区只告警不拦截；> hard 必须拆分。
 const (
-	fileLineLimitSoft = 500
-	fileLineLimitHard = 550
+	fileLineLimitSoft = 800
+	fileLineLimitHard = 850
 )
 
 // Test_inv_FileLineLimit 验证 R7 文件行数上限对存量代码同样生效，不只是

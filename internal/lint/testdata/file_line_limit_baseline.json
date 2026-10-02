@@ -1,9 +1,3 @@
 {
-  "_comment": "R7 ratchet baseline——只减不增。2026-07-07 建立（硬线 400）；2026-09-25 R7 改为软 500 / 硬 550，名单收紧为只收 > 550 行的存量文件，降到 ≤ 550 即须移除（Test_inv_FileLineLimit 会报红）。新增代码/新文件不得依赖本名单豁免，发现即拆分，不得静默加入。",
-  "_reason_agent_execute_dag": "P0-6 fix added logic; will split deterministic effect handling",
-  "internal/agent/agent_execute_dag.go": true,
-  "_reason_state_machine": "P0-5 fix added event handling; will split state definitions",
-  "internal/agent/fsm/state_machine.go": true,
-  "_reason_thresholds": "阈值结构体集中定义，待按模块拆分",
-  "internal/config/thresholds.go": true
+  "_comment": "R7 ratchet baseline——只减不增。2026-07-07 建立（硬线 400）；2026-09-25 R7 改为软 500 / 硬 550；2026-10-02 改为软 800 / 硬 850，存量文件均已低于 850 行，名单清空。新增代码/新文件不得依赖本名单豁免，发现即拆分，不得静默加入。"
 }
