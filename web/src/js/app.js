@@ -29,6 +29,7 @@ import './store/components.js'
 import './store/computer.js'
 import './store/plugins.js'
 import './store/update.js'
+import './store/audio.js'
 import './mcp_apps.js'
 
 // ── Markdown 渲染配置 ──────────────────────────────────────────────────────
@@ -95,6 +96,12 @@ Alpine.start()
 // 状态栏开始轮询
 document.addEventListener('DOMContentLoaded', () => {
   Alpine.store('statusBar').startPolling()
+  Alpine.store('audio').refresh()
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      Alpine.store('audio').refresh()
+    }
+  })
 
   const rawPath = location.pathname.replace(/^\//, '') || 'chat'
   // 兼容旧 URL → 新页面

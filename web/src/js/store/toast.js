@@ -7,10 +7,25 @@ Alpine.store('toast', {
   items: [],
   _nextId: 0,
 
-  show(type, message, durationMs = 4000) {
+  show(type, message, durationMs = 4000, opts = {}) {
+    if (opts && opts.key) {
+      const existing = this.items.find((t) => t.key === opts.key)
+      if (existing) {
+        if (existing._timer) clearTimeout(existing._timer)
+        existing.type = type
+        existing.message = message
+        existing._timer = setTimeout(() => {
+          this.items = this.items.filter((t) => t.id !== existing.id)
+        }, durationMs)
+        return
+      }
+    }
     const id = this._nextId++
-    this.items.push({ id, type, message })
-    setTimeout(() => { this.items = this.items.filter(t => t.id !== id) }, durationMs)
+    const item = { id, type, message, key: opts?.key, _timer: null }
+    item._timer = setTimeout(() => {
+      this.items = this.items.filter((t) => t.id !== id)
+    }, durationMs)
+    this.items.push(item)
   },
 })
 

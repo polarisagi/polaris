@@ -257,110 +257,115 @@ Alpine.store('chat', {
   // 语音资产门控（kind: 'stt'|'tts'）。返回 true 表示现在即可使用（ready，或 loading——请求会等待加载完成）。
   // 状态机：not_installed→征得同意后 POST install 并轮询进度；downloading→只展示进度；
   // unsupported→说明最低配置；failed→展示原因并允许再次点击重试安装。
+  // 语音资产门控（kind: 'stt'|'tts'）。返回 true 表示现在即可使用（ready 或 loading）。
   async _ensureAudioAsset(kind) {
-    await this.fetchCapabilities();
-    const st = this.capabilities?.[kind + '_status'];
-    if (!st) return true; // 老后端无该字段：保持旧行为，交给请求本身报错
-    const t = (k) => Alpine.store('i18n').t(k);
-    const toast = (type, msg, ms) => { if (Alpine.store('toast')) Alpine.store('toast').show(type, msg, ms); };
-    const mb = (n) => Math.max(1, Math.round((n || 0) / 1048576));
-    const sizeFallback = kind === 'stt' ? 230 : 365;
+    const audio = Alpine.store('audio')
+    if (audio) await audio.refresh()
+    const st = audio ? audio[kind] : this.capabilities?.[kind + '_status']
+    if (!st) return true
+    const t = (k) => Alpine.store('i18n')?.t(k) || k
+    const toast = (type, msg, ms, opts) => {
+      if (Alpine.store('toast')) Alpine.store('toast').show(type, msg, ms, opts)
+    }
 
     switch (st.state) {
       case 'ready':
       case 'loading':
-        return true;
-      case 'unsupported':
-        toast('error', t(kind === 'stt' ? 'audio_stt_unsupported' : 'audio_tts_unsupported'), 8000);
-        return false;
-      case 'downloading':
-        this._pollAudioInstall(kind);
-        return false;
-      case 'not_installed':
-      case 'failed': {
-        const size = st.install_size_bytes ? mb(st.install_size_bytes) : sizeFallback;
-        if (st.state === 'failed') toast('error', t('audio_prep_failed').replace('{0}', st.error || st.detail || ''), 6000);
-        if (!window.confirm(t(kind === 'stt' ? 'audio_stt_confirm_install' : 'audio_tts_confirm_install').replace('{0}', size))) return false;
-        try {
-          const resp = await fetch(`/v1/audio/${kind}/install`, { method: 'POST', headers: authHeaders() });
-          if (!resp.ok && resp.status !== 200) {
-            toast('error', (await this._readErrMessage(resp)) || t('audio_install_failed'), 6000);
-            return false;
-          }
-        } catch (e) {
-          toast('error', e?.message || t('audio_install_failed'), 6000);
-          return false;
-        }
-        this._pollAudioInstall(kind);
-        return false;
-      }
-      default:
-        toast('error', t('chat_stt_not_ready').replace('{0}', st.detail || st.state), 6000);
-        return false;
-    }
-  },
+        return true
 
-  // 轮询安装进度并以 toast 展示百分比；同一 kind 只保留一个轮询。结束（ready/failed/unsupported）时给出结果提示。
-  _pollAudioInstall(kind) {
-    this._audioPolls = this._audioPolls || {};
-    if (this._audioPolls[kind]) return;
-    const t = (k) => Alpine.store('i18n').t(k);
-    const toast = (type, msg, ms) => { if (Alpine.store('toast')) Alpine.store('toast').show(type, msg, ms); };
-    this._audioPolls[kind] = true;
-    const tick = async () => {
-      await this.fetchCapabilities();
-      const st = this.capabilities?.[kind + '_status'];
-      if (!st) { this._audioPolls[kind] = false; return; }
-      if (st.state === 'downloading' || st.state === 'loading') {
-        const p = st.progress;
-        const pct = p && p.bytes_total > 0 ? Math.floor((p.bytes_done * 100) / p.bytes_total) : null;
-        toast('ok', t('audio_downloading').replace('{0}', pct === null ? '…' : pct + '%'), 2500);
-        setTimeout(tick, 1500);
-        return;
+      case 'unsupported':
+        toast('error', t(kind === 'stt' ? 'audio_stt_unsupported' : 'audio_tts_unsupported'), 8000, { key: `audio-${kind}` })
+        return false
+
+      case 'downloading': {
+        if (audio) audio.pendingIntent[kind] = true
+        const p = audio ? audio.pct(kind) : null
+        const pStr = p !== null ? `${p}%` : '…'
+        const msg = t(kind === 'stt' ? 'audio_wait_stt' : 'audio_wait_tts').replace('{0}', pStr)
+        toast('info', msg, 4000, { key: `audio-${kind}` })
+        return false
       }
-      this._audioPolls[kind] = false;
-      if (st.state === 'ready') toast('ok', t('audio_ready'), 3000);
-      else if (st.state === 'failed') toast('error', t('audio_prep_failed').replace('{0}', st.error || st.detail || ''), 6000);
-      else if (st.state === 'unsupported') toast('error', t(kind === 'stt' ? 'audio_stt_unsupported' : 'audio_tts_unsupported'), 8000);
-    };
-    tick();
+
+      case 'not_installed': {
+        if (audio && audio.autoInstall) {
+          audio.pendingIntent[kind] = true
+          audio.install(kind)
+          const msg = t(kind === 'stt' ? 'audio_wait_stt' : 'audio_wait_tts').replace('{0}', '…')
+          toast('info', msg, 4000, { key: `audio-${kind}` })
+          return false
+        }
+        // auto_install 为 false：弹出页内 modal
+        if (audio) {
+          const confirmed = await audio.promptInstall(kind)
+          if (confirmed) {
+            audio.pendingIntent[kind] = true
+            audio.install(kind)
+            const msg = t(kind === 'stt' ? 'audio_wait_stt' : 'audio_wait_tts').replace('{0}', '…')
+            toast('info', msg, 4000, { key: `audio-${kind}` })
+          }
+        }
+        return false
+      }
+
+      case 'failed': {
+        const errText = st.error || st.detail || t('audio_prep_failed')
+        toast('error', errText, 6000, { key: `audio-${kind}` })
+        if (audio) {
+          audio.pendingIntent[kind] = true
+          audio.install(kind)
+        }
+        return false
+      }
+
+      default:
+        toast('error', t('chat_stt_not_ready').replace('{0}', st.detail || st.state), 6000, { key: `audio-${kind}` })
+        return false
+    }
   },
 
   // 浏览器系统语音兜底：只用本地（localService）中文语音，避免把文本发给云端语音。无可用语音返回 null。
   _pickLocalZhVoice() {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return null;
-    const voices = window.speechSynthesis.getVoices() || [];
-    return voices.find((v) => v.localService && v.lang && v.lang.startsWith('zh')) || null;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return null
+    const voices = window.speechSynthesis.getVoices() || []
+    return voices.find((v) => v.localService && v.lang && v.lang.startsWith('zh')) || null
   },
 
   // 决定朗读后端：'server'（Kokoro）| 'system'（speechSynthesis）| null（不可用，已提示）。
-  // auto：服务端 ready 用服务端；未安装且硬件支持则征得同意下载（拒绝则退回系统语音）；
-  // 不支持/失败则退回系统语音。engine=server/system 强制指定。
+  // 读 Alpine.store('audio')，下载中直接退回系统语音且不弹任何下载 toast。
   async _resolveTTSBackend() {
-    await this.fetchCapabilities();
-    const t = (k) => Alpine.store('i18n').t(k);
-    const toast = (type, msg, ms) => { if (Alpine.store('toast')) Alpine.store('toast').show(type, msg, ms); };
-    const engine = this.capabilities?.tts_engine || 'auto';
-    const st = this.capabilities?.tts_status;
+    const audio = Alpine.store('audio')
+    if (audio) await audio.refresh()
+    const t = (k) => Alpine.store('i18n')?.t(k) || k
+    const toast = (type, msg, ms, opts) => {
+      if (Alpine.store('toast')) Alpine.store('toast').show(type, msg, ms, opts)
+    }
+    const engine = audio ? audio.engine : (this.capabilities?.tts_engine || 'auto')
+    const st = audio ? audio.tts : this.capabilities?.tts_status
+
     const useSystem = () => {
-      if (this._pickLocalZhVoice()) return 'system';
-      toast('error', t('audio_tts_unavailable'), 6000);
-      return null;
-    };
-    if (engine === 'system') return useSystem();
-    if (!st) return 'server'; // 老后端：保持旧行为
-    if (st.state === 'ready' || st.state === 'loading') return 'server';
+      if (this._pickLocalZhVoice()) return 'system'
+      toast('error', t('audio_tts_unavailable'), 6000, { key: 'audio-tts' })
+      return null
+    }
+
+    if (engine === 'system') return useSystem()
+    if (!st) return 'server'
+    if (st.state === 'ready' || st.state === 'loading') return 'server'
+
     if (engine === 'server') {
-      await this._ensureAudioAsset('tts');
-      return null;
+      await this._ensureAudioAsset('tts')
+      return null
     }
+
     if (st.state === 'not_installed') {
-      // 先征得同意下载服务端语音；无论同意与否，本次都用系统语音朗读（下载期间不让用户干等）。
-      await this._ensureAudioAsset('tts');
-      return useSystem();
+      if (audio && audio.autoInstall) {
+        audio.install('tts')
+      }
+      return useSystem() // 不弹下载 toast，直接系统语音
     }
-    if (st.state === 'downloading') this._pollAudioInstall('tts');
-    return useSystem(); // downloading / unsupported / failed：退回系统语音
+
+    // downloading / unsupported / failed：退回系统语音，零下载 toast
+    return useSystem()
   },
 
   // 用 speechSynthesis 逐句朗读（系统语音兜底）。返回的 Promise 在读完或被取消时结束。
