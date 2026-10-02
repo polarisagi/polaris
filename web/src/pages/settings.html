@@ -94,6 +94,44 @@
               </button>
             </div>
           </div>
+      </div>
+
+      <!-- Embedding Configuration (ADR-0109) -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm" x-show="$store.statusBar.embedding">
+        <div class="card-body p-4">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <h4 class="font-bold text-sm" x-text="$store.i18n.t('embedding_title')"></h4>
+              <p class="text-xs text-base-content/60" x-text="$store.i18n.t('embedding_subtitle')"></p>
+            </div>
+            <button class="btn btn-xs btn-outline" :disabled="$store.statusBar.rebenchRunning" @click="$store.statusBar.rebenchEmbedding()">
+              <span x-show="$store.statusBar.rebenchRunning" class="loading loading-spinner loading-xs"></span>
+              <span x-show="!$store.statusBar.rebenchRunning" x-text="$store.i18n.t('embedding_rebench_btn')"></span>
+            </button>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 pt-3 border-t border-base-300 text-xs">
+            <div>
+              <span class="text-base-content/60 block" x-text="$store.i18n.t('embedding_backend')"></span>
+              <span class="font-mono font-bold" x-text="$store.statusBar.embedding?.backend || 'none'"></span>
+            </div>
+            <div>
+              <span class="text-base-content/60 block" x-text="$store.i18n.t('embedding_model')"></span>
+              <span class="font-mono font-bold truncate block" x-text="$store.statusBar.embedding?.model || 'none'"></span>
+            </div>
+            <div>
+              <span class="text-base-content/60 block" x-text="$store.i18n.t('embedding_dim')"></span>
+              <span class="font-mono font-bold" x-text="$store.statusBar.embedding?.dim || 0"></span>
+            </div>
+            <div>
+              <span class="text-base-content/60 block" x-text="$store.i18n.t('embedding_state')"></span>
+              <span class="badge badge-xs font-bold uppercase" :class="{
+                'badge-success': $store.statusBar.embedding?.state === 'ready',
+                'badge-warning': $store.statusBar.embedding?.state === 'starting' || $store.statusBar.embedding?.state === 'backoff',
+                'badge-error': $store.statusBar.embedding?.state === 'failed',
+                'badge-ghost': $store.statusBar.embedding?.state === 'fts'
+              }" x-text="$store.statusBar.embedding?.state || 'fts'"></span>
+            </div>
+          </div>
         </div>
       </div>
 

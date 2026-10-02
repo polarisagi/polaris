@@ -157,6 +157,7 @@ type Server struct {
 	appsSandboxBoundPort atomic.Int32
 
 	embeddingStatusFn func() EmbeddingStatus
+	rebenchFn         func(ctx context.Context) error
 }
 
 // EmbeddingStatus 网关暴露的向量化运行时状态 (ADR-0109 D5)。
@@ -172,6 +173,11 @@ type EmbeddingStatus struct {
 // SetEmbeddingStatusProvider 注入向量化状态查询回调。
 func (s *Server) SetEmbeddingStatusProvider(fn func() EmbeddingStatus) {
 	s.embeddingStatusFn = fn
+}
+
+// SetEmbeddingRebencher 注入重新基准测定回调（ADR-0109）。
+func (s *Server) SetEmbeddingRebencher(fn func(ctx context.Context) error) {
+	s.rebenchFn = fn
 }
 
 // GetEmbeddingStatus 获取当前向量化状态快照。

@@ -285,6 +285,23 @@ func (s *Server) handleGetAudioStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleEmbeddingRebench 触发重新基准测定与档位评估（POST /v1/embedding/rebench，ADR-0109）。
+func (s *Server) handleEmbeddingRebench(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.rebenchFn == nil {
+		httputil.WriteJSON(w, map[string]string{"status": "no_rebencher"})
+		return
+	}
+	if err := s.rebenchFn(r.Context()); err != nil {
+		httputil.RespondError(w, "rebench failed", err, http.StatusInternalServerError)
+		return
+	}
+	httputil.WriteJSON(w, map[string]string{"status": "rebench_started"})
+}
+
 // handleGetPendingApprovals/parseInterruptAction/handleAgentInterrupt/
 // handleResolveApproval（HITL 审批 + 中断处理）、agentStateString/
 // handleStatus（WebUI 状态快照）见 server_handlers_hitl.go（R7 拆分）。

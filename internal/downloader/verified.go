@@ -161,3 +161,70 @@ func fileSHA256(path string) (string, error) {
 	}
 	return strings.ToLower(hex.EncodeToString(h.Sum(nil))), nil
 }
+
+// DownloadFileOpts 将 rawURL 内容写入 destPath，支持断点续传与 sha256 校验。
+// 若文件已存在且 sha256 匹配，直接返回；若不匹配则删除重下；下载后仍不匹配则删除并报错。
+func DownloadFileOpts(ctx context.Context, client *http.Client, rawURL, destPath string, opts Options) error {
+	mu := getDlLock(destPath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	for attempt := 0; ; attempt++ {
+		_, statErr := os.Stat(destPath)
+		cached := statErr == nil
+		if cached && opts.SHA256 != "" {
+			got, err := fileSHA256(destPath)
+			if err == nil && got == opts.SHA256 {
+				return nil
+			}
+			if rmErr := os.Remove(destPath); rmErr != nil {
+				slog.Debug("downloader: 删除旧缓存文件失败", "path", destPath, "err", rmErr)
+			}
+		}
+
+		if err := downloadResumeP(ctx, client, rawURL, destPath, newProgressSink(opts)); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "DownloadFileOpts", err)
+		}
+		if opts.SHA256 == "" {
+			break
+		}
+		got, err := fileSHA256(destPath)
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "DownloadFileOpts: sha256 计算失败", err)
+		}
+		if got == opts.SHA256 {
+			break
+		}
+		if rmErr := os.Remove(destPath); rmErr != nil {
+			slog.Warn("downloader: 删除校验失败的文件失败", "path", destPath, "err", rmErr)
+		}
+		if cached && attempt == 0 {
+			slog.Warn("downloader: 缓存文件 sha256 不符，已删除并重新下载",
+				"file", filepath.Base(destPath), "want", opts.SHA256, "got", got)
+			continue
+		}
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf(
+			"downloader: %s sha256 校验失败（期望 %s，实得 %s）；文件已删除，可能被镜像/代理截断或篡改",
+			filepath.Base(destPath), opts.SHA256, got))
+	}
+	return nil
+}
+
+// DownloadExtractTarGzOpts 同 DownloadExtractTarBz2Opts，针对 .tar.gz / .tgz 归档。
+func DownloadExtractTarGzOpts(ctx context.Context, client *http.Client, rawURL, destDir string, mapper func(string) (string, bool), opts Options) error {
+	return downloadExtractOpts(ctx, client, rawURL, opts, func(path string) error {
+		f, err := os.Open(path)
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "DownloadExtractTarGz", err)
+		}
+		defer f.Close()
+		return ExtractTarGz(f, destDir, mapper)
+	})
+}
+
+// DownloadExtractZipOpts 同 DownloadExtractTarBz2Opts，针对 .zip 归档。
+func DownloadExtractZipOpts(ctx context.Context, client *http.Client, rawURL, destDir string, mapper func(string) (string, bool), opts Options) error {
+	return downloadExtractOpts(ctx, client, rawURL, opts, func(path string) error {
+		return ExtractZip(path, destDir, mapper)
+	})
+}

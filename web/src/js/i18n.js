@@ -44,6 +44,15 @@ export const zh = {
   nav_settings:      '设置',
   nav_eval:          '评测',
 
+  // ── 向量化引擎 ──────────────────────────────────────────────────────────
+  embedding_title:           '向量化引擎',
+  embedding_subtitle:        '检索与记忆向量化配置及性能基准',
+  embedding_backend:         '后端',
+  embedding_model:           '模型',
+  embedding_dim:             '维度',
+  embedding_state:           '状态',
+  embedding_rebench_btn:     '重新评估',
+
   // ── 插件目录页 ──────────────────────────────────────────────────────────
   plugins_title:        '插件目录',
   plugins_subtitle:     '个插件可用',
@@ -774,6 +783,15 @@ export const en = {
   nav_computer:      'Computer Use',
   nav_settings:      'Settings',
   nav_eval:          'Eval',
+
+  // ── Embedding Engine ───────────────────────────────────────────────────
+  embedding_title:           'Embedding Engine',
+  embedding_subtitle:        'Retrieval & memory embedding configuration and performance benchmark',
+  embedding_backend:         'Backend',
+  embedding_model:           'Model',
+  embedding_dim:             'Dimension',
+  embedding_state:           'State',
+  embedding_rebench_btn:     'Rebench',
 
   // ── Plugin Catalog page ────────────────────────────────────────────────
   plugins_title:        'Plugin Catalog',

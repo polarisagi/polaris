@@ -13,6 +13,8 @@ Alpine.store('statusBar', {
   costCNY: 0,
   memoryMB: 0,
   memoryLimitMB: 8192,
+  embedding: null,
+  rebenchRunning: false,
   _timer: null,
 
   get tokenPct() { return this.tokenLimit > 0 ? this.tokenUsed / this.tokenLimit : 0 },
@@ -48,12 +50,25 @@ Alpine.store('statusBar', {
       this.costCNY = d.cost_cny || 0
       this.memoryMB = d.memory_mb || 0
       this.memoryLimitMB = d.memory_limit_mb || 8192
+      this.embedding = d.embedding || null
 
       if (this.sealed) {
         Alpine.store('toast').show('warn', '⚠ 服务器已进入 Sealed 状态，所有操作已暂停')
       }
     } catch {
       this.connected = false
+    }
+  },
+
+  async rebenchEmbedding() {
+    this.rebenchRunning = true
+    try {
+      await fetch('/v1/embedding/rebench', { method: 'POST', headers: authHeaders() })
+      await this.poll()
+    } catch (e) {
+      console.warn('rebench failed', e)
+    } finally {
+      this.rebenchRunning = false
     }
   },
 })

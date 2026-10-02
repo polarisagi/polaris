@@ -543,7 +543,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	// ─── 4.5~4.9 向量化引擎与训练适配器 (ADR-0109) ───────────────────────────
 	embedBackoff := retrieval.NewEmbedBackoff()
-	embedder, dynEmbedder, batcher, embedChoice := initEmbedding(ctx, cfg, layout, safeHTTPClient, embedBackoff)
+	embedder, dynEmbedder, batcher, embedChoice := initEmbedding(ctx, cfg, layout, safeHTTPClient, embedBackoff, store.DB())
 
 	var qloraAdapter *llmadapter.QLoRAAdapter
 	var prmAdapter *llmadapter.PRMAdapter

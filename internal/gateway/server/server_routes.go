@@ -133,6 +133,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/audio/stt/install", s.chatHandler.AudioService.HandleAudioInstall("stt"))
 	mux.HandleFunc("POST /v1/audio/tts/install", s.chatHandler.AudioService.HandleAudioInstall("tts"))
 
+	// 向量化重新评估 API（ADR-0109）
+	mux.HandleFunc("POST /v1/embedding/rebench", s.handleEmbeddingRebench)
+
 	// VFS 通用文件上传（对话附件）。
 	// 2026-08-12 接线：此前 handler 已实现但从未注册，而 web/src/js/store/chat.js
 	// 的 uploadFile() 一直在 POST /v1/workspace/upload——即前端上传功能长期 404。

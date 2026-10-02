@@ -181,6 +181,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 			NextRetryAt:         nextRetry,
 		}
 	})
+	httpServer.SetEmbeddingRebencher(func(ctx context.Context) error {
+		return triggerRebench(ctx, sb)
+	})
 	httpServer.SetAmbientSkillMaxChars(sb.Cfg.Thresholds.M13Interface.AmbientSkillMaxChars)
 	// M09 §1.3 /steer 命令面（2026-07-21 deadcode 审查补齐）：sb.Steering/sb.CVStore
 	// 均可为 nil（FeatureActivationSteer 未启用），SetSteering/handleSteer 全链 nil-safe。
