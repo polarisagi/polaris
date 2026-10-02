@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:492 对内调度 / 3:615 MCP / 6:633 (SOFT)降级 / 6-bis:646 已知Bug修复记录 / 7:658 跨模块契约 / 8:675 Web UI 规约 / 8.6:821 插件聚合市场DB+流 / 8.7:857 自动化中心DB+流+工作流 / 8.8:974 电脑操控权限+Preferences / 8.9:1014 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:495 对内调度 / 3:618 MCP / 6:636 (SOFT)降级 / 6-bis:649 已知Bug修复记录 / 7:661 跨模块契约 / 8:678 Web UI 规约 / 8.6:824 插件聚合市场DB+流 / 8.7:860 自动化中心DB+流+工作流 / 8.8:977 电脑操控权限+Preferences / 8.9:1017 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -333,7 +333,10 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/approvals/` | `handleResolveApproval` |
 | GET | `/v1/approvals/pending` | `handleGetPendingApprovals` |
 | POST | `/v1/audio/speech` | `chatHandler.AudioService.HandleAudioSpeech` |
+| GET | `/v1/audio/status` | `handleGetAudioStatus` |
+| POST | `/v1/audio/stt/install` | `chatHandler.AudioService.HandleAudioInstall("stt")` |
 | POST | `/v1/audio/transcriptions` | `chatHandler.AudioService.HandleAudioTranscriptions` |
+| POST | `/v1/audio/tts/install` | `chatHandler.AudioService.HandleAudioInstall("tts")` |
 | GET | `/v1/automation-templates` | `sysadminHandler.Cron.HandleListAutomationTemplates` |
 | GET | `/v1/automations` | `sysadminHandler.Cron.HandleListAutomations` |
 | POST | `/v1/automations` | `sysadminHandler.Cron.HandleCreateAutomation` |
@@ -457,7 +460,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 149 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 152 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
@@ -788,8 +791,8 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | **键盘快捷键** | `Enter` 提交，`Shift+Enter` 换行，`Ctrl+C` 中断流，`/` 唤出斜杠补全。 |
 | **主题切换** | `--color-surface` 变量系（Tailwind `@theme`）。支持 system/dark/light/terminal，持久化至 localStorage。 |
 | **语言切换** | `$store.i18n.setLang('zh'|'en')`，i18n 数据集中在 `js/i18n.js`，涵盖全量 UI key。 |
-| **语音输入 (STT)** | 录音流（WebM/MP4）经 `multipart/form-data` 提交至 `/v1/audio/transcriptions`。技术选型后端强制绑定 Sherpa-ONNX + SenseVoice 极速本地推理，以零 Python 依赖满足 Tier 0 约束并触发 `stt-result` 事件回填输入框。默认 int8 模型（`model_precision="int8"`，归档 166MB；fp32 886MB 仅显式 opt-in），`use_itn` 默认关闭；sherpa 库版本钉死为 `stt.SherpaABIVersion`（FFI 偏移实测值）。资产经状态机（disabled/pending/downloading/ready/failed）后台准备，失败按 1m/5m/15m/1h 退避重试；未就绪时该接口返回 503 JSON `{"error":"stt_not_ready","state","detail","message"}`，状态经 `GET /v1/system/capabilities` 的 `stt_status`/`tts_status` 暴露。见 ADR-0106。 |
-| **语音合成 (TTS)** | POST `/v1/audio/speech` → `{"input": "..."}` → 音频字节流，`Content-Type` 取自 Provider 返回的 MIME（Sherpa=`audio/wav`，HTTP sidecar=其响应类型，缺省 `audio/wav`）。服务端仅 Kokoro v1.1 fp32（默认 sid=3，`rule_fsts` 规整日期/数字/电话），可选 HTTP sidecar（`provider="http"`）；Edge/Matcha/Piper 已移除。资产按需安装：`POST /v1/audio/{stt|tts}/install`（202 started / 200 无需或进行中 / 422 unsupported / 503 无安装器），懒加载 + `inference.audio.idle_unload_minutes` 空闲卸载；首次加载跑固定句基准（预热 1 次 + 计时 2 次取最小 RTF），RTF>0.8 判不支持，结果连同硬件指纹持久化（`preferences.audio.tts_bench`；unsupported 带 `retry_on_start`，重启后用户再次触发时重测一次）。最低配置：STT 2GB/2 核，服务端 TTS 4GB/4 核；低于此前端退回 `speechSynthesis` 本地中文语音（`inference.tts.engine=auto|server|system`）。未就绪返回 503 JSON `{error,state,detail,message}`。`GET /v1/system/capabilities` 提供 `stt_status`/`tts_status`（state: not_installed/unsupported/downloading/loading/ready/failed，另含 reason、install_size_bytes、loaded、progress）与 `tts_engine`。见 ADR-0107（取代 ADR-0031 与 ADR-0106 的 Edge 部分）。 |
+| **语音输入 (STT)** | 录音流（WebM/MP4）经 `multipart/form-data` 提交至 `/v1/audio/transcriptions`。技术选型后端强制绑定 Sherpa-ONNX + SenseVoice 极速本地推理，以零 Python 依赖满足 Tier 0 约束并触发 `stt-result` 事件回填输入框。默认 int8 模型（`model_precision="int8"`，归档 166MB；fp32 886MB 仅显式 opt-in），`use_itn` 默认关闭；sherpa 库版本钉死为 `stt.SherpaABIVersion`（FFI 偏移实测值）。资产在守护进程就绪 45 秒后由单一预置器后台串行自动下载（配置 `inference.audio.auto_install=true` 默认开启，见 ADR-0108；亦可经 `POST /v1/audio/stt/install` 手动触发），失败按 5m/30m/2h 退避重试；未就绪时该接口返回 503 JSON `{"error":"stt_not_ready","state","detail","message"}`，状态经 `GET /v1/audio/status` 与 `GET /v1/system/capabilities` 暴露，前端由状态栏单一 chip 汇总进度。见 ADR-0106、ADR-0107 与 ADR-0108。 |
+| **语音合成 (TTS)** | POST `/v1/audio/speech` → `{"input": "..."}` → 音频字节流，`Content-Type` 取自 Provider 返回的 MIME（Sherpa=`audio/wav`，HTTP sidecar=其响应类型，缺省 `audio/wav`）。服务端仅 Kokoro v1.1 fp32（默认 sid=3，`rule_fsts` 规整日期/数字/电话），可选 HTTP sidecar（`provider="http"`）；Edge/Matcha/Piper 已移除。资产由预置器在 STT 完成后串行自动安装（见 ADR-0108；亦可经 `POST /v1/audio/tts/install` 手动触发），懒加载 + `inference.audio.idle_unload_minutes` 空闲卸载；首次加载在 CPU 空闲时（连续 3 次 <50%）跑固定句基准，RTF>0.8 且无争用判不支持，争用时不落定论并在空闲窗口自动重测。最低配置：STT 2GB/2 核，服务端 TTS 4GB/4 核；低于此或准备中前端退回 `speechSynthesis` 本地中文语音（`inference.tts.engine=auto|server|system`）。未就绪返回 503 JSON `{error,state,detail,message}`。`GET /v1/audio/status` 与 `GET /v1/system/capabilities` 提供 `stt_status`/`tts_status` 与 `tts_engine`。见 ADR-0107 与 ADR-0108。 |
 
 ---
 

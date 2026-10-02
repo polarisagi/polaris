@@ -1,6 +1,6 @@
 # ADR-0107: 语音 v2：本地离线 STT + Kokoro TTS、按需下载、最低配置门控、系统语音兜底
 
-- **状态**: Accepted
+- **状态**: Accepted（决策 3 与反例守护第一条被 ADR-0108 取代）
 - **日期**: 2026-10-02
 - **决策者**: 用户（定位与模型裁决）/ Opus（实测）/ Sonnet（实现）
 - **相关模块**: M13 Gateway / `internal/llm/audioassets/` / `internal/llm/audiorun/` / `internal/llm/stt/` / `internal/llm/tts/` / `web/src/js/store/chat.js`
@@ -50,3 +50,10 @@
 | Kokoro int8 | 无 VNNI 机器 RTF 1.44–1.76，慢于实时 |
 | 启动期预下载 | 违反 2GB 核心路径与离线按需原则 |
 | 常驻引擎 | 空闲时占用 400–600MB，改为懒加载 + 空闲卸载 |
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-10-02 | 初稿 |
+| 2026-10-02 | 决策 3（按需下载）与反例守护第一条（拒绝启动期自动下载语音资产）被 ADR-0108 取代为后台串行预置 |

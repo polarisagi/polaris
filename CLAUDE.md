@@ -40,7 +40,7 @@
 | HE-6 | **State-in-DB** — 持久化落盘，跨模块走异步事件 | 状态仅内存、DB 连接期间发起 LLM 调用（R1.16） |
 | HE-7 | **防退化边界** — 守住核心体系 (五防线与 Memory-Write-Tool) | 绕过 ExecuteTool 写记忆、弱化 Taint/Cedar/KillSwitch/SSRFGuard |
 
-**[Tier-0]** 核心路径（含 SurrealDB kv-mem + Embedding + Wasm 沙箱）必须在 2GB+ VPS 可运行；语音按 ADR-0107：STT 需 2GB/2 核，服务端 TTS（Kokoro）需 4GB/4 核，低于此由前端系统语音兜底，资产均按需下载、空闲卸载，启动不下载；麦克风需安全上下文（127.0.0.1/localhost 可用，远程 VPS 须 HTTPS）；8GB 为推荐开发地板（Tier0），本地推理需 Tier1（16GB+）。超限能力走硬件门控解锁，不得作硬依赖。
+**[Tier-0]** 核心路径（含 SurrealDB kv-mem + Embedding + Wasm 沙箱）必须在 2GB+ VPS 可运行；语音按 ADR-0107 / ADR-0108：STT 需 2GB/2 核，服务端 TTS（Kokoro）需 4GB/4 核，低于此由前端系统语音兜底，资产由守护进程后台串行预置（可配置关闭）、空闲卸载；麦克风需安全上下文（127.0.0.1/localhost 可用，远程 VPS 须 HTTPS）；8GB 为推荐开发地板（Tier0），本地推理需 Tier1（16GB+）。超限能力走硬件门控解锁，不得作硬依赖。
 
 ## 项目结构
 
