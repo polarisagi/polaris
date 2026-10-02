@@ -101,7 +101,7 @@ internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
 
   # --- 通用契约（所有层均可引用）---
   protocol/      跨模块共享类型 + 接口契约：repo/ 接口定义、pb/ Protobuf 生成物、schema/ DDL SQL（43 个，SSoT）
-  config/        配置加载 + 编译期不变量
+  config/        配置加载 + 编译期不变量 + 系统参数与路径单一事实源 (system_params.go)
   lint/          CI 静态扫描规则
   bootstrap/     模块生命周期编排（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）
 
@@ -126,7 +126,7 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
 - **[强制] 配置变更策略**：凡修改 `internal/config/` 中的结构体定义，**必须**执行 `make gen-threshold-examples` 重新生成 TOML 配置文件并提交。禁止代码与配置模板脱节。
 - **[强制] 音频外部坐标**：改动 `internal/llm/stt|tts` 的下载 URL / 资产名 / `configs/defaults.toml [inference.stt|tts]` 的模型 URL，`internal/llm/audioassets` 清单后，必须在本机跑 `make audio-nettest`（HEAD 校验全部资产 URL 与 Content-Length，依赖外网，不进 CI；ADR-0106/0107——硬编码的外部假设曾让 6 个平台 5 个 URL 404 而单测全绿）。升级 sherpa-onnx 版本须先重测 FFI 偏移并改 `stt.SherpaABIVersion`。
 - **[强制] DDL 修改策略**：`internal/protocol/schema/NNN_*.sql` 是 Schema SSoT，禁止以 ALTER TABLE / ADD COLUMN 补丁文件打补丁。
-  - **上线前**（`§当前阶段` 未标注"上线后"）：Schema 变更**直接修改原始建表文件**；开发库删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。
+  - **上线前**（`§当前阶段` 未标注"上线后"）：Schema 变更**直接修改原始建表文件**；开发库删除重建（`rm ~/.polaris/data/polaris.db`）。
   - **上线后**（存在生产数据）：新增编号迁移文件（ALTER TABLE / 数据迁移），不得修改已应用历史文件。
   - Phase 判断 SSoT：本文 `§当前阶段`。不确定 → 主动提问，禁止静默决策。
 - **[强制] Git 署名与 Commit Message**：所有的 Git 提交必须统一使用署名 `MrLaoLiAI <polarisagi.online@gmail.com>`。**绝对禁止**在 commit message 中添加 `Co-authored-by: Claude ...`、`Co-authored-by: Gemini ...` 或任何 AI 工具的联合署名标签，这会污染 GitHub 的贡献者（Contributors）列表。如果你作为代理工具自动生成了这些标签，必须在执行 `git commit` 前将其剔除。

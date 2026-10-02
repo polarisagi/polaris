@@ -4,10 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -142,19 +141,14 @@ func currentOSUser() string {
 }
 
 // resolveDataDirForCLI 与 boot_substrate.go resolveDataDir 同一优先级：
-// POLARIS_DATA_DIR env > ~/.polarisagi/polaris。
+// POLARIS_DATA_DIR env > ~/.polaris。
 //
 // 刻意不读 config.toml：本命令要在"系统起不来"时可用，而配置加载本身就是启动
 // 链路的一环——依赖它会让恢复命令和被恢复的对象共享同一批失败模式。
 func resolveDataDirForCLI() string {
-	dir := os.Getenv("POLARIS_DATA_DIR")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".polarisagi/polaris")
-	}
-	if strings.HasPrefix(dir, "~/") {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, dir[2:])
+	dir, err := config.ResolveDataDir("")
+	if err != nil {
+		return "."
 	}
 	return dir
 }

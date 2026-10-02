@@ -2,10 +2,11 @@
 # -e: 任何命令失败立即退出；-u: 引用未定义变量报错；-o pipefail: 管道任一步骤失败即报错
 set -euo pipefail
 
+# 全局系统参数与路径配置（与 internal/config/system_params.go 保持单一事实源一致）
 REPO="polarisagi/polaris"
 BIN_NAME="polaris"
-INSTALL_DIR="$HOME/.polarisagi/polaris/bin"
-DATA_DIR="$HOME/.polarisagi/polaris"
+INSTALL_DIR="$HOME/.polaris/bin"
+DATA_DIR="$HOME/.polaris"
 PLIST_LABEL="com.polarisagi.polaris"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 PORT=28888

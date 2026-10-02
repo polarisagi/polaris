@@ -175,18 +175,15 @@ func runBenchmarkRouting(args []string) error { //nolint:gocyclo
 	}
 
 	// ─── 4. 持久化到 EvalStore (仅在数据库可用时) ────────────────────────────
-	cfgPath := os.Getenv("POLARIS_CONFIG")
-	if cfgPath == "" {
-		cfgPath = "configs/defaults.toml"
-	}
+	cfgPath := config.ResolveConfigFile("", "")
 	_, err = config.Load(cfgPath)
 	if err != nil {
 		fmt.Printf("polaris benchmark: skip persistence (config load: %v)\n", err)
 		return nil
 	}
 
-	dataDir, _ := resolveDataDirBase(nil)
-	dbPath := filepath.Join(dataDir, "polaris.db")
+	dataDir, _ := config.ResolveDataDir("")
+	dbPath := filepath.Join(dataDir, config.SubdirData, config.SQLiteDBFileName)
 	store, err := store.OpenSQLite(dbPath, schema.FS)
 	if err != nil {
 		fmt.Printf("polaris benchmark: skip persistence (db open: %v)\n", err)

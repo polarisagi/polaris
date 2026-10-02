@@ -81,7 +81,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/preferences", s.sysadminHandler.HandleGetPreferences)
 	mux.HandleFunc("PUT /v1/preferences/{key}", s.sysadminHandler.HandleSetPreference)
 
-	// 提示词管理 API（三层所有权：Layer 1 用户自定义层，读写 ~/.polarisagi/polaris/config/prompts/）
+	// 提示词管理 API（三层所有权：Layer 1 用户自定义层，读写 ~/.polaris/config/prompts/）
 	// Layer 0（embedded 内置默认）和 Layer 2（M9 优化）不通过此 API 暴露。
 	//
 	// 【状态：实现完整、刻意未接线，2026-08-12 复核】

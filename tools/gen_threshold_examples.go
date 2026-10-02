@@ -51,7 +51,7 @@ func main() {
 		}
 
 		header := fmt.Sprintf("# Example threshold overrides for %s\n", file)
-		header += "# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.\n\n"
+		header += "# To use, copy this file to ~/.polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.\n\n"
 
 		if err := os.WriteFile(path, append([]byte(header), data...), 0644); err != nil {
 			fmt.Printf("failed to write %s: %v\n", file, err)

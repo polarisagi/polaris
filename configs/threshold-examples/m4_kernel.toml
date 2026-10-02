@@ -1,5 +1,5 @@
 # Example threshold overrides for m4_kernel.toml
-# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+# To use, copy this file to ~/.polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
 
 max_replan_attempts = 3
 default_budget = 50000

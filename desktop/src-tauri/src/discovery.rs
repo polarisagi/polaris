@@ -59,11 +59,10 @@ pub fn find_binary() -> Option<PathBuf> {
         }
     }
 
-    // ② 约定安装位置：install.sh 装到 <home>/.polarisagi/polaris/bin/
+    // ② 约定安装位置：install.sh 装到 <home>/.polaris/bin/
     if let Some(home) = home_dir() {
         let p = home
-            .join(".polarisagi")
-            .join("polaris")
+            .join(".polaris")
             .join("bin")
             .join(exe_name());
         if is_executable(&p) {

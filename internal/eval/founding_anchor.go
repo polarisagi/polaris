@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// foundingAnchorFile 锚点文件名（相对于 dataDir = ~/.polarisagi/polaris/）。
+	// foundingAnchorFile 锚点文件名（相对于 dataDir = ~/.polaris/）。
 	foundingAnchorFile = "founding_anchor.json"
 
 	// DriftWarnThreshold 综合漂移评分触发 WARN 告警的阈值。
@@ -170,7 +170,7 @@ func CompareWithAnchor(anchor *FoundingAnchor, current BehaviorFingerprint) Drif
 
 // LoadOrCreate 加载现有锚点；不存在且轨迹足够时创建。
 // 返回: (anchor, isNewlyCreated, error)
-// dataDir: ~/.polarisagi/polaris/
+// dataDir: ~/.polaris/
 func LoadOrCreate(dataDir string, privKey ed25519.PrivateKey, trajectories []harness.TrajectoryTrace) (*FoundingAnchor, bool, error) {
 	path := filepath.Join(dataDir, foundingAnchorFile)
 

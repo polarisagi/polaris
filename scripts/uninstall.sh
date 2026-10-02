@@ -4,7 +4,7 @@
 set -euo pipefail
 
 BIN_NAME="polaris"
-INSTALL_DIR="$HOME/.polarisagi/polaris/bin"
+INSTALL_DIR="$HOME/.polaris/bin"
 PLIST_LABEL="com.polarisagi.polaris"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 
@@ -81,10 +81,10 @@ elif [ "$OS" = "linux" ]; then
 fi
 
 echo ""
-msg "⚠️  数据目录 ~/.polarisagi/polaris 已保留（含数据库、配置、模型）。" \
-    "⚠️  Data directory ~/.polarisagi/polaris has been kept (DB, configs, models)."
+msg "⚠️  数据目录 ~/.polaris 已保留（含数据库、配置、模型）。" \
+    "⚠️  Data directory ~/.polaris has been kept (DB, configs, models)."
 msg "    彻底清除所有数据请手动执行:" \
     "    To fully remove all data, run manually:"
-echo "    rm -rf ~/.polarisagi/polaris"
+echo "    rm -rf ~/.polaris"
 echo ""
 msg "✅ 卸载完成！" "✅ Uninstallation complete!"

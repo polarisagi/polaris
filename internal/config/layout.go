@@ -8,14 +8,18 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// DataLayout 定义运行时数据根目录下所有子目录的规范布局。
+// DataLayout 定义运行时数据根目录下所有子目录与关键文件的规范布局。
 // 所有子系统必须从此结构取路径，禁止各自拼接 filepath.Join(dataDir, "xxx")。
-// 新增子目录时同步更新 MkdirAll 列表。
+// 新增子目录或系统文件时同步更新常量与 MkdirAll 列表。
 type DataLayout struct {
-	Root string // 例：~/.polarisagi/polaris
+	Root string // 例：~/.polaris
 
 	// 顶层文件
-	ConfigFile string // Root/config.toml
+	ConfigFile     string // Root/config.toml
+	KillSwitchFile string // Root/KILLSWITCH
+	FullStopFile   string // Root/.fullstop
+	VaultKeyFile   string // Root/vault.key
+	CLISessionFile string // Root/cli_session.json
 
 	// 子目录
 	Data       string // Root/data        — SQLite + SurrealDB 数据库文件
@@ -33,6 +37,8 @@ type DataLayout struct {
 	Tmp        string // Root/tmp         — 临时下载 / 解压暂存
 	Bin        string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist、桌面版的 polaris 本体）
 	Run        string // Root/run         — 运行时状态：端口/令牌/PID，仅本机有效，不随备份迁移
+	Secrets    string // Root/secrets     — 机密数据目录（Vault 密钥与敏感凭据保护区）
+	Eval       string // Root/eval        — 评测数据集根目录
 
 	// 派生路径（从上方字段组合，避免调用方再次拼接）
 	SQLiteDB     string // Data/polaris.db
@@ -40,6 +46,9 @@ type DataLayout struct {
 	AuditArchive string // Audit/archive
 	ConfigPrompt string // Config/prompts
 	SkillSignKey string // Config/skill_signing.key
+	SoulMDFile   string // Config/SOUL.md
+	EvalHoldout  string // Eval/holdout     — Holdout Set，防 M9 过拟合
+	EvalTraining string // Eval/training    — Training Set
 
 	// run/ 下三个运行时文件。写入方是守护进程，读取方是 CLI 与桌面外壳
 	// （ADR-0096 决策六）；读写语义（原子写、0600 校验）在 internal/runtimeinfo，
@@ -55,58 +64,72 @@ type DataLayout struct {
 	LocalOnlyAllowlistFile string // Config/local_only_network_allowlist.toml
 }
 
+// DefaultDataLayout 返回当前用户家目录下默认数据根目录的 DataLayout。
+func DefaultDataLayout() (DataLayout, error) {
+	root, err := DefaultDataDir()
+	if err != nil {
+		return DataLayout{}, err
+	}
+	return NewDataLayout(root, DirsConfig{}), nil
+}
+
 // NewDataLayout 返回以 root 为根的完整 DataLayout。
 // overrides 中非空字段会覆盖对应子目录的默认派生路径（来自 DirsConfig）。
 func NewDataLayout(root string, overrides DirsConfig) DataLayout {
 	pick := func(override, defaultVal string) string {
 		if override != "" {
-			return expandHome(override)
+			return ExpandHome(override)
 		}
 		return defaultVal
 	}
 
 	d := DataLayout{
-		Root:       root,
-		ConfigFile: filepath.Join(root, "config.toml"),
-		Config:     filepath.Join(root, "config"),
-		Extensions: filepath.Join(root, "extensions"),
-		Skills:     filepath.Join(root, "skills"),
-		Sessions:   filepath.Join(root, "sessions"),
-		Audit:      filepath.Join(root, "audit"),
-		Reports:    filepath.Join(root, "reports"),
-		Cache:      filepath.Join(root, "cache"),
-		Hooks:      filepath.Join(root, "hooks"),
-		Tmp:        filepath.Join(root, "tmp"),
-		Run:        filepath.Join(root, "run"),
+		Root:           root,
+		ConfigFile:     filepath.Join(root, ConfigFileName),
+		KillSwitchFile: filepath.Join(root, KillSwitchFileName),
+		FullStopFile:   filepath.Join(root, FullStopFileName),
+		VaultKeyFile:   filepath.Join(root, VaultKeyFileName),
+		CLISessionFile: filepath.Join(root, CLISessionFileName),
+		Reports:        filepath.Join(root, SubdirReports),
 	}
-	// 可覆盖的四个路径：logs、data（db）、workspace、models
-	d.Logs = pick(overrides.LogsDir, filepath.Join(root, "logs"))
-	d.Data = pick(overrides.DBDir, filepath.Join(root, "data"))
-	d.Workspace = pick(overrides.WorkspaceDir, filepath.Join(root, "workspace"))
-	d.Models = pick(overrides.ModelsDir, filepath.Join(root, "models"))
-	d.Bin = pick(overrides.BinDir, filepath.Join(root, "bin"))
+	// 支持所有子目录独立挂载/覆盖配置
+	d.Logs = pick(overrides.LogsDir, filepath.Join(root, SubdirLogs))
+	d.Data = pick(overrides.DBDir, filepath.Join(root, SubdirData))
+	d.Workspace = pick(overrides.WorkspaceDir, filepath.Join(root, SubdirWorkspace))
+	d.Models = pick(overrides.ModelsDir, filepath.Join(root, SubdirModels))
+	d.Bin = pick(overrides.BinDir, filepath.Join(root, SubdirBin))
+	d.Config = pick(overrides.ConfigDir, filepath.Join(root, SubdirConfig))
+	d.Extensions = pick(overrides.ExtensionsDir, filepath.Join(root, SubdirExtensions))
+	d.Skills = pick(overrides.SkillsDir, filepath.Join(root, SubdirSkills))
+	d.Sessions = pick(overrides.SessionsDir, filepath.Join(root, SubdirSessions))
+	d.Audit = pick(overrides.AuditDir, filepath.Join(root, SubdirAudit))
+	d.Cache = pick(overrides.CacheDir, filepath.Join(root, SubdirCache))
+	d.Hooks = pick(overrides.HooksDir, filepath.Join(root, SubdirHooks))
+	d.Tmp = pick(overrides.TmpDir, filepath.Join(root, SubdirTmp))
+	d.Run = pick(overrides.RunDir, filepath.Join(root, SubdirRun))
+	d.Secrets = pick(overrides.SecretsDir, filepath.Join(root, SubdirSecrets))
+	d.Eval = pick(overrides.EvalDir, filepath.Join(root, SubdirEval))
 
 	// 派生路径从各自父目录计算
-	d.SQLiteDB = filepath.Join(d.Data, "polaris.db")
-	d.SurrealDB = filepath.Join(d.Data, "surreal.db")
-	d.AuditArchive = filepath.Join(d.Audit, "archive")
-	d.ConfigPrompt = filepath.Join(d.Config, "prompts")
-	d.SkillSignKey = filepath.Join(d.Config, "skill_signing.key")
-	d.LocalOnlyAllowlistFile = filepath.Join(d.Config, "local_only_network_allowlist.toml")
-	d.RunPID = filepath.Join(d.Run, "polaris.pid")
-	d.RunPort = filepath.Join(d.Run, "polaris.port")
-	d.RunToken = filepath.Join(d.Run, "polaris.token")
-	d.RunLock = filepath.Join(d.Run, "polaris.lock")
+	d.SQLiteDB = filepath.Join(d.Data, SQLiteDBFileName)
+	d.SurrealDB = filepath.Join(d.Data, SurrealDBFileName)
+	d.AuditArchive = filepath.Join(d.Audit, SubdirArchive)
+	d.ConfigPrompt = filepath.Join(d.Config, SubdirPrompts)
+	d.SkillSignKey = filepath.Join(d.Config, SkillSignKeyFileName)
+	d.SoulMDFile = filepath.Join(d.Config, SoulMDFileName)
+	d.LocalOnlyAllowlistFile = filepath.Join(d.Config, AllowlistFileName)
+	d.EvalHoldout = filepath.Join(d.Eval, "holdout")
+	d.EvalTraining = filepath.Join(d.Eval, "training")
+	d.RunPID = filepath.Join(d.Run, PIDFileName)
+	d.RunPort = filepath.Join(d.Run, PortFileName)
+	d.RunToken = filepath.Join(d.Run, TokenFileName)
+	d.RunLock = filepath.Join(d.Run, LockFileName)
 	return d
 }
 
-// expandHome 展开路径中的 ~ 前缀。
+// expandHome 展开路径中的 ~ 前缀（兼容老代码调用）。
 func expandHome(p string) string {
-	if len(p) >= 2 && p[:2] == "~/" {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, p[2:])
-	}
-	return p
+	return ExpandHome(p)
 }
 
 // MkdirAll 创建所有运行时必要目录。启动时调用一次，幂等。
@@ -130,6 +153,8 @@ func (l DataLayout) MkdirAll() error {
 		l.Tmp,
 		l.Bin,
 		l.Run,
+		l.Secrets,
+		l.Eval,
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -146,7 +171,7 @@ func (l DataLayout) Migrate() {
 	type mv struct{ src, dst string }
 	migrations := []mv{
 		// 数据库：根目录 → data/
-		{filepath.Join(l.Root, "polaris.db"), l.SQLiteDB},
+		{filepath.Join(l.Root, SQLiteDBFileName), l.SQLiteDB},
 		{filepath.Join(l.Root, "surreal_rust.db"), l.SurrealDB},
 		// 日志：根目录 → logs/
 		{filepath.Join(l.Root, "polaris.log"), filepath.Join(l.Logs, "polaris.log")},

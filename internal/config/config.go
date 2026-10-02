@@ -182,6 +182,25 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// Layout 计算当前配置对应的规范运行时数据布局。
+// 所有子模块由此结构获取各子目录与数据库路径，严禁自行拼接。
+func (c *Config) Layout() DataLayout {
+	dataDir := c.System.DataDir
+	if dataDir == "" {
+		dataDir, _ = DefaultDataDir()
+	} else {
+		dataDir = ExpandHome(dataDir)
+	}
+	layout := NewDataLayout(dataDir, c.System.Dirs)
+	if c.Storage.SQLiteDBFileName != "" {
+		layout.SQLiteDB = filepath.Join(layout.Data, c.Storage.SQLiteDBFileName)
+	}
+	if c.Storage.SurrealDBFileName != "" {
+		layout.SurrealDB = filepath.Join(layout.Data, c.Storage.SurrealDBFileName)
+	}
+	return layout
+}
+
 func GetThresholds(dataDir string) (*Thresholds, error) {
 	t := DefaultThresholds()
 	configDir := os.Getenv("POLARIS_THRESHOLDS_DIR")

@@ -18,18 +18,16 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/runtimeinfo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// serviceLabel 沿用 scripts/install.sh 自 2026 年起使用的标签，不另起新名：
-// 换标签会让已装机器上同时存在两个注册项，两个实例同时起来时后者被单实例锁拒绝，
-// 而用户看到的只是"服务时好时坏"。
-const serviceLabel = "com.polarisagi.polaris"
+// serviceLabel 守护进程服务标识，SSoT 来自 internal/config。
+const serviceLabel = config.ServiceLabelLaunchd
 
-// windowsTaskName 是 Windows 计划任务名。与 serviceLabel 不同：scripts/install.ps1
-// 自 2026 年起用的就是这个名字，换名同样会留下两个注册项（理由见上）。
-const windowsTaskName = "PolarisAGI-Polaris"
+// windowsTaskName 是 Windows 计划任务名，SSoT 来自 internal/config。
+const windowsTaskName = config.WindowsTaskName
 
 func runServiceCmd(args []string) error {
 	if len(args) == 0 {
@@ -236,7 +234,11 @@ func launchdInstall(exe string) error {
 		return err
 	}
 	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".polarisagi", "polaris", "logs")
+	layout, lErr := config.DefaultDataLayout()
+	logDir := filepath.Join(".", config.SubdirLogs)
+	if lErr == nil {
+		logDir = layout.Logs
+	}
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

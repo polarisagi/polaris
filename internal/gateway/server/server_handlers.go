@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/configs"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -72,11 +73,11 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		err    error
 	)
 
-	if cfgPath := os.Getenv("POLARIS_CONFIG"); cfgPath != "" {
+	if cfgPath := os.Getenv(config.EnvPolarisConfig); cfgPath != "" {
 		// Operator 显式指定配置文件：从文件系统读取，路径可为绝对路径或相对路径。
 		raw, err = os.ReadFile(cfgPath)
 		if err != nil {
-			http.Error(w, "POLARIS_CONFIG file not readable: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, config.EnvPolarisConfig+" file not readable: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		source = cfgPath

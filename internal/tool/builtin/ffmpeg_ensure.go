@@ -34,7 +34,7 @@ func FFmpegStaticURL() (string, error) {
 }
 
 // EnsureFFmpeg 按三级优先级查找或自动安装 ffmpeg 可执行文件并返回其路径：
-//  1. binDir 目录下已安装的 ffmpeg (如 ~/.polarisagi/polaris/bin/ffmpeg)
+//  1. binDir 目录下已安装的 ffmpeg (如 ~/.polaris/bin/ffmpeg)
 //  2. 系统全局 PATH 中的 ffmpeg
 //  3. 若均不存在且提供了 httpClient 与 binDir，则自动从 GitHub 下载静态编译包解压安装
 //

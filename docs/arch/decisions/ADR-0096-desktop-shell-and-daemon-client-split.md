@@ -50,10 +50,10 @@
 
 | 组件 | 安装位置 | 更新者 |
 |---|---|---|
-| `polaris` 二进制 + `lib/`（含 `libsubstrate`） | `~/.polarisagi/polaris/bin/`（`config.DataLayout.Bin`，用户级，免管理员权限） | `sysmgr/updater`，**行为与 tarball 渠道完全一致**（ADR-0095 信任模型不变） |
+| `polaris` 二进制 + `lib/`（含 `libsubstrate`） | `~/.polaris/bin/`（`config.DataLayout.Bin`，用户级，免管理员权限） | `sysmgr/updater`，**行为与 tarball 渠道完全一致**（ADR-0095 信任模型不变） |
 | 桌面外壳（`.app` / `.exe` / AppImage） | 平台常规位置 | 重跑安装脚本，或外壳自身的 Tauri updater |
 
-- 外壳启动时以固定路径拉起 `~/.polarisagi/polaris/bin/polaris`，**不使用 Tauri 的 bundle 内 sidecar 机制**。
+- 外壳启动时以固定路径拉起 `~/.polaris/bin/polaris`，**不使用 Tauri 的 bundle 内 sidecar 机制**。
 - 由此 `updater_install.go` 的就地替换（`os.Rename` 覆盖二进制与 `lib/`）**永远发生在 bundle 之外**，不触碰任何已签名结构。托管标记 `POLARIS_MANAGED_BY` 与 `updater` 的"拒绝安装"分支**不需要实现**。
 - 外壳与守护进程版本解耦，故 `/healthz` 响应带版本号（2026-09-21 已实现，`server_handlers.go`），外壳在版本不兼容时提示而非崩溃。
 - **反例守护**：驳回"把 Go 二进制作为 Tauri sidecar 打进 bundle"一类提议——那会让守护进程的自更新与 bundle 完整性耦合；一旦将来取得签名证书，耦合的代价是自更新整条链路作废（见重评触发条件 2）。
@@ -192,7 +192,7 @@
 | 2026-09-21 | 初稿：八条决策，对应桌面化/CLI 化的全部形态选择 |
 | 2026-09-21 | 追记修订：补入「无开发者签名证书」这一约束。决策四由「桌面渠道禁用内置自更新」改为「sidecar 与 dylib 装在 bundle 之外」——初稿的前提（持有证书、bundle 需保持签名有效）不成立；决策八由「平台原生签名 + 不上架商店」改为「命令行安装为主渠道 + 不上架商店」，信任锚点全部落到 cosign。原结论的驳回理由见「被驳回的方案」表相应行。 |
 | 2026-09-21 | 追记修订二：决策七扩写为启动判定状态机——两段式探测（`/healthz` 免鉴权，单探它无法判定凭证有效性）、核心缺失故障页、凭证不匹配不得拉起第二实例；决策三补「外壳内置纯静态故障页」这一唯一例外及其边界。 |
-| 2026-09-21 | 追记修订三：状态转 Accepted；路径订正——守护进程安装位置写为 `DataLayout.Bin`（`~/.polarisagi/polaris/bin`，既有字段），run/ 三文件路径归入 DataLayout 而非由 runtimeinfo 自行推导，遵从 layout.go 的路径 SSoT 约定。 |
+| 2026-09-21 | 追记修订三：状态转 Accepted；路径订正——守护进程安装位置写为 `DataLayout.Bin`（`~/.polaris/bin`，既有字段），run/ 三文件路径归入 DataLayout 而非由 runtimeinfo 自行推导，遵从 layout.go 的路径 SSoT 约定。 |
 | 2026-09-21 | 实施追记：P0（T1~T7）与 P2 外壳骨架落地。三处与初稿的差异已并入正文——服务注册归并为单一实现（决策一）、`/healthz` 带版本号（决策四）、外壳经 `service status --json` 发现运行时状态（决策七）。 |
 | 2026-09-21 | 实施追记二：外壳实跑七个分支（宿主/附着/凭证不匹配/崩溃检测/陈旧状态/核心缺失/版本不兼容）后并入正文——判活改以单实例锁为准、退出改为两个显式菜单项、新增后台巡检；新增「范围裁决」节记录不做的五项及理由。 |
 | 2026-09-22 | 分发合并：GitHub Release 不再分"核心"和"桌面"两类产物。每平台/架构组合只出一个归档，内含守护进程 + Rust dylib + 桌面外壳（有桌面版的平台）+ configs。安装脚本从统一归档中提取桌面外壳并放到平台常规位置（macOS → `/Applications/`，Linux → `~/.local/bin/` + `.desktop` 文件，Windows → 开始菜单快捷方式）。决策四"分开安装"的语义收窄为"运行时分离"而非"分发渠道分离"——updater 仍只替换 `bin/` 与 `lib/`，不触碰桌面外壳。`tauri.conf.json` 移除 `dmg` 和 `deb` bundle targets；Windows 改用原始 exe 而非 `.msi`。 |

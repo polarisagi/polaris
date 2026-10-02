@@ -154,10 +154,10 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	// ─── 1. 配置加载 ─────────────────────────────────────────────────────────
 	cfgPath := configFilePath()
-	if os.Getenv("POLARIS_CONFIG") != "" {
+	if os.Getenv(config.EnvPolarisConfig) != "" {
 		// 显式配置路径缺失 → fail-fast，避免掩盖运维挂载问题
 		if _, statErr := os.Stat(cfgPath); os.IsNotExist(statErr) {
-			return nil, apperr.New(apperr.CodeInternal, "POLARIS_CONFIG file not found: "+cfgPath)
+			return nil, apperr.New(apperr.CodeInternal, config.EnvPolarisConfig+" file not found: "+cfgPath)
 		}
 	}
 	cfg, err := config.Load(cfgPath)
@@ -745,27 +745,16 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 }
 
 // resolveDataDirBase 解析运行时数据根目录。
-// 优先级：POLARIS_DATA_DIR env > cfg.System.DataDir > ~/.polarisagi/polaris
+// 委托给 config.ResolveDataDir 统一权威决议（POLARIS_DATA_DIR env > cfg.System.DataDir > ~/.polaris）。
 // 从 main.go 移入，消除 main.go 对 path/filepath/strings 的依赖。
 func resolveDataDirBase(cfg *config.Config) (string, error) {
-	dir := os.Getenv("POLARIS_DATA_DIR")
-	if dir == "" && cfg != nil && cfg.System.DataDir != "" {
-		dir = cfg.System.DataDir
+	explicit := ""
+	if cfg != nil {
+		explicit = cfg.System.DataDir
 	}
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", apperr.Wrap(apperr.CodeInternal,
-				"cannot determine home directory; set POLARIS_DATA_DIR explicitly", err)
-		}
-		dir = filepath.Join(home, ".polarisagi/polaris")
-	} else if strings.HasPrefix(dir, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", apperr.Wrap(apperr.CodeInternal,
-				"cannot determine home directory for ~ expansion", err)
-		}
-		dir = filepath.Join(home, dir[2:])
+	dir, err := config.ResolveDataDir(explicit)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "failed to resolve data dir", err)
 	}
 	return dir, nil
 }
@@ -902,15 +891,9 @@ func initSurrealStore(
 	return st
 }
 
-// configFilePath 返回配置文件路径：POLARIS_CONFIG 优先，否则用默认根目录下的 config.toml。
-// 守护进程与 CLI 客户端共用同一判定——两份实现必然漂移其一，而漂移的表现是
-// "CLI 读的配置和服务跑的配置不是同一份"，排查时毫无线索。
+// configFilePath 返回配置文件路径：委托给 config.ResolveConfigFile 统一决议。
 func configFilePath() string {
-	if p := os.Getenv("POLARIS_CONFIG"); p != "" {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".polarisagi/polaris", "config.toml")
+	return config.ResolveConfigFile("", "")
 }
 
 // admitBackground 是 boot 层各后台 ticker 的统一资源准入入口。

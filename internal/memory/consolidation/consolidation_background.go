@@ -409,6 +409,6 @@ func (fm *ForgettingManager) processForgettableItemKV(ctx context.Context, id st
 // store 通过协议抽象访问持久化层。
 type ColdArchiver struct {
 	store         protocol.Store
-	archivePath   string // ~/.polarisagi/polaris/archive/
+	archivePath   string // ~/.polaris/archive/
 	retentionDays int    // 热库 30d, 冷库无限
 }

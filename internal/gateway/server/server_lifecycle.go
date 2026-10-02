@@ -80,7 +80,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 	if rwDB == nil {
 		panic("NewServer: rwDB（读写连接）不能为 nil")
 	}
-	// 必须用 NewVaultInDir(dataDir) 而非 NewVault()：后者硬编码 ~/.polarisagi/polaris，
+	// 必须用 NewVaultInDir(dataDir) 而非 NewVault()：后者硬编码 ~/.polaris，
 	// 一旦运行时数据根目录被 POLARIS_DATA_DIR / cfg.System.DataDir 覆盖（Docker 部署下
 	// $HOME 往往不是持久化卷），vault.key 就会和 SQLite 数据库落在不同位置，
 	// 容器重启后 key 丢失导致已加密的 Provider API Key 全部无法解密。

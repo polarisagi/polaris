@@ -50,7 +50,7 @@ type AuditTrail struct {
 	epochBytes int64
 }
 
-// NewAuditTrail 创建审计轨迹，archiveDir 为归档路径（e.g. ~/.polarisagi/polaris/audit/archive/）。
+// NewAuditTrail 创建审计轨迹，archiveDir 为归档路径（e.g. ~/.polaris/audit/archive/）。
 func NewAuditTrail(repo protocol.AuditRepository, archiveDir string) *AuditTrail {
 	return &AuditTrail{
 		repo:       repo,

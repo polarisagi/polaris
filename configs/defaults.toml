@@ -1,11 +1,12 @@
 # polaris default configuration
 # Tier: 0 (8GB RAM) - all remote API, no local model
+# 系统参数与全局路径单一事实源: internal/config/system_params.go
 
 [system]
 tier = 0
 max_agents = 3
 go_memlimit_mb = 150
-data_dir = "~/.polarisagi/polaris"
+data_dir = "~/.polaris"
 data_encryption_key = "" # 留空或配置外部 KMS，不要硬编码明文密钥
 egress_allowed_domains = [] # 出站域名白名单（仅开启网络隔离时生效，空 = 允许所有）
 
@@ -17,28 +18,25 @@ mem_l3_free_mb = 512  # L3 濒死：强杀耗存最大的子进程
 cpu_l1_pct = 80.0     # CPU 阈值：降低后台任务优先级
 cpu_l2_pct = 95.0     # CPU 阈值：限制并发请求
 
-# 运行时目录布局（从 data_dir 自动派生，无需手动设置）：
-#   data_dir/data/        — 数据库文件（polaris.db, surreal.db）
-#   data_dir/logs/        — 日志文件
-#   data_dir/config/      — Operator 配置覆盖 + 用户 prompts
-#   data_dir/extensions/  — 已安装插件（含内嵌 MCP 服务）
-#   data_dir/skills/      — 用户技能脚本 / Wasm
-#   data_dir/models/      — AI 模型文件（SenseVoice 等）
-#   data_dir/workspace/   — Agent 任务沙箱 VFS（每任务一子目录）
-#   data_dir/sessions/    — 会话 transcript 归档
-#   data_dir/audit/       — 审计档案
-#   data_dir/reports/     — 月度成本报告
-#   data_dir/cache/       — HTTP / 推理缓存
-#   data_dir/hooks/       — 用户事件 Hook 脚本
-#   data_dir/tmp/         — Marketplace 下载暂存
-#
-# 以下四个目录可独立挂载到其他磁盘/分区（空字符串 = 使用默认派生路径）：
+# 运行时目录布局（默认均从 data_dir 自动派生，各目录均支持独立挂载到其他磁盘/分区）：
+# 空字符串 = 使用默认派生路径
 [system.dirs]
-logs_dir      = ""   # 示例："/var/log/polarisagi" — 中央日志盘
-db_dir        = ""   # 示例："/mnt/nvme/polarisagi/data" — 高速 NVMe
-workspace_dir = ""   # 示例："/tmp/polarisagi/workspace" — tmpfs 沙箱
-models_dir    = ""   # 示例："/mnt/data/models" — 大容量模型盘
-bin_dir       = ""   # 示例："/opt/polarisagi/bin" — 二进制依赖存放目录
+db_dir         = ""   # 数据库文件目录（默认 data_dir/data，存放 polaris.db, surreal.db）
+logs_dir       = ""   # 系统运行日志目录（默认 data_dir/logs；示例："/var/log/polaris"）
+models_dir     = ""   # 本地 AI 模型资产目录（默认 data_dir/models；示例："/mnt/data/models"）
+workspace_dir  = ""   # Agent 任务沙箱隔离目录（默认 data_dir/workspace；示例："/tmp/polaris/workspace"）
+bin_dir        = ""   # 外部可执行依赖目录（默认 data_dir/bin；示例："/opt/polaris/bin"）
+config_dir     = ""   # 配置覆盖与提示词目录（默认 data_dir/config）
+extensions_dir = ""   # 插件与 Marketplace 安装目录（默认 data_dir/extensions）
+skills_dir     = ""   # 用户技能脚本目录（默认 data_dir/skills）
+sessions_dir   = ""   # 会话历史转录记录（默认 data_dir/sessions）
+audit_dir      = ""   # 审计轨迹与归档目录（默认 data_dir/audit）
+cache_dir      = ""   # HTTP 与推理缓存目录（默认 data_dir/cache）
+hooks_dir      = ""   # 用户事件 Hook 脚本目录（默认 data_dir/hooks）
+tmp_dir        = ""   # 临时下载解压暂存目录（默认 data_dir/tmp）
+run_dir        = ""   # 运行时状态目录（默认 data_dir/run，存放 pid/port/token/lock）
+secrets_dir    = ""   # 机密凭据保护区（默认 data_dir/secrets）
+eval_dir       = ""   # 离线评测数据集目录（默认 data_dir/eval）
 
 # ── 下载配置 ────────────────────────────────────────────────────────────────
 [download]
@@ -106,6 +104,10 @@ http_endpoint = ""   # provider="http" 时填 "http://127.0.0.1:8000/tts"
 # Tier0 SQLite 内存余弦向量扫描的最大行数上限，防止全表扫描导致 OOM（见 docs/specs/09-LLM-Agent-Production.md A-14）。
 # <=0 时代码内回退默认值 500（internal/config/config.go），此处显式声明保持配置可发现性。
 tier0_vector_scan_limit = 500
+# SQLite 关系型与向量核心数据库主文件名（存放于 system.dirs.db_dir 下，默认 polaris.db）
+sqlite_db_filename = "polaris.db"
+# SurrealDB 认知图谱与文档数据库文件名（存放于 system.dirs.db_dir 下，默认 surreal.db）
+surreal_db_filename = "surreal.db"
 
 [storage.engines]
 relational = "sqlite"
@@ -223,7 +225,7 @@ network_policy = "block"
 # Linux bubblewrap 可执行路径，空 = 自动从 PATH 查找。
 bwrap_path = ""
 # Agent 可访问的额外文件系统路径白名单。
-# DataDir（~/.polarisagi/polaris）始终自动包含，无需重复填写。
+# DataDir（~/.polaris）始终自动包含，无需重复填写。
 # 加入后，read_file / list_dir / glob / grep / bash / git_diff 等所有文件工具均可访问该路径。
 # 示例（取消注释并按需修改）：
 # allowed_paths = ["/home/user/projects", "/tmp"]

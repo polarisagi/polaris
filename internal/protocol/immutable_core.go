@@ -23,7 +23,7 @@ type ImmutableCoreFields struct {
 
 	// 三层系统提示词组装字段（stable + volatile）
 
-	// SoulMDContent 用户自定义身份文件内容（~/.polarisagi/polaris/config/SOUL.md）。
+	// SoulMDContent 用户自定义身份文件内容（~/.polaris/config/SOUL.md）。
 	// 非空时替换 DefaultPolarisIdentity 作为 stable 层首段。
 	SoulMDContent string `json:"soul_md_content,omitempty"`
 

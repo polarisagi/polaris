@@ -74,7 +74,7 @@ type LLMClient interface {
 // PluginCreator defines the auto-generation workflow for MCP plugins based on user intent.
 type PluginCreator struct {
 	llm       LLMClient
-	baseDir   string                      // e.g. ~/.polarisagi/polaris/extensions/local/
+	baseDir   string                      // e.g. ~/.polaris/extensions/local/
 	structGen *llmgen.StructuredGenerator // 阶段03 R-06：有界重试+熔断+tracing/metrics
 }
 

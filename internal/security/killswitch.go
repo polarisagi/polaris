@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -47,7 +48,7 @@ type KillSwitch struct {
 	mu          sync.Mutex
 	sigintTimes []time.Time // 3s 窗口内的 SIGINT 时间戳
 
-	// dataDir 用于写入 .fullstop 文件（默认 ~/.polarisagi/polaris）
+	// dataDir 用于写入 .fullstop 文件（默认 ~/.polaris）
 	dataDir string
 	tbr     *metrics.TokenBurnRate
 
@@ -200,9 +201,8 @@ func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) bool {
 func (ks *KillSwitch) writeFullStopFile(reason string) {
 	dataDir := ks.dataDir
 	if dataDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			dataDir = filepath.Join(home, ".polarisagi/polaris")
-		}
+		// 未指定时默认使用全局规范数据目录
+		dataDir, _ = config.DefaultDataDir()
 	}
 	if dataDir != "" {
 		// 目录创建失败必须 fail-closed，与下方 WriteFile 失败同等对待：
@@ -219,7 +219,7 @@ func (ks *KillSwitch) writeFullStopFile(reason string) {
 		}
 		content := fmt.Sprintf("{\"timestamp\":%d,\"reason\":%q,\"actor\":%q}\n",
 			time.Now().Unix(), reason, actor)
-		if err := os.WriteFile(filepath.Join(dataDir, ".fullstop"), []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dataDir, config.FullStopFileName), []byte(content), 0o600); err != nil {
 			panic(fmt.Sprintf("killswitch: failed to write .fullstop file (fail-closed): %v", err))
 		}
 	}
@@ -312,21 +312,19 @@ func (ks *KillSwitch) OnSIGINT() {
 	}
 }
 
-// CheckKILLSWITCHFile 轮询检查 ~/.polarisagi/polaris/KILLSWITCH 文件是否存在。
+// CheckKILLSWITCHFile 轮询检查 KILLSWITCH 文件是否存在。
 // 如果存在则立即触发 FullStop。
 // 调用方：在 goroutine 中以 500ms 间隔定期调用，
 // 或替换为 fsnotify watcher（Tier 1+ 优化）。
 func (ks *KillSwitch) CheckKILLSWITCHFile() {
 	dataDir := ks.dataDir
 	if dataDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			dataDir = filepath.Join(home, ".polarisagi/polaris")
-		}
+		dataDir, _ = config.DefaultDataDir()
 	}
 	if dataDir == "" {
 		return
 	}
-	killFile := filepath.Join(dataDir, "KILLSWITCH")
+	killFile := filepath.Join(dataDir, config.KillSwitchFileName)
 	if _, err := os.Stat(killFile); err == nil {
 		// 文件存在 → 触发 FullStop（持锁）。已处于 FullStop 时不重复迁移：
 		// 轮询周期 500ms，transitionLocked 每次都会推送 CRITICAL 通知。

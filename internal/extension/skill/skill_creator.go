@@ -53,7 +53,7 @@ type ExtensionInstaller interface {
 // SkillCreator defines the auto-generation workflow for skills based on Codex templates.
 type SkillCreator struct {
 	llm        LLMClient
-	baseDir    string // e.g. ~/.polarisagi/polaris/plugins/user/
+	baseDir    string // e.g. ~/.polaris/plugins/user/
 	installMgr ExtensionInstaller
 	registry   protocol.SkillRegistry
 	structGen  *llmgen.StructuredGenerator // 阶段03 R-06：有界重试+熔断+tracing/metrics

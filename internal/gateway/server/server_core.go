@@ -101,7 +101,7 @@ type Server struct {
 	ks *security.KillSwitch // [B1] KillSwitch
 
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
-	soulMDContent       string                // ~/.polarisagi/polaris/config/SOUL.md 内容
+	soulMDContent       string                // ~/.polaris/config/SOUL.md 内容
 	serverPlatform      string                // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
 	promptMgr           protocol.PromptFacade // 提示词管理器（接口）
 	baseSystemPromptTpl string                // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积

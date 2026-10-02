@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -36,14 +37,12 @@ func (ks *KillSwitch) OnRecovery(cb func(ctx context.Context)) {
 func (ks *KillSwitch) removeFullStopFile() error {
 	dataDir := ks.dataDir
 	if dataDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			dataDir = filepath.Join(home, ".polarisagi/polaris")
-		}
+		dataDir, _ = config.DefaultDataDir()
 	}
 	if dataDir == "" {
 		return nil
 	}
-	fullStopFile := filepath.Join(dataDir, ".fullstop")
+	fullStopFile := filepath.Join(dataDir, config.FullStopFileName)
 	if err := os.Remove(fullStopFile); err != nil && !os.IsNotExist(err) {
 		return apperr.Wrap(apperr.CodeInternal, "failed to remove fullstop file", err)
 	}

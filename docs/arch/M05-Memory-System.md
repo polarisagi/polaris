@@ -129,7 +129,7 @@ spotlight_hex 由内容 SHA-256 前 8 位派生（非随机）→ 同内容同�
 ### 3.1 episodic_events 表
 
 > `episodic_events` 是 M2 `events` 表（[EventLog] 真相源）的派生投影表。
-> - **热路径**：`EpisodicMem.Append()` 将事件写入 `kv_store` KV（Key-Value，键值） 表，Payload 上界 8KB，超限落盘至 `~/.polarisagi/polaris/logs/events/<id>.bin` 并替换为 `log_ref` 占位符。
+> - **热路径**：`EpisodicMem.Append()` 将事件写入 `kv_store` KV（Key-Value，键值） 表，Payload 上界 8KB，超限落盘至 `~/.polaris/logs/events/<id>.bin` 并替换为 `log_ref` 占位符。
 > - **冷投影**：`agent_execute.go` 同步向 outbox 写入 `target_engine="episodic"` 记录，OutboxWorker `EpisodicProjectorHandler` 异步消费并 INSERT `episodic_events` 表，填充 `content`/`salience`/`decay_weight`/`cold` 等字段。
 
 **可变字段白名单**: `episodic_events` 为派生投影表，允许受控字段变更（`archived`, `decay_weight`, `salience`, `archive_offset`），其余字段 append-only。每次受控字段变更须写入 `episodic_events_change_log` 表（再由该 log 表参与 M11 hash chain）。M2 `events` 表（真相源）仅 INSERT，绝不 UPDATE。M11 hash chain 覆盖 `events` 表全字段 + `episodic_events_change_log` 表。
@@ -506,7 +506,7 @@ PromptBuilder 布局实现见 `internal/agent/`（PromptBuilder），SessionComp
 | context | 项目上下文（由 M13 Interface 层注入 ambient skills / 全局目标等） | 会话内不变 | `internal/gateway/` |
 | volatile | 当前日期（精确到天，不到分钟，避免逐分钟破坏 prefix cache） | 每天变一次 | `ImmutableCore.VolatileBlock` |
 
-**用户自定义身份**：`~/.polarisagi/polaris/config/SOUL.md` 存在时覆盖 `DefaultPolarisIdentity`，服务启动时一次性读取并缓存到 `Server.soulMDContent`。
+**用户自定义身份**：`~/.polaris/config/SOUL.md` 存在时覆盖 `DefaultPolarisIdentity`，服务启动时一次性读取并缓存到 `Server.soulMDContent`。
 
 **模型感知引导**：`memory.NeedsToolUseEnforcement(modelID)` 判断模型族（deepseek/qwen/gpt/gemini 等），对应注入 `memory.ModelSpecificGuidance(modelID)` 的专属工具调用约束文本，防止模型仅描述意图而不实际调用工具。
 
@@ -521,7 +521,7 @@ PromptBuilder 布局实现见 `internal/agent/`（PromptBuilder），SessionComp
 | 层 | 存储位置 | Owner | 变更方式 | DB（Database，数据库） 重置（re-init）行为 | Factory Reset 行为 |
 |----|---------|-------|---------|---------------------|------------------|
 | **Layer 0** 内置默认 | `configs/prompts/*.md`（go:embed，随二进制） | Polaris 项目 | PR + 重新编译 | 不受影响（embedded） | 不受影响 |
-| **Layer 1** 用户自定义 | `~/.polarisagi/polaris/config/prompts/*.md` | 用户 | 直接编辑文件 或 `PUT /v1/config/prompts/{name}` | **存活**（文件不在 DB 中） | `DELETE /v1/config/prompts/{name}` 显式删除 |
+| **Layer 1** 用户自定义 | `~/.polaris/config/prompts/*.md` | 用户 | 直接编辑文件 或 `PUT /v1/config/prompts/{name}` | **存活**（文件不在 DB 中） | `DELETE /v1/config/prompts/{name}` 显式删除 |
 | **Layer 2** M9 优化 | DB `prompt_versions` 表 | 自进化引擎 | M9 自动生成 + Staging 审批 | **重置**（随 DB 删除，正确） | 随 DB 删除 |
 
 **用户可通过 API 编辑的提示词**（Layer 1，白名单控制）：

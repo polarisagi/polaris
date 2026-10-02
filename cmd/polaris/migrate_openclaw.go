@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -319,12 +320,11 @@ func applyMigration(rep *migrateReport, preset string, overwrite bool) error {
 }
 
 func resolvePolarisDir() string {
-	dir := os.Getenv("POLARIS_DATA_DIR")
-	if dir != "" {
-		return dir
+	dir, err := config.ResolveDataDir("")
+	if err != nil {
+		return "."
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".polarisagi/polaris")
+	return dir
 }
 
 func applyUserData(rep *migrateReport, polarisDir string, overwrite bool) error { //nolint:gocyclo

@@ -251,7 +251,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	// sysadmin/skill_create.go pickSkillCreatorProvider 完全一致的
 	// default→general 兜底链；baseDir 落地目录同
 	// docs/arch/M13-bis-Extension-Registry.md §5.8 约定的
-	// ~/.polarisagi/polaris/extensions/local/。
+	// ~/.polaris/extensions/local/。
 	pluginCreatorProvider := sb.InfReg.PickProvider("default")
 	if pluginCreatorProvider == nil {
 		pluginCreatorProvider = sb.InfReg.PickProvider("general")

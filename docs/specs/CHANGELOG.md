@@ -118,7 +118,7 @@
 
 ## 2026-09-26（ADR-0103 第二阶段：统一插件/技能/连接器安装路径 — 含**契约变更**与 **DDL 变更**）
 
-- **[DDL] `015_mcp_servers.sql` 新增 `headers`**（上线前直接改原文件）：开发库需删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。
+- **[DDL] `015_mcp_servers.sql` 新增 `headers`**（上线前直接改原文件）：开发库需删除重建（`rm ~/.polaris/data/polaris.db`）。
 - **[契约] `internal/extension/pluginspec` 是插件 / 技能 / MCP 配置的唯一解析器**；新增清单解析不得绕开它。
 - **[契约] MCP 启动只经 `MCPManager.StartFromDB(serverID)`**：`mcp_servers` 行是配置权威源，`ConfigFromRow` 统一展开插件变量与 headers；新增调用点不得再自行拼 `MCPClientConfig` 调 `Add`。`protocol.MCPClientConfig` / `MCPUpdateConfig` / `types.MCPServerRow` 新增 `Headers`。
 - **[契约] `lifecycle.Installer.Install` 返回 `InstallResult{Dir, RuntimeID}`**，由 `InstallFSM` 回写 `install_path` / `runtime_id` / `status`；`Manager.CompleteInstall` 为文件就位后的唯一绑定入口；`ExtensionRepository` 新增 `UpdateInstanceRuntimeID`、`GetPluginInstallPath`，`UpsertPlugin` 改收 `types.PluginRow`。

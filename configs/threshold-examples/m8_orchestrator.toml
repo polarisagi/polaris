@@ -1,5 +1,5 @@
 # Example threshold overrides for m8_orchestrator.toml
-# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+# To use, copy this file to ~/.polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
 
 'lease.ttl_seconds' = 60
 'heartbeat.seconds' = 15

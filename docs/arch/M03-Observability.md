@@ -248,7 +248,7 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 
 ## 6. OSMemoryGuard — 绝对空闲内存兜底
 
-OSMemoryGuard 与 M13 ResourceGovernor 共享统一三级资源降级体系。**阈值实际加载路径**：`internal/config/thresholds.go` 的 `M3ObservabilityThresholds`（`MemCautionMB`=1536 / `MemWarningMB`=1024 / `MemCriticalMB`=512，通过 `config.LoadThresholds(dataDir)` 读取 `~/.polarisagi/polaris/config/m3_observability.toml` 覆盖）。`spec/state.yaml §thresholds.memory_pressure` 定义百分比策略（`memory_governor_soft_pct` 等），与 MB 绝对值阈值是两套互补系统，非同一来源。
+OSMemoryGuard 与 M13 ResourceGovernor 共享统一三级资源降级体系。**阈值实际加载路径**：`internal/config/thresholds.go` 的 `M3ObservabilityThresholds`（`MemCautionMB`=1536 / `MemWarningMB`=1024 / `MemCriticalMB`=512，通过 `config.LoadThresholds(dataDir)` 读取 `~/.polaris/config/m3_observability.toml` 覆盖）。`spec/state.yaml §thresholds.memory_pressure` 定义百分比策略（`memory_governor_soft_pct` 等），与 MB 绝对值阈值是两套互补系统，非同一来源。
 
 实现见 `internal/observability/`（OSMemoryGuard）。阈值：criticalThresholdMB=512MB（**L3 临界**）/ warningThresholdMB=1.0GB（**L2 紧急**）/ cautionThresholdMB=1.5GB（**L1 预警**）；斜率窗口 4 槽环形缓冲区，采样间隔 5s，斜率阈值 -100MB/s。
 

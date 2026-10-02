@@ -20,7 +20,7 @@ import (
 const maxEpisodicEvents = 2000
 
 // maxEpisodicPayloadBytes kv_store 单条 episodic 事件 Payload 的最大字节数。
-// 超限部分落盘到 ~/.polarisagi/polaris/logs/events/ 并替换为 log_ref 占位符，
+// 超限部分落盘到 ~/.polaris/logs/events/ 并替换为 log_ref 占位符，
 // 保留前 512 字节作为 BM25 可搜索摘要。
 const maxEpisodicPayloadBytes = 8192
 

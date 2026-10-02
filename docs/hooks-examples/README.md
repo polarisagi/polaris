@@ -2,7 +2,7 @@
 
 Polaris 采用 Claude / Codex 共同的 `hooks.json` 模型（ADR-0103 决策六）。
 
-- 用户级：`~/.polarisagi/polaris/hooks/hooks.json`（视为已信任）
+- 用户级：`~/.polaris/hooks/hooks.json`（视为已信任）
 - 项目级：`<项目根>/.polaris/hooks/hooks.json`（需在「插件 › Hooks」审阅信任后才执行）
 - 插件：插件包内 `hooks/hooks.json` 或清单 `hooks` 字段（同样需审阅信任；定义变更后须重新审阅）
 

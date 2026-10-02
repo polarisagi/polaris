@@ -38,7 +38,7 @@ for arg in "$@"; do
 done
 
 # ── 安装目录布局（与 scripts/install.sh / cli_service.go serviceLabel 一致）──
-INSTALL_DIR="$HOME/.polarisagi/polaris"
+INSTALL_DIR="$HOME/.polaris"
 BIN_DIR="$INSTALL_DIR/bin"
 LOG_OUT="$INSTALL_DIR/logs/service.out.log"
 LOG_ERR="$INSTALL_DIR/logs/service.err.log"

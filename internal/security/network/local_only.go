@@ -97,7 +97,7 @@ func isLocalTLD(host string) bool {
 }
 
 // Allowlist local_only 网络白名单。
-// 配置: ~/.polarisagi/polaris/config/local_only_network_allowlist.toml, Ed25519 签名防篡改。
+// 配置: ~/.polaris/config/local_only_network_allowlist.toml, Ed25519 签名防篡改。
 // 上限: Tier 3=5 条, Tier 0/1/2 禁用。
 // 仅 M10 Connector 子系统豁免; M1/M12/OTel 仍全阻断。
 type Allowlist struct {
@@ -266,7 +266,7 @@ func (ns *NetworkSandbox) StartupCheck() error {
 	// DNS 泄露检测: 解析公网域名 → 收到响应 → 沙箱失效
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	addrs, err := ns.dnsResolver.LookupHost(ctx, "privacy-check.polarisagi/polaris-external.com")
+	addrs, err := ns.dnsResolver.LookupHost(ctx, "privacy-check.polaris-external.com")
 	if err == nil && len(addrs) > 0 {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("local_only: DNS leak detected — %d addresses resolved for privacy check domain", len(addrs)))
 	}

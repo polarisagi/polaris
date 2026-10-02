@@ -30,7 +30,7 @@
 ### 症状 4：重启后插件市场/插件目录页面短暂为空
 - **症状特征**：重启后插件市场/插件目录页面短暂为空，过一两分钟自己又有了。
 - **归类模块**：M13-bis
-- **根因类别**：1) 启动期后台全量同步尚未跑完（约 1~2 分钟）；2) 多个 polaris 进程共用同一个 `~/.polarisagi/polaris/data/polaris.db`（如 launchd 常驻实例 + 本地测试构建同时跑）。
+- **根因类别**：1) 启动期后台全量同步尚未跑完（约 1~2 分钟）；2) 多个 polaris 进程共用同一个 `~/.polaris/data/polaris.db`（如 launchd 常驻实例 + 本地测试构建同时跑）。
 - **排查起点**：`internal/gateway/server/server_init.go` `bootMarketplaceInit`；`lsof`/`pgrep -fl "polaris serve"` 确认是否有多个实例共用数据目录（`scripts/restart.sh` 自 2026-09-22 起直接热部署常驻服务，不再另起隔离沙箱实例）。
 
 ### 症状 5：怀疑外部阻塞式调用导致卡死

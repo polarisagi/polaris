@@ -60,7 +60,7 @@ func utf8ValidStart(b byte) bool {
 // 返回内容：前 512 字节（BM25 可用，按 UTF-8 边界截断）+ log_ref JSON。
 //
 // GR-5-001 修复：原实现直接调用 os.MkdirAll/os.WriteFile 并硬编码
-// ~/.polarisagi/polaris/logs/events/ 绝对路径，绕过 VFS 隔离边界（HE-6：
+// ~/.polaris/logs/events/ 绝对路径，绕过 VFS 隔离边界（HE-6：
 // "单行载荷超 4KB 必须卸载至 VFS，禁止在 memory 层直接调用 os.WriteFile"）。
 // 未注入 vfsWriter 时（如未接入 VFS 的最小化 Tier-0 部署/单测），降级为
 // 仅保留截断预览、不落盘完整内容——不再绕过分层直接写宿主文件系统。

@@ -219,7 +219,7 @@ SSE 事件 (text/event-stream): "token" | "tool_call" | "tool_result" | "thinkin
 #### 1.2.1 认证
 
 **AuthMiddleware**:
-- 1. X-Session-Token → 匹配本地 Bearer Token (`~/.polarisagi/polaris/.session_token` 0600) → 放行; loopback 不免密 → 401
+- 1. X-Session-Token → 匹配本地 Bearer Token (`~/.polaris/.session_token` 0600) → 放行; loopback 不免密 → 401
 - 2. X-API-Key → `[CredentialVault] KeychainProvider.Verify SHA-256` 常量时间比较 → 失败 401
 - **公网**: JWT Ed25519 + TLS 1.3; 3 次失败 → IP 冷却 5min
 

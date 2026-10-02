@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -27,15 +28,16 @@ func forbiddenDirs() []string {
 }
 
 func forbiddenDirsLiteral() []string {
-	home, err := os.UserHomeDir()
+	layout, err := config.DefaultDataLayout()
 	if err != nil {
-		return []string{"/etc", "/usr", "/bin", "/sbin", "/root/.polarisagi"}
+		return []string{"/etc", "/usr", "/bin", "/sbin", "/root/" + config.DefaultDataDirRel}
 	}
+	home, _ := os.UserHomeDir()
 	return []string{
-		filepath.Join(home, ".polarisagi", "polaris", "config"),
-		filepath.Join(home, ".polarisagi", "polaris", "data"),
-		filepath.Join(home, ".polarisagi", "polaris", "secrets"),
-		filepath.Join(home, ".polarisagi", "polaris", "audit"),
+		layout.Config,
+		layout.Data,
+		layout.Secrets,
+		layout.Audit,
 		filepath.Join(home, ".ssh"),
 		filepath.Join(home, ".gnupg"),
 		"/etc",

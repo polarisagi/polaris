@@ -31,7 +31,7 @@ import (
 
 type WorkspaceManager struct {
 	rootDir   string
-	cfg       config.M7ToolThresholds // ~/.polarisagi/polaris/workspaces
+	cfg       config.M7ToolThresholds // ~/.polaris/workspaces
 	maxSize   int64                   // Tier 0 = 500MB
 	manifests map[string]*WorkspaceManifest
 	gcCh      chan string  // Background GC queue

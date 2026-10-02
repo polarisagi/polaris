@@ -7,7 +7,7 @@
 | 脚本 | 目标平台 | 说明与触发场景 |
 |---|---|---|
 | `install.sh` / `.ps1` | Mac/Linux/Win | **用户一键安装**：从远端下载最新版 Release 二进制，并配置系统的开机后台守护服务。 |
-| `uninstall.sh` / `.ps1` | Mac/Linux/Win | **一键卸载清理**：停止并移除系统服务、删除二进制文件及 Rust dylib（默认安全保留 `~/.polarisagi/polaris` 下的所有用户数据）。 |
+| `uninstall.sh` / `.ps1` | Mac/Linux/Win | **一键卸载清理**：停止并移除系统服务、删除二进制文件及 Rust dylib（默认安全保留 `~/.polaris` 下的所有用户数据）。 |
 | `restart.sh` | 本地开发机 | **开发联调热启**：停止本地旧进程 → 重新构建前/后端代码 → 在 `28889` 开发测试端口启动程序。附加 `--full` 参数可强制重编底层 Rust FFI。 |
 | `ci_test.sh` | 本地开发机 | **推送前本地全链路预检**：在本地复刻 GitHub Actions CI 的全套 13 步流程，遇错不立即中止、全部跑完后汇总报告。**在本机运行，不由 CI 自动触发**（CI 有自己的 `.github/workflows/ci.yml`）。 |
 | `docs-refs.sh` | CI / 本地 | **架构文档失效路径门控**（`make docs-refs` 调用）：扫描活文档中引用但仓库内不存在的路径、Go 注释同类漂移、§ 锚点、ADR 编号体系自洽性。 |

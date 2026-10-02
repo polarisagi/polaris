@@ -1,5 +1,5 @@
 # Example threshold overrides for m2_storage.toml
-# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+# To use, copy this file to ~/.polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
 
 'sqlite.busy_timeout_ms' = 5000
 'surreal.buffer_pool_mb' = 64

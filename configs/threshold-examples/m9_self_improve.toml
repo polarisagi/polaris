@@ -1,5 +1,5 @@
 # Example threshold overrides for m9_self_improve.toml
-# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+# To use, copy this file to ~/.polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
 
 'worker.cpu_pct_user_active' = 0.05
 'worker.cpu_pct_idle' = 0.5

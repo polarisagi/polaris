@@ -70,7 +70,7 @@ func (h *SysAdminHandler) HandleGetPrompt(w http.ResponseWriter, r *http.Request
 }
 
 // HandleSetPrompt PUT /v1/config/prompts/{name}
-// 将用户编辑的提示词写入 ~/.polarisagi/polaris/config/prompts/{filename}。
+// 将用户编辑的提示词写入 ~/.polaris/config/prompts/{filename}。
 // 立即热更新 ImmutableCore，下一轮对话生效。
 func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

@@ -9,13 +9,14 @@ function Write-Msg {
     else        { Write-Host $en -ForegroundColor $Color }
 }
 
-$Repo       = "polarisagi/polaris"
-$BinName    = "polaris.exe"
-$InstallDir = "$env:USERPROFILE\.polarisagi\polaris\bin"
-$DataDir    = "$env:USERPROFILE\.polarisagi\polaris"
-$LogDir     = "$DataDir\logs"
-$Port       = 28888
-$TaskName   = "PolarisAGI-Polaris"
+# 全局系统参数与路径配置（与 internal/config/system_params.go 保持单一事实源一致）
+$Repo          = "polarisagi/polaris"
+$BinName       = "polaris.exe"
+$InstallDir    = "$env:USERPROFILE\.polaris\bin"
+$DataDir       = "$env:USERPROFILE\.polaris"
+$LogDir        = "$DataDir\logs"
+$Port          = 28888
+$TaskName      = "PolarisAGI-Polaris"
 
 Write-Msg -zh "🌌 正在安装/更新 PolarisAGI Polaris..." `
            -en "🌌 Installing/Updating PolarisAGI Polaris..." -Color Cyan

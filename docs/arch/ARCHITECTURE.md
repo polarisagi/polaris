@@ -172,7 +172,7 @@ M3 OSMemoryGuard L1 预警（1.5GB Free）在峰值时，会触发后台任务�
 四层优先级（高优先级覆盖低优先级）：
 
 ```
-Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESHOLDS_DIR）< 环境变量(POLARIS_*) < CLI 启动参数
+Default 代码常量 < ~/.polaris/config/m*.toml（或 POLARIS_THRESHOLDS_DIR）< 环境变量(POLARIS_*) < CLI 启动参数
 ```
 
 1. **加载与验证边界**：

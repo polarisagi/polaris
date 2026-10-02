@@ -219,7 +219,7 @@ DELETE /v1/mcp-servers/{plugin_xxx}    返回 405——插件 MCP 须通过插�
 
 ### 5.8 Plugin 自动生成（PluginCreator）
 
-`PluginCreator.GeneratePlugin()` 按意图生成 TypeScript MCP 服务器，以 **agent-plugins 1.0 布局**落盘到 `~/.polarisagi/polaris/extensions/local/{name}/`（`plugin.json` + `mcp.json` + `src/index.ts` + `deno.json`），随后以 `ext_type=plugin`、`LocalPath` 走 §5.1 主干安装——与市场插件同一解析、授权与启动路径。
+`PluginCreator.GeneratePlugin()` 按意图生成 TypeScript MCP 服务器，以 **agent-plugins 1.0 布局**落盘到 `~/.polaris/extensions/local/{name}/`（`plugin.json` + `mcp.json` + `src/index.ts` + `deno.json`），随后以 `ext_type=plugin`、`LocalPath` 走 §5.1 主干安装——与市场插件同一解析、授权与启动路径。
 
 **运行时约定**：优先 Deno（`deno run --no-prompt` + `denoPermFlags`）；Deno 不可用时回退 `npx tsx`。
 
@@ -275,7 +275,7 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
 ## 7. 文件系统布局
 
 ```
-~/.polarisagi/polaris/
+~/.polaris/
 ├── extensions/
 │   ├── {ext_id}/               # 市场安装的技能 / 插件（gateway 从市场缓存原样拷贝）
 │   │   ├── SKILL.md            # 独立技能：agentskills.io frontmatter（Polaris 参数在 metadata.polaris-*）

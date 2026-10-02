@@ -159,7 +159,7 @@ PR 创建后 CI 触发独立 AI reviewer agent（执行带 3，对抗审查）�
 1. 定位目标 SQL 文件：internal/protocol/schema/NNN_<name>.sql
 2. 直接修改 CREATE TABLE 语句（增列、改类型、加索引）
 3. 禁止：新建 NNN_*.sql 补丁文件（哪怕编号更高也禁止）
-4. 删除开发库：rm ~/.polarisagi/polaris/data/polaris.db
+4. 删除开发库：rm ~/.polaris/data/polaris.db
 5. make build && bin/polaris（自动 apply 重建）
 ```
 

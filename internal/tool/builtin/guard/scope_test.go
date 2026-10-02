@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -26,9 +27,9 @@ func TestCheckScopeRoot(t *testing.T) {
 		"/",                                 // 根
 		filepath.Join(home, ".ssh"),         // 敏感目录本身
 		filepath.Join(home, ".ssh", "keys"), // 敏感目录内
-		filepath.Join(home, ".polarisagi"),  // 敏感目录的祖先
-		"/etc",                              // 系统目录
-		"relative/dir",                      // 非绝对路径
+		filepath.Join(home, config.DefaultDataDirRel), // 敏感目录的祖先
+		"/etc",         // 系统目录
+		"relative/dir", // 非绝对路径
 	}
 	// macOS：/etc 是 /private/etc 的软链，规范化后的项目根是后者，同样须拒绝。
 	if real, err := filepath.EvalSymlinks("/etc"); err == nil && real != "/etc" {

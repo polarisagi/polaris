@@ -68,7 +68,7 @@ Fork 源码、参与贡献的技术用户。可直接修改 Go/Rust 代码。扩
 
 Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模型，零依赖，脚本可用任意语言编写。
 
-**目录**：`~/.polarisagi/polaris/hooks/`（或 `POLARIS_HOOKS_DIR` 环境变量覆盖）
+**目录**：`~/.polaris/hooks/`（或 `POLARIS_HOOKS_DIR` 环境变量覆盖）
 
 **事件点**：
 

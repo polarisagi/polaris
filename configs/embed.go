@@ -12,7 +12,7 @@ import "embed"
 //   - policy/：Cedar 策略文件（hard_constraints.cedar / soft_constraints.cedar / memory.cedar）
 //
 // 排除（设计意图）：
-//   - threshold-examples/：仅供 Operator 复制到 ~/.polarisagi/polaris/config/ 使用，不嵌入
+//   - threshold-examples/：仅供 Operator 复制到 ~/.polaris/config/ 使用，不嵌入
 //
 //go:embed *.toml prompts automations extensions policy
 var FS embed.FS

@@ -264,7 +264,7 @@ D2 (性能) 触发: Hot 表行数 >100 万或空间 >500MB → 自动触发 Warm
 
 ## 4. WorkspaceManager — 重型中间物文件系统
 
-大规模爬取结果、AST dump、diff patch、二进制文件不入 SQLite（Blob 膨胀），不入 Working Memory（[Tier-0-Limit]）。Working Memory 仅持有路径+摘要。物理路径：`~/.polarisagi/polaris/workspace/<task_id>/`，权限 0700。
+大规模爬取结果、AST dump、diff patch、二进制文件不入 SQLite（Blob 膨胀），不入 Working Memory（[Tier-0-Limit]）。Working Memory 仅持有路径+摘要。物理路径：`~/.polaris/workspace/<task_id>/`，权限 0700。
 
 实现见 `internal/store/`（WorkspaceManager）：
 
@@ -284,7 +284,7 @@ D2 (性能) 触发: Hot 表行数 >100 万或空间 >500MB → 自动触发 Warm
   - 提前 5 天: ResourceReaper 写 `hitl_suspension_expiry_warning` WARN 审计 + 操作员通知
   - 到期: (a) 清零 task_pii_vault 行（SecureZero；PII（Personally Identifiable Information，个人敏感信息） 先于一切删除）→ (b) MutationBus 置 S_FAILED + 写 `suspended_hitl_timeout_expired` → (c) HITL 通知（M13）→ (d) 之后 7 天走正常 GC
 - **KillSwitch-Suspended**: 无 TTL（等 unseal 自动恢复）。
-  - 但磁盘 <100MB CRITICAL 且 workspace UpdatedAt >7 天 → 打包 `~/.polarisagi/polaris/archive/<task_id>_<timestamp>.tar.zst` 删原目录，保留 Blackboard 元数据。unseal 时 M13 检查 archive 存在 → 先解压再恢复任务。归档上限 10GB（LRU 删最老 + WARN）。
+  - 但磁盘 <100MB CRITICAL 且 workspace UpdatedAt >7 天 → 打包 `~/.polaris/archive/<task_id>_<timestamp>.tar.zst` 删原目录，保留 Blackboard 元数据。unseal 时 M13 检查 archive 存在 → 先解压再恢复任务。归档上限 10GB（LRU 删最老 + WARN）。
 - **Dead-letter Pending**: `status=Pending` 且 Outbox max_attempts 耗尽 (`status='dead'`) 且 UpdatedAt+7d>now → 直接 S_FAILED + GC workspace。
 - **provider_exhausted-Suspended**: 无 TTL。M1 CircuitBreaker 恢复 (§7.3) 触发自动唤醒。`provider_suspended_count > 5` 已 ESCALATE→HITL，转 HITL-Suspended TTL 管理。
 
@@ -294,7 +294,7 @@ D2 (性能) 触发: Hot 表行数 >100 万或空间 >500MB → 自动触发 Warm
 
 **Workspace 静态加密**: 外部 Connector (M10) 拉取的原始文件落盘前 AES-256-GCM 加密（key 由 M11 CredentialVault.persistent_key 派生）。强制加密: `[TaintLevel]` ≥ `[Taint-Medium]`；可选跳过: `[Taint-Low]`/`[Taint-None]`（系统自生成 / 用户本地代码，省 CPU）。密钥与 M11 SafeString HMAC 共享同一 persistent_key。
 
-VFS 引用计数 + SQLite Trigger 自动回收: 热表大型载荷 (>4KB) 不存入 B-Tree 页，写入 VFS 文件 (`~/.polarisagi/polaris/vfs/{sha256_prefix}/{uuid}.blob`)，热表仅存 `vfs_ref` 指针。4KB 热行硬限防 B-Tree 页缓存血崩。
+VFS 引用计数 + SQLite Trigger 自动回收: 热表大型载荷 (>4KB) 不存入 B-Tree 页，写入 VFS 文件 (`~/.polaris/vfs/{sha256_prefix}/{uuid}.blob`)，热表仅存 `vfs_ref` 指针。4KB 热行硬限防 B-Tree 页缓存血崩。
 
 ```sql
 sys_vfs_references: vfs_ref TEXT PK, ref_count INTEGER
@@ -306,7 +306,7 @@ BEFORE DELETE trigger 自动递减引用计数，引用归零入队 GC。4KB 硬
 
 ## 5. Schema 迁移策略
 
-**当前阶段（上线前）**：Schema 变更直接修改 `internal/protocol/schema/NNN_*.sql` 原始 DDL 文件，删库重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。禁止以 ALTER TABLE/ADD COLUMN 补丁文件打补丁。
+**当前阶段（上线前）**：Schema 变更直接修改 `internal/protocol/schema/NNN_*.sql` 原始 DDL 文件，删库重建（`rm ~/.polaris/data/polaris.db`）。禁止以 ALTER TABLE/ADD COLUMN 补丁文件打补丁。
 
 **上线后**：新增编号迁移文件（ALTER TABLE / 数据迁移），由 `internal/store/`（SchemaManager）负责：按版本升序执行，每条迁移在独立事务内运行（失败自动回滚），前后向 `sys_config` 写入状态标记（idle / in_progress / completed）。崩溃恢复：启动时检测到 `in_progress` 则拒绝启动，要求操作员重置后重启。
 
@@ -395,7 +395,7 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
     > **后端选择策略（三级 RAM 降级，`boot_substrate.go initSurrealStore`）**
     > - **<2GB**: 跳过 SurrealDB，FeatureSurrealDBCore 禁用。
     > - **2-4GB**: 强制 `kv-mem`，覆盖配置文件，进程重启数据丢失，由 SQLite Outbox 投影恢复（§2.5）。
-    > - **≥4GB（默认路径）**: 使用 `configs/defaults.toml [cognition] surreal_backend`（默认值 `"rocksdb"`），持久化落盘 `~/.polarisagi/polaris/data/surreal.db`，RSS ~200MB。
+    > - **≥4GB（默认路径）**: 使用 `configs/defaults.toml [cognition] surreal_backend`（默认值 `"rocksdb"`），持久化落盘 `~/.polaris/data/surreal.db`，RSS ~200MB。
     > - **≥8GB**: 额外自动开启 workerThreads，提升并发处理能力。
     > - **surreal-mem**: 仅在 RAM 2-4GB 时自动降级，或显式配置 `surreal_backend = "mem"` 时使用。
 

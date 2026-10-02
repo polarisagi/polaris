@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -23,7 +24,7 @@ func getToolUseEnforcementModels() []string {
 
 // Manager 管理提示词和用户身份（消除包级全局变量）。
 // 三层优先级：用户自定义文件 > embedded 内置默认 > 硬编码 fallback。
-// 写路径：WriteUserPrompt / DeleteUserPrompt → ~/.polarisagi/polaris/config/prompts/
+// 写路径：WriteUserPrompt / DeleteUserPrompt → ~/.polaris/config/prompts/
 // 读路径：ReadPrompt → 按三层优先级加载
 type Manager struct {
 	configDir         string
@@ -36,8 +37,11 @@ var _ protocol.PromptFacade = (*Manager)(nil)
 // NewManager 构造 Manager。
 func NewManager(configDir string, embeddedPromptsFS fs.FS) *Manager {
 	if configDir == "" {
-		home, _ := os.UserHomeDir()
-		configDir = filepath.Join(home, ".polarisagi/polaris", "config")
+		if layout, err := config.DefaultDataLayout(); err == nil {
+			configDir = layout.Config
+		} else {
+			configDir = filepath.Join(".", config.SubdirConfig)
+		}
 	}
 	return &Manager{
 		configDir:         configDir,

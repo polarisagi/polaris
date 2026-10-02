@@ -45,13 +45,24 @@ type ResourceGovernorConfig struct {
 
 // DirsConfig 允许 Operator 将特定子目录挂载到其他磁盘/分区。
 // 未设置的字段自动从 DataDir 派生（见 DataLayout.NewDataLayout）。
-// 典型场景：logs_dir 指向中央日志盘；db_dir 指向高速 NVMe；workspace_dir 指向 tmpfs。
+// 典型场景：logs_dir 指向中央日志盘；db_dir 指向高速 NVMe；workspace_dir 指向 tmpfs；models_dir 指向大容量存储。
 type DirsConfig struct {
-	LogsDir      string `toml:"logs_dir"`      // 覆盖 DataDir/logs
-	DBDir        string `toml:"db_dir"`        // 覆盖 DataDir/data（数据库文件）
-	WorkspaceDir string `toml:"workspace_dir"` // 覆盖 DataDir/workspace（Agent VFS 沙箱）
-	ModelsDir    string `toml:"models_dir"`    // 覆盖 DataDir/models（AI 模型文件）
-	BinDir       string `toml:"bin_dir"`       // 覆盖 DataDir/bin（二进制依赖等，如 ollama）
+	LogsDir       string `toml:"logs_dir"`       // 覆盖 DataDir/logs（系统运行日志）
+	DBDir         string `toml:"db_dir"`         // 覆盖 DataDir/data（SQLite + SurrealDB 数据库文件）
+	WorkspaceDir  string `toml:"workspace_dir"`  // 覆盖 DataDir/workspace（Agent VFS 任务沙箱）
+	ModelsDir     string `toml:"models_dir"`     // 覆盖 DataDir/models（本地 AI 模型权重资产）
+	BinDir        string `toml:"bin_dir"`        // 覆盖 DataDir/bin（外部依赖可执行文件）
+	ConfigDir     string `toml:"config_dir"`     // 覆盖 DataDir/config（配置覆盖、提示词、SOUL.md）
+	ExtensionsDir string `toml:"extensions_dir"` // 覆盖 DataDir/extensions（插件市场安装目录）
+	SkillsDir     string `toml:"skills_dir"`     // 覆盖 DataDir/skills（用户自定义技能脚本）
+	SessionsDir   string `toml:"sessions_dir"`   // 覆盖 DataDir/sessions（会话历史转录记录）
+	AuditDir      string `toml:"audit_dir"`      // 覆盖 DataDir/audit（不可变审计日志与归档）
+	CacheDir      string `toml:"cache_dir"`      // 覆盖 DataDir/cache（HTTP/推理缓存）
+	HooksDir      string `toml:"hooks_dir"`      // 覆盖 DataDir/hooks（用户事件触发钩子）
+	TmpDir        string `toml:"tmp_dir"`        // 覆盖 DataDir/tmp（临时下载解压暂存）
+	RunDir        string `toml:"run_dir"`        // 覆盖 DataDir/run（运行时状态 PID/端口/锁文件）
+	SecretsDir    string `toml:"secrets_dir"`    // 覆盖 DataDir/secrets（主密钥与敏感凭据保护区）
+	EvalDir       string `toml:"eval_dir"`       // 覆盖 DataDir/eval（评测与基准数据集）
 }
 
 type InferenceConfig struct {
@@ -137,6 +148,8 @@ type CacheConfig struct {
 type StorageConfig struct {
 	Engines              map[string]string `toml:"engines"`
 	Tier0VectorScanLimit int               `toml:"tier0_vector_scan_limit"`
+	SQLiteDBFileName     string            `toml:"sqlite_db_filename"`  // 覆盖默认 polaris.db
+	SurrealDBFileName    string            `toml:"surreal_db_filename"` // 覆盖默认 surreal.db
 }
 
 type ObservabilityConfig struct {
@@ -300,7 +313,7 @@ type SandboxConfig struct {
 	// BwrapPath Linux 下 bubblewrap 可执行文件路径。空 = 自动 PATH 查找。
 	BwrapPath string `toml:"bwrap_path"`
 	// AllowedPaths Agent 可访问的额外文件系统路径白名单。
-	// DataDir（~/.polarisagi/polaris）始终自动包含，无需重复填写。
+	// DataDir（~/.polaris）始终自动包含，无需重复填写。
 	// 典型用途：将用户项目目录加入白名单，让 Agent 可读写项目文件并在该目录执行命令。
 	// 示例：["/home/user/projects", "/tmp/scratch"]
 	// 注意：bash/run_command 工具的进程沙箱仅允许读写这些路径（OS 级强制隔离）。

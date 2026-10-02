@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -261,6 +261,9 @@ func mapTableWithOpts(ocDB, polDB *sql.DB, table string, opts migrateOpts) (int,
 			content: content, role: role, ts: ts,
 			sessionID: sessionID, title: title,
 		})
+	}
+	if err := ocRows.Err(); err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "迭代行数据失败", err)
 	}
 
 	if len(rawRows) == 0 {
@@ -666,12 +669,11 @@ func quoteTable(name string) string { return fmt.Sprintf("%q", name) }
 func quoteCol(name string) string   { return fmt.Sprintf("%q", name) }
 
 func resolvePolarisDB() string {
-	dir := os.Getenv("POLARIS_DATA_DIR")
-	if dir != "" {
-		return filepath.Join(dir, "polaris.db")
+	dir, err := config.ResolveDataDir("")
+	if err != nil {
+		return config.SQLiteDBFileName
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".polarisagi/polaris", "polaris.db")
+	return filepath.Join(dir, config.SubdirData, config.SQLiteDBFileName)
 }
 
 func verifyEventsTable(db *sql.DB) error {

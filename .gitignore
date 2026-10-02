@@ -66,7 +66,7 @@ sessions/
 code_review_report.md
 .agents/
 
-# scripts/restart.sh 本地测试用独立数据目录（隔离 launchd 生产实例的 ~/.polarisagi/polaris）
+# scripts/restart.sh 本地测试用独立数据目录（隔离 launchd 生产实例的 ~/.polaris）
 /.devdata/
 
 # Scripts & Misc

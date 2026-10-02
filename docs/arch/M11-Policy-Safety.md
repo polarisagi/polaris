@@ -74,8 +74,8 @@ M11 进程启动后第一时间计算核心安全相关源码目录及文件（�
 - **forbid**: 不可逆操作未经审批 → `resource.tool_name in [deploy_to_production, delete_data, send_external_communication, financial_transaction] AND context.approval_status != "approved"`
 - **forbid**: LLM 生成代码执行特权操作 → `principal in Role::"Agent" AND resource.source == "llm_generated" AND resource.risk_level == "privileged"`
 - **forbid**: 预算硬上限 → `context.monthly_spend_usd > context.monthly_budget_usd` (所有 principal/action/resource 无条件)
-- **forbid**: Holdout Set 读取隔离 → `principal in Role::"Agent" AND action in [Action::"read_local", Action::"read_file"] AND resource.path.startsWith(context.polarisagi/polaris_eval_holdout_path)`
-  - *说明*: `context.polarisagi/polaris_eval_holdout_path` 由 Go 侧在策略加载时注入（展开后的绝对路径，等价于 `~/.polarisagi/polaris/eval/holdout/`）。`ci_gate` role 不受此 forbid 限制（CI/Canary 需要读取 Holdout Set）。此规则为防御纵深——物理隔离层（WASI 沙箱 + Openat2 `RESOLVE_IN_ROOT`）已阻止逃逸，Cedar 规则覆盖 Host Function 层可能的访问向量。
+- **forbid**: Holdout Set 读取隔离 → `principal in Role::"Agent" AND action in [Action::"read_local", Action::"read_file"] AND resource.path.startsWith(context.polaris_eval_holdout_path)`
+  - *说明*: `context.polaris_eval_holdout_path` 由 Go 侧在策略加载时注入（展开后的绝对路径，等价于 `~/.polaris/eval/holdout/`）。`ci_gate` role 不受此 forbid 限制（CI/Canary 需要读取 Holdout Set）。此规则为防御纵深——物理隔离层（WASI 沙箱 + Openat2 `RESOLVE_IN_ROOT`）已阻止逃逸，Cedar 规则覆盖 Host Function 层可能的访问向量。
 
 **Layer 3 软约束 — Cedar permit + conditions**:
 - **permit**: 只读工具 → `trust_level >= 1`
@@ -330,14 +330,14 @@ executePause: 200ms timeout → toolRegistry.StopAllPending
 | 路径 | 机制 | 响应 |
 |------|------|------|
 | Ctrl+C x3 (3s 窗口) | SIGINT 计数器, 窗口重置归零, >=3 → Full Stop | <1s |
-| ~/.polarisagi/polaris/KILLSWITCH 文件 | fsnotify 监视, 存在 → Full Stop | <500ms |
+| ~/.polaris/KILLSWITCH 文件 | fsnotify 监视, 存在 → Full Stop | <500ms |
 | POST /_admin/kill | 需已认证身份（任意合法用户，非 admin-only）；未配置 `POLARIS_API_KEY` 时按回环 IP (127.0.0.1/::1) 豁免免认证，已配置后不再有 IP 限制 | <100ms |
 | POST /_admin/unseal | 强制鉴权且要求 `UserID == "admin"`（不接受匿名/回环豁免，见 `HandleUnseal`） | <100ms |
 | [TokenBurnRate] > 10x baseline 30s | 滑动窗口背压熔断 | ~30s |
 | Global DoS Guard (LLM10) | 全局信号量饱和 / Session Bucket 耗尽 | 限流或 Stage 1 |
 
 - **TripleCtrlCGuard**: 3s 滑动窗口计数 SIGINT, `归零/>=3` → `executeFullStop`
-- **KILLSWITCHFileWatch**: fsnotify 监视 `~/.polarisagi/polaris/KILLSWITCH`, 存在 → `executeFullStop`, 删除后恢复
+- **KILLSWITCHFileWatch**: fsnotify 监视 `~/.polaris/KILLSWITCH`, 存在 → `executeFullStop`, 删除后恢复
 - **AdminKillEndpoint**（2026-07-24 复核修正，此前文档误述为"仅 127.0.0.1/::1、无认证"，与
   `internal/gateway/server/sysadmin/admin_killswitch.go` `HandleKill` 实际逻辑不符）：
   鉴权规则由 `middleware_auth.go` 统一处理，与其余路由一致——未配置 `POLARIS_API_KEY` 时仅回环 IP
@@ -429,7 +429,7 @@ approval:
 
 **冷启动主密钥（Master Key）决策树**:
   1. 优先读取 `POLARIS_VAULT_PASSPHRASE` 环境变量（SHA-256 派生 32 字节）。
-  2. 其次读取 `~/.polarisagi/polaris/vault.key`（0600 权限）。
+  2. 其次读取 `~/.polaris/vault.key`（0600 权限）。
   3. 如果均不存在，自动生成高熵随机密钥并存入 `vault.key`。
 
 ### 5.3 local_only 网络沙箱三层防御
@@ -518,7 +518,7 @@ Hash Chain 结构：`RecordHash = SHA-256(序列化后记录，不含 RecordHash
 
 ### 7.2 Epoch 轮转
 
-触发：审计日志估算体积 > 100MB（由调用方传入当前 MB 数）。封存流程：追加 `epoch_end` 标记记录（FinalHash + RecordCount），写 DB；更新 epochID；追加 `epoch_start` 标记（PrevEpochFinalHash），建立跨 Epoch 密码学连续性。归档目录 `~/.polarisagi/polaris/audit/archive/`，保留 90 天（Tier 0）。
+触发：审计日志估算体积 > 100MB（由调用方传入当前 MB 数）。封存流程：追加 `epoch_end` 标记记录（FinalHash + RecordCount），写 DB；更新 epochID；追加 `epoch_start` 标记（PrevEpochFinalHash），建立跨 Epoch 密码学连续性。归档目录 `~/.polaris/audit/archive/`，保留 90 天（Tier 0）。
 
 ### 7.3 Outbox Worker 增量消费（HE-Rule-6）
 

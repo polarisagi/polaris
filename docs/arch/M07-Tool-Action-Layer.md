@@ -157,7 +157,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 
 > 历史遗留的 Wasm 版 `file_read`/`file_write`/`web_fetch`/`shell_exec` 技能已全部废弃并清理。
 
-**write_file 禁止目录黑名单**：`makeWriteFileFn`（`internal/tool/builtin/`）在 `checkAllowedPath` 通过后追加 `checkForbiddenPath` 二次过滤，硬编码禁止写入 `~/.polarisagi/polaris/config/`、`~/.polarisagi/polaris/data/`、`~/.ssh/`、`~/.gnupg/`、`/etc/`、`/usr/`、`/bin/`、`/sbin/` 等敏感目录；当 `os.UserHomeDir()` 获取失败时兜底禁写 `/root/.polarisagi`；路径比较走 `filepath.Clean + strings.HasPrefix`，不可被配置覆盖。
+**write_file 禁止目录黑名单**：`makeWriteFileFn`（`internal/tool/builtin/`）在 `checkAllowedPath` 通过后追加 `checkForbiddenPath` 二次过滤，硬编码禁止写入 `~/.polaris/config/`、`~/.polaris/data/`、`~/.ssh/`、`~/.gnupg/`、`/etc/`、`/usr/`、`/bin/`、`/sbin/` 等敏感目录；当 `os.UserHomeDir()` 获取失败时兜底禁写 `/root/.polaris`；路径比较走 `filepath.Clean + strings.HasPrefix`，不可被配置覆盖。
 
 **Git 内置工具**：`internal/tool/builtin/git_text_tools.go` 已将 `git_diff` 和 `git_commit` 实现为 M07 原生内置工具（`makeGitDiffFn` / `makeGitCommitFn`），Agent 可直接调用，无需挂载外部 MCP 扩展。Git 高级操作（rebase、branch 管理等）仍可通过 L3 MCP 扩展扩充。
 
@@ -210,7 +210,7 @@ Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256M
 
 当前 `sandbox.go` 实现与规则 1–4 对齐：`LLMGenerated`/`MCP`/`A2A` 分配 L2 Wasm，`CapWriteNetwork` 最低 L2，`CapPrivileged`/`SideProcessSpawn` 升至 L3；Tier0 Container 全平台返回 `ErrTier0SandboxLimit`，不降级。
 
-Auto-Curriculum: M9 `bash_restricted` 强制 L2 Wasm，字符集 `[A-Za-z0-9 ./\-_=:,]`，禁止管道/重定向/命令替换/`~/.polarisagi/polaris`。`bash` 永久禁止。
+Auto-Curriculum: M9 `bash_restricted` 强制 L2 Wasm，字符集 `[A-Za-z0-9 ./\-_=:,]`，禁止管道/重定向/命令替换/`~/.polaris`。`bash` 永久禁止。
 
 ### 4.3 Rust 脚本沙箱（CANONICAL SOURCE）
 
@@ -264,9 +264,9 @@ Syscall 防逃逸: Go 堆缓冲区（严禁线性内存切片）→ 独立 gorou
 **`workspace_read(artifactID,offset,length)->([]byte,error)`**:
 1. **路径校验**: `filepath.Clean` → 分量级 `..` 检测 + IsAbs 拦截。Linux 5.6+: `Openat2(workspaceRootFd, path, RESOLVE_NO_SYMLINKS|RESOLVE_IN_ROOT)`。非 Linux: component-by-component walk → 逐级 openat + Fstat 校验 dev/inode
 2. **读取禁止路径（eval 数据隔离）**: 目标路径前缀匹配以下任一 → 立即返回 `ErrEvalDataAccessForbidden` + CRITICAL 审计，不触发 Capability Token 校验（快速拒绝，防止绕过）:
-    - `~/.polarisagi/polaris/eval/holdout/`（Holdout Set，防 M9 过拟合，M12 §5）
-    - `~/.polarisagi/polaris/eval/training/`（Training Set，仅 Eval API（Application Programming Interface，应用程序接口） 层允许 M9 通过 Ed25519 签名访问，不走 Workspace Bridge）
-  > 注: `~` 展开为运行时 `polaris_home` 变量（与 M11 Cedar Layer 2 的 `context.polarisagi/polaris_eval_holdout_path` 同源）。物理层 `Openat2(RESOLVE_IN_ROOT)` 已阻止路径逃逸，此检查为防御纵深。
+    - `~/.polaris/eval/holdout/`（Holdout Set，防 M9 过拟合，M12 §5）
+    - `~/.polaris/eval/training/`（Training Set，仅 Eval API（Application Programming Interface，应用程序接口） 层允许 M9 通过 Ed25519 签名访问，不走 Workspace Bridge）
+  > 注: `~` 展开为运行时 `polaris_home` 变量（与 M11 Cedar Layer 2 的 `context.polaris_eval_holdout_path` 同源）。物理层 `Openat2(RESOLVE_IN_ROOT)` 已阻止路径逃逸，此检查为防御纵深。
 3. **验证 Capability Token 读权限**
 4. **`Pread(fd,buf,offset)`**
 5. **每次 <=64KB**
@@ -275,11 +275,11 @@ Syscall 防逃逸: Go 堆缓冲区（严禁线性内存切片）→ 独立 gorou
 **`workspace_write(artifactID,data)->(int,error)`**:
 > 2026-08-12 复核：该工具目前未实现，以下内容为设计超前描述。
 1. **路径白名单校验**: 仅允许写入以下三类路径:
-   - (a) `~/.polarisagi/polaris/workspace/<task_id>/`（M2 WorkspaceManager 托管目录）
+   - (a) `~/.polaris/workspace/<task_id>/`（M2 WorkspaceManager 托管目录）
    - (b) 经 `[Sandbox-L2]` 显式挂载的临时目录 `/tmp/sandbox/{skill_id}/`
    - (c) 启动时传入的 Workspace Root（用户项目根目录），需经 `[Cedar-Gate]` 显式授权——Cedar 策略 `permit write_local when resource.path in WorkspaceRoot` 控制可写子路径范围
    > 默认拒绝所有其他绝对和相对路径。白名单外路径 → `ErrWorkspacePathNotAllowed` + WARN + 审计
-2. **禁止覆盖保护**: 即使白名单内，仍禁止覆盖 `~/.polarisagi/polaris/config/`、`~/.polarisagi/polaris/secrets/`、`~/.polarisagi/polaris/data/`（含 SQLite/SurrealDB-Core 数据库文件）、`~/.polarisagi/polaris/audit/`——此四目录为系统关键数据区，独立于 Workspace 白名单做第二层拒绝
+2. **禁止覆盖保护**: 即使白名单内，仍禁止覆盖 `~/.polaris/config/`、`~/.polaris/secrets/`、`~/.polaris/data/`（含 SQLite/SurrealDB-Core 数据库文件）、`~/.polaris/audit/`——此四目录为系统关键数据区，独立于 Workspace 白名单做第二层拒绝
 3. **前置**: `CapabilityLevel>=write_local`
 4. **Taint Gate**（路径 × TaintLevel 决策表）:
 
@@ -714,7 +714,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 同一 bundle 目录下还可同时包含外部厂商格式（`ai-plugin.json` / `plugin.toml` / `skills.yaml`），由 `adapter.ParseManifestDir()` 解析后各自安装对应的运行时组件。
 
-**安装路径**：`~/.polarisagi/polaris/extensions/plugin/{ext_id}/`（HTTP tar.gz 下载解压）
+**安装路径**：`~/.polaris/extensions/plugin/{ext_id}/`（HTTP tar.gz 下载解压）
 
 **加载流程**:
 ```

@@ -35,7 +35,7 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 		ic.SoulMDContent = *s.SoulMDContent
 	}
 
-	// 用户自定义追加指令（~/.polarisagi/polaris/config/prompts/custom_instructions.md）
+	// 用户自定义追加指令（~/.polaris/config/prompts/custom_instructions.md）
 	ic.CustomInstructions = s.PromptMgr.ReadPrompt("custom_instructions.md", "")
 
 	// 用户画像（P0-2：消费 default 用户画像）

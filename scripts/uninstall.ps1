@@ -9,8 +9,8 @@ function Write-Msg {
     else        { Write-Host $en -ForegroundColor $Color }
 }
 
-$InstallDir = "$env:USERPROFILE\.polarisagi\polaris\bin"
-$DataDir    = "$env:USERPROFILE\.polarisagi\polaris"
+$InstallDir = "$env:USERPROFILE\.polaris\bin"
+$DataDir    = "$env:USERPROFILE\.polaris"
 $TaskName   = "PolarisAGI-Polaris"
 
 Write-Msg -zh "🗑️  正在卸载 PolarisAGI Polaris..." `

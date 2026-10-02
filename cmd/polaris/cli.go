@@ -16,9 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
-
 	"golang.org/x/term"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ── ANSI 颜色（仅 TTY 生效）─────────────────────────────────────────────────
@@ -489,7 +490,7 @@ func runChatREPL(initialSession string, project *cliProject) error { //nolint:go
 
 	sessionID := initialSession
 	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 64*1024), 64*1024)
+	sc.Buffer(make([]byte, config.CLIScanBufferMaxBytes), config.CLIScanBufferMaxBytes)
 
 	for {
 		if cliTTY {
@@ -684,15 +685,11 @@ func cliPrintSessions(projectID string) {
 // ── 会话持久化 ────────────────────────────────────────────────────────────────
 
 func cliSessionFile() string {
-	dir := os.Getenv("POLARIS_DATA_DIR")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".polarisagi/polaris")
-	} else if strings.HasPrefix(dir, "~/") {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, dir[2:])
+	dir, err := config.ResolveDataDir("")
+	if err != nil {
+		return filepath.Join(".", config.CLILastSessionFileName)
 	}
-	return filepath.Join(dir, "last_cli_session")
+	return filepath.Join(dir, config.CLILastSessionFileName)
 }
 
 func cliSaveSession(id string) {
