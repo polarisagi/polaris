@@ -158,6 +158,7 @@ type Server struct {
 
 	embeddingStatusFn func() EmbeddingStatus
 	rebenchFn         func(ctx context.Context) error
+	acceleratorProbe  *probe.AcceleratorProbe
 }
 
 // EmbeddingStatus 网关暴露的向量化运行时状态 (ADR-0109 D5)。
@@ -178,6 +179,19 @@ func (s *Server) SetEmbeddingStatusProvider(fn func() EmbeddingStatus) {
 // SetEmbeddingRebencher 注入重新基准测定回调（ADR-0109）。
 func (s *Server) SetEmbeddingRebencher(fn func(ctx context.Context) error) {
 	s.rebenchFn = fn
+}
+
+// SetAcceleratorProbe 注入硬件加速算力探针 (ADR-0109 P3)。
+func (s *Server) SetAcceleratorProbe(p *probe.AcceleratorProbe) {
+	s.acceleratorProbe = p
+}
+
+// GetAcceleratorInfo 获取当前硬件加速探测信息。
+func (s *Server) GetAcceleratorInfo() probe.AcceleratorInfo {
+	if s.acceleratorProbe == nil {
+		return probe.AcceleratorInfo{Kind: "none"}
+	}
+	return s.acceleratorProbe.Get()
 }
 
 // GetEmbeddingStatus 获取当前向量化状态快照。

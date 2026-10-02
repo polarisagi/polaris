@@ -14,6 +14,7 @@ Alpine.store('statusBar', {
   memoryMB: 0,
   memoryLimitMB: 8192,
   embedding: null,
+  accelerator: null,
   rebenchRunning: false,
   _timer: null,
 
@@ -51,6 +52,7 @@ Alpine.store('statusBar', {
       this.memoryMB = d.memory_mb || 0
       this.memoryLimitMB = d.memory_limit_mb || 8192
       this.embedding = d.embedding || null
+      this.accelerator = d.accelerator || null
 
       if (this.sealed) {
         Alpine.store('toast').show('warn', '⚠ 服务器已进入 Sealed 状态，所有操作已暂停')

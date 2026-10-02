@@ -132,6 +132,19 @@
               }" x-text="$store.statusBar.embedding?.state || 'fts'"></span>
             </div>
           </div>
+
+          <!-- Hardware Acceleration Recommendation Tip (ADR-0109 / P3) -->
+          <div class="alert alert-info shadow-sm mt-3 text-xs" x-show="$store.statusBar.accelerator?.accelerated && $store.statusBar.embedding?.backend === 'onnx'">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <div>
+              <div class="font-bold" x-text="$store.i18n.t('accelerator_rec_title')"></div>
+              <div class="text-base-content/80 mt-1" x-text="$store.i18n.t('accelerator_rec_desc')"></div>
+              <pre class="mt-2 p-2 bg-base-300 rounded text-2xs font-mono select-all"><code>[embedding]
+backend = "llama_server"
+model = "qwen3-embedding:4b"
+dim = 2560</code></pre>
+            </div>
+          </div>
         </div>
       </div>
 

@@ -279,5 +279,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"agent_state":     agentState,
 		"agent_config":    agentConfig,
 		"embedding":       s.GetEmbeddingStatus(),
+		"accelerator":     s.GetAcceleratorInfo(),
 	})
 }
