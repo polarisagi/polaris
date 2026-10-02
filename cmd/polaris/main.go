@@ -234,7 +234,7 @@ func run() error { //nolint:gocyclo
 			}
 		} else {
 			slog.Warn("polaris: [Zero-Provider] No AI providers found in the database.")
-			slog.Warn("polaris: Please visit http://localhost:28888 or run `polaris init` to configure the system.")
+			slog.Warn("polaris: Please visit " + config.DefaultServerURL + " or run `polaris init` to configure the system.")
 		}
 	}
 

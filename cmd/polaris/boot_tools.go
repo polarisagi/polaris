@@ -159,7 +159,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		} else {
 			authToken := sb.Cfg.Sandbox.Remote.AuthToken
 			if authToken == "" {
-				authToken = os.Getenv("POLARIS_REMOTE_SANDBOX_TOKEN")
+				authToken = os.Getenv(config.EnvPolarisRemoteSandboxToken)
 			}
 			remoteSandbox := sandbox.NewRemoteSandbox(
 				sb.Cfg.Sandbox.Remote.Endpoint,
@@ -341,9 +341,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 从未调用而永久跳过（ADR-0062）；mktClient.Install 是完整实现，直接注入。
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
 	// 市场目录同步与目录安装（标准市场格式 + 来源取回 + 依赖先装，ADR-0103 决策七）。
-	catalogSync := marketplace.NewCatalogSync(extRepo, mktClient, sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp", "marketplaces"))
-	sourceFetcher := marketplace.NewSourceFetcher(sb.SafeHTTPClient, filepath.Join(sb.DataDir, "tmp"))
-	catalogInstaller := marketplace.NewCatalogInstaller(installMgr, extRepo, sourceFetcher, catalogSync, filepath.Join(sb.DataDir, "extensions"))
+	catalogSync := marketplace.NewCatalogSync(extRepo, mktClient, sb.SafeHTTPClient, filepath.Join(sb.Layout.Tmp, "marketplaces"))
+	sourceFetcher := marketplace.NewSourceFetcher(sb.SafeHTTPClient, sb.Layout.Tmp)
+	catalogInstaller := marketplace.NewCatalogInstaller(installMgr, extRepo, sourceFetcher, catalogSync, sb.Layout.Extensions)
 	installMgr.WithOutbox(sb.Outbox)
 
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())

@@ -37,13 +37,13 @@ var cliEndpoint = sync.OnceValue(resolveCLITarget) //nolint:gochecknoglobals // 
 
 // resolveCLITarget 执行三段解析。
 func resolveCLITarget() cliTarget {
-	if u := os.Getenv("POLARIS_SERVER_URL"); u != "" {
-		return cliTarget{BaseURL: strings.TrimRight(u, "/"), Token: os.Getenv("POLARIS_API_KEY")}
+	if u := os.Getenv(config.EnvPolarisServerURL); u != "" {
+		return cliTarget{BaseURL: strings.TrimRight(u, "/"), Token: os.Getenv(config.EnvPolarisAPIKey)}
 	}
 
 	layout, err := cliDataLayout()
 	if err != nil {
-		return cliTarget{BaseURL: "http://localhost:28888", Err: err}
+		return cliTarget{BaseURL: config.DefaultServerURL, Err: err}
 	}
 	st, err := runtimeinfo.Read(runtimeinfo.Paths{
 		PID:   layout.RunPID,
@@ -53,7 +53,7 @@ func resolveCLITarget() cliTarget {
 	if err != nil {
 		// 区分"没运行"与"运行了但读不到凭证"：后者若被当成前者，用户会去反复
 		// 重启一个其实活得好好的服务。
-		return cliTarget{BaseURL: "http://localhost:28888", Err: err}
+		return cliTarget{BaseURL: config.DefaultServerURL, Err: err}
 	}
 	return cliTarget{
 		BaseURL: "http://127.0.0.1:" + strconv.Itoa(st.Port),

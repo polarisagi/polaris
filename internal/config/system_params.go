@@ -43,6 +43,48 @@ const (
 
 	// EnvPolarisTier 硬件分级覆盖环境变量。
 	EnvPolarisTier = "POLARIS_TIER"
+
+	// EnvPolarisServerURL 指定客户端连接的 API 服务端基础地址。
+	EnvPolarisServerURL = "POLARIS_SERVER_URL"
+
+	// EnvPolarisThresholdsDir 覆盖阈值配置文件存放目录。
+	EnvPolarisThresholdsDir = "POLARIS_THRESHOLDS_DIR"
+
+	// EnvPolarisGitHubProxy 指定 GitHub 资源加速代理前缀。
+	EnvPolarisGitHubProxy = "POLARIS_GITHUB_PROXY"
+
+	// EnvPolarisSubstrateLib 指定 Rust 核心动态库路径覆盖。
+	EnvPolarisSubstrateLib = "POLARIS_SUBSTRATE_LIB"
+
+	// EnvPolarisPlatform 服务端所在宿主平台标识覆盖。
+	EnvPolarisPlatform = "POLARIS_PLATFORM"
+
+	// EnvPolarisTrustedProxy 是否信任反向代理前置（1 开启）。
+	EnvPolarisTrustedProxy = "POLARIS_TRUSTED_PROXY"
+
+	// EnvPolarisLocalOnlyAllowlistPubKey 本地网络白名单公钥。
+	EnvPolarisLocalOnlyAllowlistPubKey = "POLARIS_LOCAL_ONLY_ALLOWLIST_PUBKEY"
+
+	// EnvPolarisSkillSigningKey 技能编译签名密钥覆盖。
+	EnvPolarisSkillSigningKey = "POLARIS_SKILL_SIGNING_KEY"
+
+	// EnvPolarisRemoteSandboxToken 远端沙箱 Bearer 认证令牌。
+	EnvPolarisRemoteSandboxToken = "POLARIS_REMOTE_SANDBOX_TOKEN"
+
+	// EnvPolarisEmbeddingAPIKey 专用向量嵌入模型 API 密钥。
+	EnvPolarisEmbeddingAPIKey = "POLARIS_EMBEDDING_API_KEY"
+
+	// EnvPolarisFoundingAnchorPrivKey 根锚点私钥。
+	EnvPolarisFoundingAnchorPrivKey = "POLARIS_FOUNDING_ANCHOR_PRIVKEY"
+)
+
+// 网络与服务端口默认定义。
+const (
+	// DefaultPort 默认守护进程 HTTP API 服务端口。
+	DefaultPort = 28888
+
+	// DefaultServerURL 默认守护进程 HTTP API 基础 URL。
+	DefaultServerURL = "http://localhost:28888"
 )
 
 // 核心目录名称与相对路径定义。

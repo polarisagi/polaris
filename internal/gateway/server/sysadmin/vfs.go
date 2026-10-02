@@ -68,7 +68,10 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 	defer file.Close()
 
 	// 生成物理路径
-	vfsRoot := filepath.Join(h.DataDir, "workspace")
+	vfsRoot := h.WorkspaceDir
+	if vfsRoot == "" {
+		vfsRoot = filepath.Join(h.DataDir, "workspace")
+	}
 	if err := os.MkdirAll(vfsRoot, 0755); err != nil {
 		slog.Error("vfs: mkdir error", "err", err)
 		http.Error(w, "server error", http.StatusInternalServerError)

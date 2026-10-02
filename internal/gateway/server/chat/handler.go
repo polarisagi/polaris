@@ -76,6 +76,7 @@ type Dependencies struct {
 	ContextRefExpander    *authcontext.ContextRefExpander
 	OutboxWriter          protocol.OutboxWriter
 	BinDir                string
+	WorkspaceDir          string
 	HTTPClient            *http.Client
 }
 
@@ -164,6 +165,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		AgentPool:     deps.AgentPool,
 		TranscriptDir: deps.TranscriptDir,
 		DataDir:       deps.DataDir,
+		WorkspaceDir:  deps.WorkspaceDir,
 	})
 
 	return h

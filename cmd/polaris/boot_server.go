@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/channel"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/network"
@@ -68,7 +69,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		// 加载器此前从未实现，Allowlist.Add/.IsAllowed 构造后从未被填充/查询。
 		// 文件不存在时 InitAllowlistFromFile 返回 nil（未配置白名单，local_only 仍
 		// 全阻断，行为不变）；文件存在但签名缺失/校验失败 → fail-closed 拒绝启动。
-		if err := ns.InitAllowlistFromFile(sb.Layout.LocalOnlyAllowlistFile, os.Getenv("POLARIS_LOCAL_ONLY_ALLOWLIST_PUBKEY")); err != nil {
+		if err := ns.InitAllowlistFromFile(sb.Layout.LocalOnlyAllowlistFile, os.Getenv(config.EnvPolarisLocalOnlyAllowlistPubKey)); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "local_only allowlist load failed", err)
 		}
 		// 顺序修复（2026-07-04 审计）：StartupCheck() 的 loopback-only 连通性自检
@@ -93,6 +94,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 
 	httpServer := server.NewServer(ctx, addr, sb.DataDir, ab.AgentPool, ab.Blackboard, tb.HITLGateway,
 		sb.Store.DB(), sb.Store.ReadDB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.Cfg.Agent, sb.Cfg.A2A, sb.TBR, apiRateLimiter)
+	httpServer.SetDataLayout(sb.Layout)
 	httpServer.SetPromptManager(sb.PromptMgr)
 	httpServer.SetKillSwitch(sb.KS)
 	// MCP Apps Sandbox proxy 监听器配置（M8f-1）：必须在 Start() 之前注入。
@@ -160,7 +162,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 
 	// ─── Skill 签名密钥 ──────────────────────────────────────────────────────
 	var skillSigningKey []byte
-	if key := os.Getenv("POLARIS_SKILL_SIGNING_KEY"); key != "" { //nolint:nestif
+	if key := os.Getenv(config.EnvPolarisSkillSigningKey); key != "" { //nolint:nestif
 		skillSigningKey = []byte(key)
 	} else {
 		if b, err := os.ReadFile(sb.Layout.SkillSignKey); err == nil && len(b) > 0 {
@@ -258,7 +260,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	}
 	httpServer.SetPluginCreator(extplugin.NewPluginCreator(
 		&extplugin.ProviderLLMClient{Provider: pluginCreatorProvider},
-		filepath.Join(sb.DataDir, "extensions", "local"),
+		filepath.Join(sb.Layout.Extensions, "local"),
 	))
 	httpServer.SetSkillSigningKey(skillSigningKey)
 	httpServer.SetMCPManager(tb.MCPMgr)
@@ -304,6 +306,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	initAudio(ctx, audioInit{
 		Server:        httpServer,
 		DataDir:       sb.DataDir,
+		ModelsDir:     sb.Layout.Models,
 		TierParams:    tierParams,
 		HTTPClient:    sb.SafeHTTP,
 		Cfg:           sb.Cfg.Inference,

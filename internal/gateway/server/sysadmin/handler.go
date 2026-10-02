@@ -52,6 +52,8 @@ type SysAdminHandler struct {
 	Agent          protocol.AgentController
 	MCPMgr         MCPManager
 	DataDir        string
+	WorkspaceDir   string
+	SkillsDir      string
 	ChatRepo       protocol.ChatRepository
 	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
 	ProviderRepo   protocol.ProviderRepository
@@ -121,6 +123,8 @@ type Dependencies struct {
 	AgentPool      protocol.AgentPool
 	MCPMgr         MCPManager
 	DataDir        string
+	WorkspaceDir   string
+	SkillsDir      string
 	ChatRepo       protocol.ChatRepository
 	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
 	ProviderRepo   protocol.ProviderRepository
@@ -179,6 +183,8 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		WorkflowRepo:         deps.WorkflowRepo,
 		MCPMgr:               deps.MCPMgr,
 		DataDir:              deps.DataDir,
+		WorkspaceDir:         deps.WorkspaceDir,
+		SkillsDir:            deps.SkillsDir,
 		ChatRepo:             deps.ChatRepo,
 		ProjectRepo:          deps.ProjectRepo,
 		ProviderRepo:         deps.ProviderRepo,

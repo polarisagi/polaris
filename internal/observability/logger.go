@@ -95,11 +95,16 @@ func logLevel() slog.Level {
 }
 
 // SetupLogger configures rotating dual-track logging.
-// It creates polaris.log (all levels) and polaris.error.log (Warn/Error) in dataDir/logs/.
-func SetupLogger(dataDir string) io.Closer {
+// It creates polaris.log (all levels) and polaris.error.log (Warn/Error) in logsDir.
+// If dir ends with "logs" or is explicitly specified as logs directory, it uses it directly;
+// otherwise it falls back to filepath.Join(dir, "logs").
+func SetupLogger(dir string) io.Closer {
 	var closers []io.Closer
 
-	logsDir := filepath.Join(dataDir, "logs")
+	logsDir := dir
+	if filepath.Base(dir) != "logs" {
+		logsDir = filepath.Join(dir, "logs")
+	}
 	// 失败必须可见：logger 尚未建好，只能走 stderr。吞掉的话后续 lumberjack 会在
 	// 每次写日志时静默失败，表现为"服务在跑但没有任何日志"——最难排查的一类现象。
 	if err := os.MkdirAll(logsDir, 0o700); err != nil {

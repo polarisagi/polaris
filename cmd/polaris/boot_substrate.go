@@ -172,7 +172,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	if err != nil {
 		return nil, err
 	}
-	layout := config.NewDataLayout(dataDir, cfg.System.Dirs)
+	layout := cfg.LayoutFor(dataDir)
 	if err := layout.MkdirAll(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "failed to create data directories", err)
 	}
@@ -189,10 +189,10 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// 启动失败恰恰是最需要日志的时刻，却是唯一拿不到日志的时刻。
 	//
 	// 前移的前提：SetupLogger 只依赖 dataDir，上面 MkdirAll 已保证目录存在。
-	logFile := observability.SetupLogger(dataDir)
+	logFile := observability.SetupLogger(layout.Logs)
 	logStore := server.NewLogStore(slog.Default().Handler(), 500)
 	slog.SetDefault(slog.New(logStore))
-	slog.Info("polaris: logger initialized", "data_dir", dataDir)
+	slog.Info("polaris: logger initialized", "logs_dir", layout.Logs, "data_dir", dataDir)
 
 	vault, err := credential.NewVaultInDir(dataDir)
 	if err != nil {
@@ -603,7 +603,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		// 2. 远程 API 绝对兜底逻辑 (只在本地跑不起且强制配置时才用)
 		apiKey := cfg.Embedding.APIKey
 		if apiKey == "" {
-			apiKey = os.Getenv("POLARIS_EMBEDDING_API_KEY")
+			apiKey = os.Getenv(config.EnvPolarisEmbeddingAPIKey)
 		}
 		var embedKeys []string
 		if apiKey != "" {

@@ -164,6 +164,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		STTEngine:             sttPtr,
 		TTSEngine:             ttsPtr,
 		BinDir:                filepath.Join(s.dataDir, "bin"),
+		WorkspaceDir:          filepath.Join(s.dataDir, "workspace"),
 		HTTPClient:            httpClient,
 		// WithWorkDir 2026-07-21 deadcode 审查修复：此前未传，@file 引用解析退化为
 		// 相对进程 CWD（而非 dataDir）解析路径；同一 Dependencies 结构体的其他字段
@@ -189,6 +190,8 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		Registry:       s.registry,
 		HTTPClient:     httpClient,
 		DataDir:        s.dataDir,
+		WorkspaceDir:   filepath.Join(s.dataDir, "workspace"),
+		SkillsDir:      filepath.Join(s.dataDir, "skills"),
 		DB:             db,
 		Chat:           s.chatHandler,
 		// SessionOrch 复用 s.chatHandler 已构造的 session.Orchestrator 单例

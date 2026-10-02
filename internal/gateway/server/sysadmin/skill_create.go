@@ -41,7 +41,11 @@ func (h *SysAdminHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Reque
 	// PickProvider("default") 为 nil 时兜底 PickProvider("general")。
 	p := h.pickSkillCreatorProvider()
 
-	baseDir := filepath.Join(h.DataDir, "skills", "user_generated")
+	skillsBase := h.SkillsDir
+	if skillsBase == "" {
+		skillsBase = filepath.Join(h.DataDir, "skills")
+	}
+	baseDir := filepath.Join(skillsBase, "user_generated")
 	creator := skill.NewSkillCreator(&skill.ProviderLLMClient{Provider: p}, baseDir, h.InstallMgr, h.SkillReg)
 
 	intentTS := taint.NewTaintedString(req.Intent,

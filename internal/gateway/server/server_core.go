@@ -157,6 +157,21 @@ type Server struct {
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
 
+// SetDataLayout 注入统一的数据目录布局，覆盖默认推导的 sessions/skills/workspace 路径。
+func (s *Server) SetDataLayout(l config.DataLayout) {
+	if l.Sessions != "" {
+		s.transcriptDir = l.Sessions
+	}
+	if s.sysadminHandler != nil {
+		if l.Skills != "" {
+			s.sysadminHandler.SkillsDir = l.Skills
+		}
+		if l.Workspace != "" {
+			s.sysadminHandler.WorkspaceDir = l.Workspace
+		}
+	}
+}
+
 // ChannelsAdmin 返回底层管理的 ChannelsAdmin，供 boot 阶段获取并给 channelMgr 绑定 handler
 func (s *Server) ChannelsAdmin() *channelsadmin.ChannelsAdmin {
 	if s.sysadminHandler != nil {

@@ -372,7 +372,7 @@ func runInit() error { //nolint:gocyclo
 	fmt.Println()
 	fmt.Println(t("init_next"))
 	fmt.Printf("  %s %s\n", clr(ansiAccent+ansiBold, "polaris chat"), t("init_next_chat"))
-	fmt.Printf("  %s %s\n", clr(ansiAccent+ansiBold, "open http://localhost:28888"), t("init_next_web"))
+	fmt.Printf("  %s %s\n", clr(ansiAccent+ansiBold, "open "+config.DefaultServerURL), t("init_next_web"))
 	fmt.Println()
 	return nil
 }

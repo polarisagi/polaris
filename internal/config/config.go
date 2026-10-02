@@ -185,12 +185,21 @@ func (c *Config) Validate() error {
 // Layout 计算当前配置对应的规范运行时数据布局。
 // 所有子模块由此结构获取各子目录与数据库路径，严禁自行拼接。
 func (c *Config) Layout() DataLayout {
-	dataDir := c.System.DataDir
+	dataDir := os.Getenv(EnvPolarisDataDir)
+	if dataDir == "" {
+		dataDir = c.System.DataDir
+	}
 	if dataDir == "" {
 		dataDir, _ = DefaultDataDir()
 	} else {
 		dataDir = ExpandHome(dataDir)
 	}
+	return c.LayoutFor(dataDir)
+}
+
+// LayoutFor 计算指定数据根目录下应用当前配置（含各子目录挂载与数据库名）的规范运行时数据布局。
+func (c *Config) LayoutFor(dataDir string) DataLayout {
+	dataDir = ExpandHome(dataDir)
 	layout := NewDataLayout(dataDir, c.System.Dirs)
 	if c.Storage.SQLiteDBFileName != "" {
 		layout.SQLiteDB = filepath.Join(layout.Data, c.Storage.SQLiteDBFileName)

@@ -42,6 +42,7 @@ type Deps struct {
 	AgentPool     protocol.AgentPool
 	TranscriptDir string
 	DataDir       string
+	WorkspaceDir  string
 }
 
 type orchestrator struct {
@@ -54,6 +55,7 @@ type orchestrator struct {
 	agentPool     protocol.AgentPool
 	transcriptDir string
 	dataDir       string
+	workspaceDir  string
 }
 
 // New 构造 Orchestrator。
@@ -68,6 +70,7 @@ func New(d Deps) Orchestrator {
 		agentPool:     d.AgentPool,
 		transcriptDir: d.TranscriptDir,
 		dataDir:       d.DataDir,
+		workspaceDir:  d.WorkspaceDir,
 	}
 }
 

@@ -52,7 +52,11 @@ func (o *orchestrator) buildUserMessage(req Request) (finalInput string, userMsg
 			continue
 		}
 
-		localPath := filepath.Join(o.dataDir, "workspace", strings.TrimPrefix(att.URI, "workspace://"))
+		wsDir := o.workspaceDir
+		if wsDir == "" {
+			wsDir = filepath.Join(o.dataDir, "workspace")
+		}
+		localPath := filepath.Join(wsDir, strings.TrimPrefix(att.URI, "workspace://"))
 
 		if isVideo {
 			// 视频大小门控：超过 Gemini inlineData 上限（20MB）直接拒绝，避免 OOM

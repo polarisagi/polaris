@@ -25,6 +25,7 @@ import (
 type audioInit struct {
 	Server        *server.Server
 	DataDir       string
+	ModelsDir     string
 	TierParams    *probe.TierParameters // 可 nil（无 AutoConf）
 	HTTPClient    *http.Client
 	Cfg           config.InferenceConfig
@@ -72,7 +73,11 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 	profile := audiorun.HostProfile(in.TotalRAMBytes)
 	support := audiorun.AudioSupport(profile)
 	idle := time.Duration(in.Cfg.Audio.IdleUnloadMinutes) * time.Minute
-	sttDir := filepath.Join(in.DataDir, "models", "sensevoice")
+	modelsDir := in.ModelsDir
+	if modelsDir == "" {
+		modelsDir = filepath.Join(in.DataDir, "models")
+	}
+	sttDir := filepath.Join(modelsDir, "sensevoice")
 
 	sttThreads := 1
 	if in.TierParams != nil && in.TierParams.STTNumThreads > 0 {
@@ -140,9 +145,14 @@ func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audior
 		return
 	}
 
+	modelsDir := in.ModelsDir
+	if modelsDir == "" {
+		modelsDir = filepath.Join(in.DataDir, "models")
+	}
+
 	rt.tts = audiorun.NewTTSService(ctx, audiorun.TTSOptions{
 		LibDir:        libDir,
-		Dir:           filepath.Join(in.DataDir, "models", "kokoro"),
+		Dir:           filepath.Join(modelsDir, "kokoro"),
 		SherpaVersion: cfg.SherpaVersion,
 		SID:           int32(cfg.KokoroSID),
 		Speed:         float32(cfg.Speed),
