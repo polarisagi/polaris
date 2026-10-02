@@ -209,7 +209,7 @@ for URL in "${CANDIDATE_URLS[@]}"; do
                 break
             fi
         fi
-        msg "   此源失败（exit $EXIT_CODE），尝试下一个..." \
+        msg "   此源失败（exit ${EXIT_CODE}），尝试下一个..." \
             "   Source failed (exit $EXIT_CODE), trying next..."
     fi
 done
@@ -255,7 +255,7 @@ if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${DIRECT_URL}.sha256"; then
     if [ "$POLARIS_ALLOW_MIRROR_CHECKSUM" = "1" ] && [ "$URL" != "$DIRECT_URL" ]; then
         msg "⚠️  无法从官方直连源获取校验和文件。检测到 POLARIS_ALLOW_MIRROR_CHECKSUM=1，" \
             "⚠️  Failed to fetch checksum from the official source. POLARIS_ALLOW_MIRROR_CHECKSUM=1 detected,"
-        msg "⚠️  按你的显式授权回退到二进制同源（$URL）下载校验和。此模式下无法防御该源同时" \
+        msg "⚠️  按你的显式授权回退到二进制同源（${URL}）下载校验和。此模式下无法防御该源同时" \
             "⚠️  falling back to the same source that served the binary ($URL) for the checksum. This mode cannot detect"
         msg "⚠️  伪造二进制与校验和的供应链攻击，风险自负。" \
             "⚠️  a source that forges both the binary and its checksum together — proceed at your own risk."

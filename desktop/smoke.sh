@@ -43,7 +43,7 @@ wait_ready() {
     return 1
 }
 
-[ -x "$BIN" ] || { fail "找不到可执行的 polaris：$BIN（设 POLARIS_BIN 指定）"; exit 1; }
+[ -x "$BIN" ] || { fail "找不到可执行的 polaris：${BIN}（设 POLARIS_BIN 指定）"; exit 1; }
 
 # ── 场景 1：冷启动 ───────────────────────────────────────────────────────────
 # 无守护进程时，外壳走宿主模式拉起 sidecar，并在超时内就绪。
@@ -52,7 +52,7 @@ echo "场景 1 冷启动"
 "$BIN" serve >/dev/null 2>&1 &
 if wait_ready; then
     PORT="$(field port)"; TOKEN="$(field token)"
-    ok "守护进程就绪，端口 $PORT（内核分配，非写死 28888）"
+    ok "守护进程就绪，端口 ${PORT}（内核分配，非写死 28888）"
 else
     fail "90 秒内未就绪"; exit 1
 fi
@@ -66,10 +66,10 @@ A=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $TOKEN" "http://127.0.
 N=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/v1/config")
 [ "$H" = "200" ] && ok "① /healthz 200（存活）" || fail "① /healthz 返回 $H"
 [ "$A" = "200" ] && ok "② 带令牌 200（凭证有效 → 附着模式）" || fail "② 带令牌返回 $A"
-[ "$N" = "401" ] && ok "  无令牌 401（证明 ① 单独不足以判定可用）" || fail "  无令牌返回 $N，应为 401"
+[ "$N" = "401" ] && ok "  无令牌 401（证明 ① 单独不足以判定可用）" || fail "  无令牌返回 ${N}，应为 401"
 
 BEFORE=$(pgrep -f "$BIN serve" | wc -l | tr -d ' ')
-[ "$BEFORE" = "1" ] && ok "只有一个守护进程实例" || fail "实例数为 $BEFORE，应为 1"
+[ "$BEFORE" = "1" ] && ok "只有一个守护进程实例" || fail "实例数为 ${BEFORE}，应为 1"
 
 # ── 场景 3：单实例 / 自恢复 ──────────────────────────────────────────────────
 # 附着模式下不得拉起第二实例；单实例锁是最后一道保证。

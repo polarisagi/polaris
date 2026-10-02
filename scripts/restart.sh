@@ -33,7 +33,7 @@ for arg in "$@"; do
   case "$arg" in
     --full)       FULL_BUILD=true ;;
     --no-desktop) BUILD_DESKTOP=false ;;
-    *) echo "✗ 未知参数：$arg（可用：--full / --no-desktop）"; exit 1 ;;
+    *) echo "✗ 未知参数：${arg}（可用：--full / --no-desktop）"; exit 1 ;;
   esac
 done
 
@@ -49,7 +49,7 @@ OS="$(uname -s)"
 case "$OS" in
   Darwin) DYLIB="libsubstrate.dylib" ;;
   Linux)  DYLIB="libsubstrate.so" ;;
-  *) echo "✗ 本脚本的服务热部署仅支持 macOS / Linux（当前：$OS）。Windows 请用 scripts/install.ps1 + polaris service。"; exit 1 ;;
+  *) echo "✗ 本脚本的服务热部署仅支持 macOS / Linux（当前：${OS}）。Windows 请用 scripts/install.ps1 + polaris service。"; exit 1 ;;
 esac
 DYLIB_SRC="rust/substrate/target/release/$DYLIB"
 
@@ -105,7 +105,7 @@ CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
 
 # ── 3b. 桌面外壳（同样先构建、后替换：构建失败不停服务、不动已安装外壳）──
 if $BUILD_DESKTOP; then
-  echo "→ 构建桌面外壳 (desktop/, bundle=$DESKTOP_BUNDLE，首次约数分钟)..."
+  echo "→ 构建桌面外壳 (desktop/, bundle=${DESKTOP_BUNDLE}，首次约数分钟)..."
   if ! cargo tauri --version &>/dev/null; then
     echo "  未安装 tauri-cli，安装中（一次性，与 release.yml desktop job 同版本约束）..."
     cargo install tauri-cli --version "^2" --locked
