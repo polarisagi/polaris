@@ -142,31 +142,8 @@ func (c *Config) Validate() error {
 	if c.Inference.STT.Language == "" {
 		c.Inference.STT.Language = "zh"
 	}
-	switch c.Inference.TTS.Provider {
-	case "":
-		c.Inference.TTS.Provider = "sherpa"
-	case "sherpa", "http":
-	default:
-		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
-			"config: inference.tts.provider must be \"sherpa\" or \"http\", got %q", c.Inference.TTS.Provider))
-	}
-	switch c.Inference.TTS.Engine {
-	case "":
-		c.Inference.TTS.Engine = "auto"
-	case "auto", "server", "system":
-	default:
-		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
-			"config: inference.tts.engine must be \"auto\", \"server\" or \"system\", got %q", c.Inference.TTS.Engine))
-	}
-	if c.Inference.TTS.KokoroSID < 0 {
-		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: inference.tts.kokoro_sid must be >= 0, got %d", c.Inference.TTS.KokoroSID))
-	}
-	if c.Inference.TTS.Speed <= 0 {
-		c.Inference.TTS.Speed = 1.0
-	}
-	if c.Inference.Audio.IdleUnloadMinutes < 0 {
-		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
-			"config: inference.audio.idle_unload_minutes must be >= 0 (0 = never unload), got %d", c.Inference.Audio.IdleUnloadMinutes))
+	if err := validateAudioConfig(&c.Inference); err != nil {
+		return err
 	}
 
 	if c.System.Tier < 0 || c.System.Tier > 3 {
@@ -178,7 +155,74 @@ func (c *Config) Validate() error {
 		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: system.go_memlimit_mb must be >= 64 when set, got %d", c.System.GoMemLimitMB))
 	}
 
-	// Removed Sandbox.AllowedDomains check as the field is deleted.
+	return validateEmbeddingConfig(&c.Embedding)
+}
+
+func validateAudioConfig(inf *InferenceConfig) error {
+	switch inf.TTS.Provider {
+	case "":
+		inf.TTS.Provider = "sherpa"
+	case "sherpa", "http":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: inference.tts.provider must be \"sherpa\" or \"http\", got %q", inf.TTS.Provider))
+	}
+	switch inf.TTS.Engine {
+	case "":
+		inf.TTS.Engine = "auto"
+	case "auto", "server", "system":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: inference.tts.engine must be \"auto\", \"server\" or \"system\", got %q", inf.TTS.Engine))
+	}
+	if inf.TTS.KokoroSID < 0 {
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: inference.tts.kokoro_sid must be >= 0, got %d", inf.TTS.KokoroSID))
+	}
+	if inf.TTS.Speed <= 0 {
+		inf.TTS.Speed = 1.0
+	}
+	if inf.Audio.IdleUnloadMinutes < 0 {
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: inference.audio.idle_unload_minutes must be >= 0 (0 = never unload), got %d", inf.Audio.IdleUnloadMinutes))
+	}
+	return nil
+}
+
+func validateEmbeddingConfig(emb *EmbeddingConfig) error {
+	if emb.Backend == "" {
+		emb.Backend = "auto"
+	}
+	switch emb.Backend {
+	case "auto", "onnx", "ollama", "llama_server", "none":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: embedding.backend must be \"auto\", \"onnx\", \"ollama\", \"llama_server\" or \"none\", got %q", emb.Backend))
+	}
+	if emb.ONNXModel == "" {
+		emb.ONNXModel = "auto"
+	}
+	switch emb.ONNXModel {
+	case "auto", "embeddinggemma", "bge-small-zh":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: embedding.onnx_model must be \"auto\", \"embeddinggemma\" or \"bge-small-zh\", got %q", emb.ONNXModel))
+	}
+	// llama_server 后端在 ADR-0109 中已规划但启动/接线尚未实现；此前接受该值会挂上一个
+	// 永远没有引擎的 DynamicEmbedder，检索与重嵌每次都失败。显式拒绝，不静默降级。
+	if emb.Backend == "llama_server" {
+		return apperr.New(apperr.CodeInvalidInput,
+			"config: embedding.backend = \"llama_server\" is not implemented yet; use \"ollama\" or a remote base_url (ADR-0109)")
+	}
+	if emb.Backend == "ollama" {
+		if emb.Model == "" {
+			return apperr.New(apperr.CodeInvalidInput,
+				fmt.Sprintf("config: embedding.model must not be empty when backend is %q", emb.Backend))
+		}
+		if emb.Dim <= 0 {
+			return apperr.New(apperr.CodeInvalidInput,
+				fmt.Sprintf("config: embedding.dim must be > 0 when backend is %q, got %d", emb.Backend, emb.Dim))
+		}
+	}
 	return nil
 }
 

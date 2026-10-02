@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -14,12 +15,24 @@ import (
 type DynamicEmbedder struct {
 	ptr     atomic.Pointer[search.Embedder]
 	readyCh chan struct{}
+	mu      sync.Mutex
+	onSet   []func()
 }
 
 func NewDynamicEmbedder() *DynamicEmbedder {
 	return &DynamicEmbedder{
 		readyCh: make(chan struct{}),
 	}
+}
+
+// OnSet 注册当底层 Embedder 被 Set 时调用的回调函数（例如重置退避器）。
+func (d *DynamicEmbedder) OnSet(fn func()) {
+	if fn == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.onSet = append(d.onSet, fn)
 }
 
 // Set 原子替换底层的 Embedder 实例。
@@ -35,6 +48,14 @@ func (d *DynamicEmbedder) Set(e search.Embedder) {
 	case <-d.readyCh:
 	default:
 		close(d.readyCh)
+	}
+
+	d.mu.Lock()
+	callbacks := make([]func(), len(d.onSet))
+	copy(callbacks, d.onSet)
+	d.mu.Unlock()
+	for _, cb := range callbacks {
+		cb()
 	}
 }
 

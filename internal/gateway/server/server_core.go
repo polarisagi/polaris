@@ -155,6 +155,31 @@ type Server struct {
 	appsSandboxSrv *http.Server
 	// appsSandboxBoundPort 沙箱监听器实际绑定端口（配置端口为 0 时由操作系统分配）。
 	appsSandboxBoundPort atomic.Int32
+
+	embeddingStatusFn func() EmbeddingStatus
+}
+
+// EmbeddingStatus 网关暴露的向量化运行时状态 (ADR-0109 D5)。
+type EmbeddingStatus struct {
+	Backend             string `json:"backend"`
+	Model               string `json:"model"`
+	Dim                 int    `json:"dim"`
+	State               string `json:"state"` // "ready" | "starting" | "fts" | "backoff" | "failed"
+	ConsecutiveFailures int    `json:"consecutive_failures"`
+	NextRetryAt         string `json:"next_retry_at,omitempty"`
+}
+
+// SetEmbeddingStatusProvider 注入向量化状态查询回调。
+func (s *Server) SetEmbeddingStatusProvider(fn func() EmbeddingStatus) {
+	s.embeddingStatusFn = fn
+}
+
+// GetEmbeddingStatus 获取当前向量化状态快照。
+func (s *Server) GetEmbeddingStatus() EmbeddingStatus {
+	if s.embeddingStatusFn != nil {
+		return s.embeddingStatusFn()
+	}
+	return EmbeddingStatus{Backend: "none", State: "fts"}
 }
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }

@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -214,5 +215,71 @@ func TestEncodeFloat16_Length(t *testing.T) {
 	blob := encodeFloat16(vec)
 	if len(blob) != 20 {
 		t.Errorf("blob len=%d, want 20 (10 float16 * 2 bytes)", len(blob))
+	}
+}
+
+// failingEmbedder 每次都失败，记录调用次数。
+type failingEmbedder struct{ calls int }
+
+func (f *failingEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	f.calls++
+	return nil, errors.New("embed backend down")
+}
+
+func (f *failingEmbedder) ModelVersion() string { return "v-fail" }
+
+// ADR-0109 D5：嵌入后端整体不可用时，Run 必须在连续失败上限处中止并返回错误，
+// 让调用方的退避器生效；此前逐条吞错使整批每条都跑到超时，退避器永远看不到失败。
+func TestOnlineReindexer_AbortsOnConsecutiveEmbedFailures(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	for i := 0; i < 10; i++ {
+		insertEvent(t, db, "row", "", 0)
+	}
+	emb := &failingEmbedder{}
+	r := NewOnlineReindexer(db, emb)
+
+	processed, remaining, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when embedder fails consecutively")
+	}
+	if emb.calls != reindexMaxConsecutiveEmbedFails {
+		t.Errorf("embed calls=%d, want %d (batch must abort early)", emb.calls, reindexMaxConsecutiveEmbedFails)
+	}
+	if processed != 0 || !remaining {
+		t.Errorf("processed=%d remaining=%v, want 0/true", processed, remaining)
+	}
+}
+
+// flakyEmbedder 交替失败/成功：单条失败不应中止整批。
+type flakyEmbedder struct{ calls int }
+
+func (f *flakyEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	f.calls++
+	if f.calls%2 == 1 {
+		return nil, errors.New("transient")
+	}
+	return []float32{0.1, 0.2}, nil
+}
+
+func (f *flakyEmbedder) ModelVersion() string { return "v-flaky" }
+
+func TestOnlineReindexer_IsolatedFailuresDoNotAbort(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	for i := 0; i < 6; i++ {
+		insertEvent(t, db, "row", "", 0)
+	}
+	emb := &flakyEmbedder{}
+	r := NewOnlineReindexer(db, emb)
+
+	processed, _, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("isolated failures must not abort the batch: %v", err)
+	}
+	if emb.calls != 6 || processed != 3 {
+		t.Errorf("calls=%d processed=%d, want 6/3", emb.calls, processed)
 	}
 }

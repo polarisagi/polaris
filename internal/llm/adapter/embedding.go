@@ -21,6 +21,16 @@ type OllamaEmbeddingAdapter struct {
 	model   string
 	baseURL string
 	client  *http.Client
+	// numThread >0 时经 options.num_thread 限制 runner 推理线程（ADR-0109 D4）；0 = Ollama 默认（占满核）。
+	numThread int
+}
+
+// WithNumThread 设置每次嵌入请求的推理线程上限，返回自身便于链式构造。
+func (e *OllamaEmbeddingAdapter) WithNumThread(n int) *OllamaEmbeddingAdapter {
+	if n > 0 {
+		e.numThread = n
+	}
+	return e
 }
 
 // NewOllamaEmbeddingAdapter 构造本地嵌入适配器。
@@ -29,7 +39,7 @@ func NewOllamaEmbeddingAdapter(model string, httpClient *http.Client) *OllamaEmb
 		httpClient = defaultHTTPClient()
 	}
 	if model == "" {
-		model = "nomic-embed-text"
+		model = "default"
 	}
 	return &OllamaEmbeddingAdapter{
 		model:   model,
@@ -49,8 +59,13 @@ func (e *OllamaEmbeddingAdapter) Embed(ctx context.Context, text string) []float
 
 // EmbedBatch 批量嵌入（减少 HTTP 往返）。
 type ollamaEmbedReq struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
+	Model   string              `json:"model"`
+	Input   []string            `json:"input"`
+	Options *ollamaEmbedOptions `json:"options,omitempty"`
+}
+
+type ollamaEmbedOptions struct {
+	NumThread int `json:"num_thread,omitempty"`
 }
 
 type ollamaEmbedResp struct {
@@ -63,7 +78,11 @@ func (e *OllamaEmbeddingAdapter) EmbedBatch(ctx context.Context, texts []string)
 		metrics.RecordEmbeddingCall(ctx, "ollama", e.model, float64(time.Since(start).Milliseconds()), err)
 	}()
 
-	body, err := json.Marshal(ollamaEmbedReq{Model: e.model, Input: texts})
+	reqBody := ollamaEmbedReq{Model: e.model, Input: texts}
+	if e.numThread > 0 {
+		reqBody.Options = &ollamaEmbedOptions{NumThread: e.numThread}
+	}
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "marshal embed req", err)
 	}

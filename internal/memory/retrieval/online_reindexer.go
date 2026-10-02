@@ -51,9 +51,13 @@ func NewOnlineReindexerWithCognitive(db protocol.SQLQuerier, embedder Embedder, 
 	}
 }
 
+// reindexMaxConsecutiveEmbedFails 单批内连续嵌入失败达到该值即中止本批并返回错误（ADR-0109 D5）。
+const reindexMaxConsecutiveEmbedFails = 3
+
 // Run 执行一批重建索引。返回 (已处理数, 是否还有未索引条目, error)。
 // 调用方在后台 goroutine 中循环调用，remaining=false 时停止。
-// 单条失败不中断整批（best-effort，与 Consolidation Stage 2 原则一致）。
+// 单条失败不中断整批（best-effort，与 Consolidation Stage 2 原则一致）；
+// 但连续 reindexMaxConsecutiveEmbedFails 条嵌入失败视为后端不可用，中止本批并返回错误。
 func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining bool, err error) {
 	version := r.embedder.ModelVersion()
 
@@ -100,14 +104,24 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 		return 0, false, nil
 	}
 
+	consecutiveEmbedFails := 0
 	for _, e := range batch {
 		vec, embedErr := r.embedder.Embed(ctx, e.content)
 		if embedErr != nil {
-			// Tier 0 BM25 路径兜底，单条失败仅告警继续
+			// Tier 0 BM25 路径兜底，单条失败仅告警继续。
+			// ADR-0109 D5：连续失败说明嵌入后端整体不可用（超时 / runner 崩溃），继续逐条
+			// 重试只会把整批每条都跑到超时、持续占满 CPU。中止本批并返回错误，交给调用方
+			// 的退避器（EmbedBackoff）拉长下一轮间隔；此前逐条吞错使退避器永远看不到失败。
+			consecutiveEmbedFails++
 			slog.Warn("reindexer: embed failed, row skipped",
-				"id", e.id, "err", embedErr)
+				"id", e.id, "err", embedErr, "consecutive", consecutiveEmbedFails)
+			if consecutiveEmbedFails >= reindexMaxConsecutiveEmbedFails {
+				return processed, true, apperr.Wrap(apperr.CodeProviderExhausted,
+					"reindexer: embedder failing consecutively, batch aborted", embedErr)
+			}
 			continue
 		}
+		consecutiveEmbedFails = 0
 		if _, updateErr := r.db.ExecContext(ctx,
 			`UPDATE episodic_events SET embedding = ?, embed_model_version = ? WHERE id = ?`,
 			encodeFloat16(vec), version, e.id,

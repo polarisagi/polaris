@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -85,6 +86,13 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 		}
 		displayName = fmt.Sprintf("[%s] %s", pName, displayName)
 
+		// ADR-0109 D6：本地对话模型（ollama / llama_local）未填 role 时默认 general，
+		// 避免空 role 落入 costTier=0 与 default 对话模型同档竞争、把后台调用路由到本地。
+		// 远程 Provider 保持原语义（空 role = 单 Provider 部署的便宜档），不得改动。
+		if role == "" && (typ == "ollama" || typ == "llama_local") {
+			role = "general"
+		}
+
 		if p := buildProviderAdapter(typ, baseURL, modelID, projectID, location, credPool, httpClient, tbr); p != nil {
 			stage(name, displayName, role, p)
 		}
@@ -144,6 +152,10 @@ func buildProviderAdapter(typ, baseURL, modelID, projectID, location string, cre
 			baseURL = "http://localhost:11434"
 		}
 		return llmadapter.NewOpenAIAdapter(baseURL+"/v1", modelID, credPool, httpClient, tbr)
+	case "llama_local":
+		if ffi.LlamaAvailable() {
+			return llmadapter.NewLocalAdapter(tbr)
+		}
 	}
 	return nil
 }

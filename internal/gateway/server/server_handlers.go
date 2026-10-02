@@ -265,6 +265,7 @@ func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
 		"tts_status":         ttsStatus,
 		"tts_provider":       ttsProvider,
 		"hardware_tier":      int(s.tier),
+		"embedding":          s.GetEmbeddingStatus(),
 	})
 }
 

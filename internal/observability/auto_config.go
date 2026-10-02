@@ -166,33 +166,10 @@ func (ac *AutoConfig) computeInferenceConfig(c *AutoConfigResult) {
 	modelID, localOK := probe.TierLocalModel(c.Tier)
 	c.LocalModelID = modelID
 
-	// 本地 Embedding 模型按内存档位自动选取（Ollama 标准 tag，最高档优先）。
-	// LocalEmbeddingDim 写入 SurrealDB HNSW DIMENSION，必须与模型输出一致。
-	//
-	//   档位           Feature               模型                     MTEB  Dim   运行内存  Tier
-	//   Max（≥12GB）   FeatureMaxEmbedding   qwen3-embedding:8b       70.58 4096  ~10GB   Tier2
-	//   Ultra（≥6GB）  FeatureUltraEmbedding qwen3-embedding:4b       ~68   2560  ~4GB    Tier1
-	//   HQ（≥3GB）     FeatureHQEmbedding    qwen3-embedding:0.6b     64.33 1024  ~1GB    Tier0
-	//   标准（≥256MB） FeatureLocalEmbedding nomic-embed-text          ~62   768   ~512MB  Tier0
-	//   不可用          —                     —（远程 API 路径）        —     —     —
-	switch {
-	case ac.Gate.State(probe.FeatureMaxEmbedding) != probe.FeatureDisabled:
-		c.LocalEmbeddingModel = "qwen3-embedding:8b"
-		c.LocalEmbeddingDim = 4096
-	case ac.Gate.State(probe.FeatureUltraEmbedding) != probe.FeatureDisabled:
-		c.LocalEmbeddingModel = "qwen3-embedding:4b"
-		c.LocalEmbeddingDim = 2560
-	case ac.Gate.State(probe.FeatureHQEmbedding) != probe.FeatureDisabled:
-		c.LocalEmbeddingModel = "qwen3-embedding:0.6b"
-		c.LocalEmbeddingDim = 1024
-	case ac.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled:
-		c.LocalEmbeddingModel = "nomic-embed-text"
-		c.LocalEmbeddingDim = 768
-	default:
-		// 本地 Embedding 不可用；SurrealDB 维度及远程 API 路径维度由 cfg.Inference.EmbedderDim 决定。
-		c.LocalEmbeddingModel = ""
-		c.LocalEmbeddingDim = 0
-	}
+	// ADR-0109: 本地推理默认关闭，删除按空闲内存自动升档的 Embedding 阶梯。
+	// 向量维度与模型由 boot 层的 chooseEmbedding 决议填充。
+	c.LocalEmbeddingModel = ""
+	c.LocalEmbeddingDim = 0
 
 	if ac.Gate.State(probe.FeatureLocalInference) == probe.FeatureEnabled {
 		c.LocalModelAutoLoad = true
@@ -292,8 +269,6 @@ func (ac *AutoConfig) computeFeatureMap(c *AutoConfigResult) {
 		probe.FeatureLogicCollapse, probe.FeatureComputerUseGUI, probe.FeaturePresidioPII,
 		probe.FeatureWebUI, probe.FeatureActivationSteer,
 		probe.FeatureOTelExporter, probe.FeatureDeepRAG,
-		// Embedding 阶梯
-		probe.FeatureHQEmbedding, probe.FeatureUltraEmbedding, probe.FeatureMaxEmbedding,
 	}
 	for _, f := range allFeatures {
 		c.Features[f] = ac.Gate.State(f)

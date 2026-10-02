@@ -28,14 +28,6 @@ const (
 	FeatureActivationSteer     Feature = "activation_steer"      // M9: Activation Steering (hidden_state injection)
 	FeatureOTelExporter        Feature = "otel_exporter"         // M3: OTel SDK Prometheus exporter（Tier 1+）
 	FeatureDeepRAG             Feature = "deep_rag"              // M10: 三阶段深度 RAG（Tier 0+，≥8GB；依赖 rocksdb 持久化，自动升级后索引可落盘）
-	// Embedding 档位阶梯（优先级递增，内存压力时从高往低降级）：
-	//   FeatureLocalEmbedding  → nomic-embed-text        768-dim  ~512MB  Tier0 ≥256MB
-	//   FeatureHQEmbedding     → qwen3-embedding:0.6b   1024-dim  ~1GB   Tier0 ≥3GB
-	//   FeatureUltraEmbedding  → qwen3-embedding:4b     2560-dim  ~4GB   Tier1 ≥6GB
-	//   FeatureMaxEmbedding    → qwen3-embedding:8b     4096-dim  ~10GB  Tier2 ≥12GB
-	FeatureHQEmbedding    Feature = "hq_embedding"    // M1: qwen3-embedding:0.6b（Tier0, ≥3GB free）
-	FeatureUltraEmbedding Feature = "ultra_embedding" // M1: qwen3-embedding:4b（Tier1, ≥6GB free）
-	FeatureMaxEmbedding   Feature = "max_embedding"   // M1: qwen3-embedding:8b（Tier2, ≥12GB free）
 
 	// STT/TTS 不在此门控：ADR-0107 起"是否支持"由稳定硬件画像（总内存/逻辑核/arch，
 	// internal/llm/audiorun.AudioSupport）判定，空闲内存只决定"此刻能否加载"。
@@ -77,10 +69,6 @@ var getFeatureRules = sync.OnceValue(func() map[Feature]featureRule {
 		FeatureGraphRAGFull:  {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 40},
 		FeatureSurrealDBCore: {MinTier: Tier0, MinMemoryMB: 256, DegradeMemoryMB: 512, Priority: 8},
 		FeatureLargeLocalLLM: {MinTier: Tier2, MinMemoryMB: 6144, DegradeMemoryMB: 8192, Priority: 55},
-		// Embedding 阶梯门控（Priority 越高越先降级，保留低档基础能力）。
-		FeatureHQEmbedding:    {MinTier: Tier0, MinMemoryMB: 3072, DegradeMemoryMB: 4096, Priority: 11},   // 0.6b ~1GB
-		FeatureUltraEmbedding: {MinTier: Tier1, MinMemoryMB: 6144, DegradeMemoryMB: 8192, Priority: 12},   // 4b  ~4GB
-		FeatureMaxEmbedding:   {MinTier: Tier2, MinMemoryMB: 12288, DegradeMemoryMB: 16384, Priority: 13}, // 8b ~10GB
 		// 桶 B — 新增规则
 		FeatureLogicCollapse:       {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 42},
 		FeatureComputerUseGUI:      {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 38, OSConstraint: "requires_display"},
@@ -174,9 +162,6 @@ func (fg *FeatureGate) reassessAll() {
 		FeatureL2Sandbox,
 		FeatureSurrealDBCore,
 		FeatureLocalEmbedding,
-		FeatureHQEmbedding, // Embedding 阶梯：门控独立，按内存阈值自动升档
-		FeatureUltraEmbedding,
-		FeatureMaxEmbedding,
 		FeatureLocalInference,
 		FeatureWebUI,
 		FeaturePresidioPII,

@@ -32,13 +32,12 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/eval"
-	"github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/internal/gateway/egress"
 	"github.com/polarisagi/polaris/internal/gateway/server"
 	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
-	"github.com/polarisagi/polaris/internal/llm/ollamamgr"
+	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/observability"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/observability/trace"
@@ -127,6 +126,10 @@ type SubstrateBundle struct {
 	DynEmbedder *llm.DynamicEmbedder
 	// EmbedBatcher Embedder 背后的合批器；停机序列在生产者停止后调用 Stop()（GR-1.1-004）。
 	EmbedBatcher *search.EmbeddingBatcher
+	// EmbedChoice 当前选定的向量化决策 (ADR-0109 D1)
+	EmbedChoice embedChoice
+	// EmbedBackoff 后台向量任务（reindexer 与插件向量回填）的重试退避器 (ADR-0109 D5)
+	EmbedBackoff *retrieval.EmbedBackoff
 
 	// 训练适配器（门控，M9 流水线消费；当前作占位）
 	QLoRA    *llmadapter.QLoRAAdapter
@@ -345,7 +348,16 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	slog.Info("polaris: storage initialized", "db", layout.SQLiteDB)
 
 	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）────────────
-	surrealStore := initSurrealStore(autoConf, cfg, layout)
+	const onnxAvail = false
+	preChoice := chooseEmbedding(cfg.Embedding, cfg.Inference.EmbedderDim, onnxAvail)
+	surrealVecDim := preChoice.Dim
+	if surrealVecDim <= 0 {
+		surrealVecDim = cfg.Inference.EmbedderDim
+	}
+	if surrealVecDim <= 0 {
+		surrealVecDim = 1536
+	}
+	surrealStore := initSurrealStore(autoConf, cfg, layout, surrealVecDim)
 
 	// B4-F3: 将 SurrealDB Purge 回调注入 AutoConfig，
 	// 使 OSMemoryGuard DegradationCritical 时可清理认知轴内存。
@@ -529,144 +541,30 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。
 	provider.SeedProvidersFromEnv(ctx, repo.NewSQLiteProviderRepository(store.DB()).WithVault(vault))
 
-	// ─── 4.5~4.9 本地推理适配器（各 FeatureGate 门控）────────────────────────
-	// ollamaHTTPClient 允许访问 loopback（127.x/::1），专用于系统级受控本地服务（Ollama）。
-	// 其余私有 CIDR 仍受 SafeDialer SSRF 阻断；不得用于用户可控的出站请求。
-	ollamaHTTPClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
-	var embedder search.Embedder
+	// ─── 4.5~4.9 向量化引擎与训练适配器 (ADR-0109) ───────────────────────────
+	embedBackoff := retrieval.NewEmbedBackoff()
+	embedder, dynEmbedder, batcher, embedChoice := initEmbedding(ctx, cfg, layout, safeHTTPClient, embedBackoff)
+
 	var qloraAdapter *llmadapter.QLoRAAdapter
 	var prmAdapter *llmadapter.PRMAdapter
 	var steeringAdapter *llmadapter.SteeringAdapter
 	var cvStore *llmadapter.ControlVectorStore
 
-	// 创建动态原子代理，瞬间点亮系统基础功能
-	dynEmbedder := llm.NewDynamicEmbedder()
-
-	// 透传给 dynEmbedder.EmbedBatch：若当前挂载的真实引擎（Ollama/OpenAI 兼容适配器）
-	// 支持批量 API，则一次 HTTP 往返处理整个批次；否则内部自动降级为逐条 Embed。
-	// 之前这里手写 for 循环逐条调用 dynEmbedder.Embed，导致 EmbeddingBatcher 攒批之后
-	// 仍是 N 次串行调用，白白丢失了批处理收益。
-	embedFn := func(ctx context.Context, texts []string, _ string) ([][]float32, error) {
-		return dynEmbedder.EmbedBatch(ctx, texts)
-	}
-	// ADR-0099：High/Low 独立通道，Low 单批上限约束后台批在串行后端上的占用，
-	// 单次下游调用有界。阈值 SSoT：spec/state.yaml §m1_router.embed_*。
-	m1 := cfg.Thresholds.M1Router
-	batcher := search.NewEmbeddingBatcher(time.Duration(m1.EmbedBatchWindowMs)*time.Millisecond, m1.EmbedHighMaxBatchSize, embedFn).
-		WithLaneLimits(m1.EmbedLowMaxBatchSize, time.Duration(m1.EmbedCallTimeoutSeconds)*time.Second)
-	// 与单写者同理脱离信号 ctx：HTTP 排空期间仍有检索需要 embedding，由停机序列显式 Stop。
-	batcher.Start(context.WithoutCancel(ctx))
-	embedder = search.NewSyncBatcherAdapter(batcher)
-
-	// 智能判定优先级的核心逻辑
-	targetModel := ""
-	if cfg.Embedding.Model != "" && cfg.Embedding.BaseURL == "" {
-		targetModel = cfg.Embedding.Model
-		slog.Info("polaris: Using explicit local embedding model", "model", targetModel)
-	} else if autoConf != nil && autoConf.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled {
-		targetModel = autoConf.Config.LocalEmbeddingModel
-		if targetModel == "" {
-			targetModel = "nomic-embed-text"
-		}
-		slog.Info("polaris: Using auto-detected local embedding model", "model", targetModel, "dim", autoConf.Config.LocalEmbeddingDim)
+	// QLoRA / PRM / Steering 适配器仅在显式启用本地后端时初始化 (ADR-0109 D6)
+	if localBackendEnabled(cfg) {
+		ollamaHTTPClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
+		qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient.Client)
+		slog.Info("polaris: QLoRA training adapter initialized")
+		prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient.Client)
+		slog.Info("polaris: PRM training adapter initialized")
+		steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient.Client)
+		cvStore = llmadapter.NewControlVectorStore()
+		slog.Info("polaris: activation steering adapter initialized")
 	}
 
-	if targetModel != "" { //nolint:nestif
-		// 1. 全自动免安装与异步自愈逻辑 (Zero-setup background boot)
-		concurrent.SafeGo(context.Background(), "boot_substrate.ollama_lifecycle", func(ctxBg context.Context) {
-			slog.Info("polaris: Starting background Ollama lifecycle manager...")
-			binPath, err := ollamamgr.EnsureOllama(ctxBg, safeHTTPClient.Client, layout.Bin)
-			if err != nil {
-				slog.Error("polaris: Failed to install local Ollama", "err", err)
-				return
-			}
-
-			// Ensure service runs in background with a client that allows loopback polling
-			loopbackClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
-			_, err = ollamamgr.StartOllama(ctxBg, loopbackClient.Client, binPath)
-			if err != nil {
-				slog.Error("polaris: Failed to start local Ollama", "err", err)
-				return
-			}
-
-			if err := ollamamgr.EnsureModel(ctxBg, binPath, targetModel); err != nil {
-				slog.Error("polaris: Failed to pull embedding model", "err", err)
-				return
-			}
-
-			// 一切就绪，热更新引擎
-			adapter := llmadapter.NewOllamaEmbeddingAdapter(targetModel, ollamaHTTPClient.Client)
-			dynEmbedder.Set(adapter)
-			slog.Info("polaris: Dynamic embedding engine is now ACTIVE!", "model", targetModel)
-		})
-	} else if cfg.Embedding.BaseURL != "" {
-		// 2. 远程 API 绝对兜底逻辑 (只在本地跑不起且强制配置时才用)
-		apiKey := cfg.Embedding.APIKey
-		if apiKey == "" {
-			apiKey = os.Getenv(config.EnvPolarisEmbeddingAPIKey)
-		}
-		var embedKeys []string
-		if apiKey != "" {
-			embedKeys = []string{apiKey}
-		}
-		adapter := llmadapter.NewOpenAICompatibleEmbeddingAdapter(
-			cfg.Embedding.BaseURL,
-			cfg.Embedding.Model,
-			llm.NewCredentialPool(embedKeys, llm.StrategyFillFirst),
-			safeHTTPClient.Client,
-		)
-		dynEmbedder.Set(adapter)
-		slog.Info("polaris: Remote OpenAI-compat embedding registered as fallback",
-			"base_url", cfg.Embedding.BaseURL,
-			"model", cfg.Embedding.Model,
-		)
-	}
-
-	if autoConf != nil { //nolint:nestif
-		if autoConf.Gate.State(probe.FeatureLocalInference) != probe.FeatureDisabled {
-			localModel := autoConf.Config.LocalModelID
-			if localModel == "" {
-				localModel = "llama3.2"
-			}
-			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, ollamaHTTPClient.Client, tbr))
-			slog.Info("polaris: Ollama local inference registered", "model", localModel)
-
-			// llama.cpp FFI 本地推理（P3-1）：与上面的 Ollama 路径并存，不互斥。
-			// 惰性注册——不在启动时加载任何 GGUF 权重（无默认模型文件来源假设），
-			// LoadModel 由调用方通过 reg.Get("llama-local") 类型断言为
-			// protocol.LocalProvider 后显式触发（见 docs/arch/M01-Inference-Runtime.md §8）。
-			// 仅当二进制以 --features tier1 构建（ffi.LlamaAvailable()）时才注册，
-			// 避免 Tier-0/未编译 tier1 的二进制里出现一个必然报错的 Provider 条目。
-			if ffi.LlamaAvailable() {
-				reg.Register("llama-local", "Local LLM (llama.cpp FFI)", llmadapter.NewLocalAdapter(tbr))
-				slog.Info("polaris: llama.cpp FFI local inference registered (unloaded, awaiting LoadModel)")
-			}
-		}
-
-		if autoConf.Gate.State(probe.FeatureQLoRA) != probe.FeatureDisabled {
-			qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient.Client)
-			slog.Info("polaris: QLoRA training adapter initialized")
-		}
-		if autoConf.Gate.State(probe.FeaturePRMTraining) != probe.FeatureDisabled {
-			prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient.Client)
-			slog.Info("polaris: PRM training adapter initialized")
-		}
-		if autoConf.Gate.State(probe.FeatureActivationSteer) != probe.FeatureDisabled {
-			steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient.Client)
-			cvStore = llmadapter.NewControlVectorStore()
-			slog.Info("polaris: activation steering adapter initialized")
-		}
-		if autoConf.Gate.State(probe.FeatureLargeLocalLLM) != probe.FeatureDisabled {
-			if largeModel, ok := probe.TierLocalModel(autoConf.Config.Tier); ok {
-				reg.Register("ollama-large", "Large Local LLM", llmadapter.NewOllamaAdapter(largeModel, ollamaHTTPClient.Client, tbr))
-				slog.Info("polaris: large local LLM registered", "model", largeModel)
-			}
-		}
-
-		// 2026-07-04 审计补齐（任务4）：注入 LocalModelUnloader，使 OSMemoryGuard
-		// DegradationCritical 时能真正调用 UnloadModel 释放本地模型常驻内存，
-		// 而不是只 Disable Gate + GC。*llm.ProviderRegistry 天然满足
-		// observability.LocalModelUnloader 接口（Get(name) (protocol.Provider, bool)）。
+	if autoConf != nil {
+		// 注入 LocalModelUnloader，使 OSMemoryGuard DegradationCritical 时能真正调用
+		// UnloadModel 释放本地模型常驻内存。
 		autoConf.WithLocalModelUnloader(reg)
 		slog.Info("polaris: local model unloader wired into AutoConfig memory pressure callback")
 	}
@@ -734,6 +632,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		Embedder:                 embedder,
 		DynEmbedder:              dynEmbedder,
 		EmbedBatcher:             batcher,
+		EmbedChoice:              embedChoice,
+		EmbedBackoff:             embedBackoff,
 		QLoRA:                    qloraAdapter,
 		PRM:                      prmAdapter,
 		Steering:                 steeringAdapter,
@@ -816,6 +716,7 @@ func initSurrealStore(
 	autoConf *observability.AutoConfig,
 	cfg *config.Config,
 	layout config.DataLayout,
+	vecDim int,
 ) *sysstore.SurrealDBCoreStore {
 	const (
 		minRAMForSurreal   = 2 * 1024 * 1024 * 1024 // 2GB：以下完全跳过
@@ -859,13 +760,6 @@ func initSurrealStore(
 		dbPath = layout.SurrealDB
 	}
 
-	vecDim := cfg.Inference.EmbedderDim
-	// 本地 Ollama Embedding 启用时，向量维度由模型决定（768 或 1024），
-	// 需覆盖 defaults.toml 中针对远程 API 设置的 1536。
-	// LocalEmbeddingDim > 0 表示本地 Embedding 已选定，以其维度为 SurrealDB HNSW DIMENSION 权威值。
-	if autoConf != nil && autoConf.Config.LocalEmbeddingDim > 0 {
-		vecDim = autoConf.Config.LocalEmbeddingDim
-	}
 	if vecDim <= 0 {
 		vecDim = 1536
 	}
@@ -946,16 +840,4 @@ func waitForBackgroundSlot(ctx context.Context, sb *SubstrateBundle, work string
 		case <-time.After(retryInterval):
 		}
 	}
-}
-
-// backgroundEmbedder 返回低优先级嵌入器，供批量/周期性后台工作使用。
-// 合批器缺席时回退到默认 Embedder（可能为 nil，调用方本就需判空）。
-func backgroundEmbedder(sb *SubstrateBundle) search.Embedder {
-	if sb == nil || sb.EmbedBatcher == nil {
-		if sb == nil {
-			return nil
-		}
-		return sb.Embedder
-	}
-	return search.NewBackgroundEmbedder(sb.EmbedBatcher)
 }

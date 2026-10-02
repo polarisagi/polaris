@@ -233,14 +233,35 @@ func checkOllamaExecutable(p string) bool {
 	return true
 }
 
+// RecommendedThreads 显式启用本地 Ollama 时单次推理的线程上限：物理核/2（以逻辑核/4 近似），
+// 至少 1（ADR-0109 D4）。Ollama 没有全局线程数环境变量，线程数只能经请求的
+// options.num_thread 下发，故由嵌入适配器在每次请求中携带该值。
+func RecommendedThreads() int {
+	threads := runtime.NumCPU() / 4
+	if threads < 1 {
+		threads = 1
+	}
+	return threads
+}
+
 // StartOllama 在后台启动 ollama serve
 func StartOllama(ctx context.Context, httpClient *http.Client, binPath string) (*exec.Cmd, error) {
 	if httpClient == nil {
 		return nil, apperr.New(apperr.CodeInternal, "ollamamgr: httpClient is required for StartOllama")
 	}
 
-	slog.Info("polaris: Starting local Ollama engine in background...")
+	slog.Info("polaris: Starting local Ollama engine in background...",
+		"threads_per_request", RecommendedThreads(), "parallel", 1, "priority", "low")
 	cmd := exec.CommandContext(ctx, binPath, "serve")
+
+	// 护栏设置（ADR-0109 D4）：单并发、只常驻一个模型、子进程低优先级（runner 子进程继承 nice 值）。
+	// 线程上限不在此处：Ollama 无全局线程环境变量，由嵌入请求的 options.num_thread 下发
+	// （见 RecommendedThreads 与 adapter.OllamaEmbeddingAdapter.WithNumThread）。
+	prepareCmdAttrs(cmd)
+	cmd.Env = append(os.Environ(),
+		"OLLAMA_NUM_PARALLEL=1",
+		"OLLAMA_MAX_LOADED_MODELS=1",
+	)
 
 	// 将输出重定向到 devnull 或者丢弃，避免污染主进程日志
 	cmd.Stdout = nil
@@ -249,6 +270,7 @@ func StartOllama(ctx context.Context, httpClient *http.Client, binPath string) (
 	if err := cmd.Start(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "failed to start ollama", err)
 	}
+	setProcessLowPriority(cmd)
 
 	// 轮询等待端口启动
 	ready := false

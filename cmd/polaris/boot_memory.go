@@ -60,12 +60,12 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 
 	// 统一注入 Embedder 激活向量检索路径（P0-3 修复）
 	if sb.Embedder != nil {
-		embedModelName := "nomic-embed-text"
-		if sb.AutoConf != nil && sb.AutoConf.Config.LocalEmbeddingModel != "" {
-			embedModelName = sb.AutoConf.Config.LocalEmbeddingModel
+		embedModelName := sb.EmbedChoice.Model
+		if embedModelName == "" {
+			embedModelName = "embedding"
 		}
 		mem.InjectEmbedder(&memEmbedderAdapter{e: sb.Embedder, model: embedModelName})
-		slog.Info("polaris: vector retrieval path activated")
+		slog.Info("polaris: vector retrieval path activated", "model", embedModelName)
 	}
 
 	// ─── GD-14-003 检索强化：让遗忘按"有没有人用"而非"够不够旧"淘汰 ────────
@@ -186,11 +186,12 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 // Embedder 未启用时返回 nil（调用方需判空——纯 BM25 路径本就不需要重嵌）。
 func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context.Context) (int, bool, error) {
 	if sb.Embedder == nil {
+		slog.Info("polaris: embedder is nil (FTS mode), skipping online reindexer")
 		return nil
 	}
-	embedModelName := "nomic-embed-text"
-	if sb.AutoConf != nil && sb.AutoConf.Config.LocalEmbeddingModel != "" {
-		embedModelName = sb.AutoConf.Config.LocalEmbeddingModel
+	embedModelName := sb.EmbedChoice.Model
+	if embedModelName == "" {
+		embedModelName = "embedding"
 	}
 	// 重索引是批量后台负载：走 Low 优先级嵌入队列，把 High 队列让给用户的
 	// 交互式检索（EmbeddingBatcher 的双队列此前因无人提交 Low 而形同虚设，
@@ -217,11 +218,32 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 			case <-ctx.Done():
 				return
 			case <-reindexTicker.C:
+				if sb.EmbedBackoff != nil && !sb.EmbedBackoff.CanAttempt() {
+					slog.Debug("polaris: online reindexer skipped due to backoff guardrail",
+						"consecutive_failures", sb.EmbedBackoff.ConsecutiveFailures(),
+						"next_retry_at", sb.EmbedBackoff.NextRetryAt(),
+						"stopped", sb.EmbedBackoff.IsStopped())
+					continue
+				}
 				// 重索引把整批文档重新过一遍本地嵌入引擎，是 Tier-0 机器上最容易
 				// 把交互式检索挤到超时的后台负载之一，先过资源准入。
 				runAdmittedBackground(sb, "online_reindex", func() {
 					if _, _, err := onlineReindexer.Run(ctx); err != nil {
-						slog.Warn("polaris: online reindexer failed", "err", err)
+						if sb.EmbedBackoff != nil {
+							delay, stopped, failures := sb.EmbedBackoff.RecordFailure()
+							slog.Warn("polaris: online reindexer failed",
+								"err", err,
+								"consecutive_failures", failures,
+								"next_retry_delay", delay,
+								"next_retry_at", sb.EmbedBackoff.NextRetryAt(),
+								"stopped", stopped)
+						} else {
+							slog.Warn("polaris: online reindexer failed", "err", err)
+						}
+					} else {
+						if sb.EmbedBackoff != nil {
+							sb.EmbedBackoff.RecordSuccess()
+						}
 					}
 				})
 			}

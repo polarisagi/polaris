@@ -54,15 +54,10 @@ github_proxy = "auto"
 default_provider = "deepseek-flash"
 reasoning_provider = "deepseek-v4-pro"
 structured_output = "grammar"
-# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION）。
-# 用户如果在下方 [embedding] 配置了外部大模型，此值必须与模型输出维度对应（如 OpenAI/DeepSeek 均为 1536）。
-# 只有在用户未配置外部 API，且 FeatureGate 根据内存自动启用了本地 Ollama 时，此值才会被自动覆盖，无需手动修改：
-#   FeatureMaxEmbedding  （Tier2, ≥12GB free）→ qwen3-embedding:8b   → 4096  MTEB 70.58
-#   FeatureUltraEmbedding（Tier1, ≥6GB  free）→ qwen3-embedding:4b   → 2560  MTEB ~68
-#   FeatureHQEmbedding   （Tier0, ≥3GB  free）→ qwen3-embedding:0.6b → 1024  MTEB 64.33
-#   FeatureLocalEmbedding（Tier0, ≥256MB    ）→ nomic-embed-text     →  768  MTEB ~62
-# 远程 API 默认路径：
-#   OpenAI text-embedding-3-small / DeepSeek-Embedder → 1536
+# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION，ADR-0109）。
+# 远程 API 默认路径（如 OpenAI / DeepSeek）：1536 维。
+# 进程内 ONNX 嵌入器（默认后端）：统一 512 维（EmbeddingGemma 截断至 512，bge-small-zh 原生 512）。
+# 显式启用本地服务（ollama / llama_server）时，由下方 [embedding].dim 指定。
 embedder_dim = 1536
 
 [inference.cache]
@@ -276,20 +271,26 @@ warn_pct         = 80.0
 # 连续自动压缩但仍超阈值的最大次数；超出后停止自动压缩并显示抖动告警。
 max_thrash_count = 3
 
-# ── 向量化服务（Tier 2 Ambient 匹配 + Extension Catalog 预计算）─────────────────
-# 系统完全遵循“用户配置优先”。只要配置了 base_url，即强制使用该远程模型，绝不会自动拉取本地模型。
-# 只有在 base_url 留空时，系统才可能根据可用内存在后台尝试启动本地 Ollama 作为回退（Fallback）。
-# 若本地模型也不可用，所有检索将优雅降级到 Tier 1（基于关键词的 FTS 搜索）。
+# ── 向量化服务（ADR-0109：本地推理默认关闭，选择顺序唯一事实源）─────────────
+# 向量化后端选择顺序：
+#   1. base_url 非空 → 远程 OpenAI 兼容 API（最高优先级，绝不再拉起本地子进程）
+#   2. backend = "ollama" | "llama_server" 且 model 非空 → 显式本地服务（需显式配置）
+#   3. backend = "auto" | "onnx" → 进程内 ONNX 嵌入器（默认，平衡档 EmbeddingGemma / 轻量档 bge-small-zh）
+#   4. 都不满足或不可用 → 不挂载嵌入器，检索降级到关键词 FTS 搜索
 #
-# 提示：首次配置好下方的大模型后，可在系统中触发市场同步（local_only），即可将历史缺少的插件向量全部补齐。
-# 示例: base_url = "https://api.deepseek.com/v1", model = "deepseek-embed"
+# backend 取值: "auto" | "onnx" | "ollama" | "llama_server" | "none"（默认 "auto"，"none" 显式关闭向量化）
+# onnx_model 取值: "auto" | "embeddinggemma" | "bge-small-zh"（默认 "auto"，由启动基准自动决定档位）
+# dim: 向量维度（显式使用 ollama/llama_server 本地服务时必填；ONNX 固定 512；远程默认读 inference.embedder_dim）
 [embedding]
-base_url  = ""
-model     = ""
+base_url             = ""
+model                = ""
 # api_key 留空时读 POLARIS_EMBEDDING_API_KEY 环境变量
-api_key   = ""
+api_key              = ""
 # 余弦相似度阈值，低于此值的技能/扩展不注入
 similarity_threshold = 0.60
+backend              = "auto"
+onnx_model           = "auto"
+dim                  = 0
 
 [a2a]
 enabled = true

@@ -147,6 +147,40 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
+	httpServer.SetEmbeddingStatusProvider(func() server.EmbeddingStatus {
+		state := "fts"
+		if sb.Embedder != nil {
+			state = "starting" // 引擎（如显式 Ollama）仍在安装/拉模型，尚未 Set
+			if sb.DynEmbedder != nil {
+				select {
+				case <-sb.DynEmbedder.WaitReady():
+					state = "ready"
+				default:
+				}
+			}
+		}
+		consecFailures := 0
+		nextRetry := ""
+		if sb.EmbedBackoff != nil {
+			consecFailures = sb.EmbedBackoff.ConsecutiveFailures()
+			if !sb.EmbedBackoff.NextRetryAt().IsZero() {
+				nextRetry = sb.EmbedBackoff.NextRetryAt().Format(time.RFC3339)
+			}
+			if sb.EmbedBackoff.IsStopped() {
+				state = "failed"
+			} else if consecFailures > 0 {
+				state = "backoff"
+			}
+		}
+		return server.EmbeddingStatus{
+			Backend:             sb.EmbedChoice.Kind,
+			Model:               sb.EmbedChoice.Model,
+			Dim:                 sb.EmbedChoice.Dim,
+			State:               state,
+			ConsecutiveFailures: consecFailures,
+			NextRetryAt:         nextRetry,
+		}
+	})
 	httpServer.SetAmbientSkillMaxChars(sb.Cfg.Thresholds.M13Interface.AmbientSkillMaxChars)
 	// M09 §1.3 /steer 命令面（2026-07-21 deadcode 审查补齐）：sb.Steering/sb.CVStore
 	// 均可为 nil（FeatureActivationSteer 未启用），SetSteering/handleSteer 全链 nil-safe。
@@ -320,31 +354,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	tb.TTSBridge.Bind(httpServer.SynthesizeSpeech)
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
-	// sb.Embedder 经 EmbeddingBatcher 合批接线后已是 *search.SyncBatcherAdapter，
-	// 不再是 *llm.DynamicEmbedder，类型断言拿不到 WaitReady()；改用 sb.DynEmbedder
-	// （详见 boot_substrate.go SubstrateBundle 字段注释）。
-	if sb.DynEmbedder != nil {
-		concurrent.SafeGo(context.Background(), "boot_server.vector_backfill", func(ctx context.Context) {
-			<-sb.DynEmbedder.WaitReady()
-			if httpServer.PluginHandler() == nil {
-				return
-			}
-			// 资源准入：这是全系统最重的一次性后台负载——实测清库重启后它要把
-			// 148 个扩展逐条过本地嵌入引擎，与 STT 模型下载、知识连接器全量同步
-			// 撞在一起，直接把交互式检索挤到连续 30 秒超时。拿不到额度就退避重试，
-			// 而不是取消（回填只跑一次，跳过等于向量永久缺失）。
-			release, ok := waitForBackgroundSlot(ctx, sb, "plugin_vector_backfill")
-			if !ok {
-				slog.Warn("polaris: plugin vector backfill aborted (shutting down or never admitted)")
-				return
-			}
-			defer release()
-			slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
-			if _, err := httpServer.PluginHandler().SyncAllMarketplaces(ctx, true); err != nil {
-				slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
-			}
-		})
-	}
+	triggerPluginVectorBackfill(sb, httpServer.PluginHandler())
 
 	// Task 7: SystemPromptGuard
 	// V-3 核实：SystemPromptGuard 已在内部组件级完成拦截器接线，无需在 boot 层全局注入。
@@ -491,4 +501,46 @@ func shutdownSubstrateForRestart(sb *SubstrateBundle) {
 			slog.Error("polaris: store close failed before hot-restart, relying on WAL recovery in new process", "err", err)
 		}
 	}
+}
+
+// triggerPluginVectorBackfill 在动态嵌入器就绪后触发插件向量回填 (ADR-0109)。
+func triggerPluginVectorBackfill(sb *SubstrateBundle, pluginHandler *plugin.PluginHandler) {
+	if sb.Embedder == nil {
+		slog.Info("polaris: embedder is nil (FTS mode), skipping plugin vector backfill")
+		return
+	}
+	if sb.DynEmbedder == nil || pluginHandler == nil {
+		return
+	}
+	concurrent.SafeGo(context.Background(), "boot_server.vector_backfill", func(ctx context.Context) {
+		<-sb.DynEmbedder.WaitReady()
+		if sb.EmbedBackoff != nil && !sb.EmbedBackoff.CanAttempt() {
+			slog.Debug("polaris: plugin vector backfill skipped due to backoff guardrail",
+				"consecutive_failures", sb.EmbedBackoff.ConsecutiveFailures(),
+				"next_retry_at", sb.EmbedBackoff.NextRetryAt())
+			return
+		}
+		release, ok := waitForBackgroundSlot(ctx, sb, "plugin_vector_backfill")
+		if !ok {
+			slog.Warn("polaris: plugin vector backfill aborted (shutting down or never admitted)")
+			return
+		}
+		defer release()
+		slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
+		if _, err := pluginHandler.SyncAllMarketplaces(ctx, true); err != nil {
+			if sb.EmbedBackoff != nil {
+				delay, stopped, failures := sb.EmbedBackoff.RecordFailure()
+				slog.Warn("polaris: Background vector backfill encountered errors",
+					"err", err,
+					"consecutive_failures", failures,
+					"next_retry_delay", delay,
+					"next_retry_at", sb.EmbedBackoff.NextRetryAt(),
+					"stopped", stopped)
+			} else {
+				slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
+			}
+		} else if sb.EmbedBackoff != nil {
+			sb.EmbedBackoff.RecordSuccess()
+		}
+	})
 }

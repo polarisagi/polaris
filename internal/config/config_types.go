@@ -95,6 +95,9 @@ type EmbeddingConfig struct {
 	Model     string  `toml:"model"`                // 例: "deepseek-embed"
 	APIKey    string  `toml:"api_key"`              // 空 → 读 POLARIS_EMBEDDING_API_KEY 环境变量
 	Threshold float64 `toml:"similarity_threshold"` // 余弦阈值，默认 0.60
+	Backend   string  `toml:"backend"`              // "auto"|"onnx"|"ollama"|"llama_server"|"none"，默认 "auto" (ADR-0109)
+	ONNXModel string  `toml:"onnx_model"`           // "auto"|"embeddinggemma"|"bge-small-zh"，默认 "auto" (ADR-0109)
+	Dim       int     `toml:"dim"`                  // 显式指定向量维度；显式本地服务时必填 (ADR-0109)
 }
 
 // STTConfig 语音识别配置。模型与动态库的 URL/sha256 不在此配置，统一见
