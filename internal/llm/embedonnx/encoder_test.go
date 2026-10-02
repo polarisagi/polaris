@@ -67,7 +67,7 @@ func TestBGEEncoderCosineParity(t *testing.T) {
 		t.Skip("vocab.txt not found")
 	}
 
-	api, err := LoadORT(dylibPath)
+	api, err := OpenORT(dylibPath)
 	if err != nil {
 		t.Fatalf("loadORT failed: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestGemmaEncoderCosineParityAndMatryoshka(t *testing.T) {
 		t.Skip("Gemma tokenizer not found; download to testdata/ or spike/ to run")
 	}
 
-	api, err := LoadORT(dylibPath)
+	api, err := OpenORT(dylibPath)
 	if err != nil {
 		t.Fatalf("loadORT failed: %v", err)
 	}

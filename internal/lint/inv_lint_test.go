@@ -732,6 +732,7 @@ func Test_inv_NoAlterTableInSchema(t *testing.T) {
 //   - internal/llm/tts/            → Sherpa-ONNX TTS dylib（音频推理，L0 基础设施）
 //   - internal/security/policy/    → Cedar 策略引擎 dylib（L0 安全基础设施）
 //   - internal/store/              → SurrealDB embedded dylib（L0 存储基础设施）
+//   - internal/llm/embedonnx/      → ONNX Runtime dylib（ADR-0109 向量嵌入推理，L0 基础设施）
 func Test_inv_NoFFIOutsideFfiPkg(t *testing.T) {
 	root := repoRoot(t)
 	// 豁免列表由 testdata/ffi_boundary_exempt.json 管理，见该文件注释说明。

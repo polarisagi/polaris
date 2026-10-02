@@ -83,14 +83,14 @@ impl SurrealStore {
         })?;
         rt.block_on(async { db.use_ns("polaris").use_db("cognition").await })?;
 
-        let ddl = format!(
-            "DEFINE TABLE IF NOT EXISTS kv SCHEMAFULL; \
+        let base_ddl = "DEFINE TABLE IF NOT EXISTS kv SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS k ON kv TYPE string; \
              DEFINE FIELD IF NOT EXISTS v ON kv TYPE string; \
              DEFINE INDEX IF NOT EXISTS kv_k ON kv FIELDS k UNIQUE; \
+             DEFINE TABLE IF NOT EXISTS meta SCHEMAFULL; \
+             DEFINE FIELD IF NOT EXISTS dim ON meta TYPE int; \
              DEFINE TABLE IF NOT EXISTS vectors SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS embed ON vectors TYPE array<float>; \
-             DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EFC 64; \
              DEFINE TABLE IF NOT EXISTS edges SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS from_id ON edges TYPE string; \
              DEFINE FIELD IF NOT EXISTS edge_type ON edges TYPE string; \
@@ -100,17 +100,74 @@ impl SurrealStore {
              DEFINE TABLE IF NOT EXISTS docs SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS body ON docs TYPE string; \
              DEFINE ANALYZER IF NOT EXISTS ascii_lower TOKENIZERS class FILTERS lowercase; \
-             DEFINE INDEX IF NOT EXISTS fts_idx ON docs FIELDS body FULLTEXT ANALYZER ascii_lower BM25;"
-        );
+             DEFINE INDEX IF NOT EXISTS fts_idx ON docs FIELDS body FULLTEXT ANALYZER ascii_lower BM25;";
 
         rt.block_on(async {
-            match db.query(&ddl).await {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    eprintln!("[surreal_store] DDL error (fatal): {e}");
-                    Err(Box::new(e) as Box<dyn std::error::Error>)
-                }
+            if let Err(e) = db.query(base_ddl).await {
+                eprintln!("[surreal_store] Base DDL error (fatal): {e}");
+                return Err(Box::new(e) as Box<dyn std::error::Error>);
             }
+
+            // 检查 meta:vector_index 是否存在已落库维度（ADR-0109 P4）
+            let meta_row: Option<MetaRow> = match db.query("SELECT dim FROM type::record('meta', 'vector_index')").await {
+                Ok(mut resp) => {
+                    let rows: Vec<MetaRow> = resp.take(0).unwrap_or_default();
+                    rows.into_iter().next()
+                }
+                Err(_) => None,
+            };
+
+            let need_rebuild = match meta_row {
+                Some(row) => {
+                    let stored_dim = row.dim as u32;
+                    if stored_dim != vec_dim {
+                        eprintln!("[surreal_store] HNSW dimension changed from {stored_dim} to {vec_dim}. Rebuilding index...");
+                        true
+                    } else {
+                        false
+                    }
+                }
+                None => {
+                    // 无元数据（老库或全新库）：检查现有 vectors 表任一条推断维度
+                    let vec_len: Option<u32> = match db.query("SELECT array::len(embed) AS len FROM vectors LIMIT 1").await {
+                        Ok(mut resp) => {
+                            let rows: Vec<VectorLenRow> = resp.take(0).unwrap_or_default();
+                            rows.into_iter().next().and_then(|r| r.len.map(|l| l as u32))
+                        }
+                        Err(_) => None,
+                    };
+
+                    if let Some(inferred) = vec_len && inferred > 0 {
+                        if inferred != vec_dim {
+                            eprintln!("[surreal_store] Legacy HNSW dimension mismatch: inferred={inferred}, target={vec_dim}. Rebuilding index...");
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        // 表空或新库
+                        false
+                    }
+                }
+            };
+
+            if need_rebuild {
+                let _ = db.query("REMOVE INDEX IF EXISTS hnsw_idx ON vectors; DELETE vectors;").await;
+            }
+
+            let define_idx = format!("DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EFC 64;");
+            if let Err(e) = db.query(&define_idx).await {
+                eprintln!("[surreal_store] Define HNSW index error (fatal): {e}");
+                return Err(Box::new(e) as Box<dyn std::error::Error>);
+            }
+
+            // 写入或更新 meta:vector_index
+            let _ = db
+                .query("UPSERT type::record('meta', 'vector_index') SET dim = $dim")
+                .bind(("dim", vec_dim as i64))
+                .await;
+
+            Ok(())
         })?;
 
         Ok(SurrealStore { db, rt, vec_dim })
@@ -120,6 +177,16 @@ impl SurrealStore {
 pub(super) static STORE: OnceLock<Arc<RwLock<SurrealStore>>> = OnceLock::new();
 
 // ─── 查询结果结构 ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, SurrealValue)]
+pub(super) struct MetaRow {
+    pub(super) dim: i64,
+}
+
+#[derive(Debug, SurrealValue)]
+pub(super) struct VectorLenRow {
+    pub(super) len: Option<i64>,
+}
 
 #[derive(Debug, SurrealValue)]
 pub(super) struct KvRow {
@@ -414,5 +481,104 @@ mod tests {
                 "stats_json was {stats_json}"
             );
         }
+    }
+
+    #[test]
+    fn test_hnsw_dimension_migration() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "polaris_test_surreal_mig_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = temp_dir.to_str().unwrap();
+
+        // 1. 模拟旧库：以 2560 维打开并写入 2560 维向量
+        {
+            let store1 =
+                super::SurrealStore::new("rocksdb", path, 2560).expect("init store with 2560 dim");
+            let v2560 = vec![0.1f32; 2560];
+            let q_res = store1.rt.block_on(async {
+                store1
+                    .db
+                    .query("UPSERT type::record('vectors', 'doc1') SET embed = $embed")
+                    .bind(("embed", v2560))
+                    .await
+            });
+            assert!(q_res.is_ok(), "insert 2560 dim vector failed");
+
+            // 验证 meta 表已记录 2560
+            let meta_dim: Option<i64> = store1.rt.block_on(async {
+                let mut resp = store1
+                    .db
+                    .query("SELECT dim FROM type::record('meta', 'vector_index')")
+                    .await
+                    .ok()?;
+                let rows: Vec<super::MetaRow> = resp.take(0).ok()?;
+                rows.into_iter().next().map(|r| r.dim)
+            });
+            assert_eq!(meta_dim, Some(2560));
+
+            let super::SurrealStore { db, rt, .. } = store1;
+            drop(db);
+            rt.block_on(async {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            });
+            drop(rt);
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // 2. 模拟升级：以 512 维重新打开同一路径
+        {
+            let store2 =
+                super::SurrealStore::new("rocksdb", path, 512).expect("reopen store with 512 dim");
+
+            // 验证旧向量已清空（HNSW 索引重建，旧维度不兼容数据被清除）
+            let vec_count: Option<i64> = store2.rt.block_on(async {
+                let mut resp = store2
+                    .db
+                    .query("SELECT count() AS count FROM vectors GROUP ALL")
+                    .await
+                    .ok()?;
+                let rows: Vec<super::CountRow> = resp.take(0).ok()?;
+                rows.into_iter().next().map(|r| r.count)
+            });
+            assert_eq!(
+                vec_count.unwrap_or(0),
+                0,
+                "vectors table must be cleared upon dimension migration"
+            );
+
+            // 验证 meta 表已更新为 512
+            let meta_dim: Option<i64> = store2.rt.block_on(async {
+                let mut resp = store2
+                    .db
+                    .query("SELECT dim FROM type::record('meta', 'vector_index')")
+                    .await
+                    .ok()?;
+                let rows: Vec<super::MetaRow> = resp.take(0).ok()?;
+                rows.into_iter().next().map(|r| r.dim)
+            });
+            assert_eq!(
+                meta_dim,
+                Some(512),
+                "meta:vector_index must be updated to 512"
+            );
+
+            // 验证可以正常写入 512 维新向量
+            let v512 = vec![0.2f32; 512];
+            let q_res = store2.rt.block_on(async {
+                store2
+                    .db
+                    .query("UPSERT type::record('vectors', 'doc2') SET embed = $embed")
+                    .bind(("embed", v512))
+                    .await
+            });
+            assert!(q_res.is_ok(), "insert 512 dim vector must succeed");
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

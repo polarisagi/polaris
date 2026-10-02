@@ -38,8 +38,8 @@ type ORTApi struct {
 	getErrorMessage                  func(status uintptr) *byte
 }
 
-// LoadORT 从 dylib/so/dll 动态库加载 ORT C API。
-func LoadORT(dylibPath string) (*ORTApi, error) {
+// OpenORT 从 dylib/so/dll 动态库加载 ORT C API。
+func OpenORT(dylibPath string) (*ORTApi, error) {
 	handle, err := purego.Dlopen(dylibPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "embedonnx: dlopen failed", err)

@@ -51,6 +51,7 @@ var (
 	surrealFreeString               func(ptr uintptr)
 	surrealFreeBuf                  func(ptr uintptr, length uintptr)
 	surrealVecSetMode               func(mode int32) int32
+	surrealVecDimension             func() int32
 	surrealStats                    func(outJSON *uintptr) int32
 	surrealPurge                    func()
 )
@@ -82,6 +83,7 @@ func bindSurreal() error {
 		purego.RegisterLibFunc(&surrealFreeString, lib, "surreal_free_string")
 		purego.RegisterLibFunc(&surrealFreeBuf, lib, "surreal_free_buf")
 		purego.RegisterLibFunc(&surrealVecSetMode, lib, "surreal_vec_set_mode")
+		purego.RegisterLibFunc(&surrealVecDimension, lib, "surreal_vec_dimension")
 		purego.RegisterLibFunc(&surrealStats, lib, "surreal_stats")
 		purego.RegisterLibFunc(&surrealPurge, lib, "surreal_purge")
 	})
@@ -172,6 +174,16 @@ func OpenSurrealDBCore(backend, dbPath string, vecDim, workerThreads int) (*Surr
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_open failed: code %d", rc))
 	}
 	return &SurrealDBCoreStore{}, nil
+}
+
+// VectorDim 返回底层 HNSW 索引的向量维度（ADR-0109 P4）。
+func (s *SurrealDBCoreStore) VectorDim() int {
+	if surrealVecDimension != nil {
+		if dim := int(surrealVecDimension()); dim > 0 {
+			return dim
+		}
+	}
+	return 0
 }
 
 // ─── protocol.Store 实现 ──────────────────────────────────────────────────────

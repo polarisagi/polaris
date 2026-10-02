@@ -170,3 +170,17 @@ pub unsafe extern "C" fn surreal_vec_knn(
 pub extern "C" fn surreal_vec_set_mode(_mode: c_int) -> c_int {
     super::SURREAL_OK
 }
+
+// ─── surreal_vec_dimension ───────────────────────────────────────────────────
+
+/// 获取当前已初始化的 HNSW 索引维度（ADR-0109 P4）。
+#[unsafe(no_mangle)]
+pub extern "C" fn surreal_vec_dimension() -> c_int {
+    let Some(store_arc) = get_store() else {
+        return 0;
+    };
+    let Ok(guard) = store_arc.read() else {
+        return 0;
+    };
+    guard.vec_dim as c_int
+}

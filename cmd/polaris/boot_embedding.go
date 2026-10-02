@@ -149,7 +149,9 @@ func initEmbedding(
 		setupOllamaEmbedding(cfg, choice, layout, safeHTTPClient, dynEmbedder)
 	case "onnx":
 		concurrent.SafeGo(context.WithoutCancel(ctx), "boot_embedding.onnx_init", func(ctxBg context.Context) {
-			_ = runONNXEmbedding(ctxBg, cfg, layout, safeHTTPClient.Client, dynEmbedder, db, false)
+			if err := runONNXEmbedding(ctxBg, cfg, layout, safeHTTPClient.Client, dynEmbedder, db, false); err != nil {
+				slog.Warn("polaris: ONNX embedding background initialization failed", "err", err)
+			}
 		})
 	}
 
@@ -234,7 +236,9 @@ func triggerRebench(ctx context.Context, sb *SubstrateBundle) error {
 		return apperr.New(apperr.CodeInvalidInput, "embedding engine not initialized")
 	}
 	concurrent.SafeGo(context.WithoutCancel(ctx), "embedding.rebench", func(ctxBg context.Context) {
-		_ = runONNXEmbedding(ctxBg, sb.Cfg, sb.Layout, sb.SafeHTTP, sb.DynEmbedder, sb.Store.DB(), true)
+		if err := runONNXEmbedding(ctxBg, sb.Cfg, sb.Layout, sb.SafeHTTP, sb.DynEmbedder, sb.Store.DB(), true); err != nil {
+			slog.Warn("polaris: embedding rebench failed", "err", err)
+		}
 	})
 	return nil
 }
@@ -300,7 +304,13 @@ func benchGemma(ctx context.Context, httpClient *http.Client, embedDir string, a
 	}
 	gemmaEngine := embedonnx.NewGemmaEngine(gemmaSession, gemmaTok)
 	p95, err := embedonnx.MeasureP95(ctx, func(c context.Context, text string) error {
-		_ = gemmaEngine.Embed(c, text)
+		vecs, err := gemmaEngine.EmbedBatch(c, []string{text})
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "gemma embed bench", err)
+		}
+		if len(vecs) == 0 {
+			return apperr.New(apperr.CodeInternal, "empty vector in bench")
+		}
 		return nil
 	})
 	if err != nil {
@@ -329,7 +339,13 @@ func benchBGE(ctx context.Context, httpClient *http.Client, embedDir string, api
 	}
 	bgeEngine := embedonnx.NewBGEEngine(bgeSession, bgeTok)
 	p95, err := embedonnx.MeasureP95(ctx, func(c context.Context, text string) error {
-		_ = bgeEngine.Embed(c, text)
+		vecs, err := bgeEngine.EmbedBatch(c, []string{text})
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "bge embed bench", err)
+		}
+		if len(vecs) == 0 {
+			return apperr.New(apperr.CodeInternal, "empty vector in bench")
+		}
 		return nil
 	})
 	if err != nil {
@@ -363,7 +379,7 @@ func runONNXEmbedding(
 		slog.Warn("polaris: failed to ensure ORT library for embedding", "err", err)
 		return apperr.Wrap(apperr.CodeInternal, "polaris: ensure ORT library failed", err)
 	}
-	api, err := embedonnx.LoadORT(dylibPath)
+	api, err := embedonnx.OpenORT(dylibPath)
 	if err != nil {
 		slog.Warn("polaris: failed to load ORT library for embedding", "err", err)
 		return apperr.Wrap(apperr.CodeInternal, "polaris: load ORT library failed", err)

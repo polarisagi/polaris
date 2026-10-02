@@ -6,16 +6,6 @@
 package main
 
 import (
-	"github.com/polarisagi/polaris/internal/security/policy"
-
-	"github.com/polarisagi/polaris/internal/security/credential"
-	"github.com/polarisagi/polaris/internal/security/network"
-	"github.com/polarisagi/polaris/internal/security/taint"
-
-	"github.com/polarisagi/polaris/internal/observability/probe"
-
-	"github.com/polarisagi/polaris/internal/observability/metrics"
-
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -37,14 +28,21 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+	"github.com/polarisagi/polaris/internal/llm/embedassets"
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/observability"
 	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	sysstore "github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/audit"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -348,9 +346,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	slog.Info("polaris: storage initialized", "db", layout.SQLiteDB)
 
 	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）────────────
-	const onnxAvail = false
-	preChoice := chooseEmbedding(cfg.Embedding, cfg.Inference.EmbedderDim, onnxAvail)
-	surrealVecDim := preChoice.Dim
+	_, onnxAvail := embedassets.ORTLibAsset(runtime.GOOS, runtime.GOARCH)
+	surrealVecDim := chooseEmbedding(cfg.Embedding, cfg.Inference.EmbedderDim, onnxAvail).Dim
 	if surrealVecDim <= 0 {
 		surrealVecDim = cfg.Inference.EmbedderDim
 	}

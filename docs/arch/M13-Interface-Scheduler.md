@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:495 对内调度 / 3:618 MCP / 6:636 (SOFT)降级 / 6-bis:649 已知Bug修复记录 / 7:661 跨模块契约 / 8:678 Web UI 规约 / 8.6:824 插件聚合市场DB+流 / 8.7:860 自动化中心DB+流+工作流 / 8.8:977 电脑操控权限+Preferences / 8.9:1017 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:496 对内调度 / 3:619 MCP / 6:637 (SOFT)降级 / 6-bis:650 已知Bug修复记录 / 7:662 跨模块契约 / 8:679 Web UI 规约 / 8.6:825 插件聚合市场DB+流 / 8.7:861 自动化中心DB+流+工作流 / 8.8:978 电脑操控权限+Preferences / 8.9:1018 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -359,6 +359,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | GET | `/v1/doctor` | `sysadminHandler.HandleDoctor` |
 | GET | `/v1/elicitations` | `handleGetElicitations` |
 | POST | `/v1/elicitations/{id}` | `handleRespondElicitation` |
+| POST | `/v1/embedding/rebench` | `handleEmbeddingRebench` |
 | POST | `/v1/eval/benchmark` | `sysadminHandler.Eval.HandleBenchmark` |
 | GET | `/v1/eval/meta-audit` | `sysadminHandler.Eval.HandleGetMetaAuditStatus` |
 | POST | `/v1/eval/meta-audit` | `sysadminHandler.Eval.HandleRunMetaAudit` |
@@ -460,7 +461,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 152 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 153 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]

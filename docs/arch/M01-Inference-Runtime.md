@@ -398,8 +398,8 @@ MutationIntent{
 **硬件门控**：
 `FeatureLocalInference`（`internal/observability/probe/feature_gate.go`，`MinTier: Tier1, MinMemoryMB: 2048`）之外，额外叠加 `ffi.LlamaAvailable()` 判断——区分“硬件满足 Tier-1”与“二进制是否以 `--features tier1` 编译”两个独立维度，二进制未编译时不注册一个必然失败的 Provider（`cmd/polaris/boot_substrate.go`）。
 
-**功能对照**：
-`internal/llm/adapter/ollama.go`（HTTP 接入本机 Ollama 服务）与 `LocalAdapter`（同进程 FFI）两条本地推理路径并存、不互斥，分别注册为 `ollama-local` / `llama-local`，由 Router 按健康度/延迟自动择优。Ollama 路径部署简单（依赖外部 Ollama 服务），FFI 路径部署更紧凑（单二进制、无额外进程），二者互为备份。
+**功能对照（ADR-0109 更新）**：
+按 ADR-0109 规范，本地推理默认全量关闭（OFF-by-default）。`internal/llm/adapter/ollama.go`（HTTP 接入本机 Ollama 服务）与 `LocalAdapter`（同进程 FFI）不再无条件自动注册；仅在用户显式配置 `inference.backend` 时才按需注册为 `ollama-local` / `llama-local`。向量化嵌入（Embedding）首选远端 base_url，次选显式本地模型，三选零外部依赖的进程内 ONNX 引擎（纯 Go purego ORT 绑定），不可用时降级为 SQLite BM25 全文检索（FTS）。
 
 ### 8.2 生命周期
 

@@ -1,6 +1,6 @@
 # ADR-0109: 本地推理默认关闭——向量化改用独立的进程内 ONNX 嵌入器，llama-server/Ollama 仅显式配置启用
 
-- **状态**: Proposed
+- **状态**: Accepted
 - **日期**: 2026-10-02
 - **决策者**: 用户（需求）/ Opus（设计）/ Sonnet（实现）
 - **相关模块**: M1 Inference / `cmd/polaris/boot_substrate.go` / `cmd/polaris/boot_memory.go` / `internal/observability/probe/` / `internal/llm/` / `internal/memory/retrieval/` / `internal/ffi/`
@@ -144,3 +144,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-10-02 | 初稿（Proposed） |
+| 2026-10-02 | P0-P4 全面落地并验收完成（Accepted）。默认关闭本地 Ollama/llama-server，实现纯 Go 进程内 ONNX 向量化引擎（512 维）、SurrealDB HNSW 索引平滑迁移与硬件探测建议提示 |
