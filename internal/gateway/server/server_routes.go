@@ -125,10 +125,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/projects/{id}", s.chatHandler.HandleUpdateProject)
 	mux.HandleFunc("DELETE /v1/projects/{id}", s.chatHandler.HandleDeleteProject)
 
-	// 语音识别 API
+	// 语音识别与合成 API（ADR-0108）
+	mux.HandleFunc("GET /v1/audio/status", s.handleGetAudioStatus)
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)
 	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.AudioService.HandleAudioSpeech)
-	// 语音资产按需安装（ADR-0107）：首次点麦克风/朗读时由前端触发，进度经 capabilities 轮询。
+	// 语音资产按需安装（ADR-0107 / ADR-0108）：首次点麦克风/朗读时由前端触发，进度经 capabilities 与 audio/status 轮询。
 	mux.HandleFunc("POST /v1/audio/stt/install", s.chatHandler.AudioService.HandleAudioInstall("stt"))
 	mux.HandleFunc("POST /v1/audio/tts/install", s.chatHandler.AudioService.HandleAudioInstall("tts"))
 

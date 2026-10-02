@@ -268,6 +268,22 @@ func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetAudioStatus 返回 GET /v1/audio/status 的轻量状态快照（ADR-0108）。
+func (s *Server) handleGetAudioStatus(w http.ResponseWriter, r *http.Request) {
+	sttStatus := s.GetSTTStatus()
+	ttsStatus := s.GetTTSStatus()
+	ttsEngine := "auto"
+	if p := s.ttsEnginePref.Load(); p != nil && *p != "" {
+		ttsEngine = *p
+	}
+	httputil.WriteJSON(w, map[string]any{
+		"stt_status":   sttStatus,
+		"tts_status":   ttsStatus,
+		"tts_engine":   ttsEngine,
+		"auto_install": s.autoInstallAudio.Load(),
+	})
+}
+
 // handleGetPendingApprovals/parseInterruptAction/handleAgentInterrupt/
 // handleResolveApproval（HITL 审批 + 中断处理）、agentStateString/
 // handleStatus（WebUI 状态快照）见 server_handlers_hitl.go（R7 拆分）。

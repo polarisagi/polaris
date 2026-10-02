@@ -109,3 +109,39 @@ func TestHandleGetCapabilities(t *testing.T) {
 		t.Errorf("expected hardware_tier=1, got %v", res["hardware_tier"])
 	}
 }
+
+func TestHandleGetAudioStatus(t *testing.T) {
+	s := &Server{}
+	s.SetAudioAutoInstall(true)
+	s.SetTTSEnginePref("server")
+
+	req := httptest.NewRequest("GET", "/v1/audio/status", nil)
+	w := httptest.NewRecorder()
+
+	s.handleGetAudioStatus(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Result().StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+
+	if res["auto_install"] != true {
+		t.Errorf("expected auto_install=true, got %v", res["auto_install"])
+	}
+	if res["tts_engine"] != "server" {
+		t.Errorf("expected tts_engine=server, got %v", res["tts_engine"])
+	}
+
+	// AudioService 为 nil 时返回 disabled 状态
+	sttStatus, ok := res["stt_status"].(map[string]any)
+	if !ok || sttStatus["state"] != "disabled" {
+		t.Errorf("expected stt_status.state=disabled, got %v", sttStatus)
+	}
+	ttsStatus, ok := res["tts_status"].(map[string]any)
+	if !ok || ttsStatus["state"] != "disabled" {
+		t.Errorf("expected tts_status.state=disabled, got %v", ttsStatus)
+	}
+}

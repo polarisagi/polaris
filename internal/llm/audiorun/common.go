@@ -26,10 +26,11 @@ func sumSize(assets []audioassets.Asset) int64 {
 }
 
 // downloadProgress 返回把下载进度翻译成状态快照的回调。
-func downloadProgress(sink StatusSink) audioassets.ProgressFunc {
+func downloadProgress(sink StatusSink, origin string) audioassets.ProgressFunc {
 	return func(a audioassets.Asset, done, total int64) {
 		sink.Publish(Status{
 			State:     StateDownloading,
+			Origin:    origin,
 			Detail:    fmt.Sprintf("下载%s（%s）", a.Name, humanBytes(a.Size)),
 			BytesDone: done, BytesTotal: total,
 		})

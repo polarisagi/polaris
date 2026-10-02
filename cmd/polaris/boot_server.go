@@ -292,8 +292,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetEvalAdmin(ab.EvalStore, ab.MetaEvalSentinel, ab.EvalRunner)
 	httpServer.SetToolRefOffloader(tb.ToolRefOffloader)
 
-	// ─── §11.5 STT/TTS 语音服务装配（ADR-0107）：启动时不下载任何资产，
-	// 首次使用由前端触发 install；引擎懒加载、空闲卸载。
+	// ─── §11.5 STT/TTS 语音服务装配（ADR-0107 / ADR-0108）：
+	// 若 auto_install=true，启动后延迟 45s 串行后台预置支持的模型；引擎懒加载、空闲卸载。
 	var tierParams *probe.TierParameters
 	if sb.AutoConf != nil {
 		tierParams = &sb.AutoConf.Config.Params
@@ -303,6 +303,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	if sb.AutoConf != nil && sb.AutoConf.Probe != nil {
 		totalRAM = sb.AutoConf.Probe.TotalRAM
 	}
+	cpuSampler := probe.NewCPUSampler()
 	initAudio(ctx, audioInit{
 		Server:        httpServer,
 		DataDir:       sb.DataDir,
@@ -312,6 +313,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		Cfg:           sb.Cfg.Inference,
 		Prefs:         tb.SysRepo,
 		TotalRAMBytes: totalRAM,
+		AutoInstall:   sb.Cfg.Inference.Audio.AutoInstall,
+		CPUUsage:      cpuSampler.Usage,
 	})
 	// tts 内置工具与 Provider 同源：工具调用与 /v1/audio/speech 走同一套懒加载/不支持/未安装语义。
 	tb.TTSBridge.Bind(httpServer.SynthesizeSpeech)

@@ -121,6 +121,8 @@ type Server struct {
 	// ttsEnginePref 前端朗读引擎偏好 auto|server|system（inference.tts.engine）。
 	// 后端不据此行事，只经 capabilities 下发；用 atomic：装配期写、请求期读。
 	ttsEnginePref atomic.Pointer[string]
+	// autoInstallAudio 标识守护进程是否在后台自动预置语音模型（ADR-0108）。
+	autoInstallAudio atomic.Bool
 
 	// Cron runner 生命周期控制
 	cronCancel context.CancelFunc
@@ -521,6 +523,25 @@ func (s *Server) PublishTTSStatus(st chat.AudioAssetStatus) {
 
 // SetTTSEnginePref 注入前端朗读引擎偏好（auto|server|system），经 /v1/system/capabilities 下发。
 func (s *Server) SetTTSEnginePref(pref string) { s.ttsEnginePref.Store(&pref) }
+
+// SetAudioAutoInstall 注入是否自动后台预置语音模型。
+func (s *Server) SetAudioAutoInstall(enabled bool) { s.autoInstallAudio.Store(enabled) }
+
+// GetSTTStatus 读取当前 STT 资产状态快照。
+func (s *Server) GetSTTStatus() chat.AudioAssetStatus {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		return s.chatHandler.AudioService.STTStatus.Get()
+	}
+	return chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+}
+
+// GetTTSStatus 读取当前 TTS 资产状态快照。
+func (s *Server) GetTTSStatus() chat.AudioAssetStatus {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		return s.chatHandler.AudioService.TTSStatus.Get()
+	}
+	return chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+}
 
 // SetAudioInstaller 注入语音资产安装器（POST /v1/audio/{stt|tts}/install 的后端）。
 func (s *Server) SetAudioInstaller(i chat.AudioInstaller) {

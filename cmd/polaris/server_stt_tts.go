@@ -31,13 +31,19 @@ type audioInit struct {
 	Cfg           config.InferenceConfig
 	Prefs         audiorun.PrefStore // 持久化首次 TTS 基准（HE-6）
 	TotalRAMBytes uint64
+	AutoInstall   bool
+	CPUUsage      func() float64
 }
 
 // audioRuntime 聚合语音服务，实现 chat.AudioInstaller（POST /v1/audio/{stt|tts}/install 的后端）。
 type audioRuntime struct {
-	stt *audiorun.STTService
-	tts *audiorun.TTSService // provider="http" 时为 nil（外部 sidecar 无需安装）
+	stt         *audiorun.STTService
+	tts         *audiorun.TTSService // provider="http" 时为 nil（外部 sidecar 无需安装）
+	autoInstall bool
 }
+
+// AutoInstall 报告当前是否开启自动预置。
+func (a *audioRuntime) AutoInstall() bool { return a.autoInstall }
 
 // Install 实现 chat.AudioInstaller。
 func (a *audioRuntime) Install(kind string) (bool, error) {
@@ -63,9 +69,8 @@ func (a *audioRuntime) Close() {
 	}
 }
 
-// initAudio 装配 STT/TTS 语音服务（ADR-0107）：
-//   - 不在启动时下载任何语音资产：状态机初始为 not_installed / unsupported / ready（已装但未加载），
-//     由前端首次使用时调用 install 触发下载；
+// initAudio 装配 STT/TTS 语音服务（ADR-0107 / ADR-0108）：
+//   - 启动后若 auto_install=true，在后台延迟 45s 串行预置支持的模型（STT→TTS）；
 //   - 引擎首次请求时才加载，空闲 inference.audio.idle_unload_minutes 分钟后卸载；
 //   - "是否支持"只看稳定硬件画像（总内存/逻辑核/arch），空闲内存只决定此刻能否加载。
 func initAudio(ctx context.Context, in audioInit) *audioRuntime {
@@ -100,7 +105,7 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 		"stt_supported", support.STT.Supported, "tts_supported", support.TTS.Supported,
 		"idle_unload", idle.String())
 
-	rt := &audioRuntime{}
+	rt := &audioRuntime{autoInstall: in.AutoInstall}
 	rt.stt = audiorun.NewSTTService(ctx, audiorun.STTOptions{
 		Dir:           sttDir,
 		SherpaVersion: in.Cfg.STT.SherpaVersion,
@@ -119,6 +124,10 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 
 	s.SetTTSEnginePref(in.Cfg.TTS.Engine)
 	s.SetAudioInstaller(rt)
+	s.SetAudioAutoInstall(in.AutoInstall)
+
+	scheduleAudioProvisioner(ctx, in.AutoInstall, s, rt)
+
 	// 进程关停时释放原生引擎（推理中的请求持有引用，Slot.Close 不会在其使用期间卸载）。
 	concurrent.SafeGo(ctx, "server_stt_tts.close_on_shutdown", func(ctx context.Context) {
 		<-ctx.Done()
@@ -164,6 +173,7 @@ func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audior
 		Sink:          audioSink{publish: s.PublishTTSStatus},
 		Prefs:         in.Prefs,
 		Profile:       profile,
+		CPUUsage:      in.CPUUsage,
 	})
 	s.SetTTSProvider(&ttsAdapter{inner: rt.tts}, "sherpa")
 }
@@ -180,6 +190,10 @@ func toChatStatus(st audiorun.Status) chat.AudioAssetStatus {
 	out := chat.AudioAssetStatus{
 		State: st.State, Detail: st.Detail, Error: st.Error, Reason: st.Reason,
 		InstallSizeBytes: st.InstallSizeBytes, Loaded: st.Loaded,
+		Origin: st.Origin,
+	}
+	if !st.NextRetryAt.IsZero() {
+		out.NextRetryAt = &st.NextRetryAt
 	}
 	if st.BytesDone > 0 || st.BytesTotal > 0 {
 		out.Progress = &chat.AudioProgress{BytesDone: st.BytesDone, BytesTotal: st.BytesTotal}
@@ -258,4 +272,34 @@ func (b *ttsBridge) Synthesize(ctx context.Context, text string) ([]byte, string
 // 这是模型内部 token 的写法，不应泄露到 API；空串原样返回，由 JSON omitempty 省略该字段。
 func trimLangTag(l string) string {
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(l), "<|"), "|>"))
+}
+
+func scheduleAudioProvisioner(ctx context.Context, autoInstall bool, s *server.Server, rt *audioRuntime) {
+	if !autoInstall {
+		slog.Info("audio: auto provisioning disabled, will install on first user action")
+		return
+	}
+	sink := func(kind string, nextRetry time.Time) {
+		var nextPtr *time.Time
+		if !nextRetry.IsZero() {
+			nextPtr = &nextRetry
+		}
+		switch kind {
+		case "stt":
+			st := s.GetSTTStatus()
+			st.NextRetryAt = nextPtr
+			s.PublishSTTStatus(st)
+		case "tts":
+			st := s.GetTTSStatus()
+			st.NextRetryAt = nextPtr
+			s.PublishTTSStatus(st)
+		}
+	}
+	audiorun.StartProvisioner(ctx, audiorun.ProvisionerOptions{
+		STT:        rt.stt,
+		TTS:        rt.tts,
+		StartDelay: 45 * time.Second,
+		Sink:       sink,
+	})
+	slog.Info("audio: auto provisioning scheduled", "delay", "45s")
 }

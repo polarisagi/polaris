@@ -2,6 +2,7 @@ package audiorun
 
 import (
 	"errors"
+	"time"
 )
 
 // 状态机取值。与 gateway/server/chat 的 AudioState* 常量字面一致（由 cmd 层适配时直接透传，
@@ -24,6 +25,11 @@ type Status struct {
 
 	InstallSizeBytes int64 // State=not_installed：还需下载的总字节数
 	Loaded           bool  // 引擎当前是否驻留内存（State=ready）
+
+	// Origin 标识发起方："auto"|"user"，仅 downloading|loading 时填写。
+	Origin string
+	// NextRetryAt 处于退避等待时填写。
+	NextRetryAt time.Time
 
 	// 下载进度（State=downloading）；BytesTotal 为 0 表示总量未知。
 	BytesDone, BytesTotal int64

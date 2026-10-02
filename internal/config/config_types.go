@@ -82,6 +82,9 @@ type AudioConfig struct {
 	// 为什么默认卸载：桌面场景与用户其他应用共享内存，STT≈420MB + Kokoro≈600MB 不应常驻；
 	// 2GB VPS 上更是核心路径之外的纯开销。下次请求自动重新加载。
 	IdleUnloadMinutes int `toml:"idle_unload_minutes"`
+
+	// AutoInstall 是否在守护进程启动后后台串行预置语音模型（STT→TTS，ADR-0108）。
+	AutoInstall bool `toml:"auto_install"`
 }
 
 // EmbeddingConfig 向量化服务配置。

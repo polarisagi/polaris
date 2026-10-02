@@ -32,6 +32,8 @@ type TTSOptions struct {
 	Prefs PrefStore
 	// Profile 用于计算硬件指纹（指纹变化才重测）。
 	Profile HardwareProfile
+	// CPUUsage 采样系统 CPU 占用率（0–100）。nil 时视为恒 0（仅测试用）。
+	CPUUsage func() float64
 }
 
 // TTSService 把 tts.Engine（Kokoro）包成"按需安装、懒加载、首次基准、空闲卸载"的服务，实现 tts.Provider。
@@ -43,6 +45,10 @@ type TTSService struct {
 	installing atomic.Bool
 	// slow 非 nil 表示本机已被基准判定为过慢（同指纹）：服务端 TTS 置 unsupported，前端用系统语音。
 	slow atomic.Pointer[BenchRecord]
+	// nextLoadOrigin 记录下一次引擎加载的发起方（"auto"|"user"）。
+	// 为什么不改 Slot.Load 签名：Slot 是通用的懒加载容器，不应侵入特定引擎的业务来源参数；
+	// 通过原子指针在 Acquire 前设置、loadEngine 中读取并复位，保持 Slot 纯粹（HE-3）。
+	nextLoadOrigin atomic.Pointer[string]
 }
 
 var _ tts.Provider = (*TTSService)(nil)
@@ -142,6 +148,55 @@ func (t *TTSService) onLoadFailed(err error) {
 	t.o.Sink.Publish(Status{State: StateFailed, Error: err.Error()})
 }
 
+func (t *TTSService) setLoadOrigin(origin string) {
+	o := origin
+	t.nextLoadOrigin.Store(&o)
+}
+
+func (t *TTSService) takeLoadOrigin() string {
+	p := t.nextLoadOrigin.Swap(nil)
+	if p != nil && *p != "" {
+		return *p
+	}
+	return "user"
+}
+
+// NeedsBench 检查是否需要运行首次基准（资产齐全且无基准记录或处于 RetryOnStart，且无定论 too_slow）。
+func (t *TTSService) NeedsBench(ctx context.Context) bool {
+	if !t.o.Support.Supported {
+		return false
+	}
+	if t.slow.Load() != nil {
+		return false
+	}
+	if len(tts.MissingAssets(t.o.LibDir, t.o.Dir)) > 0 {
+		return false
+	}
+	rec, ok, err := GetBench(ctx, t.o.Prefs, t.fp)
+	if err != nil || !ok {
+		return true
+	}
+	if rec.Supported {
+		return false
+	}
+	return rec.RetryOnStart
+}
+
+// BenchIfNeeded 在 NeedsBench 为真时经 slot.AcquireWait 加载运行基准，跑完立即释放并卸载（ADR-0108）。
+func (t *TTSService) BenchIfNeeded(ctx context.Context) error {
+	if !t.NeedsBench(ctx) {
+		return nil
+	}
+	t.setLoadOrigin("auto")
+	_, release, err := t.slot.AcquireWait(ctx, 0)
+	if err != nil {
+		return err
+	}
+	release()
+	t.slot.Unload()
+	return nil
+}
+
 // loadEngine 由 Slot 在后台调用：内存检查 → 加载库 → 创建引擎 → （首次）基准。
 func (t *TTSService) loadEngine(ctx context.Context) (*tts.Engine, error) {
 	if free := t.o.FreeMemMB(); free < ttsMinFreeMB {
@@ -157,36 +212,46 @@ func (t *TTSService) loadEngine(ctx context.Context) (*tts.Engine, error) {
 	slog.Info("audio: tts engine created (sherpa-onnx Kokoro v1.1 fp32)",
 		"threads", t.o.NumThreads, "sid", t.o.SID, "speed", t.o.Speed)
 
-	prev, ok, lerr := GetBench(ctx, t.o.Prefs, t.fp)
-	if lerr != nil {
-		slog.Warn("audio: tts bench record unreadable, re-measuring", "err", lerr)
-	} else if ok && prev.Supported {
-		return eng, nil // 同指纹已测过且支持（确定过慢的在 restoreBench 里就拦下了）
+	origin := t.takeLoadOrigin()
+	if !t.NeedsBench(ctx) {
+		return eng, nil
 	}
-	// 走到这里：无记录/损坏，或上次为待重测的 unsupported（retried=true，本次是那次重测）。
-	return t.firstBench(ctx, eng, ok && !prev.Supported)
+	prev, ok, _ := GetBench(ctx, t.o.Prefs, t.fp)
+	return t.firstBench(ctx, eng, ok && !prev.Supported, origin)
 }
 
 // firstBench 在首次加载后测 RTF 并持久化；过慢则卸载并置 unsupported(too_slow)。
-func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine, retried bool) (*tts.Engine, error) {
-	t.o.Sink.Publish(Status{State: StateLoading, Detail: "首次启用：运行语音合成速度基准"})
+func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine, retried bool, origin string) (*tts.Engine, error) {
+	t.o.Sink.Publish(Status{State: StateLoading, Origin: origin, Detail: "首次启用：运行语音合成速度基准"})
+	usage := t.o.CPUUsage
+	if usage == nil {
+		usage = func() float64 { return 0 }
+	}
+	if origin == "auto" {
+		if !waitCPUIdle(ctx, usage, benchIdleThreshold, benchIdleSamples, benchIdleInterval, benchIdleMaxWaitAuto) {
+			slog.Info("audio: tts bench proceeding without confirmed idle CPU")
+		}
+	}
+	cpuBefore := usage()
 	rtf, err := RunBench(ctx, eng)
+	cpuAfter := usage()
 	if err != nil {
 		if cerr := eng.Close(); cerr != nil {
 			slog.Warn("audio: tts engine close after bench failure failed", "err", cerr)
 		}
 		return nil, err
 	}
-	supported := rtf <= MaxTTSRTF
-	rec := BenchRecord{
-		Fingerprint: t.fp, RTF: rtf, Supported: supported, MeasuredAt: time.Now().UTC(),
-		RetryOnStart: !supported && !retried, // 首次判慢给一次重测机会；重测仍慢则定论
-	}
-	slog.Info("audio: tts first-load benchmark",
+	contended := cpuBefore >= benchIdleThreshold || cpuAfter >= benchIdleThreshold
+	rec := decideBench(rtf, contended, retried)
+	rec.Fingerprint = t.fp
+	rec.MeasuredAt = time.Now().UTC()
+
+	slog.Info("audio: tts benchmark",
 		"rtf", rtf, "max_rtf", MaxTTSRTF, "supported", rec.Supported,
-		"threads", t.o.NumThreads, "fingerprint", t.fp)
+		"threads", t.o.NumThreads, "fingerprint", t.fp,
+		"cpu_before", cpuBefore, "cpu_after", cpuAfter, "contended", contended, "origin", origin)
+
 	if serr := SaveBench(ctx, t.o.Prefs, rec); serr != nil {
-		// 落库失败不阻断本次使用（结果仍有效），但下次启动会重测——必须留痕。
 		slog.Warn("audio: tts bench result not persisted", "err", serr)
 	}
 	if rec.Supported {
@@ -195,8 +260,14 @@ func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine, retried bo
 	if cerr := eng.Close(); cerr != nil {
 		slog.Warn("audio: tts engine close after slow bench failed", "err", cerr)
 	}
-	t.slow.Store(&rec)
-	return nil, notReady(CodeUnsupported, t.tooSlowStatus().Detail)
+	if !rec.RetryOnStart {
+		// 定论：非争用且已重测过仍慢
+		t.slow.Store(&rec)
+		return nil, notReady(CodeUnsupported, t.tooSlowStatus().Detail)
+	}
+	// 暂时不可用：本次请求降级系统语音，RetryOnStart=true，不写 t.slow，状态发布为 ready（资产完备，下次空闲重测）
+	t.o.Sink.Publish(t.base(false))
+	return nil, notReady(CodeUnsupported, "本机服务端语音合成暂时不可用：此刻 CPU 繁忙，朗读暂用系统语音，空闲时会自动重测")
 }
 
 // gate 在加载前拦截"根本不可能服务"的状态。
@@ -221,12 +292,30 @@ func (t *TTSService) Generate(ctx context.Context, text string) (tts.Audio, erro
 	if err := t.gate(); err != nil {
 		return tts.Audio{}, err
 	}
+	t.setLoadOrigin("user")
 	eng, release, err := t.slot.Acquire(ctx)
 	if err != nil {
 		return tts.Audio{}, err
 	}
 	defer release()
 	return eng.Generate(ctx, text) //nolint:wrapcheck // tts 包已用 apperr 包装
+}
+
+func (t *TTSService) installSync(ctx context.Context, origin string) error {
+	defer t.installing.Store(false)
+	t.o.Sink.Publish(Status{State: StateDownloading, Origin: origin, Detail: "准备下载语音合成模型"})
+	if err := tts.EnsureAssets(ctx, t.o.LibDir, t.o.Dir, t.o.HTTPClient, t.o.SherpaVersion, downloadProgress(t.o.Sink, origin)); err != nil {
+		slog.Error("audio: tts install failed", "err", err)
+		t.o.Sink.Publish(Status{State: StateFailed, Error: err.Error()})
+		return apperr.Wrap(apperr.CodeInternal, "tts: ensure assets failed", err)
+	}
+	slog.Info("audio: tts install complete", "dir", t.o.Dir)
+	if origin == "user" {
+		t.warm(ctx)
+	} else {
+		t.o.Sink.Publish(t.base(t.slot.IsResident()))
+	}
+	return nil
 }
 
 // Install 启动后台安装（下载 + sha256 校验 + 首次加载与基准）。
@@ -244,23 +333,30 @@ func (t *TTSService) Install() (started bool, err error) {
 	if !t.installing.CompareAndSwap(false, true) {
 		return false, nil
 	}
-	t.o.Sink.Publish(Status{State: StateDownloading, Detail: "准备下载语音合成模型"})
 	concurrent.SafeGo(t.rootCtx, "audiorun.tts_install", func(ctx context.Context) {
-		defer t.installing.Store(false)
-		if err := tts.EnsureAssets(ctx, t.o.LibDir, t.o.Dir, t.o.HTTPClient, t.o.SherpaVersion, downloadProgress(t.o.Sink)); err != nil {
-			slog.Error("audio: tts install failed", "err", err)
-			t.o.Sink.Publish(Status{State: StateFailed, Error: err.Error()})
-			return
+		if err := t.installSync(ctx, "user"); err != nil {
+			slog.Warn("audio: tts background install failed", "err", err)
 		}
-		slog.Info("audio: tts install complete", "dir", t.o.Dir)
-		t.warm(ctx)
 	})
 	return true, nil
+}
+
+// InstallBlocking 供后台预置器调用（ADR-0108）：
+// 不支持 / 已慢判定 / 已安装 / 已在进行中 → ran=false, err=nil；否则同步阻塞执行 installSync(ctx, "auto")。
+func (t *TTSService) InstallBlocking(ctx context.Context) (ran bool, err error) {
+	if !t.o.Support.Supported || t.slow.Load() != nil || len(tts.MissingAssets(t.o.LibDir, t.o.Dir)) == 0 {
+		return false, nil
+	}
+	if !t.installing.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	return true, t.installSync(ctx, "auto")
 }
 
 // warm 安装完成后立即加载一次：既验证资产能真正跑起来，也触发首次基准（结果落库）。
 // 失败状态已由 Slot 的 OnLoadFailed 钩子发布，这里只需把终态补齐。
 func (t *TTSService) warm(ctx context.Context) {
+	t.setLoadOrigin("user")
 	_, release, err := t.slot.Acquire(ctx)
 	if err != nil {
 		slog.Warn("audio: tts post-install warm-up did not yield a usable engine", "err", err)

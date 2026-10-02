@@ -34,6 +34,10 @@ type AudioAssetStatus struct {
 	// Reason 是 State=unsupported 时的机器可读原因码（insufficient_ram / insufficient_cores /
 	// unsupported_platform / too_slow），前端据此选文案。
 	Reason string `json:"reason,omitempty"`
+	// Origin 标识发起方："auto"|"user"，仅 downloading|loading 时填写。
+	Origin string `json:"origin,omitempty"`
+	// NextRetryAt 处于退避等待时填写。
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
 	// InstallSizeBytes 是 State=not_installed 时还需下载的总字节数（供"首次使用需下载约 X MB"确认框）。
 	InstallSizeBytes int64 `json:"install_size_bytes,omitempty"`
 	// Loaded 表示引擎当前是否驻留内存（State=ready 时有意义；空闲会被卸载）。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/llm/audiorun"
@@ -30,17 +31,23 @@ func TestAudioStateConstants_InSyncWithChat(t *testing.T) {
 }
 
 func TestToChatStatus_MapsAllFields(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
 	got := toChatStatus(audiorun.Status{
 		State: audiorun.StateDownloading, Detail: "d", Error: "e", Reason: "r",
+		Origin: "auto", NextRetryAt: now,
 		InstallSizeBytes: 7, Loaded: true, BytesDone: 3, BytesTotal: 9,
 	})
 	if got.State != "downloading" || got.Detail != "d" || got.Error != "e" || got.Reason != "r" ||
+		got.Origin != "auto" || got.NextRetryAt == nil || !got.NextRetryAt.Equal(now) ||
 		got.InstallSizeBytes != 7 || !got.Loaded || got.Progress == nil ||
 		got.Progress.BytesDone != 3 || got.Progress.BytesTotal != 9 {
 		t.Errorf("字段映射不完整: %+v", got)
 	}
 	if toChatStatus(audiorun.Status{State: audiorun.StateReady}).Progress != nil {
 		t.Error("无进度时不应带 progress 字段")
+	}
+	if toChatStatus(audiorun.Status{State: audiorun.StateReady}).NextRetryAt != nil {
+		t.Error("未设置重试时间时不应带 next_retry_at")
 	}
 }
 

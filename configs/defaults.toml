@@ -69,15 +69,15 @@ embedder_dim = 1536
 enabled = true
 backend = "pebble"
 
-# ── 语音（STT/TTS）：按需下载、懒加载、空闲卸载（ADR-0107）──────────────────────
+# ── 语音（STT/TTS）：按需下载/后台预置、懒加载、空闲卸载（ADR-0107 / ADR-0108）──────
 # 资产（动态库/模型）的 URL 与 sha256 由代码内清单 internal/llm/audioassets 钉死，不开放配置。
-# 守护进程启动时不下载任何语音资产；前端首次点麦克风/朗读时调用 POST /v1/audio/{stt|tts}/install。
 # 最低配置（按稳定硬件画像判定，空闲内存只决定"此刻能否加载"）：
 #   STT  2GB 总内存 + 2 逻辑核（SenseVoice int8）
-#   TTS  4GB 总内存 + 4 逻辑核（Kokoro v1.1 fp32；首次启用基准 RTF>0.7 则判 unsupported）
+#   TTS  4GB 总内存 + 4 逻辑核（Kokoro v1.1 fp32；首次启用基准 RTF>0.8 则判 unsupported）
 #   低于 TTS 门槛：前端退回浏览器/WebView 内置系统语音
 [inference.audio]
 idle_unload_minutes = 10   # 引擎空闲多久卸载释放内存；0 = 不卸载
+auto_install = true   # 守护进程启动后在后台串行下载语音模型（STT→TTS），仅预置本机硬件支持的能力；false = 首次使用时再下载
 
 [inference.stt]
 # 留空 = 代码内钉死的 ABI 版本（1.13.2）。填其他值会让 STT/TTS 资产初始化报错：

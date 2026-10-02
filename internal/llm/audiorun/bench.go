@@ -26,16 +26,105 @@ type PrefStore interface {
 	UpsertPreference(ctx context.Context, key, value string) error
 }
 
+const (
+	benchIdleThreshold   = 50.0
+	benchIdleSamples     = 3
+	benchIdleInterval    = 2 * time.Second
+	benchIdleMaxWaitAuto = 10 * time.Minute
+)
+
 // BenchRecord 是一次基准的持久化结果。
 type BenchRecord struct {
 	Fingerprint string    `json:"fingerprint"`
 	RTF         float64   `json:"rtf"`
 	Supported   bool      `json:"supported"`
 	MeasuredAt  time.Time `json:"measured_at"`
+	// Contended 记录基准开始或结束时 CPU 是否 ≥ 50%（ADR-0108）。
+	Contended bool `json:"contended,omitempty"`
 	// RetryOnStart 仅在 unsupported 结论上为 true：该结论可能来自瞬时 CPU 争抢（实测 0.65 vs 1.07），
 	// 下次守护进程启动后不直接采信，等用户再次触发朗读/安装时重测一次；
 	// 重测仍过慢则写入 false，此后同指纹不再重测。supported 结论同指纹始终复用。
 	RetryOnStart bool `json:"retry_on_start,omitempty"`
+}
+
+// decideBench 根据 RTF、CPU 争用标志以及是否已重测计算基准判定结论（纯函数，供表驱动测试）。
+func decideBench(rtf float64, contended, retried bool) BenchRecord {
+	if rtf <= MaxTTSRTF {
+		return BenchRecord{
+			RTF:          rtf,
+			Contended:    contended,
+			Supported:    true,
+			RetryOnStart: false,
+		}
+	}
+	if contended {
+		return BenchRecord{
+			RTF:          rtf,
+			Contended:    contended,
+			Supported:    false,
+			RetryOnStart: true,
+		}
+	}
+	if !retried {
+		return BenchRecord{
+			RTF:          rtf,
+			Contended:    contended,
+			Supported:    false,
+			RetryOnStart: true,
+		}
+	}
+	return BenchRecord{
+		RTF:          rtf,
+		Contended:    contended,
+		Supported:    false,
+		RetryOnStart: false,
+	}
+}
+
+// waitCPUIdle 等待 CPU 连续 need 次采样低于 threshold。
+// 若在 maxWait 内满足，返回 true；若超时返回 false。
+// ctx 取消时立即返回 false。
+func waitCPUIdle(ctx context.Context, usage func() float64, threshold float64, need int, interval, maxWait time.Duration) bool {
+	if usage == nil || need <= 0 {
+		return true
+	}
+	consecutive := 0
+	if usage() < threshold {
+		consecutive++
+		if consecutive >= need {
+			return true
+		}
+	} else {
+		consecutive = 0
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var deadline <-chan time.Time
+	if maxWait > 0 {
+		timer := time.NewTimer(maxWait)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline:
+			return false
+		case <-ticker.C:
+			if usage() < threshold {
+				consecutive++
+				if consecutive >= need {
+					return true
+				}
+			} else {
+				consecutive = 0
+			}
+		}
+	}
 }
 
 // Fingerprint 返回硬件指纹（arch + 逻辑核 + 总内存 GiB 取整）。

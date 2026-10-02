@@ -19,7 +19,7 @@ func loadCfg(t *testing.T, toml string) *Config {
 	return cfg
 }
 
-// ADR-0107 默认值：sherpa/auto/sid=3/speed=1.0/空闲 10 分钟卸载。
+// ADR-0107 / ADR-0108 默认值：sherpa/auto/sid=3/speed=1.0/空闲 10 分钟卸载/自动后台预置开启。
 func TestLoad_AudioDefaults(t *testing.T) {
 	cfg := loadCfg(t, "")
 	tts := cfg.Inference.TTS
@@ -28,6 +28,9 @@ func TestLoad_AudioDefaults(t *testing.T) {
 	}
 	if cfg.Inference.Audio.IdleUnloadMinutes != 10 {
 		t.Errorf("idle_unload_minutes 默认应为 10，got %d", cfg.Inference.Audio.IdleUnloadMinutes)
+	}
+	if !cfg.Inference.Audio.AutoInstall {
+		t.Errorf("auto_install 默认应为 true，got %v", cfg.Inference.Audio.AutoInstall)
 	}
 	if cfg.Inference.STT.UseITN || cfg.Inference.STT.Language != "zh" {
 		t.Errorf("STT 默认值错误: %+v", cfg.Inference.STT)
@@ -71,11 +74,14 @@ func TestValidate_RejectsBadAudioConfig(t *testing.T) {
 }
 
 func TestLoad_AudioUserOverrides(t *testing.T) {
-	cfg := loadCfg(t, "[inference.tts]\nkokoro_sid = 50\nspeed = 1.2\nengine = \"system\"\n[inference.audio]\nidle_unload_minutes = 0\n")
+	cfg := loadCfg(t, "[inference.tts]\nkokoro_sid = 50\nspeed = 1.2\nengine = \"system\"\n[inference.audio]\nidle_unload_minutes = 0\nauto_install = false\n")
 	if cfg.Inference.TTS.KokoroSID != 50 || cfg.Inference.TTS.Speed != 1.2 || cfg.Inference.TTS.Engine != "system" {
 		t.Errorf("用户覆盖未生效: %+v", cfg.Inference.TTS)
 	}
 	if cfg.Inference.Audio.IdleUnloadMinutes != 0 {
 		t.Error("idle_unload_minutes=0（不卸载）应被保留")
+	}
+	if cfg.Inference.Audio.AutoInstall {
+		t.Error("auto_install=false 应被保留")
 	}
 }

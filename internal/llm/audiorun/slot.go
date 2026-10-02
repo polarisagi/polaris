@@ -14,7 +14,8 @@ import (
 const DefaultLoadWait = 30 * time.Second
 
 // loadBudget 是单次加载（含 TTS 首次基准）的总预算，与请求等待上限解耦。
-const loadBudget = 5 * time.Minute
+// 必须大于 benchIdleMaxWaitAuto（10m），以便后台预置器等待 CPU 空闲。
+const loadBudget = 15 * time.Minute
 
 // SlotHooks 是 Slot 状态变化的回调；全部可为 nil，且都在 Slot 锁外调用。
 type SlotHooks struct {
@@ -82,9 +83,19 @@ func (s *Slot[E]) IsResident() bool {
 // Acquire 取得引擎：已加载则立即返回，否则触发（或加入进行中的）加载并等待至多 LoadWait。
 // 调用方必须在用完后调用返回的 release。
 func (s *Slot[E]) Acquire(ctx context.Context) (E, func(), error) {
+	return s.AcquireWait(ctx, s.cfg.LoadWait)
+}
+
+// AcquireWait 取得引擎：若 waitLimit > 0 则最多等待该时长；若 waitLimit <= 0 则无本地定时器超时，
+// 纯由 ctx 或后台加载预算控制。供后台预置器等待基准测试完成时使用。
+func (s *Slot[E]) AcquireWait(ctx context.Context, waitLimit time.Duration) (E, func(), error) {
 	var zero E
-	wait := time.NewTimer(s.cfg.LoadWait)
-	defer wait.Stop()
+	var waitCh <-chan time.Time
+	if waitLimit > 0 {
+		wait := time.NewTimer(waitLimit)
+		defer wait.Stop()
+		waitCh = wait.C
+	}
 
 	for {
 		s.mu.Lock()
@@ -113,7 +124,7 @@ func (s *Slot[E]) Acquire(ctx context.Context) (E, func(), error) {
 				return zero, nil, c.err
 			}
 			// 加载成功：回到循环顶部取引擎（期间若被卸载则自然触发重新加载）。
-		case <-wait.C:
+		case <-waitCh:
 			return zero, nil, notReady(CodeLoadTimeout, "语音引擎仍在加载中，请稍后重试（后台加载继续进行）")
 		case <-ctx.Done():
 			return zero, nil, apperr.Wrap(apperr.CodeCancelled, "audiorun: 等待 "+s.cfg.Name+" 加载时请求被取消", ctx.Err())

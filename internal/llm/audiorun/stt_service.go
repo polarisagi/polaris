@@ -151,6 +151,19 @@ func (s *STTService) Transcribe(samples []float32, sampleRate int) (stt.Result, 
 	return res, nil
 }
 
+func (s *STTService) installSync(ctx context.Context, origin string) error {
+	defer s.installing.Store(false)
+	s.o.Sink.Publish(Status{State: StateDownloading, Origin: origin, Detail: "准备下载语音识别模型"})
+	if err := stt.EnsureAssets(ctx, s.o.Dir, s.o.HTTPClient, s.o.SherpaVersion, downloadProgress(s.o.Sink, origin)); err != nil {
+		slog.Error("audio: stt install failed", "err", err)
+		s.o.Sink.Publish(Status{State: StateFailed, Error: err.Error()})
+		return apperr.Wrap(apperr.CodeInternal, "stt: ensure assets failed", err)
+	}
+	slog.Info("audio: stt install complete", "dir", s.o.Dir)
+	s.o.Sink.Publish(s.base(s.slot.IsResident()))
+	return nil
+}
+
 // Install 启动后台安装（下载 + sha256 校验）。返回 started=false 表示无需或已在进行中。
 // 不支持的机器返回 *NotReadyError（unsupported）。
 func (s *STTService) Install() (started bool, err error) {
@@ -163,18 +176,24 @@ func (s *STTService) Install() (started bool, err error) {
 	if !s.installing.CompareAndSwap(false, true) {
 		return false, nil
 	}
-	s.o.Sink.Publish(Status{State: StateDownloading, Detail: "准备下载语音识别模型"})
 	concurrent.SafeGo(s.rootCtx, "audiorun.stt_install", func(ctx context.Context) {
-		defer s.installing.Store(false)
-		if err := stt.EnsureAssets(ctx, s.o.Dir, s.o.HTTPClient, s.o.SherpaVersion, downloadProgress(s.o.Sink)); err != nil {
-			slog.Error("audio: stt install failed", "err", err)
-			s.o.Sink.Publish(Status{State: StateFailed, Error: err.Error()})
-			return
+		if err := s.installSync(ctx, "user"); err != nil {
+			slog.Warn("audio: stt background install failed", "err", err)
 		}
-		slog.Info("audio: stt install complete", "dir", s.o.Dir)
-		s.o.Sink.Publish(s.base(s.slot.IsResident()))
 	})
 	return true, nil
+}
+
+// InstallBlocking 供后台预置器调用（ADR-0108）：
+// 不支持 / 已安装 / 已在进行中 → ran=false, err=nil；否则同步阻塞执行 installSync(ctx, "auto")。
+func (s *STTService) InstallBlocking(ctx context.Context) (ran bool, err error) {
+	if !s.o.Support.Supported || len(stt.MissingAssets(s.o.Dir)) == 0 {
+		return false, nil
+	}
+	if !s.installing.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	return true, s.installSync(ctx, "auto")
 }
 
 // Close 关闭服务并卸载引擎。
