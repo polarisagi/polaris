@@ -111,6 +111,7 @@ ADR 被代码引用时，源文件头部加：
 | 0106 | 语音 STT/TTS 修复：外部资产坐标契约化（audio-nettest）、sherpa FFI ABI 版本钉死、默认 int8、消除静默兜底、TTS Provider 携带 MIME（Edge 改 MP3，追记 ADR-0031）、STT 资产状态机与退避重试 | Accepted | 2026-10-01 |
 | 0107 | 语音 v2：本地离线 STT（SenseVoice int8）+ 服务端 TTS（Kokoro fp32）、按需下载 + 懒加载/空闲卸载、最低配置门控（STT 2GB/2 核，TTS 4GB/4 核，RTF>0.7 不支持）、前端系统语音兜底；取代 ADR-0106 的 Edge/precision/启动期下载部分，取代 ADR-0031 | Accepted | 2026-10-02 |
 | 0108 | 语音 v3：后台串行预置、抗 CPU 争用基准门控与前端单一进度指示；取代 ADR-0107 决策 3 与反例守护第一条 | Accepted | 2026-10-02 |
+| 0109 | 本地推理默认关闭：向量化改用独立的进程内 ONNX 嵌入器（默认 EmbeddingGemma-300M，弱 CPU 降 bge-small-zh），llama-server/Ollama 仅显式配置启用；删除 Embedding 内存阶梯与本地对话 Provider 自动注册；取代 ADR-0062 Tier1 embedding 选型部分 | Proposed | 2026-10-02 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
