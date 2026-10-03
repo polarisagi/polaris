@@ -16,5 +16,6 @@
   "_comment_storage": "SurrealDB embedded dylib（L0 存储基础设施）",
   "internal/store/surreal_store.go": true,
   "_comment_embedonnx": "ONNX Runtime dylib（ADR-0109 向量嵌入推理，L0 基础设施）",
+  "internal/llm/embedonnx/dlopen_unix.go": true,
   "internal/llm/embedonnx/ort.go": true
 }

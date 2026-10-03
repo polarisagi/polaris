@@ -40,9 +40,9 @@ type ORTApi struct {
 
 // OpenORT 从 dylib/so/dll 动态库加载 ORT C API。
 func OpenORT(dylibPath string) (*ORTApi, error) {
-	handle, err := purego.Dlopen(dylibPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	handle, err := dlopen(dylibPath)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "embedonnx: dlopen failed", err)
+		return nil, err
 	}
 
 	var ortGetApiBase func() *ortApiBase
