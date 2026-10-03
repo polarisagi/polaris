@@ -87,6 +87,12 @@
 - **根因类别**：内部阶段 token 被当作用户回复推送（LLMFillEffect 受众未隔离）/ 无回复合成态 / 记忆路径 prompt 未加载阶段 Schema / session 未向内核注入对话历史（ADR-0098，2026-09-24 修复）。
 - **排查起点**：`internal/agent/agent_execute_effect_helpers.go` `doStreamInfer`（按 `Audience` 发布）→ `internal/agent/fsm/transitions_respond.go` → `internal/agent/context/respond_context.go`；历史注入看 `internal/gateway/session/orchestrator_fsm.go` `SetConversationHistory`。
 
+### 症状 14：侧边栏某几个页面（如插件/自动化/技能）显示完全空白，其余页面正常
+- **症状特征**：点击侧边栏「插件」或「自动化」等页面时主内容区完全空白，而对话、监控、设置等页面正常展示。
+- **归类模块**：M13
+- **根因类别**：`web/src/index.html` 采用 `<page-fragment>` 扁平拼装页面，当前面某个页面（如 `settings.html`）遗漏闭合 `</div>` 时，后续页面会被意外吞入父级 `<div x-show="...">`，在非父页面路由激活时因父容器 `display: none` 导致整体空白。
+- **排查起点**：`web/src/pages/` 下执行 HTML 标签平衡检查，定位未闭合标签文件；查看 DevTools DOM 树中空白页面的父节点是否属于其他页面。
+
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。
 - 相似症状优先合并成一项（用"/"列举变体），不要为每个变体开新项。
