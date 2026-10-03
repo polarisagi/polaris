@@ -184,3 +184,42 @@ pub extern "C" fn surreal_vec_dimension() -> c_int {
     };
     guard.vec_dim as c_int
 }
+
+// ─── surreal_vec_clear ───────────────────────────────────────────────────────
+
+/// 清空 vectors 表（保留 HNSW 索引定义与维度）。
+///
+/// ADR-0109 P4：嵌入模型切换但维度不变（如 EmbeddingGemma@512 ↔ bge-small-zh@512，或远程
+/// 换了同维模型）时，旧模型写入的向量与新模型查询向量不在同一语义空间，KNN 结果无意义。
+/// 维度迁移只覆盖"维度变化"，同维换模型由 Go 侧检测到模型版本变化后调用本函数清空，
+/// 再由各写入方（重嵌 / 插件回填 / 知识同步）按新模型补齐。
+#[unsafe(no_mangle)]
+pub extern "C" fn surreal_vec_clear() -> c_int {
+    let result = panic::catch_unwind(|| {
+        let store_arc = match get_store() {
+            Some(s) => s,
+            None => return SURREAL_ERR_LOCK,
+        };
+        let guard = match store_arc.read() {
+            Ok(g) => g,
+            Err(_) => return SURREAL_ERR_LOCK,
+        };
+        let q_res = guard
+            .rt
+            .block_on(async { guard.db.query("DELETE vectors;").await });
+        match q_res {
+            Ok(resp) => match resp.check() {
+                Ok(_) => SURREAL_OK,
+                Err(e) => {
+                    eprintln!("[surreal_vec_clear] Statement error: {e}");
+                    SURREAL_ERR_QUERY
+                }
+            },
+            Err(e) => {
+                eprintln!("[surreal_vec_clear] Query error: {e}");
+                SURREAL_ERR_QUERY
+            }
+        }
+    });
+    result.unwrap_or(SURREAL_ERR_PANIC)
+}

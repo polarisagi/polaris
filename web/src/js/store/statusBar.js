@@ -65,7 +65,8 @@ Alpine.store('statusBar', {
   async rebenchEmbedding() {
     this.rebenchRunning = true
     try {
-      await fetch('/v1/embedding/rebench', { method: 'POST', headers: authHeaders() })
+      const r = await fetch('/v1/embedding/rebench', { method: 'POST', headers: authHeaders() })
+      if (!r.ok) console.warn('rebench rejected', r.status, await r.text())
       await this.poll()
     } catch (e) {
       console.warn('rebench failed', e)

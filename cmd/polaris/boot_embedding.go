@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -108,6 +111,7 @@ func initEmbedding(
 	safeHTTPClient network.SafeHTTPClient,
 	backoff *retrieval.EmbedBackoff,
 	db *sql.DB,
+	onModelSet func(version string),
 ) (search.Embedder, *llm.DynamicEmbedder, *search.EmbeddingBatcher, embedChoice) {
 	_, onnxAvailable := embedassets.ORTLibAsset(runtime.GOOS, runtime.GOARCH)
 	choice := chooseEmbedding(cfg.Embedding, cfg.Inference.EmbedderDim, onnxAvailable)
@@ -130,6 +134,10 @@ func initEmbedding(
 	dynEmbedder := llm.NewDynamicEmbedder()
 	if backoff != nil {
 		dynEmbedder.OnSet(backoff.Reset)
+	}
+	// 必须在任何 Set 之前注册：远程后端在下方同步 Set，晚注册会漏掉首次模型切换检测。
+	if onModelSet != nil {
+		dynEmbedder.OnSet(func() { onModelSet(dynEmbedder.ModelVersion()) })
 	}
 
 	embedFn := func(ctxBg context.Context, texts []string, _ string) ([][]float32, error) {
@@ -178,7 +186,7 @@ func setupRemoteEmbedding(
 		llm.NewCredentialPool(embedKeys, llm.StrategyFillFirst),
 		safeHTTPClient.Client,
 	)
-	dynEmbedder.Set(adapter)
+	dynEmbedder.SetWithVersion(adapter, fmt.Sprintf("remote:%s@%d", cfg.Embedding.Model, choice.Dim))
 	slog.Info("polaris: Remote OpenAI-compatible embedding registered",
 		"base_url", cfg.Embedding.BaseURL,
 		"model", cfg.Embedding.Model,
@@ -214,7 +222,7 @@ func setupOllamaEmbedding(
 		}
 		adapter := llmadapter.NewOllamaEmbeddingAdapter(targetModel, ollamaHTTPClient.Client).
 			WithNumThread(ollamamgr.RecommendedThreads())
-		dynEmbedder.Set(adapter)
+		dynEmbedder.SetWithVersion(adapter, fmt.Sprintf("ollama:%s@%d", targetModel, choice.Dim))
 		slog.Info("polaris: Dynamic embedding engine is now ACTIVE!", "model", targetModel)
 	})
 }
@@ -235,7 +243,17 @@ func triggerRebench(ctx context.Context, sb *SubstrateBundle) error {
 	if sb == nil || sb.DynEmbedder == nil {
 		return apperr.New(apperr.CodeInvalidInput, "embedding engine not initialized")
 	}
+	// 只有进程内 ONNX 后端有档位可评估；远程 / Ollama 后端下重测会把引擎替换成 ONNX，
+	// 违背"用户配置优先"（ADR-0109 D1）。
+	if sb.EmbedChoice.Kind != "onnx" {
+		return apperr.New(apperr.CodeInvalidInput,
+			"embedding rebench is only available for the in-process ONNX backend (current: "+sb.EmbedChoice.Kind+")")
+	}
+	if !sb.EmbedRebenchRunning.CompareAndSwap(false, true) {
+		return apperr.New(apperr.CodeConflict, "embedding rebench already in progress")
+	}
 	concurrent.SafeGo(context.WithoutCancel(ctx), "embedding.rebench", func(ctxBg context.Context) {
+		defer sb.EmbedRebenchRunning.Store(false)
 		if err := runONNXEmbedding(ctxBg, sb.Cfg, sb.Layout, sb.SafeHTTP, sb.DynEmbedder, sb.Store.DB(), true); err != nil {
 			slog.Warn("polaris: embedding rebench failed", "err", err)
 		}
@@ -543,4 +561,50 @@ func recordBenchResult(ctx context.Context, db *sql.DB, result embedonnx.TierBen
 	); err != nil {
 		slog.Warn("polaris: failed to persist embedding bench result", "err", err)
 	}
+}
+
+// prefKeyActiveEmbedModel 记录上一次生效的嵌入模型版本，用于检测"同维换模型"。
+const prefKeyActiveEmbedModel = "embed.active_model_version"
+
+// newEmbedModelSwitchHandler 返回模型切换处理器（ADR-0109 P4）：新引擎就绪时与上次生效的
+// 模型版本比较，不同则清空 SurrealDB 向量库（维度相同但语义空间不同的向量不得混检），
+// 随后由重嵌 / 插件回填 / 知识同步按新模型补齐。SQLite 侧 episodic 由 embed_model_version 驱动重嵌。
+// vecClear 为 nil（无 SurrealDB）时只记录版本。
+func newEmbedModelSwitchHandler(db *sql.DB, vecClear func() error) func(version string) {
+	return func(version string) {
+		if db == nil || version == "" {
+			return
+		}
+		ctx := context.Background()
+		var prev string
+		if err := db.QueryRowContext(ctx, "SELECT value FROM preferences WHERE key = ?", prefKeyActiveEmbedModel).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			slog.Warn("polaris: read active embedding model failed", "err", err)
+			return
+		}
+		if prev == version {
+			return
+		}
+		if prev != "" && vecClear != nil {
+			if err := vecClear(); err != nil {
+				// 清空失败则不更新记录，下次启动/切换时重试，绝不在旧向量仍在时宣称已切换。
+				slog.Error("polaris: embedding model switched but clearing stale vectors failed",
+					"from", prev, "to", version, "err", err)
+				return
+			}
+			slog.Info("polaris: embedding model switched, stale vectors cleared", "from", prev, "to", version)
+		}
+		if _, err := db.ExecContext(ctx,
+			"INSERT INTO preferences (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+			prefKeyActiveEmbedModel, version,
+		); err != nil {
+			slog.Warn("polaris: persist active embedding model failed", "err", err)
+		}
+	}
+}
+
+func surrealVecClear(s *store.SurrealDBCoreStore) func() error {
+	if s != nil {
+		return s.VecClear
+	}
+	return nil
 }

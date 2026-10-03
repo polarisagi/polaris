@@ -19,6 +19,7 @@ import (
 
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -296,7 +297,16 @@ func (s *Server) handleEmbeddingRebench(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.rebenchFn(r.Context()); err != nil {
-		httputil.RespondError(w, "rebench failed", err, http.StatusInternalServerError)
+		// 非 ONNX 后端 / 引擎未初始化属调用方前置条件不满足（400），重测进行中为冲突（409），
+		// 不应报 500 让前端误判为服务故障。
+		status := http.StatusInternalServerError
+		switch {
+		case apperr.IsCode(err, apperr.CodeInvalidInput):
+			status = http.StatusBadRequest
+		case apperr.IsCode(err, apperr.CodeConflict):
+			status = http.StatusConflict
+		}
+		httputil.RespondError(w, "rebench failed", err, status)
 		return
 	}
 	httputil.WriteJSON(w, map[string]string{"status": "rebench_started"})

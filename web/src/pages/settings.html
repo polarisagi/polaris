@@ -104,7 +104,7 @@
               <h4 class="font-bold text-sm" x-text="$store.i18n.t('embedding_title')"></h4>
               <p class="text-xs text-base-content/60" x-text="$store.i18n.t('embedding_subtitle')"></p>
             </div>
-            <button class="btn btn-xs btn-outline" :disabled="$store.statusBar.rebenchRunning" @click="$store.statusBar.rebenchEmbedding()">
+            <button class="btn btn-xs btn-outline" x-show="$store.statusBar.embedding?.backend === 'onnx'" :disabled="$store.statusBar.rebenchRunning" @click="$store.statusBar.rebenchEmbedding()">
               <span x-show="$store.statusBar.rebenchRunning" class="loading loading-spinner loading-xs"></span>
               <span x-show="!$store.statusBar.rebenchRunning" x-text="$store.i18n.t('embedding_rebench_btn')"></span>
             </button>
@@ -140,7 +140,7 @@
               <div class="font-bold" x-text="$store.i18n.t('accelerator_rec_title')"></div>
               <div class="text-base-content/80 mt-1" x-text="$store.i18n.t('accelerator_rec_desc')"></div>
               <pre class="mt-2 p-2 bg-base-300 rounded text-2xs font-mono select-all"><code>[embedding]
-backend = "llama_server"
+backend = "ollama"
 model = "qwen3-embedding:4b"
 dim = 2560</code></pre>
             </div>

@@ -21,6 +21,11 @@ import (
 type memEmbedderAdapter struct {
 	e     search.Embedder
 	model string
+	// versionFn 非 nil 时为模型版本的唯一来源（取自 DynamicEmbedder 当前引擎，ADR-0109 P4）。
+	// ONNX 档位在启动后才由基准决定、远程/本地模型可热切换，静态 model 名（如 "auto"）
+	// 无法区分 Gemma 与 bge，会让 embed_model_version 永不变化、两种模型的向量混检。
+	// 返回 "" 表示引擎尚未就绪，OnlineReindexer 据此跳过本轮。
+	versionFn func() string
 }
 
 func (a *memEmbedderAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
@@ -33,7 +38,24 @@ func (a *memEmbedderAdapter) Embed(ctx context.Context, text string) ([]float32,
 	return v, nil
 }
 
-func (a *memEmbedderAdapter) ModelVersion() string { return a.model }
+func (a *memEmbedderAdapter) ModelVersion() string {
+	if a.versionFn != nil {
+		return a.versionFn()
+	}
+	return a.model
+}
+
+// newMemEmbedderAdapter 构造记忆侧嵌入适配器：有 DynamicEmbedder 时版本随当前引擎动态变化。
+func newMemEmbedderAdapter(e search.Embedder, sb *SubstrateBundle) *memEmbedderAdapter {
+	a := &memEmbedderAdapter{e: e, model: sb.EmbedChoice.Model}
+	if a.model == "" {
+		a.model = "embedding"
+	}
+	if sb.DynEmbedder != nil {
+		a.versionFn = sb.DynEmbedder.ModelVersion
+	}
+	return a
+}
 
 // ─── collapseRecorderAdapter ──────────────────────────────────────────────────
 //

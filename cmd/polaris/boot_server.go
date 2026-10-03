@@ -174,7 +174,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		}
 		return server.EmbeddingStatus{
 			Backend:             sb.EmbedChoice.Kind,
-			Model:               sb.EmbedChoice.Model,
+			Model:               embedStatusModel(sb),
 			Dim:                 sb.EmbedChoice.Dim,
 			State:               state,
 			ConsecutiveFailures: consecFailures,
@@ -551,4 +551,15 @@ func triggerPluginVectorBackfill(sb *SubstrateBundle, pluginHandler *plugin.Plug
 			sb.EmbedBackoff.RecordSuccess()
 		}
 	})
+}
+
+// embedStatusModel 状态展示用模型名：引擎就绪后取其真实模型版本（ONNX 档位由基准决定，
+// 配置值只是 "auto"）；未就绪时回退到配置决议。
+func embedStatusModel(sb *SubstrateBundle) string {
+	if sb.DynEmbedder != nil {
+		if v := sb.DynEmbedder.ModelVersion(); v != "" {
+			return v
+		}
+	}
+	return sb.EmbedChoice.Model
 }

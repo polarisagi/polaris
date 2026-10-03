@@ -52,6 +52,7 @@ var (
 	surrealFreeBuf                  func(ptr uintptr, length uintptr)
 	surrealVecSetMode               func(mode int32) int32
 	surrealVecDimension             func() int32
+	surrealVecClear                 func() int32
 	surrealStats                    func(outJSON *uintptr) int32
 	surrealPurge                    func()
 )
@@ -84,6 +85,7 @@ func bindSurreal() error {
 		purego.RegisterLibFunc(&surrealFreeBuf, lib, "surreal_free_buf")
 		purego.RegisterLibFunc(&surrealVecSetMode, lib, "surreal_vec_set_mode")
 		purego.RegisterLibFunc(&surrealVecDimension, lib, "surreal_vec_dimension")
+		purego.RegisterLibFunc(&surrealVecClear, lib, "surreal_vec_clear")
 		purego.RegisterLibFunc(&surrealStats, lib, "surreal_stats")
 		purego.RegisterLibFunc(&surrealPurge, lib, "surreal_purge")
 	})
@@ -184,6 +186,17 @@ func (s *SurrealDBCoreStore) VectorDim() int {
 		}
 	}
 	return 0
+}
+
+// VecClear 清空全部向量（保留 HNSW 索引与维度），用于同维换嵌入模型（ADR-0109 P4）。
+func (s *SurrealDBCoreStore) VecClear() error {
+	if surrealVecClear == nil {
+		return apperr.New(apperr.CodeInternal, "surreal_vec_clear: not bound")
+	}
+	if rc := surrealVecClear(); rc != 0 {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_vec_clear: code %d", rc))
+	}
+	return nil
 }
 
 // ─── protocol.Store 实现 ──────────────────────────────────────────────────────

@@ -58,9 +58,13 @@ const reindexMaxConsecutiveEmbedFails = 3
 // 调用方在后台 goroutine 中循环调用，remaining=false 时停止。
 // 单条失败不中断整批（best-effort，与 Consolidation Stage 2 原则一致）；
 // 但连续 reindexMaxConsecutiveEmbedFails 条嵌入失败视为后端不可用，中止本批并返回错误。
-func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining bool, err error) {
-	version := r.embedder.ModelVersion()
+type reindexEntry struct {
+	id        int64
+	eventUUID string // 原始 Event.ID（UUID），供 SurrealDB VecUpsert 使用；空时回退到整数串
+	content   string
+}
 
+func (r *OnlineReindexer) listPendingEntries(ctx context.Context, version string) ([]reindexEntry, error) {
 	// idx_ep_embed_ver 偏索引（WHERE embed_model_version = ''）加速扫描
 	rows, queryErr := r.db.QueryContext(ctx,
 		`SELECT id, event_uuid, content FROM episodic_events
@@ -69,18 +73,13 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 		version, r.batchSize,
 	)
 	if queryErr != nil {
-		return 0, false, apperr.Wrap(apperr.CodeInternal, "reindexer: query failed", queryErr)
+		return nil, apperr.Wrap(apperr.CodeInternal, "reindexer: query failed", queryErr)
 	}
 	defer rows.Close()
 
-	type entry struct {
-		id        int64
-		eventUUID string // 原始 Event.ID（UUID），供 SurrealDB VecUpsert 使用；空时回退到整数串
-		content   string
-	}
-	var batch []entry
+	var batch []reindexEntry
 	for rows.Next() {
-		var e entry
+		var e reindexEntry
 		if scanErr := rows.Scan(&e.id, &e.eventUUID, &e.content); scanErr != nil {
 			// 2026-08-08：原为 `if scanErr == nil { append }`，扫描失败的行被
 			// 无声丢弃且不留痕。这些行的 embed_model_version 仍是 ''，下一轮
@@ -94,12 +93,67 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 	// rows.Err() 区分"正常读完"与"迭代中途出错截断"。不查则截断表现为批次
 	// 变小，与"确实只剩这些"无法区分。
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return 0, false, apperr.Wrap(apperr.CodeInternal, "reindexer: rows iteration failed", rowsErr)
+		return nil, apperr.Wrap(apperr.CodeInternal, "reindexer: rows iteration failed", rowsErr)
 	}
 	if closeErr := rows.Close(); closeErr != nil {
 		slog.Warn("reindexer: rows close error", "err", closeErr)
 	}
+	return batch, nil
+}
 
+func (r *OnlineReindexer) syncSurreal(eventUUID string, id int64, vec []float32) {
+	// SurrealDB HNSW 同步写入（Tier1+）；失败不阻断 SQLite BLOB 路径（Tier0 继续可用）
+	if r.cognitive == nil {
+		return
+	}
+	if eventUUID == "" {
+		// event_uuid 为空（存量旧行）：整数串 docID 与 KV 键 "episodic:{uuid}" 不一致，
+		// 跳过 VecUpsert 避免检索时 content 退化为 ID 字符串（BUG-2 修复）。
+		// 此类行走 SQLite BLOB 余弦相似度降级路径，BM25/FTS 路径不受影响。
+		slog.Debug("reindexer: skipping SurrealDB VecUpsert for legacy row without event_uuid",
+			"id", id)
+		return
+	}
+	if upsertErr := r.cognitive.VecUpsert(eventUUID, vec); upsertErr != nil {
+		slog.Warn("reindexer: surreal vec_upsert failed, degrading to SQLite-only path",
+			"id", id, "err", upsertErr)
+	}
+}
+
+func (r *OnlineReindexer) countRemaining(ctx context.Context) (int, error) {
+	// 检查空版本条目（走 idx_ep_embed_ver 偏索引，O(1) 量级）
+	// 仅检测 ''，版本切换场景由调用方决策是否重新触发，避免无限循环
+	//
+	// 2026-08-08 改为返回错误：此前 `_ =` 吞掉 Scan 失败，cnt 保持零值，函数
+	// 随即返回 remaining=false——调用方据此认定"重索引已做完"并停止驱动，
+	// 剩余条目的 embed_model_version 永远停在 ''，向量检索路径对它们永久失效，
+	// 且全程无任何日志。返回错误让调用方按失败重试，而不是把故障读成完成。
+	var cnt int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM episodic_events WHERE embed_model_version = '' AND archived = 0`,
+	).Scan(&cnt); err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "reindexer: remaining count query failed", err)
+	}
+	return cnt, nil
+}
+
+// Run 执行一批重建索引。返回 (已处理数, 是否还有未索引条目, error)。
+// 调用方在后台 goroutine 中循环调用，remaining=false 时停止。
+// 单条失败不中断整批（best-effort，与 Consolidation Stage 2 原则一致）；
+// 但连续 reindexMaxConsecutiveEmbedFails 条嵌入失败视为后端不可用，中止本批并返回错误。
+func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining bool, err error) {
+	version := r.embedder.ModelVersion()
+	if version == "" {
+		// 嵌入引擎尚未就绪（如 ONNX 仍在下载/基准）：不扫描、不计失败，等下一轮。
+		// 若按 version='' 查询会选中全表并逐条失败，白白触发退避（ADR-0109 P4）。
+		// remaining=false：循环驱动方据此停止，不得在引擎未就绪时空转。
+		return 0, false, nil
+	}
+
+	batch, err := r.listPendingEntries(ctx, version)
+	if err != nil {
+		return 0, false, err
+	}
 	if len(batch) == 0 {
 		return 0, false, nil
 	}
@@ -129,35 +183,14 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 			slog.Warn("reindexer: update failed", "id", e.id, "err", updateErr)
 			continue
 		}
-		// SurrealDB HNSW 同步写入（Tier1+）；失败不阻断 SQLite BLOB 路径（Tier0 继续可用）
-		if r.cognitive != nil {
-			if e.eventUUID == "" {
-				// event_uuid 为空（存量旧行）：整数串 docID 与 KV 键 "episodic:{uuid}" 不一致，
-				// 跳过 VecUpsert 避免检索时 content 退化为 ID 字符串（BUG-2 修复）。
-				// 此类行走 SQLite BLOB 余弦相似度降级路径，BM25/FTS 路径不受影响。
-				slog.Debug("reindexer: skipping SurrealDB VecUpsert for legacy row without event_uuid",
-					"id", e.id)
-			} else if upsertErr := r.cognitive.VecUpsert(e.eventUUID, vec); upsertErr != nil {
-				slog.Warn("reindexer: surreal vec_upsert failed, degrading to SQLite-only path",
-					"id", e.id, "err", upsertErr)
-			}
-		}
+		r.syncSurreal(e.eventUUID, e.id, vec)
 		processed++
 		runtime.Gosched() // 批内让出调度，避免长时间独占 goroutine
 	}
 
-	// 检查空版本条目（走 idx_ep_embed_ver 偏索引，O(1) 量级）
-	// 仅检测 ''，版本切换场景由调用方决策是否重新触发，避免无限循环
-	//
-	// 2026-08-08 改为返回错误：此前 `_ =` 吞掉 Scan 失败，cnt 保持零值，函数
-	// 随即返回 remaining=false——调用方据此认定"重索引已做完"并停止驱动，
-	// 剩余条目的 embed_model_version 永远停在 ''，向量检索路径对它们永久失效，
-	// 且全程无任何日志。返回错误让调用方按失败重试，而不是把故障读成完成。
-	var cnt int
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM episodic_events WHERE embed_model_version = '' AND archived = 0`,
-	).Scan(&cnt); err != nil {
-		return processed, false, apperr.Wrap(apperr.CodeInternal, "reindexer: remaining count query failed", err)
+	cnt, err := r.countRemaining(ctx)
+	if err != nil {
+		return processed, false, err
 	}
 
 	return processed, cnt > 0, nil

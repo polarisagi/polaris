@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/configs"
@@ -128,6 +129,8 @@ type SubstrateBundle struct {
 	EmbedChoice embedChoice
 	// EmbedBackoff 后台向量任务（reindexer 与插件向量回填）的重试退避器 (ADR-0109 D5)
 	EmbedBackoff *retrieval.EmbedBackoff
+	// EmbedRebenchRunning 防止并发重复触发 ONNX 档位重测（ADR-0109）。
+	EmbedRebenchRunning atomic.Bool
 
 	// 训练适配器（门控，M9 流水线消费；当前作占位）
 	QLoRA    *llmadapter.QLoRAAdapter
@@ -349,10 +352,9 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	_, onnxAvail := embedassets.ORTLibAsset(runtime.GOOS, runtime.GOARCH)
 	surrealVecDim := chooseEmbedding(cfg.Embedding, cfg.Inference.EmbedderDim, onnxAvail).Dim
 	if surrealVecDim <= 0 {
-		surrealVecDim = cfg.Inference.EmbedderDim
-	}
-	if surrealVecDim <= 0 {
-		surrealVecDim = 1536
+		if surrealVecDim = cfg.Inference.EmbedderDim; surrealVecDim <= 0 {
+			surrealVecDim = 1536
+		}
 	}
 	surrealStore := initSurrealStore(autoConf, cfg, layout, surrealVecDim)
 
@@ -518,13 +520,11 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// 的要求，无需为导出器单独造一个 SafeDialer 实例。若用户配置的 endpoint 域名
 	// 不在 EgressGateway 白名单内，请求会被 egressGW 拒绝——这是刻意的纵深防御，
 	// 需要通过 cfg.System.EgressAllowedDomains 显式放行该域名。
-	if te := cfg.Thresholds.M3Observability.TraceExport; te.Enabled {
-		if te.Endpoint == "" {
-			slog.Warn("polaris: trace_export.enabled=true 但 endpoint 为空，跳过导出器注册")
-		} else {
-			trace.SetDefaultExporters([]trace.SpanExporter{trace.NewOTLPHTTPExporter(safeHTTPClient.Client, te.Endpoint)})
-			slog.Info("polaris: trace exporter enabled", "endpoint", te.Endpoint)
-		}
+	if te := cfg.Thresholds.M3Observability.TraceExport; te.Enabled && te.Endpoint != "" {
+		trace.SetDefaultExporters([]trace.SpanExporter{trace.NewOTLPHTTPExporter(safeHTTPClient.Client, te.Endpoint)})
+		slog.Info("polaris: trace exporter enabled", "endpoint", te.Endpoint)
+	} else if te.Enabled {
+		slog.Warn("polaris: trace_export.enabled=true 但 endpoint 为空，跳过导出器注册")
 	}
 
 	reg := llm.NewProviderRegistry(cfg.Thresholds.M1Router)
@@ -540,28 +540,27 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	// ─── 4.5~4.9 向量化引擎与训练适配器 (ADR-0109) ───────────────────────────
 	embedBackoff := retrieval.NewEmbedBackoff()
-	embedder, dynEmbedder, batcher, embedChoice := initEmbedding(ctx, cfg, layout, safeHTTPClient, embedBackoff, store.DB())
+	embedder, dynEmbedder, batcher, embedChoice := initEmbedding(ctx, cfg, layout, safeHTTPClient, embedBackoff, store.DB(),
+		newEmbedModelSwitchHandler(store.DB(), surrealVecClear(surrealStore)))
 
-	var qloraAdapter *llmadapter.QLoRAAdapter
-	var prmAdapter *llmadapter.PRMAdapter
-	var steeringAdapter *llmadapter.SteeringAdapter
-	var cvStore *llmadapter.ControlVectorStore
+	var (
+		qloraAdapter    *llmadapter.QLoRAAdapter
+		prmAdapter      *llmadapter.PRMAdapter
+		steeringAdapter *llmadapter.SteeringAdapter
+		cvStore         *llmadapter.ControlVectorStore
+	)
 
 	// QLoRA / PRM / Steering 适配器仅在显式启用本地后端时初始化 (ADR-0109 D6)
 	if localBackendEnabled(cfg) {
 		ollamaHTTPClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
 		qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient.Client)
-		slog.Info("polaris: QLoRA training adapter initialized")
 		prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient.Client)
-		slog.Info("polaris: PRM training adapter initialized")
 		steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient.Client)
 		cvStore = llmadapter.NewControlVectorStore()
-		slog.Info("polaris: activation steering adapter initialized")
+		slog.Info("polaris: local training/steering adapters initialized")
 	}
 
 	if autoConf != nil {
-		// 注入 LocalModelUnloader，使 OSMemoryGuard DegradationCritical 时能真正调用
-		// UnloadModel 释放本地模型常驻内存。
 		autoConf.WithLocalModelUnloader(reg)
 		slog.Info("polaris: local model unloader wired into AutoConfig memory pressure callback")
 	}

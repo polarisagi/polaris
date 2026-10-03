@@ -152,7 +152,16 @@ impl SurrealStore {
             };
 
             if need_rebuild {
-                let _ = db.query("REMOVE INDEX IF EXISTS hnsw_idx ON vectors; DELETE vectors;").await;
+                // 删除失败必须致命：否则下方 DEFINE INDEX IF NOT EXISTS 会保留旧维度索引，
+                // 之后所有新维度向量写入静默失败（正是 ADR-0109 R5 要修的缺陷）。
+                let rebuild = db
+                    .query("REMOVE INDEX IF EXISTS hnsw_idx ON vectors; DELETE vectors;")
+                    .await
+                    .and_then(|resp| resp.check());
+                if let Err(e) = rebuild {
+                    eprintln!("[surreal_store] HNSW rebuild (remove old index) error (fatal): {e}");
+                    return Err(Box::new(e) as Box<dyn std::error::Error>);
+                }
             }
 
             let define_idx = format!("DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EFC 64;");

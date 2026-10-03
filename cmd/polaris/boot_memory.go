@@ -60,12 +60,8 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 
 	// 统一注入 Embedder 激活向量检索路径（P0-3 修复）
 	if sb.Embedder != nil {
-		embedModelName := sb.EmbedChoice.Model
-		if embedModelName == "" {
-			embedModelName = "embedding"
-		}
-		mem.InjectEmbedder(&memEmbedderAdapter{e: sb.Embedder, model: embedModelName})
-		slog.Info("polaris: vector retrieval path activated", "model", embedModelName)
+		mem.InjectEmbedder(newMemEmbedderAdapter(sb.Embedder, sb))
+		slog.Info("polaris: vector retrieval path activated", "backend", sb.EmbedChoice.Kind)
 	}
 
 	// ─── GD-14-003 检索强化：让遗忘按"有没有人用"而非"够不够旧"淘汰 ────────
@@ -189,10 +185,6 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 		slog.Info("polaris: embedder is nil (FTS mode), skipping online reindexer")
 		return nil
 	}
-	embedModelName := sb.EmbedChoice.Model
-	if embedModelName == "" {
-		embedModelName = "embedding"
-	}
 	// 重索引是批量后台负载：走 Low 优先级嵌入队列，把 High 队列让给用户的
 	// 交互式检索（EmbeddingBatcher 的双队列此前因无人提交 Low 而形同虚设，
 	// 见 search.BackgroundEmbedder 注释）。
@@ -201,13 +193,13 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 	if sb.SurrealStore != nil {
 		onlineReindexer = retrieval.NewOnlineReindexerWithCognitive(
 			sb.Store.DB(),
-			&memEmbedderAdapter{e: bgEmbedder, model: embedModelName},
+			newMemEmbedderAdapter(bgEmbedder, sb),
 			&surrealCognAdapter{s: sb.SurrealStore},
 		)
 	} else {
 		onlineReindexer = retrieval.NewOnlineReindexer(
 			sb.Store.DB(),
-			&memEmbedderAdapter{e: bgEmbedder, model: embedModelName},
+			newMemEmbedderAdapter(bgEmbedder, sb),
 		)
 	}
 	concurrent.SafeGo(ctx, "boot_memory.reindex_ticker", func(ctx context.Context) {
@@ -249,7 +241,7 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 			}
 		}
 	})
-	slog.Info("polaris: online reindexer started", "model", embedModelName, "interval", "5m")
+	slog.Info("polaris: online reindexer started", "backend", sb.EmbedChoice.Kind, "interval", "5m")
 	return onlineReindexer.Run
 }
 

@@ -194,6 +194,31 @@ func (s *OrtSession) Close() {
 	}
 }
 
+func (s *OrtSession) validateInputs(inputIDs []int64, attnMask []int64, tokenTypeIDs []int64) error {
+	seqLen := len(inputIDs)
+	if seqLen == 0 || len(attnMask) != seqLen {
+		return apperr.New(apperr.CodeInvalidInput, "embedonnx: empty or mismatched input tensors")
+	}
+	if !s.isGemma && len(tokenTypeIDs) != seqLen {
+		return apperr.New(apperr.CodeInvalidInput, "embedonnx: empty or mismatched input tensors")
+	}
+	return nil
+}
+
+func (s *OrtSession) createInt64Tensor(data []int64, name string) (uintptr, error) {
+	seqLen := int64(len(data))
+	shape := []int64{1, seqLen}
+	var val uintptr
+	// 7 = ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+	status := s.api.createTensorWithDataAsOrtValue(s.memInfo, unsafe.Pointer(&data[0]), uintptr(seqLen*8), &shape[0], 2, 7, &val)
+	if status != 0 {
+		msg := goString(s.api.getErrorMessage(status))
+		s.api.releaseStatus(status)
+		return 0, apperr.New(apperr.CodeInternal, "embedonnx: create "+name+" tensor error: "+msg)
+	}
+	return val, nil
+}
+
 // Run 运行单条推理，返回 512 维 L2 归一化向量。
 func (s *OrtSession) Run(inputIDs []int64, attnMask []int64, tokenTypeIDs []int64) ([]float32, error) {
 	s.mu.Lock()
@@ -203,24 +228,19 @@ func (s *OrtSession) Run(inputIDs []int64, attnMask []int64, tokenTypeIDs []int6
 		return nil, apperr.New(apperr.CodeInternal, "embedonnx: session is closed")
 	}
 
-	seqLen := int64(len(inputIDs))
-	shape := []int64{1, seqLen}
+	if err := s.validateInputs(inputIDs, attnMask, tokenTypeIDs); err != nil {
+		return nil, err
+	}
 
-	var idVal, maskVal, typeVal uintptr
-	// 7 = ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-	status := s.api.createTensorWithDataAsOrtValue(s.memInfo, unsafe.Pointer(&inputIDs[0]), uintptr(seqLen*8), &shape[0], 2, 7, &idVal)
-	if status != 0 {
-		msg := goString(s.api.getErrorMessage(status))
-		s.api.releaseStatus(status)
-		return nil, apperr.New(apperr.CodeInternal, "embedonnx: create input_ids tensor error: "+msg)
+	idVal, err := s.createInt64Tensor(inputIDs, "input_ids")
+	if err != nil {
+		return nil, err
 	}
 	defer s.api.releaseValue(idVal)
 
-	status = s.api.createTensorWithDataAsOrtValue(s.memInfo, unsafe.Pointer(&attnMask[0]), uintptr(seqLen*8), &shape[0], 2, 7, &maskVal)
-	if status != 0 {
-		msg := goString(s.api.getErrorMessage(status))
-		s.api.releaseStatus(status)
-		return nil, apperr.New(apperr.CodeInternal, "embedonnx: create attention_mask tensor error: "+msg)
+	maskVal, err := s.createInt64Tensor(attnMask, "attention_mask")
+	if err != nil {
+		return nil, err
 	}
 	defer s.api.releaseValue(maskVal)
 
@@ -235,11 +255,9 @@ func (s *OrtSession) Run(inputIDs []int64, attnMask []int64, tokenTypeIDs []int6
 		outNames = []*byte{cString("last_hidden_state"), cString("sentence_embedding")}
 		outVals = make([]uintptr, 2)
 	} else {
-		status = s.api.createTensorWithDataAsOrtValue(s.memInfo, unsafe.Pointer(&tokenTypeIDs[0]), uintptr(seqLen*8), &shape[0], 2, 7, &typeVal)
-		if status != 0 {
-			msg := goString(s.api.getErrorMessage(status))
-			s.api.releaseStatus(status)
-			return nil, apperr.New(apperr.CodeInternal, "embedonnx: create token_type_ids tensor error: "+msg)
+		typeVal, err := s.createInt64Tensor(tokenTypeIDs, "token_type_ids")
+		if err != nil {
+			return nil, err
 		}
 		defer s.api.releaseValue(typeVal)
 
@@ -249,7 +267,15 @@ func (s *OrtSession) Run(inputIDs []int64, attnMask []int64, tokenTypeIDs []int6
 		outVals = make([]uintptr, 1)
 	}
 
-	status = s.api.run(s.session, 0, &inNames[0], &inVals[0], uintptr(len(inNames)), &outNames[0], uintptr(len(outNames)), &outVals[0])
+	status := s.api.run(s.session, 0, &inNames[0], &inVals[0], uintptr(len(inNames)), &outNames[0], uintptr(len(outNames)), &outVals[0])
+	// OrtValue 直接引用 Go 侧 inputIDs/attnMask/tokenTypeIDs 的底层数组（CreateTensorWithDataAsOrtValue
+	// 不拷贝），名字数组也只以指针形式交给 C。Go 编译器在最后一次显式使用后即可视其为死对象，
+	// 必须保活到 Run 返回之后，否则 GC 可能在推理期间回收输入缓冲区。
+	runtime.KeepAlive(inputIDs)
+	runtime.KeepAlive(attnMask)
+	runtime.KeepAlive(tokenTypeIDs)
+	runtime.KeepAlive(inNames)
+	runtime.KeepAlive(outNames)
 	if status != 0 {
 		msg := goString(s.api.getErrorMessage(status))
 		s.api.releaseStatus(status)
@@ -264,6 +290,10 @@ func (s *OrtSession) Run(inputIDs []int64, attnMask []int64, tokenTypeIDs []int6
 		}
 	}()
 
+	return s.extractEmbedding(outVals)
+}
+
+func (s *OrtSession) extractEmbedding(outVals []uintptr) ([]float32, error) {
 	emb512 := make([]float32, 512)
 	if s.isGemma {
 		// outVals[1] 是 sentence_embedding [1, 768]
@@ -286,17 +316,19 @@ func (s *OrtSession) Run(inputIDs []int64, attnMask []int64, tokenTypeIDs []int6
 		copy(emb512, rawCLS[:512])
 	}
 
-	// L2 归一化
+	normalizeL2(emb512)
+	return emb512, nil
+}
+
+func normalizeL2(vec []float32) {
 	var norm float32
-	for j := 0; j < 512; j++ {
-		norm += emb512[j] * emb512[j]
+	for _, v := range vec {
+		norm += v * v
 	}
 	norm = float32(math.Sqrt(float64(norm)))
 	if norm > 0 {
-		for j := 0; j < 512; j++ {
-			emb512[j] /= norm
+		for i := range vec {
+			vec[i] /= norm
 		}
 	}
-
-	return emb512, nil
 }

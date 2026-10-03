@@ -53,7 +53,7 @@ export const zh = {
   embedding_state:           '状态',
   embedding_rebench_btn:     '重新评估',
   accelerator_rec_title:     '本机支持硬件加速',
-  accelerator_rec_desc:      '本机支持本地加速，可在配置中启用 Qwen3-Embedding（llama-server）获得更高检索质量：',
+  accelerator_rec_desc:      '本机支持本地加速，可在配置中显式启用 Ollama + Qwen3-Embedding 获得更高检索质量：',
 
   // ── 插件目录页 ──────────────────────────────────────────────────────────
   plugins_title:        '插件目录',
@@ -795,7 +795,7 @@ export const en = {
   embedding_state:           'State',
   embedding_rebench_btn:     'Rebench',
   accelerator_rec_title:     'Hardware Acceleration Available',
-  accelerator_rec_desc:      'Hardware acceleration is supported on this machine. You may enable Qwen3-Embedding (llama-server) in config for higher retrieval quality:',
+  accelerator_rec_desc:      'Hardware acceleration is supported on this machine. You may explicitly enable Ollama + Qwen3-Embedding in config for higher retrieval quality:',
 
   // ── Plugin Catalog page ────────────────────────────────────────────────
   plugins_title:        'Plugin Catalog',
