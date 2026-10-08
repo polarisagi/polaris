@@ -17,20 +17,28 @@ import (
 // 下载前代理测速（ADR-0110 修订三）。
 //
 // 为什么要代理：Melo 资产约 167MB，弱 CPU 机器下完才发现 RTF>0.8 等于白下一次。
-// SenseVoice（已随 STT 安装，几十 MB 级加载成本）与 Melo 同为 sherpa-onnx/ORT 的 CPU 推理，
-// 两者 RTF 随线程数的变化近似同比。M1 实测（同线程数）：
+// SenseVoice（已随 STT 安装）与 Melo 同为 sherpa-onnx/ORT 的 CPU 推理，RTF 随线程数近似同比变化。
 //
-//	线程   SenseVoice RTF   Melo RTF   比值
-//	 1      0.0391           0.79       20.2
-//	 2      0.0223           0.42       18.8
-//	 4      0.0172           0.233      13.5
+// 系数必须来自 Go 管线（与生产同一份 sherpa-onnx 1.13.2 + ORT 1.24.4 动态库）同一时刻的测量：
+// 早先用 Python sherpa_onnx 1.13.8 标定得到 13，但 Go 管线的 SenseVoice 比 Python 慢约 3 倍
+// （根因见 ADR-0110 修订三：1.13.2 发行包自带的 ORT 1.24.4 在 arm64 上慢，换 ORT 后与 Python 一致），
+// 而 Melo 只慢约 1.8 倍，两条管线的比值不可互换。
 //
-// 比值随线程数下降（Melo 并行效率更好）。取 13（最乐观档，即 4 线程比值）：
-// 宁可放行一台实际偏慢的机器（后面还有真实基准兜底），也不能因为代理偏悲观而误杀能用的机器。
+// Go 管线标定（2026-10-08，Apple M1 8 核，交替测 SenseVoice 与 Melo 各 3 轮，
+// 命令见 proxy_calibrate_integration_test.go）：
+//
+//	线程  轮次  sttRTF   meloRTF  ratio
+//	 1    1/2/3 0.158/0.144/0.206  0.877/1.174/1.062  5.54/8.13/5.14
+//	 2    1/2/3 0.134/0.117/0.110  0.786/0.662/0.543  5.85/5.64/4.94
+//	 4    1/2/3 0.080/0.079/0.078  0.412/0.380/0.396  5.17/4.84/5.08
+//
+// 全部 9 个 ratio 的最小值 4.84，系数取 4.84×0.9≈4.35：宁可低估 Melo 耗时（只会多下载一次，
+// 之后由真实基准兜底），也不因代理偏悲观误杀能用的机器。
 const (
 	// proxyRatio 是 Melo RTF ≈ SenseVoice RTF × proxyRatio 的外推系数。
-	proxyRatio = 13.0
-	// proxyMaxPredicted 是预测 Melo RTF 的放行上限：> 1.0 意味着连实时都追不上，必然断流。
+	proxyRatio = 4.35
+	// proxyMaxPredicted 是预测 Melo RTF 的放行上限（对应 sttRTF > 1/4.35 ≈ 0.2299）：
+	// > 1.0 意味着连实时都追不上，必然断流。
 	// 比真实基准的 MaxTTSRTF(0.8) 宽松，是因为代理有误差，边缘机型交给真实基准定夺。
 	proxyMaxPredicted = 1.0
 

@@ -83,15 +83,31 @@ B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音�
 
 **测量**：10s、16kHz、幅度 0.01、固定种子噪声（不依赖资产文件）；1 次预热 + 3 次计时取最小；线程数 = Melo 线程数 `min(4, 逻辑核)`；用临时 STT 引擎，测完释放，不扰动 Slot 常驻引擎。
 
-**标定**（M1，Opus 实测）：
+**标定（Go 管线，2026-10-08，取代下方作废的 Python 标定）**：系数必须来自 Go 管线（生产同一份 sherpa-onnx 1.13.2 + ORT 1.24.4）同一时刻的测量。方法：Apple M1（8 核/16GB），`proxy_calibrate_integration_test.go` 对 t=1/2/4 交替各跑 3 轮 Go `MeasureSTTRTF`（SenseVoice，10s 固定噪声，1 预热 + 3 计时取最小）与 Go Melo 真实基准（`RunBench`：ADR-0108 基准句，预热 1 + 计时 2 取最小），ratio = meloRTF / sttRTF：
 
-| 线程 | SenseVoice RTF | Melo RTF | 比值 |
-|---|---|---|---|
-| 1 | 0.0391 | 0.79 | 20.2 |
-| 2 | 0.0223 | 0.42 | 18.8 |
-| 4 | 0.0172 | 0.233 | 13.5 |
+| 线程 | 轮次 | sttRTF | meloRTF | ratio |
+|---|---|---|---|---|
+| 1 | 1 | 0.1584 | 0.8769 | 5.54 |
+| 1 | 2 | 0.1444 | 1.1741 | 8.13 |
+| 1 | 3 | 0.2064 | 1.0615 | 5.14 |
+| 2 | 1 | 0.1344 | 0.7864 | 5.85 |
+| 2 | 2 | 0.1174 | 0.6619 | 5.64 |
+| 2 | 3 | 0.1100 | 0.5433 | 4.94 |
+| 4 | 1 | 0.0796 | 0.4117 | 5.17 |
+| 4 | 2 | 0.0786 | 0.3804 | 4.84 |
+| 4 | 3 | 0.0779 | 0.3959 | 5.08 |
 
-**公式**：`predicted = sttRTF × 13`（取最乐观的 4 线程比值：宁可放行偏慢机器交给真实基准，也不误杀可用机器）；`predicted > 1.0` 判代理过慢（对应 sttRTF > 0.0769）。1.0 比真实基准的 0.8 宽松，因为代理有误差。
+全部轮次 ratio 最小值 4.84，**系数 = 4.84 × 0.9 ≈ 4.35**（低估 Melo 耗时：只会多下载，不会误杀）。
+
+<details><summary>已作废：Opus 的 Python 标定（系数 13）</summary>
+
+Python 管线（sherpa_onnx 1.13.8），与 Go 管线不可比，**已作废**：SenseVoice 1/2/4 线程 RTF 0.0391/0.0223/0.0172，Melo 0.79/0.42/0.233，比值 20/19/13.5。
+
+</details>
+
+**为什么两条管线不可比（Go STT 慢 3 倍的根因）**：同机同输入背靠背对比，Python 1.13.8 的 SenseVoice RTF 1/2/4 线程最优 0.0385/0.0231/0.0232，Go 管线 0.136/0.075/0.076。逐项排除：FFI 的 `num_threads`/`debug`/`provider` 偏移正确（线程数确实生效，RTF 随线程下降）；计时只含 Transcribe，标点模型对噪声输入不触发（输出为空）；噪声分布（均匀/高斯）与是否加载标点模型无差别；每次计时不重建 recognizer。决定性实验：同一份 Go FFI 代码改加载 pip 的 1.13.8 动态库，RTF 变为 0.040/0.0143，与 Python 完全一致；仅把 1.13.2 的 c-api 配上 pip 自带的新 ORT（1.28.2），1 线程即达 0.040、4 线程 0.022。**结论：慢的是 1.13.2 发行包捆绑的 ORT 1.24.4 在 macOS arm64 上的推理性能，不是 Go 路径缺陷**；Melo 同样受影响（Go 4 线程 ≈0.40 vs Python 0.233）。升级 sherpa/ORT 会牵动 ABI 钉死（偏移需重新 clang 实测）与五个平台的清单 sha256，不在本修订范围，列为后续事项（见重新评估触发条件）。
+
+**公式**：`predicted = sttRTF × 4.35`；`predicted > 1.0` 判代理过慢（对应 sttRTF > 0.2299）。1.0 比真实基准的 0.8 宽松，因为代理有误差，边缘机型交给真实基准定夺。
 
 **流程**：
 - 代理过慢：不下载 Melo，TTS 置 `unsupported/too_slow`，落库 `audio.tts_bench.melo`（`method:"proxy"`、`stt_rtf`、`predicted`，`rtf` 存 predicted），后台预置器尊重该结论，重启后同指纹直接生效。
@@ -99,13 +115,13 @@ B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音�
 - 复用 D2 的 CPU 空闲采样与 Contended 判定：测前/测后 CPU ≥50% 视为争用，**无结论**，走原路径（下载 + 真实基准），不落库。
 - STT 资产缺失、内存不足或加载失败：跳过代理，走原路径。
 - **逃生口**：用户主动 `POST /v1/audio/tts/install` 无视代理结论，清除代理 slow、下载并跑真实基准，真实结果覆盖代理记录（代理记录不算"已重测"，真实基准的首个慢结果仍享有一次重测）。真实基准的定论过慢仍拒绝安装（已测过且资产已回收）。
-- **回收**：真实基准定论过慢（非争用、已重测仍慢、`RetryOnStart=false`）后删除 `models/tts/melo/`，状态保持 `unsupported/too_slow`。争用造成的暂时不可用绝不删除。
+- **回收**：真实基准定论过慢（非争用、已重测仍慢、`RetryOnStart=false`）后删除 `models/tts/melo/`，状态保持 `unsupported/too_slow`。争用造成的暂时不可用绝不删除。启动恢复（`restoreBench`）读到同指纹的真实定论 too_slow（method 非 proxy、`RetryOnStart=false`）而 `models/tts/melo/` 仍在时，同样补回收；代理记录从未下载过 Melo，不处理。
 
 **并发与资源安全**：回收发生在 Slot 加载回调内、引擎已 `Close` 之后，此刻无驻留引擎与 inflight；`slow` 先于删除置位，`gate()` 与 `loadEngine` 入口均据此拒绝后续加载，不会再触碰该目录；`assetMu` 使"下载/解压"与"回收"互斥；安装本身由 `installing` CAS 保证预置器与手动安装互斥；回收只删目录名恰为 `melo` 的确切路径。
 
 **可观测（HE-1）**：slog 记录 stt_rtf / predicted / contended / 回收；计数器 `polaris.audio.tts_proxy_bench_total`、`tts_proxy_too_slow_total`、`tts_proxy_skipped_total`、`tts_reclaim_total`。
 
-**已知局限**：标定来自空闲 M1；同一台 M1 在约 30–40% 后台 CPU 占用（未触发 50% 争用线）下实测 SenseVoice 4 线程 RTF 0.057–0.070（predicted 0.74–0.90），明显高于标定值 0.0172，说明代理对中等负载敏感、偏悲观。因此 1.0 的放行线是"宁可放行"的上限，边缘机型由真实基准定夺；重新标定见下方重新评估触发条件。
+**M1 自检**：新系数下 M1 实测 sttRTF 1/2/4 线程 0.1435/0.0743/0.0847，predicted 0.62/0.32/0.37，2 与 4 线程均放行（M1 真实 Go Melo：2 线程 0.54–0.79、4 线程 0.38–0.41，其中 2 线程贴近 0.8 线，弱核机器会由真实基准定论）。
 
 ## 决策
 
@@ -156,7 +172,7 @@ B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音�
 
 ## 重新评估触发条件
 
-0. 代理测速在空闲机器上的 predicted 与真实 Melo RTF 偏差持续超过 2 倍（见修订三「已知局限」），需重新标定系数 13。
+0. 代理测速在空闲机器上的 predicted 与真实 Melo RTF 偏差持续超过 2 倍（见修订三「已知局限」），需重新标定系数 4.35；升级 sherpa-onnx/ORT（见修订三根因）后必须重新标定。
 1. sherpa-onnx 上游修复子句拆批吞字，或 MeloTTS 提供英文 G2P 回退（可恢复长英文词）。
 2. 出现 RTF 与音质均优于 MeloTTS 且单句 RSS ≤ 600MB 的中文模型。
 
@@ -167,4 +183,4 @@ B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音�
 | 2026-10-08 | 初稿 |
 | 2026-10-08 | 修订：删除 Matcha（许可证链路不可核验），档位收敛为两档，删除 `inference.tts.model` 与降级链 |
 | 2026-10-08 | 修订二：2GB 档（B）关闭服务端 TTS 只开 STT，档位改为 A/B/C 三档，TTS 总内存门槛 3600MB、核数门槛 2 |
-| 2026-10-08 | 修订三：新增原因码 `tts_ram_tier` 与前端分档提示（系统语音可用时不弹 toast）；下载前 SenseVoice 代理测速（predicted=sttRTF×13，>1.0 不下载）、手动安装逃生口、真实定论过慢后回收 `models/tts/melo` |
+| 2026-10-08 | 修订三：新增原因码 `tts_ram_tier` 与前端分档提示（系统语音可用时不弹 toast）；下载前 SenseVoice 代理测速（predicted=sttRTF×4.35，>1.0 不下载；系数由 Go 管线同时刻标定）、手动安装逃生口、真实定论过慢后回收 `models/tts/melo`（含启动时补回收） |

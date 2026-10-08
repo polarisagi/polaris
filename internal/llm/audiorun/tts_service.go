@@ -134,6 +134,11 @@ func (t *TTSService) restoreBench(ctx context.Context) {
 	if ok && !rec.Supported {
 		t.slow.Store(&rec)
 		slog.Info("audio: tts previously judged too slow on this hardware", "rtf", rec.RTF, "fingerprint", rec.Fingerprint)
+		// 真实基准的定论（非代理）：此前版本未回收的 melo 资产在启动时补回收；代理记录从未下载过 Melo，无需处理。
+		// 此时 Slot 尚未被任何请求使用，无驻留引擎与 inflight，可安全删除。
+		if rec.Method != MethodProxy {
+			t.reclaimAssets()
+		}
 	}
 }
 

@@ -13,13 +13,13 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/tts"
 )
 
-// 预测值边界：0.0769×13=0.9997 放行，0.0770×13=1.001 判慢（ADR-0110 修订三）。
+// 预测值边界（系数 4.35，放行线 sttRTF≈0.22989）：0.2298×4.35=0.9996 放行，0.2299×4.35=1.0001 判慢（ADR-0110 修订三）。
 func TestDecideProxy_Boundary(t *testing.T) {
 	cases := []struct {
 		sttRTF    float64
 		supported bool
 	}{
-		{0.0391, true}, {0.0769, true}, {0.0770, false}, {0.2, false},
+		{0.0391, true}, {0.2298, true}, {0.2299, false}, {0.5, false},
 	}
 	for _, c := range cases {
 		rec, ok := decideProxy(c.sttRTF, false)
@@ -29,7 +29,7 @@ func TestDecideProxy_Boundary(t *testing.T) {
 		if rec.Supported != c.supported || rec.Method != MethodProxy || rec.RetryOnStart {
 			t.Errorf("sttRTF=%v: got %+v, want supported=%v method=proxy retry=false", c.sttRTF, rec, c.supported)
 		}
-		if rec.STTRTF != c.sttRTF || rec.Predicted != c.sttRTF*13 {
+		if rec.STTRTF != c.sttRTF || rec.Predicted != c.sttRTF*proxyRatio {
 			t.Errorf("sttRTF=%v: 记录应带 stt_rtf 与 predicted，got %+v", c.sttRTF, rec)
 		}
 	}
@@ -97,7 +97,7 @@ func proxySvc(t *testing.T, probe ProxyProbeFunc, cpu float64, prefs PrefStore) 
 // 代理判慢：不下载、落库 method=proxy、状态 unsupported/too_slow，预置器随后跳过。
 func TestProxy_TooSlowSkipsDownload(t *testing.T) {
 	prefs := &memPrefs{}
-	s, nc, sink := proxySvc(t, func(context.Context, int) (float64, bool) { return 0.1, true }, 0, prefs)
+	s, nc, sink := proxySvc(t, func(context.Context, int) (float64, bool) { return 0.3, true }, 0, prefs)
 	ran, err := s.InstallBlocking(context.Background())
 	if err != nil || !ran {
 		t.Fatalf("ran=%v err=%v", ran, err)
@@ -109,7 +109,7 @@ func TestProxy_TooSlowSkipsDownload(t *testing.T) {
 		t.Errorf("状态应为 unsupported/too_slow/none，got %+v", st)
 	}
 	rec, ok, _ := GetBench(context.Background(), prefs, s.fingerprint())
-	if !ok || rec.Method != MethodProxy || rec.Supported || rec.STTRTF != 0.1 {
+	if !ok || rec.Method != MethodProxy || rec.Supported || rec.STTRTF != 0.3 {
 		t.Errorf("应落库代理记录，got %+v ok=%v", rec, ok)
 	}
 	if ran, _ := s.InstallBlocking(context.Background()); ran {
@@ -127,7 +127,7 @@ func TestProxy_TooSlowSkipsDownload(t *testing.T) {
 
 // 代理放行：继续下载（这里下载被拒绝，但请求已发出）。
 func TestProxy_PassProceedsToDownload(t *testing.T) {
-	s, nc, _ := proxySvc(t, func(context.Context, int) (float64, bool) { return 0.05, true }, 0, &memPrefs{})
+	s, nc, _ := proxySvc(t, func(context.Context, int) (float64, bool) { return 0.2, true }, 0, &memPrefs{})
 	_, _ = s.InstallBlocking(context.Background())
 	if nc.n.Load() == 0 || s.slow.Load() != nil {
 		t.Errorf("放行应继续下载且不置 slow，requests=%d slow=%v", nc.n.Load(), s.slow.Load())
@@ -179,7 +179,7 @@ func TestProxy_STTUnavailableSkipsProxy(t *testing.T) {
 // 手动安装无视代理结论：不调探针、清除代理 slow、发起下载。
 func TestProxy_ManualInstallBypasses(t *testing.T) {
 	var probed atomic.Int32
-	s, nc, _ := proxySvc(t, func(context.Context, int) (float64, bool) { probed.Add(1); return 0.1, true }, 0, &memPrefs{})
+	s, nc, _ := proxySvc(t, func(context.Context, int) (float64, bool) { probed.Add(1); return 0.3, true }, 0, &memPrefs{})
 	s.slow.Store(&BenchRecord{Method: MethodProxy, Predicted: 1.3, RTF: 1.3})
 	started, err := s.Install()
 	if err != nil || !started {
@@ -276,5 +276,38 @@ func TestReclaim_OnlyMeloDirName(t *testing.T) {
 	s.reclaimAssets()
 	if _, err := os.Stat(other); err != nil {
 		t.Error("不得误删兄弟目录")
+	}
+}
+
+// 启动恢复：真实定论 too_slow 且 melo 目录仍在 → 回收；代理记录不触碰；待重测记录不删。
+func TestReclaim_RestoreBenchAtStartup(t *testing.T) {
+	cases := []struct {
+		name       string
+		rec        BenchRecord
+		wantExists bool
+	}{
+		{"真实定论回收", BenchRecord{Method: MethodReal, RTF: 1.2}, false},
+		{"旧版无 method 的定论也回收", BenchRecord{RTF: 1.2}, false},
+		{"代理记录不删", BenchRecord{Method: MethodProxy, RTF: 1.3, Predicted: 1.3}, true},
+		{"待重测不删", BenchRecord{Method: MethodReal, RTF: 1.2, RetryOnStart: true}, true},
+	}
+	for _, c := range cases {
+		prefs := &memPrefs{}
+		c.rec.Fingerprint = Fingerprint(hostProf())
+		if err := SaveBench(context.Background(), prefs, c.rec); err != nil {
+			t.Fatal(err)
+		}
+		root := t.TempDir()
+		dir := filepath.Join(root, tts.ModelName)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		s := NewTTSService(context.Background(), TTSOptions{
+			LibDir: t.TempDir(), Dir: root, Support: supported(), Prefs: prefs, Profile: hostProf(),
+		})
+		_ = s.Close()
+		if _, err := os.Stat(dir); (err == nil) != c.wantExists {
+			t.Errorf("%s: 目录存在=%v, want %v", c.name, err == nil, c.wantExists)
+		}
 	}
 }

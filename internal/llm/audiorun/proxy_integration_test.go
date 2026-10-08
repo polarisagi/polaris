@@ -28,6 +28,9 @@ func TestProxyProbe_RealSenseVoice(t *testing.T) {
 			t.Skipf("STT 资产不可用于探针: %s", dir)
 		}
 		pred := proxyPredicted(rtf)
+		if threads >= 2 && pred > proxyMaxPredicted {
+			t.Errorf("M1 自检失败：threads=%d predicted=%.3f 被判过慢，系数错误", threads, pred)
+		}
 		t.Logf("threads=%d sttRTF=%.4f predicted=%.3f (放行上限 %.1f, 过慢=%v)", threads, rtf, pred, proxyMaxPredicted, pred > proxyMaxPredicted)
 	}
 }
