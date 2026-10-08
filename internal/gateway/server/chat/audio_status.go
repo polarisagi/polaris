@@ -34,6 +34,8 @@ type AudioAssetStatus struct {
 	// Reason 是 State=unsupported 时的机器可读原因码（insufficient_ram / insufficient_cores /
 	// unsupported_platform / too_slow），前端据此选文案。
 	Reason string `json:"reason,omitempty"`
+	// Model 是 TTS 当前模型名："melo" | "matcha" | "none"（不支持或降级链已尽）；STT 状态不填（ADR-0110）。
+	Model string `json:"model,omitempty"`
 	// Origin 标识发起方："auto"|"user"，仅 downloading|loading 时填写。
 	Origin string `json:"origin,omitempty"`
 	// NextRetryAt 处于退避等待时填写。

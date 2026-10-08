@@ -1,6 +1,6 @@
 // Package tts 是 `tts` 内置工具：把文本合成为语音，返回 data URI。
 //
-// 它不自带任何引擎，只调用调用方注入的本地 TTS Provider（Kokoro，经 AudioService）。
+// 它不自带任何引擎，只调用调用方注入的本地 TTS Provider（MeloTTS / Matcha，经 AudioService，ADR-0110）。
 // 此前的 tts_edge 靠外部 `edge-tts` CLI 访问微软在线端点，ADR-0107 随 Edge 整条删除。
 package tts
 
@@ -19,7 +19,7 @@ import (
 // 引擎未安装/不支持/内存不足时必须返回错误，不得返回空音频。
 type Synthesizer func(ctx context.Context, text string) (data []byte, mime string, err error)
 
-// maxTextRunes 限制单次合成的文本长度：Kokoro 在 RTF≈0.5 时 1000 个汉字约 4 分钟音频、
+// maxTextRunes 限制单次合成的文本长度：服务端 TTS 在 RTF≈0.5 时 1000 个汉字约 4 分钟音频、
 // 2 分钟推理，更长的文本会让一次工具调用占住推理引擎（同一引擎串行服务所有朗读请求）。
 const maxTextRunes = 1000
 

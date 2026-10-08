@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/llm/tts"
 )
 
 type recSink struct {
@@ -32,7 +34,7 @@ func supported() Capability { return Capability{Supported: true} }
 func hostProf() HardwareProfile { return HostProfile(16 * gib) }
 
 func TestSTTService_NotInstalledPublishedAtStartup(t *testing.T) {
-	if !AudioSupport(hostProf()).STT.Supported {
+	if !AudioSupport(hostProf(), "").STT.Supported {
 		t.Skip("当前平台不支持 STT")
 	}
 	sink := &recSink{}
@@ -73,7 +75,7 @@ func TestSTTService_UnsupportedBlocksEverything(t *testing.T) {
 
 func TestTTSService_UnsupportedAndGate(t *testing.T) {
 	sink := &recSink{}
-	cap := Capability{Reason: ReasonInsufficientCores, Message: "服务端朗读 需要至少 4GB 内存 / 4 核"}
+	cap := Capability{Reason: ReasonInsufficientCores, Message: "服务端朗读 需要至少 2GB 内存 / 2 核"}
 	s := NewTTSService(context.Background(), TTSOptions{LibDir: t.TempDir(), Dir: t.TempDir(), Support: cap, Sink: sink, Profile: hostProf()})
 	defer s.Close()
 	if st := sink.get(); st.State != StateUnsupported || st.Reason != ReasonInsufficientCores {
@@ -90,7 +92,12 @@ func TestTTSService_PersistedTooSlowRestored(t *testing.T) {
 	prof := hostProf()
 	prefs := &memPrefs{}
 	if err := SaveBench(context.Background(), prefs, BenchRecord{
-		Fingerprint: Fingerprint(prof), RTF: 1.4, Supported: false, MeasuredAt: time.Now(),
+		Fingerprint: Fingerprint(prof, tts.ModelMelo), Model: "melo", RTF: 1.4, Supported: false, MeasuredAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveBench(context.Background(), prefs, BenchRecord{
+		Fingerprint: Fingerprint(prof, tts.ModelMatcha), Model: "matcha", RTF: 1.1, Supported: false, MeasuredAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +106,8 @@ func TestTTSService_PersistedTooSlowRestored(t *testing.T) {
 		LibDir: t.TempDir(), Dir: t.TempDir(), Support: supported(), Sink: sink, Prefs: prefs, Profile: prof,
 	})
 	defer s.Close()
-	if st := sink.get(); st.State != StateUnsupported || st.Reason != ReasonTooSlow {
-		t.Fatalf("应恢复为 unsupported(too_slow)，got %+v", st)
+	if st := sink.get(); st.State != StateUnsupported || st.Reason != ReasonTooSlow || st.Model != TTSModelNone {
+		t.Fatalf("应恢复为 unsupported(too_slow) 且模型为 none，got %+v", st)
 	}
 	if started, err := s.Install(); started || err == nil {
 		t.Errorf("过慢机器不应再下载 365MB，started=%v err=%v", started, err)
@@ -111,11 +118,11 @@ func TestTTSService_PersistedTooSlowRestored(t *testing.T) {
 func TestTTSService_StaleFingerprintIgnored(t *testing.T) {
 	prefs := &memPrefs{}
 	if err := SaveBench(context.Background(), prefs, BenchRecord{
-		Fingerprint: "darwin/arm64;cores=1;ram_gib=1", RTF: 9, Supported: false,
+		Fingerprint: "darwin/arm64;cores=1;ram_gib=1;model=melo", Model: "melo", RTF: 9, Supported: false,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !AudioSupport(hostProf()).TTS.Supported {
+	if !AudioSupport(hostProf(), "").TTS.Supported {
 		t.Skip("当前平台不支持 TTS")
 	}
 	sink := &recSink{}

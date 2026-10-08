@@ -118,13 +118,16 @@ func warnLegacyAudioKeys(userData []byte) {
 			slog.Warn("config: inference.tts 配置键已失效，被忽略（Edge TTS 已删除，资产改由内置清单管理）", "key", k)
 		}
 	}
+	if _, ok := probe.Inference.TTS["kokoro_sid"]; ok {
+		slog.Warn("config: inference.tts.kokoro_sid 已失效，被忽略（Kokoro 已被 MeloTTS/Matcha 取代，二者为单说话人；模型用 inference.tts.model 选择，ADR-0110）", "key", "kokoro_sid")
+	}
 }
 
 // migrateLegacyTTSProvider 把已删除的 provider="edge" 迁移为 "sherpa" 并 Warn。
 // 为什么不是直接报错：旧默认 config.toml 就是 provider="edge"，升级即报错等于让全部老用户起不来。
 func migrateLegacyTTSProvider(tts *TTSConfig) {
 	if tts.Provider == "edge" {
-		slog.Warn("config: inference.tts.provider=\"edge\" 已删除（ADR-0107），迁移为 \"sherpa\"（本地 Kokoro，按需下载）")
+		slog.Warn("config: inference.tts.provider=\"edge\" 已删除（ADR-0107），迁移为 \"sherpa\"（本地 MeloTTS/Matcha，按需下载）")
 		tts.Provider = "sherpa"
 	}
 }
@@ -175,8 +178,13 @@ func validateAudioConfig(inf *InferenceConfig) error {
 		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
 			"config: inference.tts.engine must be \"auto\", \"server\" or \"system\", got %q", inf.TTS.Engine))
 	}
-	if inf.TTS.KokoroSID < 0 {
-		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: inference.tts.kokoro_sid must be >= 0, got %d", inf.TTS.KokoroSID))
+	switch inf.TTS.Model {
+	case "":
+		inf.TTS.Model = "auto"
+	case "auto", "melo", "matcha":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+			"config: inference.tts.model must be \"auto\", \"melo\" or \"matcha\", got %q", inf.TTS.Model))
 	}
 	if inf.TTS.Speed <= 0 {
 		inf.TTS.Speed = 1.0

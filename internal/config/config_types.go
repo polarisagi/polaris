@@ -79,7 +79,7 @@ type InferenceConfig struct {
 // AudioConfig 是 STT/TTS 共用的运行时生命周期配置（ADR-0107）。
 type AudioConfig struct {
 	// IdleUnloadMinutes 引擎最后一次使用后空闲多久卸载以释放内存；0 = 不卸载。
-	// 为什么默认卸载：桌面场景与用户其他应用共享内存，STT≈420MB + Kokoro≈600MB 不应常驻；
+	// 为什么默认卸载：桌面场景与用户其他应用共享内存，STT≈420MB + MeloTTS≈530MB 不应常驻；
 	// 2GB VPS 上更是核心路径之外的纯开销。下次请求自动重新加载。
 	IdleUnloadMinutes int `toml:"idle_unload_minutes"`
 
@@ -115,7 +115,7 @@ type STTConfig struct {
 }
 
 // TTSConfig TTS 引擎配置。服务端 provider 两种：
-//   - ""/"sherpa" 本地 sherpa-onnx Kokoro v1.1 fp32（离线，需 4GB/4 核；按需下载）
+//   - ""/"sherpa" 本地 sherpa-onnx MeloTTS / Matcha（离线；按硬件三档选模型，按需下载，ADR-0110）
 //   - "http"      外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理服务，高级可选）
 //
 // Edge TTS 已于 ADR-0107 删除；旧配置 provider="edge" 加载时迁移为 "sherpa" 并 Warn。
@@ -133,9 +133,11 @@ type TTSConfig struct {
 	// SherpaVersion 与 STT 共用同一 sherpa-onnx 版本（共享动态库）。
 	// 留空时自动复用 inference.stt.sherpa_version。
 	SherpaVersion string `toml:"sherpa_version"`
-	// KokoroSID Kokoro v1.1 说话人编号（voices.bin 索引）。默认 3 = zf_001（中文女声，用户试听选定）；
-	// 0 = af_maple（美音）。
-	KokoroSID int `toml:"kokoro_sid"`
+	// Model 服务端 TTS 模型："auto"（默认，按硬件三档：B 档 Matcha / C 档 MeloTTS）|
+	// "melo" | "matcha"。显式指定可越档（受空闲内存门槛与基准门控约束），但不能解锁 A 档
+	// （内存 <1800MB 或 <2 核：服务端语音整体关闭）。两个模型均为单说话人，无说话人选项
+	// （原 kokoro_sid 已随 Kokoro 删除，ADR-0110）。
+	Model string `toml:"model"`
 	// Speed 语速倍率，默认 1.0。
 	Speed float64 `toml:"speed"`
 

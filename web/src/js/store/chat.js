@@ -330,7 +330,7 @@ Alpine.store('chat', {
     return voices.find((v) => v.localService && v.lang && v.lang.startsWith('zh')) || null
   },
 
-  // 决定朗读后端：'server'（Kokoro）| 'system'（speechSynthesis）| null（不可用，已提示）。
+  // 决定朗读后端：'server'（MeloTTS/Matcha）| 'system'（speechSynthesis）| null（不可用，已提示）。
   // 读 Alpine.store('audio')，下载中直接退回系统语音且不弹任何下载 toast。
   async _resolveTTSBackend() {
     const audio = Alpine.store('audio')
@@ -544,7 +544,7 @@ Alpine.store('chat', {
     }
 
     try {
-      // 先决定朗读后端：Kokoro 服务端未就绪/不支持时按设置退回系统本地中文语音。
+      // 先决定朗读后端：服务端（MeloTTS/Matcha）未就绪/不支持时按设置退回系统本地中文语音。
       const backend = await this._resolveTTSBackend();
       if (backend === null || this._audioPlayer !== audio) {
         if (this._audioPlayer === audio) { this._audioPlayer = null; this.playingMsgIdx = null; }

@@ -24,7 +24,7 @@ const (
 
 // Provider 是 TTS 引擎的统一抽象接口。
 // 两种实现：
-//   - *Engine       —— Sherpa-ONNX 本地离线推理（Kokoro v1.1 fp32），无网络依赖，audio/wav
+//   - *Engine       —— Sherpa-ONNX 本地离线推理（MeloTTS / Matcha，ADR-0110），无网络依赖，audio/wav
 //   - *HTTPProvider —— 外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理服务，高级可选），取响应 Content-Type
 //
 // Edge TTS 已于 ADR-0107 删除。Generate 返回的 Audio.MIME 必须与 Data 的真实编码一致。

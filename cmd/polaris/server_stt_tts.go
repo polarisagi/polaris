@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -76,7 +75,7 @@ func (a *audioRuntime) Close() {
 func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 	s := in.Server
 	profile := audiorun.HostProfile(in.TotalRAMBytes)
-	support := audiorun.AudioSupport(profile)
+	support := audiorun.AudioSupport(profile, in.Cfg.TTS.Model)
 	idle := time.Duration(in.Cfg.Audio.IdleUnloadMinutes) * time.Minute
 	modelsDir := in.ModelsDir
 	if modelsDir == "" {
@@ -88,21 +87,11 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 	if in.TierParams != nil && in.TierParams.STTNumThreads > 0 {
 		sttThreads = in.TierParams.STTNumThreads
 	}
-	// 本包已有同名 min（float64 版）遮蔽内建，这里手写钳位。
-	ttsThreads := runtime.NumCPU()
-	if ttsThreads > 4 {
-		ttsThreads = 4
-	}
-	if ttsThreads < 1 {
-		ttsThreads = 1
-	}
-	if in.TierParams != nil && in.TierParams.TTSNumThreads > 0 {
-		ttsThreads = in.TierParams.TTSNumThreads
-	}
 
 	slog.Info("audio: support judged from stable hardware profile",
 		"total_ram_mb", in.TotalRAMBytes/(1024*1024), "cores", profile.LogicalCores, "arch", profile.GOARCH,
-		"stt_supported", support.STT.Supported, "tts_supported", support.TTS.Supported,
+		"tier", support.Tier, "stt_supported", support.STT.Supported, "tts_supported", support.TTS.Supported,
+		"tts_model", support.TTSModel, "tts_note", support.TTSNote,
 		"idle_unload", idle.String())
 
 	rt := &audioRuntime{autoInstall: in.AutoInstall}
@@ -120,7 +109,7 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 	})
 	s.SetSTTProvider(&sttAdapter{inner: rt.stt})
 
-	initTTS(ctx, in, rt, profile, support.TTS, idle, ttsThreads, sttDir)
+	initTTS(ctx, in, rt, profile, support, idle, sttDir)
 
 	s.SetTTSEnginePref(in.Cfg.TTS.Engine)
 	s.SetAudioInstaller(rt)
@@ -138,7 +127,7 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 
 // initTTS 按 provider 装配 TTS：http sidecar 立即就绪；sherpa 走按需安装 + 懒加载 + 首次基准。
 func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audiorun.HardwareProfile,
-	support audiorun.Capability, idle time.Duration, threads int, libDir string) {
+	support audiorun.Support, idle time.Duration, libDir string) {
 	s := in.Server
 	cfg := in.Cfg.TTS
 
@@ -159,17 +148,18 @@ func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audior
 		modelsDir = filepath.Join(in.DataDir, "models")
 	}
 
+	model, _ := support.Model() // A 档/不支持平台无模型：Support.TTS 不支持，服务只发布 unsupported 状态
 	rt.tts = audiorun.NewTTSService(ctx, audiorun.TTSOptions{
 		LibDir:        libDir,
-		Dir:           filepath.Join(modelsDir, "kokoro"),
+		Dir:           filepath.Join(modelsDir, "tts"),
 		SherpaVersion: cfg.SherpaVersion,
-		SID:           int32(cfg.KokoroSID),
+		Model:         model,
 		Speed:         float32(cfg.Speed),
-		NumThreads:    threads,
+		LegacyDir:     filepath.Join(modelsDir, "kokoro"), // ADR-0110：新资产校验通过后清理
 		IdleUnload:    idle,
 		HTTPClient:    in.HTTPClient,
 		FreeMemMB:     probe.ProbeAvailableMemoryMB,
-		Support:       support,
+		Support:       support.TTS,
 		Sink:          audioSink{publish: s.PublishTTSStatus},
 		Prefs:         in.Prefs,
 		Profile:       profile,
@@ -188,7 +178,7 @@ func (k audioSink) Publish(st audiorun.Status) { k.publish(toChatStatus(st)) }
 // toChatStatus 做字段映射。状态字符串两侧字面一致，由 server_stt_tts_test.go 守住不漂移。
 func toChatStatus(st audiorun.Status) chat.AudioAssetStatus {
 	out := chat.AudioAssetStatus{
-		State: st.State, Detail: st.Detail, Error: st.Error, Reason: st.Reason,
+		State: st.State, Detail: st.Detail, Error: st.Error, Reason: st.Reason, Model: st.Model,
 		InstallSizeBytes: st.InstallSizeBytes, Loaded: st.Loaded,
 		Origin: st.Origin,
 	}

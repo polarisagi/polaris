@@ -323,7 +323,7 @@ generate-manifest:
 	env GOOS= GOARCH= $(GO) run tools/generate_manifest.go
 
 # 音频外部坐标契约（依赖外网，不进默认 CI / check-all）：
-# 遍历 internal/llm/audioassets 清单（5 个平台 sherpa 库 + SenseVoice/标点/Kokoro 三个模型），
+# 遍历 internal/llm/audioassets 清单（5 个平台 sherpa 库 + SenseVoice/标点/MeloTTS/Matcha/Matcha 声码器五个模型类资产），
 # 对每项做 HEAD 断言 200 且 Content-Length 与清单字节数一致。改动音频资产清单后必须跑。
 audio-nettest:
 	$(GO) test -tags nettest -count=1 -v -run 'TestNet_' ./internal/llm/audioassets/

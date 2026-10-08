@@ -47,7 +47,7 @@ type loadCall struct {
 
 // Slot 持有一个按需加载、空闲卸载的引擎。
 //
-// 为什么需要它：STT≈420MB + Kokoro≈600MB 的 RSS 不应在桌面端与用户其他应用抢内存、
+// 为什么需要它：STT≈420MB + MeloTTS≈530MB 的 RSS 不应在桌面端与用户其他应用抢内存、
 // 也不应占用 2GB VPS 的核心预算，所以引擎首次使用才加载、空闲 N 分钟后释放（ADR-0107）。
 //
 // 并发契约：Acquire 返回的引擎在 release 被调用前不会被卸载（inflight 计数），

@@ -126,8 +126,9 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.TTSPrefetchCount = 1
 	}
 
-	// TTS 线程数不随内存档位走，只取决于逻辑核数：min(4, 核数)（audio-v2-spec §2.3）。
-	// Kokoro fp32 实测 RTF 0.42@4 线程 / 0.59@2 线程，核数充足时 4 线程是性价比拐点；
-	// 内存档位高并不代表核多（16GB 的 2 核云主机开 4 线程只会互相抢核）。
+	// TTS 线程数不随内存档位走，只取决于逻辑核数（内存档位高并不代表核多，
+	// 16GB 的 2 核云主机开 4 线程只会互相抢核）。此处的 min(4, 核) 即 MeloTTS 的线程数
+	// （实测 RTF 0.79/0.42/0.23 @1/2/4 线程）；Matcha 为 min(2, 核)。服务端实际线程由
+	// audiorun.ThreadsFor 按当前模型决定（模型可能在运行期降级），本字段仅作诊断展示（ADR-0110）。
 	p.TTSNumThreads = min(4, max(1, ac.Probe.CPUCores))
 }

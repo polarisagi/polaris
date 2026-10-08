@@ -14,7 +14,7 @@ import (
 
 // SherpaABIVersion 是 stt/tts 两包手写 FFI 结构体偏移所对应的 sherpa-onnx 版本。
 // 偏移按此版本 c-api.h 经 clang offsetof 实测（识别器配置 608B、结果结构 json=40/lang=48/
-// emotion=56/event=64、标点配置 24B、Kokoro TTS 配置 448B）。
+// emotion=56/event=64、标点配置 24B、TTS 配置 448B，vits/matcha 子配置偏移见 tts/sherpa.go）。
 // 为什么钉死在编译期常量：偏移与库版本强耦合，用户改 sherpa_version 即可让偏移失配并
 // 造成内存破坏，而该风险在配置层不可见。升级版本必须重测全部偏移、重算清单 sha256 后
 // 同步改本常量。
@@ -33,8 +33,10 @@ const (
 	KindSTTModel Kind = "stt_model"
 	// KindPunctModel 标点模型：只取 model(.int8).onnx 与 tokens.json。
 	KindPunctModel Kind = "punct_model"
-	// KindTTSModel Kokoro 模型：保留归档内完整目录结构（剥掉顶层目录）。
+	// KindTTSModel TTS 模型归档（Melo/Matcha）：保留归档内完整目录结构（剥掉顶层目录）。
 	KindTTSModel Kind = "tts_model"
+	// KindTTSFile 单文件 TTS 资产（Matcha 声码器）：非归档，原样落盘并做 sha256 + 字节数校验。
+	KindTTSFile Kind = "tts_file"
 )
 
 // ProgressFunc 汇报某个资产的下载进度。total 为 0 表示总量未知。
@@ -108,25 +110,45 @@ func PunctModel() Asset {
 	}
 }
 
-// KokoroModel 返回 Kokoro v1.1 fp32 归档。
-// 只保留 fp32：int8 在无 VNNI 的 x86 上 RTF 1.4–1.8（慢于实时），fp32 全平台单一资产、无 ISA 分支。
-func KokoroModel() Asset {
+// MeloModel 返回 MeloTTS zh_en fp32 归档（ADR-0110 标准档，44.1kHz）。
+// 归档内 model.int8.onnx 仅为 133 字节占位文件，不使用；只用 fp32 的 model.onnx。
+func MeloModel() Asset {
 	return Asset{
-		Name: "Kokoro v1.1 语音合成模型", Kind: KindTTSModel, Tag: "tts-models",
-		File:   "kokoro-multi-lang-v1_1.tar.bz2",
-		SHA256: "a3f4c73d043860e3fd2e5b06f36795eb81de0fc8e8de6df703245edddd87dbad",
-		Size:   364816464,
+		Name: "MeloTTS 语音合成模型", Kind: KindTTSModel, Tag: "tts-models",
+		File:   "vits-melo-tts-zh_en.tar.bz2",
+		SHA256: "e58351ed7149f290a54534538badd4077cdbe6fddc964b24d0bee870415d1514",
+		Size:   167006755,
 	}
 }
 
-// All 返回清单全部资产（5 个平台库 + 3 个模型），供 nettest 与完整性测试遍历。
+// MatchaModel 返回 Matcha zh-en 声学模型归档（ADR-0110 轻量档），必须配 MatchaVocoder。
+func MatchaModel() Asset {
+	return Asset{
+		Name: "Matcha 语音合成模型", Kind: KindTTSModel, Tag: "tts-models",
+		File:   "matcha-icefall-zh-en.tar.bz2",
+		SHA256: "271b804af570400d3bcdcb53bf6e53cc9f75180ee763b9f13eb5eaf2b0d086ef",
+		Size:   79033838,
+	}
+}
+
+// MatchaVocoder 返回 Matcha 配套声码器 vocos-16khz-univ（单文件，非归档）。
+func MatchaVocoder() Asset {
+	return Asset{
+		Name: "Matcha 声码器", Kind: KindTTSFile, Tag: "vocoder-models",
+		File:   "vocos-16khz-univ.onnx",
+		SHA256: "b599142a1fb8ff03de3e84ac35ff537c619e56f4267a6fe894851a42844acf9e",
+		Size:   53882848,
+	}
+}
+
+// All 返回清单全部资产（5 个平台库 + 5 个模型类资产），供 nettest 与完整性测试遍历。
 func All() []Asset {
-	out := make([]Asset, 0, 8)
+	out := make([]Asset, 0, 10)
 	m := libs()
 	for _, p := range LibPlatforms() {
 		out = append(out, m[p])
 	}
-	return append(out, STTModel(), PunctModel(), KokoroModel())
+	return append(out, STTModel(), PunctModel(), MeloModel(), MatchaModel(), MatchaVocoder())
 }
 
 // Validate 校验清单自身的格式（sha256 为 64 位小写十六进制、字节数为正、文件名非空）。
