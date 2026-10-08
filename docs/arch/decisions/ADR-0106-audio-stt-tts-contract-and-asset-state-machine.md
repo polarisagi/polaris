@@ -16,7 +16,7 @@ TTS（Edge）：T1 路径 `readspeaker` 应为 `readaloud`（400）；T2 缺 `Se
 ## 决策
 
 1. **外部资产坐标必须有可执行校验**：`make audio-nettest`（`-tags nettest`）对全平台库 URL + defaults.toml 3 个 STT 模型 URL 做 HEAD 断言 200，并对 Edge 做真实合成（MIME=audio/mpeg 且 >1000 字节）。依赖外网，不进默认 CI；改动音频资产坐标或 Edge 协议必须手动跑。
-2. **FFI 偏移钉死到编译期常量** `stt.SherpaABIVersion = "1.13.2"`：`sherpa_version` 非空且与之不同 → STT/TTS 资产初始化报错（不下载不加载）。升级版本必须重测全部偏移（识别器 608B、结果、标点 24B、Kokoro 448B）。
+2. **FFI 偏移钉死到编译期常量** `stt.SherpaABIVersion`（初稿 "1.13.2"，2026-10-08 起 "1.13.8"，见修订记录）：`sherpa_version` 非空且与之不同 → STT/TTS 资产初始化报错（不下载不加载）。升级版本必须重测全部偏移（识别器 608B、结果、标点 24B、Kokoro 448B）。
 3. **库平台名表驱动，统一 `-lib` 变体**（darwin/arm64 `osx-arm64-shared-lib`、darwin/amd64 `osx-x64-shared-lib`、linux/amd64 `linux-x64-shared-lib`、linux/arm64 `linux-aarch64-shared-cpu-lib`、windows/amd64 `win-x64-shared-MT-Release-lib`）。
 4. **默认 int8 全档**：`model_precision = "int8"|"fp32"`，fp32 仅显式 opt-in 且 FeatureHQSTT 开启；`use_itn` 默认 false。STT 与标点 mapper 分开，`model.int8.onnx`→`model.onnx`；EnsureAssets 解压后校验必需文件，缺失报带归档名的错误。
 5. **消除静默兜底**：`NewEngine` 库未加载返回 `CodeUnimplemented` 错误；`Transcribe` 未初始化返回错误；删除 Mock 假文本；`tts_edge` 工具失败返回错误；日志不再出现 "mock engine"。
@@ -63,3 +63,4 @@ TTS（Edge）：T1 路径 `readspeaker` 应为 `readaloud`（400）；T2 缺 `Se
 | 日期 | 变更 |
 |------|------|
 | 2026-10-01 | 初稿 |
+| 2026-10-08 | 复核：sherpa-onnx 1.13.2→1.13.8。理由：1.13.2 捆绑的 ORT 1.24.4 在 macOS arm64 上比 1.13.8 的 ORT 1.28.2 慢约 3 倍（决定性实验：同一份 Go FFI 代码仅换动态库，SenseVoice RTF 1 线程 0.138→0.040、4 线程 0.040→0.0143；1.13.2 的 c-api 配新 ORT 即 0.040/0.022）。已按 1.13.8 c-api.h 对 STT/TTS/标点全部手写偏移与 sizeof 做 clang offsetof 复测（arm64 + x86_64 `_Static_assert`），与 1.13.2 逐项一致，偏移未改；五平台库清单（文件名/size/sha256）更新，新增 `sherpa-onnx.version` 标记使旧版本用户自动迁移。详见 ADR-0110 修订三 |

@@ -116,7 +116,7 @@ func NewEngine(modelDir, punctDir, language string, numThreads int, useITN bool)
 		numThreads = 1
 	}
 
-	// 动态构造 SherpaOnnxOfflineRecognizerConfig (v1.13.2 布局)
+	// 动态构造 SherpaOnnxOfflineRecognizerConfig (v1.13.8 布局；已按 1.13.8 c-api.h 复测，与 1.13.2 逐项一致)
 	const (
 		ConfigSize                    = 608
 		OffsetFeatSampleRate          = 0
@@ -272,7 +272,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 		return Result{}, nil
 	}
 
-	// 提取 Lang / Emotion / Event。偏移取自 sherpa-onnx v1.13.2 c-api.h 经 clang
+	// 提取 Lang / Emotion / Event。偏移取自 sherpa-onnx v1.13.2/v1.13.8 c-api.h（两版一致） 经 clang
 	// offsetof 实测：json=40, lang=48, emotion=56, event=64。
 	// 旧代码按 emotion@40 / event@48 读取，实际装进去的是整段 JSON 与语言标签。
 	const (

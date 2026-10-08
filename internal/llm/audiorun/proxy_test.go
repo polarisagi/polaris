@@ -13,13 +13,13 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/tts"
 )
 
-// 预测值边界（系数 4.35，放行线 sttRTF≈0.22989）：0.2298×4.35=0.9996 放行，0.2299×4.35=1.0001 判慢（ADR-0110 修订三）。
+// 预测值边界（系数 11.2，放行线 sttRTF≈0.08929）：0.0892×11.2=0.9990 放行，0.0893×11.2=1.0002 判慢（ADR-0110 修订三）。
 func TestDecideProxy_Boundary(t *testing.T) {
 	cases := []struct {
 		sttRTF    float64
 		supported bool
 	}{
-		{0.0391, true}, {0.2298, true}, {0.2299, false}, {0.5, false},
+		{0.0391, true}, {0.0892, true}, {0.0893, false}, {0.5, false},
 	}
 	for _, c := range cases {
 		rec, ok := decideProxy(c.sttRTF, false)
@@ -127,7 +127,7 @@ func TestProxy_TooSlowSkipsDownload(t *testing.T) {
 
 // 代理放行：继续下载（这里下载被拒绝，但请求已发出）。
 func TestProxy_PassProceedsToDownload(t *testing.T) {
-	s, nc, _ := proxySvc(t, func(context.Context, int) (float64, bool) { return 0.2, true }, 0, &memPrefs{})
+	s, nc, _ := proxySvc(t, func(context.Context, int) (float64, bool) { return 0.05, true }, 0, &memPrefs{})
 	_, _ = s.InstallBlocking(context.Background())
 	if nc.n.Load() == 0 || s.slow.Load() != nil {
 		t.Errorf("放行应继续下载且不置 slow，requests=%d slow=%v", nc.n.Load(), s.slow.Load())

@@ -69,6 +69,12 @@ func TestMissingAssets_AndInstalled(t *testing.T) {
 		t.Error("缺标点模型不应判为已安装")
 	}
 	mustWrite("punct_model/model.onnx")
+	if Installed(dir) {
+		t.Error("库缺版本标记（旧版本遗留）不应判为已安装")
+	}
+	if err := WriteLibMarker(dir); err != nil {
+		t.Fatal(err)
+	}
 	if !Installed(dir) {
 		t.Errorf("三项齐备应判为已安装，missing=%v", MissingAssets(dir))
 	}
@@ -261,5 +267,39 @@ func TestParseCString_Zero(t *testing.T) {
 	s := parseCString(0)
 	if s != "" {
 		t.Errorf("ptr=0 should return empty string, got %q", s)
+	}
+}
+
+// 升级迁移：版本标记缺失或不符的库视为缺失（触发重新下载），一致才算当前；旧版带版本号的 ORT 被清理。
+func TestLibCurrent_MarkerAndStaleORT(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, LibName()), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if LibCurrent(dir) {
+		t.Error("无标记不应视为当前版本")
+	}
+	if err := os.WriteFile(filepath.Join(dir, libMarkerName), []byte("1.13.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if LibCurrent(dir) {
+		t.Error("标记为旧版本不应视为当前版本")
+	}
+	if err := WriteLibMarker(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !LibCurrent(dir) {
+		t.Error("标记一致应视为当前版本")
+	}
+	for _, n := range []string{"libonnxruntime.1.24.4.dylib", "libonnxruntime.so.1", "libonnxruntime.dylib", "libonnxruntime.so", LibName()} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removeStaleORT(dir)
+	for n, want := range map[string]bool{"libonnxruntime.1.24.4.dylib": false, "libonnxruntime.so.1": false, "libonnxruntime.dylib": true, "libonnxruntime.so": true, LibName(): true} {
+		if _, err := os.Stat(filepath.Join(dir, n)); (err == nil) != want {
+			t.Errorf("%s 存在=%v, want %v", n, err == nil, want)
+		}
 	}
 }

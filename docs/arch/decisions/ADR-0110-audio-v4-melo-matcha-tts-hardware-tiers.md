@@ -83,7 +83,9 @@ B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音�
 
 **测量**：10s、16kHz、幅度 0.01、固定种子噪声（不依赖资产文件）；1 次预热 + 3 次计时取最小；线程数 = Melo 线程数 `min(4, 逻辑核)`；用临时 STT 引擎，测完释放，不扰动 Slot 常驻引擎。
 
-**标定（Go 管线，2026-10-08，取代下方作废的 Python 标定）**：系数必须来自 Go 管线（生产同一份 sherpa-onnx 1.13.2 + ORT 1.24.4）同一时刻的测量。方法：Apple M1（8 核/16GB），`proxy_calibrate_integration_test.go` 对 t=1/2/4 交替各跑 3 轮 Go `MeasureSTTRTF`（SenseVoice，10s 固定噪声，1 预热 + 3 计时取最小）与 Go Melo 真实基准（`RunBench`：ADR-0108 基准句，预热 1 + 计时 2 取最小），ratio = meloRTF / sttRTF：
+**升级后标定（sherpa-onnx 1.13.8 + ORT 1.28.2，2026-10-08，现行）**：见下方「升级到 sherpa-onnx 1.13.8」一节，系数 11.2。
+
+**1.13.2 时代的标定（仅适用于 sherpa-onnx 1.13.2 + ORT 1.24.4，已被上一条取代；保留作历史）**：系数必须来自 Go 管线同一时刻的测量。方法：Apple M1（8 核/16GB），`proxy_calibrate_integration_test.go` 对 t=1/2/4 交替各跑 3 轮 Go `MeasureSTTRTF`（SenseVoice，10s 固定噪声，1 预热 + 3 计时取最小）与 Go Melo 真实基准（`RunBench`：ADR-0108 基准句，预热 1 + 计时 2 取最小），ratio = meloRTF / sttRTF：
 
 | 线程 | 轮次 | sttRTF | meloRTF | ratio |
 |---|---|---|---|---|
@@ -97,7 +99,7 @@ B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音�
 | 4 | 2 | 0.0786 | 0.3804 | 4.84 |
 | 4 | 3 | 0.0779 | 0.3959 | 5.08 |
 
-全部轮次 ratio 最小值 4.84，**系数 = 4.84 × 0.9 ≈ 4.35**（低估 Melo 耗时：只会多下载，不会误杀）。
+全部轮次 ratio 最小值 4.84，系数 = 4.84 × 0.9 ≈ 4.35（仅 1.13.2）。
 
 <details><summary>已作废：Opus 的 Python 标定（系数 13）</summary>
 
@@ -107,7 +109,7 @@ Python 管线（sherpa_onnx 1.13.8），与 Go 管线不可比，**已作废**�
 
 **为什么两条管线不可比（Go STT 慢 3 倍的根因）**：同机同输入背靠背对比，Python 1.13.8 的 SenseVoice RTF 1/2/4 线程最优 0.0385/0.0231/0.0232，Go 管线 0.136/0.075/0.076。逐项排除：FFI 的 `num_threads`/`debug`/`provider` 偏移正确（线程数确实生效，RTF 随线程下降）；计时只含 Transcribe，标点模型对噪声输入不触发（输出为空）；噪声分布（均匀/高斯）与是否加载标点模型无差别；每次计时不重建 recognizer。决定性实验：同一份 Go FFI 代码改加载 pip 的 1.13.8 动态库，RTF 变为 0.040/0.0143，与 Python 完全一致；仅把 1.13.2 的 c-api 配上 pip 自带的新 ORT（1.28.2），1 线程即达 0.040、4 线程 0.022。**结论：慢的是 1.13.2 发行包捆绑的 ORT 1.24.4 在 macOS arm64 上的推理性能，不是 Go 路径缺陷**；Melo 同样受影响（Go 4 线程 ≈0.40 vs Python 0.233）。升级 sherpa/ORT 会牵动 ABI 钉死（偏移需重新 clang 实测）与五个平台的清单 sha256，不在本修订范围，列为后续事项（见重新评估触发条件）。
 
-**公式**：`predicted = sttRTF × 4.35`；`predicted > 1.0` 判代理过慢（对应 sttRTF > 0.2299）。1.0 比真实基准的 0.8 宽松，因为代理有误差，边缘机型交给真实基准定夺。
+**公式**：`predicted = sttRTF × 11.2`（升级后；1.13.2 时代为 4.35）；`predicted > 1.0` 判代理过慢（对应 sttRTF > 0.0893）。1.0 比真实基准的 0.8 宽松，因为代理有误差，边缘机型交给真实基准定夺。
 
 **流程**：
 - 代理过慢：不下载 Melo，TTS 置 `unsupported/too_slow`，落库 `audio.tts_bench.melo`（`method:"proxy"`、`stt_rtf`、`predicted`，`rtf` 存 predicted），后台预置器尊重该结论，重启后同指纹直接生效。
@@ -121,7 +123,57 @@ Python 管线（sherpa_onnx 1.13.8），与 Go 管线不可比，**已作废**�
 
 **可观测（HE-1）**：slog 记录 stt_rtf / predicted / contended / 回收；计数器 `polaris.audio.tts_proxy_bench_total`、`tts_proxy_too_slow_total`、`tts_proxy_skipped_total`、`tts_reclaim_total`。
 
-**M1 自检**：新系数下 M1 实测 sttRTF 1/2/4 线程 0.1435/0.0743/0.0847，predicted 0.62/0.32/0.37，2 与 4 线程均放行（M1 真实 Go Melo：2 线程 0.54–0.79、4 线程 0.38–0.41，其中 2 线程贴近 0.8 线，弱核机器会由真实基准定论）。
+**M1 自检**（升级后系数 11.2）：M1 实测 sttRTF 1/2/4 线程 0.0389/0.0220/0.0137，predicted 0.44/0.25/0.15，均放行。
+
+### 升级到 sherpa-onnx 1.13.8（2026-10-08，ADR-0106 复核）
+
+**理由**：1.13.2 发行包捆绑的 ORT 1.24.4 在 macOS arm64 上约慢 3 倍（上文决定性实验：同一份 Go FFI 代码换 1.13.8 的库后 RTF 与 Python 一致），语音输入与 Melo 朗读都受影响。
+
+**选版**：k2-fsa/sherpa-onnx 最新稳定版 v1.13.8（2026-09-10）；五个平台均有与现清单同类型的 `-lib` 归档，sha256 逐个下载计算并与 GitHub API digest 核对一致，捆绑 ORT 1.28.2（macOS 最低系统 arm64 11.0、x64 10.15；1.13.2 包要求 15.5，限制随升级消失，`dlopenHint` 已更新）。
+
+| 平台 | 归档 | 字节 | 备注 |
+|---|---|---|---|
+| darwin/arm64 | osx-arm64-shared-lib | 8773198 | 已实跑验证 |
+| darwin/amd64 | osx-x64-shared-lib | 10014197 | 未实跑（仅 ABI 静态断言） |
+| linux/amd64 | linux-x64-shared-lib | 9816899 | 未实跑；ELF soname 已核（GLIBC ≤2.17） |
+| linux/arm64 | linux-aarch64-shared-cpu-lib | 12595068 | 未实跑；GLIBC ≤2.17 |
+| windows/amd64 | win-x64-shared-MT-Release-lib | 8032957 | 未实跑 |
+
+**ABI 重测**：用 1.13.8 的 `c-api.h`，clang（arm64 与 x86_64 各一遍）对所有手写偏移与 sizeof 做 `_Static_assert` 与 1.13.2 逐项比对，**全部一致，手写偏移无需修改**：识别器配置 608B（tokens 104、num_threads 112、debug 116、provider 120、sense_voice.model/language/use_itn 160/168/176、decoding_method 528、feat 8B）、识别结果（text 0、json 40、lang 48、emotion 56、event 64）、标点配置 24B（0/8/12/16）、TTS 配置 448B / 模型配置 416B（vits 0–48、num_threads 56、debug 60、provider 64、rule_fsts 416、max_num_sentences 424、rule_fars 432、silence_scale 440）。所用 16 个 C 函数原型两版一致。变化的仅有本项目未使用的 VAD/说话人分割/降噪配置与新增的 Diacritization 配置。代码注释已写明“已按 1.13.8 复测”。`SherpaABIVersion`、`defaults.toml sherpa_version`、清单五平台文件名/size/sha256 同步更新。
+
+**旧版迁移**：库文件存在不等于版本正确。`libDir` 下新增 `sherpa-onnx.version` 标记，`EnsureLib` 与 `MissingAssets` 以“库存在且标记等于 `SherpaABIVersion`”判定已安装；旧版本用户的库被视为缺失，由预置器（或手动安装）自动重新下载（约 9MB）覆盖，并清理遗留的 `libonnxruntime.1.24.4.dylib`（26MB）。已在本机用 1.13.2 目录实测迁移成功。
+
+**同进程 ORT 冲突排查（ADR-0109 向量化引擎）**：向量化引擎独立加载自己的官方 ORT 1.23.2（`embedassets`），语音加载 sherpa 捆绑的 ORT 1.28.2，同一进程有两份不同版本的 ORT。结论：
+- **macOS**：两级命名空间，各库只绑定自己的依赖；两份文件的 install name 不同（`libonnxruntime.1.23.2.dylib` vs `libonnxruntime.dylib`）。`TestCoLoadORT` 实测先加载 sherpa 再加载向量化、以及相反顺序，转写均正常、`OpenORT` 均成功。
+- **Linux**：此前两边都用 `RTLD_GLOBAL` 加载。ELF 的符号解析先查全局作用域，先加载的那份 ORT 的 `OrtGetApiBase` 会被后加载的另一方绑定，版本不符时 `OrtGetApi` 返回 NULL 而崩溃（1.24.4 对 1.23.2 时已潜在存在，1.28.2 对 1.23.2 差距更大）。**最小修复**：`stt.Dlopen` 与 `embedonnx.dlopen` 改为 `RTLD_LOCAL`；purego 取符号走 `dlsym(handle)`，不依赖全局作用域。soname 层面也已核对：sherpa 的 ORT soname 为 `libonnxruntime.so`，官方 1.23.2 为 `libonnxruntime.so.1`，不会被 glibc 按 soname 去重。**未在 Linux 实跑**。
+- **Windows**：加载器按基名匹配已加载模块，向量化若先加载 `onnxruntime.dll`，sherpa 的 c-api.dll 按裸名导入时会绑到它。**最小修复**：向量化的 ORT 落地文件名改为 `onnxruntime_embed.dll`（mapper 把官方包的 `onnxruntime.dll` 写到该名，已下载过旧名的 Windows 用户会重新下载一次）。**未在 Windows 实跑**。
+- 两者没有合并为同一份 ORT：ADR-0109 明确要求语音与检索版本独立，本次只做隔离，不重构向量化引擎。
+
+**升级前后性能（Go 管线，Apple M1，同一机器）**：
+
+| 线程 | 升级前 sttRTF（1.13.2） | 升级后 sttRTF（1.13.8） | 升级前 meloRTF | 升级后 meloRTF |
+|---|---|---|---|---|
+| 1 | 0.144–0.206 | 0.0389–0.0390 | 0.877–1.174 | 0.761–0.788 |
+| 2 | 0.110–0.134 | 0.0220 | 0.543–0.786 | 0.404–0.418 |
+| 4 | 0.078–0.080 | 0.0137–0.0183 | 0.380–0.412 | 0.228–0.236 |
+
+e2e：Melo 合成 8.54s 音频耗时 1.96s（RTF 0.229，升级前 0.428）；SenseVoice 对 `4-melotts.wav` 的转写与 Python 一致，ASR 回读无吞字（见提交说明）。
+
+**升级后标定（现行系数 11.2）**：同方法（`proxy_calibrate_integration_test.go`，交替 3 轮 × t=1/2/4）：
+
+| 线程 | 轮次 | sttRTF | meloRTF | ratio |
+|---|---|---|---|---|
+| 1 | 1 | 0.0389 | 0.7611 | 19.57 |
+| 1 | 2 | 0.0390 | 0.7608 | 19.50 |
+| 1 | 3 | 0.0390 | 0.7878 | 20.21 |
+| 2 | 1 | 0.0220 | 0.4043 | 18.35 |
+| 2 | 2 | 0.0220 | 0.4037 | 18.35 |
+| 2 | 3 | 0.0220 | 0.4179 | 18.96 |
+| 4 | 1 | 0.0183 | 0.2276 | 12.45 |
+| 4 | 2 | 0.0137 | 0.2279 | 16.64 |
+| 4 | 3 | 0.0137 | 0.2357 | 17.19 |
+
+ratio 最小值 12.45，**系数 = 12.45 × 0.9 ≈ 11.2**；判定线 predicted > 1.0 对应 sttRTF > 0.0893。升级后 Go 管线与 Python 管线数字一致（Python 1.13.8：0.0385/0.0231/0.0232 为负载下的值，空闲时同量级）。
 
 ## 决策
 
@@ -172,7 +224,7 @@ Python 管线（sherpa_onnx 1.13.8），与 Go 管线不可比，**已作废**�
 
 ## 重新评估触发条件
 
-0. 代理测速在空闲机器上的 predicted 与真实 Melo RTF 偏差持续超过 2 倍（见修订三「已知局限」），需重新标定系数 4.35；升级 sherpa-onnx/ORT（见修订三根因）后必须重新标定。
+0. 代理测速在空闲机器上的 predicted 与真实 Melo RTF 偏差持续超过 2 倍（见修订三「已知局限」），需重新标定系数 11.2；再次升级 sherpa-onnx/ORT 后必须重新标定。
 1. sherpa-onnx 上游修复子句拆批吞字，或 MeloTTS 提供英文 G2P 回退（可恢复长英文词）。
 2. 出现 RTF 与音质均优于 MeloTTS 且单句 RSS ≤ 600MB 的中文模型。
 
@@ -183,4 +235,5 @@ Python 管线（sherpa_onnx 1.13.8），与 Go 管线不可比，**已作废**�
 | 2026-10-08 | 初稿 |
 | 2026-10-08 | 修订：删除 Matcha（许可证链路不可核验），档位收敛为两档，删除 `inference.tts.model` 与降级链 |
 | 2026-10-08 | 修订二：2GB 档（B）关闭服务端 TTS 只开 STT，档位改为 A/B/C 三档，TTS 总内存门槛 3600MB、核数门槛 2 |
-| 2026-10-08 | 修订三：新增原因码 `tts_ram_tier` 与前端分档提示（系统语音可用时不弹 toast）；下载前 SenseVoice 代理测速（predicted=sttRTF×4.35，>1.0 不下载；系数由 Go 管线同时刻标定）、手动安装逃生口、真实定论过慢后回收 `models/tts/melo`（含启动时补回收） |
+| 2026-10-08 | 修订三：新增原因码 `tts_ram_tier` 与前端分档提示（系统语音可用时不弹 toast）；下载前 SenseVoice 代理测速（predicted=sttRTF×11.2，>1.0 不下载；系数由 Go 管线同时刻标定）、手动安装逃生口、真实定论过慢后回收 `models/tts/melo`（含启动时补回收） |
+| 2026-10-08 | 修订三追加：sherpa-onnx 升级到 1.13.8（ORT 1.28.2，ABI 偏移复测一致），库版本标记与旧版迁移，Dlopen 改 RTLD_LOCAL、Windows 向量化 ORT 改名以隔离双 ORT，代理系数重新标定为 11.2，启动补回收（详见 ADR-0106 复核） |

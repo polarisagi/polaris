@@ -49,7 +49,10 @@ func LibFileName(goos string) string {
 	case "darwin":
 		return "libonnxruntime.dylib"
 	case "windows":
-		return "onnxruntime.dll"
+		// 不能叫 onnxruntime.dll：语音的 sherpa c-api.dll 按裸名 "onnxruntime.dll" 导入 ORT，
+		// Windows 加载器按基名匹配已加载模块，向量化先加载同名 DLL 会让 sherpa 绑到 1.23.2 而版本不符。
+		// 解压时由 mapper 把官方包里的 onnxruntime.dll 落地为此名（ADR-0110 修订三：ORT 冲突排查）。
+		return "onnxruntime_embed.dll"
 	default:
 		return "libonnxruntime.so"
 	}

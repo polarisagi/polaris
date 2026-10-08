@@ -9,7 +9,7 @@ import (
 )
 
 func dlopen(abs string) (uintptr, error) {
-	h, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	h, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "embedonnx: dlopen failed", err)
 	}

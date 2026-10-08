@@ -81,9 +81,9 @@ type Engine struct {
 	speed float32
 }
 
-// TTS 配置结构体布局（SherpaOnnxOfflineTtsConfig，v1.13.2，总长 448B，arm64 实测）。
+// TTS 配置结构体布局（SherpaOnnxOfflineTtsConfig，v1.13.8（1.13.2 逐项一致，2026-10-08 复测），总长 448B，arm64 实测）。
 //
-// 测量方法（升级 sherpa 版本必须重测）：下载 tag v1.13.2 的 sherpa-onnx/c-api/c-api.h，
+// 测量方法（升级 sherpa 版本必须重测）：下载 tag v1.13.8 的 sherpa-onnx/c-api/c-api.h，
 // 写临时 C 文件 `#include "c-api.h"` 后对每个字段 printf offsetof(SherpaOnnxOfflineTtsConfig, ...)，
 // 用 clang 编译运行。实测结果（字节偏移）：
 //
@@ -94,7 +94,7 @@ type Engine struct {
 //	（model.matcha 自 72、model.kokoro 自 128 起，本包不使用）
 //	rule_fsts=416 max_num_sentences=424 rule_fars=432 silence_scale=440
 //
-// 注意：1.13.2 的 c-api.cc 创建 TTS 时不拷贝 vits 的 dict_dir（头文件注明为遗留字段），
+// 注意：1.13.2/1.13.8 的 c-api.cc 创建 TTS 时不拷贝 vits 的 dict_dir（头文件注明为遗留字段），
 // MeloTTS 的 jieba 词典由库内置，所以 dict_dir 写了也不生效；这里仍按偏移写入以对齐
 // 上游 Python 参考配置，不依赖它。noise 参数显式写为模型默认值（0.667/0.8/1.0），
 // 不留 0 让 c-api 兜底，行为不随上游默认值变动。

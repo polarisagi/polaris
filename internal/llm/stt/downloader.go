@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/llm/audioassets"
@@ -53,11 +54,52 @@ func LibAssetForHost() (audioassets.Asset, error) {
 	return a, nil
 }
 
-// EnsureLib 确保 libDir 下存在 sherpa-onnx 动态库，幂等；stt 与 tts 共用同一份库。
+// libMarkerName 记录 libDir 下动态库对应的 sherpa-onnx 版本。
+// 为什么需要：升级 SherpaABIVersion 后，旧版本用户的库文件仍然存在，仅凭"文件存在"
+// 会永远不更新（升级 1.13.2→1.13.8 的目的是换掉慢 3 倍的 ORT 1.24.4，ADR-0106 复核）。
+const libMarkerName = "sherpa-onnx.version"
+
+// LibCurrent 报告 libDir 下的动态库是否存在且版本与 SherpaABIVersion 一致。
+func LibCurrent(libDir string) bool {
+	if _, err := os.Stat(filepath.Join(libDir, LibName())); err != nil {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(libDir, libMarkerName))
+	return err == nil && strings.TrimSpace(string(b)) == SherpaABIVersion
+}
+
+// WriteLibMarker 写入版本标记（EnsureLib 下载成功后调用；测试夹具也用它伪造"已安装"）。
+func WriteLibMarker(libDir string) error {
+	if err := os.WriteFile(filepath.Join(libDir, libMarkerName), []byte(SherpaABIVersion+"\n"), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "stt: 写入动态库版本标记失败", err)
+	}
+	return nil
+}
+
+// removeStaleORT 删除旧版本遗留的带版本号 ORT 库（如 1.13.2 的 libonnxruntime.1.24.4.dylib，约 26MB）。
+// 新版发行包只带无版本号的 libonnxruntime.{dylib,so}；失败仅 Warn，不影响使用。
+func removeStaleORT(libDir string) {
+	entries, err := os.ReadDir(libDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasPrefix(n, "libonnxruntime.") || n == "libonnxruntime.dylib" || n == "libonnxruntime.so" {
+			continue
+		}
+		if err := os.Remove(filepath.Join(libDir, n)); err != nil {
+			slog.Warn("audio: 清理旧版 onnxruntime 失败（可手动删除）", "file", n, "err", err)
+		}
+	}
+}
+
+// EnsureLib 确保 libDir 下存在与 SherpaABIVersion 一致的 sherpa-onnx 动态库，幂等；stt 与 tts 共用同一份库。
+// 库存在但版本标记缺失/不符（旧版本遗留）时重新下载覆盖。
 // 下载经清单 sha256 校验，进度经 progress 汇报（nil 安全）。
 func EnsureLib(ctx context.Context, libDir string, httpClient *http.Client, progress audioassets.ProgressFunc) error {
 	libPath := filepath.Join(libDir, LibName())
-	if _, err := os.Stat(libPath); err == nil {
+	if LibCurrent(libDir) {
 		return nil
 	}
 	asset, err := LibAssetForHost()
@@ -72,7 +114,11 @@ func EnsureLib(ctx context.Context, libDir string, httpClient *http.Client, prog
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf(
 			"stt: 归档 %s 解压后缺少 %s（目录 %s）", asset.File, LibName(), libDir))
 	}
-	slog.Info("audio: sherpa-onnx library ready", "path", libPath)
+	if err := WriteLibMarker(libDir); err != nil {
+		return err
+	}
+	removeStaleORT(libDir)
+	slog.Info("audio: sherpa-onnx library ready", "path", libPath, "version", SherpaABIVersion)
 	return nil
 }
 
@@ -155,7 +201,7 @@ func Installed(sttDir string) bool {
 func MissingAssets(sttDir string) []audioassets.Asset {
 	var missing []audioassets.Asset
 	if lib, err := LibAssetForHost(); err == nil {
-		if _, statErr := os.Stat(filepath.Join(sttDir, LibName())); statErr != nil {
+		if !LibCurrent(sttDir) { // 含版本标记：旧版本遗留的库视为缺失，触发重新下载
 			missing = append(missing, lib)
 		}
 	}

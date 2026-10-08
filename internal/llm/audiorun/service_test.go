@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/llm/stt"
 )
 
 type recSink struct {
@@ -142,6 +144,9 @@ func TestSTTService_InsufficientMemoryRefusesLoad(t *testing.T) {
 		t.Skip("平台无库清单")
 	}
 	touch(libFileName())
+	if err := stt.WriteLibMarker(dir); err != nil {
+		t.Fatal(err)
+	}
 	touch("model/model.onnx")
 	touch("model/tokens.txt")
 	touch("punct_model/model.onnx")

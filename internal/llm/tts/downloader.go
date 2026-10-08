@@ -82,7 +82,7 @@ func Installed(libDir, ttsDir string) bool {
 func MissingAssets(libDir, ttsDir string) []audioassets.Asset {
 	var missing []audioassets.Asset
 	if lib, err := stt.LibAssetForHost(); err == nil {
-		if _, statErr := os.Stat(filepath.Join(libDir, stt.LibName())); statErr != nil {
+		if !stt.LibCurrent(libDir) {
 			missing = append(missing, lib)
 		}
 	}

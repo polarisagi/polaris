@@ -18,7 +18,11 @@ import (
 // 为什么钉死在编译期常量：偏移与库版本强耦合，用户改 sherpa_version 即可让偏移失配并
 // 造成内存破坏，而该风险在配置层不可见。升级版本必须重测全部偏移、重算清单 sha256 后
 // 同步改本常量。
-const SherpaABIVersion = "1.13.2"
+//
+// 2026-10-08 由 1.13.2 升到 1.13.8（ADR-0106 复核记录）：1.13.2 发行包捆绑的 ORT 1.24.4 在 macOS arm64
+// 上比 1.13.8 捆绑的 ORT 1.28.2 慢约 3 倍。升级时已按 1.13.8 的 c-api.h 对上述全部偏移与 sizeof
+// 做 clang offsetof 复测（arm64 与 x86_64 各一遍），与 1.13.2 逐项一致，故手写偏移未变。
+const SherpaABIVersion = "1.13.8"
 
 // releaseBase 是 sherpa-onnx 在 GitHub Releases 的下载前缀；各资产的 Tag 拼在其后。
 const releaseBase = "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
@@ -45,7 +49,7 @@ type ProgressFunc func(a Asset, done, total int64)
 type Asset struct {
 	Name   string // 展示名（进度文案 / 日志）
 	Kind   Kind
-	Tag    string // GitHub Release tag（"v1.13.2" / "asr-models" / ...）
+	Tag    string // GitHub Release tag（"v1.13.8" / "asr-models" / ...）
 	File   string // 归档文件名
 	SHA256 string // 小写十六进制
 	Size   int64  // 字节数（GitHub API size 字段）
@@ -68,11 +72,11 @@ func libs() map[string]Asset {
 		}
 	}
 	return map[string]Asset{
-		"darwin/amd64":  mk("osx-x64-shared-lib", "4f94d99687eabb7e92f4c547bd4b26b4ddef9702cf8405c7d7e22c49a4e8bb49", 16759428),
-		"darwin/arm64":  mk("osx-arm64-shared-lib", "9e536cb025bd4cefcf6401d24cd1810445143f6c4af38116d91335190695a205", 14810545),
-		"linux/amd64":   mk("linux-x64-shared-lib", "bb2da15d4ab5fea369b91edf3caf98bc25f95b3bbaf856215c87b20f69f347ef", 9061670),
-		"linux/arm64":   mk("linux-aarch64-shared-cpu-lib", "44449a83f19649b2466c97b4d2df57c158dbede6e1e044f6519cf297df17585c", 11688458),
-		"windows/amd64": mk("win-x64-shared-MT-Release-lib", "de56e29a406653c0098770ac76cd2837413e95bc546ffad7f047968c360a2f3f", 7466796),
+		"darwin/amd64":  mk("osx-x64-shared-lib", "0f88371565a06372889c76266e253abd1b415fcc6f98232cabd968933efb0711", 10014197),
+		"darwin/arm64":  mk("osx-arm64-shared-lib", "ae77050cdae565496059d96f5ab33d77b397a0864282a4e4a26e3b3b3effb948", 8773198),
+		"linux/amd64":   mk("linux-x64-shared-lib", "3892d184be41027e18165e67f549cd4e4cdd8dcd73ac5579e97afd55e14e30b6", 9816899),
+		"linux/arm64":   mk("linux-aarch64-shared-cpu-lib", "fb98b80628a383909bf83626daca2e0d0ffc93bf1f7d222eaaa4282b388f072f", 12595068),
+		"windows/amd64": mk("win-x64-shared-MT-Release-lib", "b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7", 8032957),
 	}
 }
 
