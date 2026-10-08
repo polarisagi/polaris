@@ -40,7 +40,7 @@
 | HE-6 | **State-in-DB** — 持久化落盘，跨模块走异步事件 | 状态仅内存、DB 连接期间发起 LLM 调用（R1.16） |
 | HE-7 | **防退化边界** — 守住核心体系 (五防线与 Memory-Write-Tool) | 绕过 ExecuteTool 写记忆、弱化 Taint/Cedar/KillSwitch/SSRFGuard |
 
-**[Tier-0]** 核心路径（含 SurrealDB kv-mem + Embedding + Wasm 沙箱）必须在 2GB+ VPS 可运行；语音按 ADR-0107 / ADR-0108 / ADR-0110 分三档：A 极低配（总内存 <1800MB 或 <2 核）STT/TTS 都关、由前端系统语音兜底；B 低配（<3600MB 或 <4 核）STT + Matcha 轻量 TTS；C 标准（≥3600MB 且 ≥4 核）STT + MeloTTS；MeloTTS 基准过慢自动降到 Matcha，再过慢回系统语音，资产由守护进程后台串行预置（可配置关闭）、空闲卸载；麦克风需安全上下文（127.0.0.1/localhost 可用，远程 VPS 须 HTTPS）；8GB 为推荐开发地板（Tier0），本地推理需 Tier1（16GB+）。超限能力走硬件门控解锁，不得作硬依赖。
+**[Tier-0]** 核心路径（含 SurrealDB kv-mem + Embedding + Wasm 沙箱）必须在 2GB+ VPS 可运行；语音按 ADR-0107 / ADR-0108 / ADR-0110 分两档：A 极低配（总内存 <1800MB 或 <2 核）STT/TTS 都关、由前端系统语音兜底；其余 STT + 服务端 TTS（MeloTTS），TTS 另需首次基准 RTF ≤ 0.8，过慢回系统语音，资产由守护进程后台串行预置（可配置关闭）、空闲卸载；麦克风需安全上下文（127.0.0.1/localhost 可用，远程 VPS 须 HTTPS）；8GB 为推荐开发地板（Tier0），本地推理需 Tier1（16GB+）。超限能力走硬件门控解锁，不得作硬依赖。
 
 ## 项目结构
 

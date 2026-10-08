@@ -176,7 +176,7 @@ Polaris 的每一次自我改进——无论是 Prompt 优化、技能蒸馏还�
 |------|----------|--------------|
 | 核心路径（不含语音） | 2GB 内存 / 1 vCPU | - |
 | 语音输入（STT，SenseVoice int8，约 230MB 下载） | 2GB 内存 / 2 逻辑核 | 不可用 |
-| 服务端朗读（TTS；首次加载基准须 RTF ≤ 0.8）：2GB 内存 / 2 核起用轻量 Matcha（约 133MB 下载），4GB 内存 / 4 逻辑核起用 MeloTTS（约 167MB 下载）；MeloTTS 过慢自动降到 Matcha | 2GB 内存 / 2 逻辑核 | 客户端系统语音（`speechSynthesis`，仅本地中文语音） |
+| 服务端朗读（TTS；首次加载基准须 RTF ≤ 0.8）：MeloTTS，约 167MB 下载 | 2GB 内存 / 2 逻辑核 | 客户端系统语音（`speechSynthesis`，仅本地中文语音） |
 
 麦克风需要安全上下文：`localhost` / `127.0.0.1` 直接可用；远程浏览器访问 VPS 必须使用 HTTPS。
 

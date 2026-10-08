@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -108,28 +107,10 @@ func provisionTTS(ctx context.Context, o ProvisionerOptions, backoffs []time.Dur
 		return
 	}
 
-	// 降级链（ADR-0110 决策 5）：基准把当前模型判为定论 too_slow 后服务会自行切到更轻的模型，
-	// 这里据模型变化再跑一轮"安装 → 基准"。轮数上限 = 链长，防御意外的无限循环。
-	const maxRounds = 2
-	for round := 0; round < maxRounds; round++ {
-		before := ttsModelOf(o)
-		err := executeWithBackoff(ctx, "tts", ttsInstallFn, o.Sink, backoffs, nowFn)
-		if err == nil && ctx.Err() == nil && ttsBenchFn != nil {
-			runTTSBench(ctx, ttsBenchFn)
-		}
-		if ctx.Err() != nil || ttsModelOf(o) == before || o.TTS.slow.Load() != nil {
-			return
-		}
-		slog.Info("audio: provisioner continuing with fallback tts model", "from", before, "to", ttsModelOf(o))
+	err := executeWithBackoff(ctx, "tts", ttsInstallFn, o.Sink, backoffs, nowFn)
+	if err == nil && ctx.Err() == nil && ttsBenchFn != nil {
+		runTTSBench(ctx, ttsBenchFn)
 	}
-}
-
-// ttsModelOf 返回预置器正在处理的 TTS 模型；无服务（测试注入的假函数）时返回空，此时不做降级续跑。
-func ttsModelOf(o ProvisionerOptions) tts.Model {
-	if o.TTS == nil {
-		return ""
-	}
-	return o.TTS.CurrentModel()
 }
 
 func logSkippedTTS(o ProvisionerOptions) {

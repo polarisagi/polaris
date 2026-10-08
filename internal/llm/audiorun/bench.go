@@ -13,12 +13,12 @@ import (
 
 // BenchPrefKey 是首次基准结果在 preferences 表里的键前缀（HE-6：状态必须落库，不能只放内存，
 // 否则每次重启都要重跑基准，且 unsupported 的判定会在重启后丢失）。
-// 实际键为 BenchPrefKey + "." + 模型名（ADR-0110 决策 5）：每个模型独立存档，Melo 判定过慢后
-// 切到 Matcha 的基准不会覆盖 Melo 的结论，重启后才不会又去加载 Melo 重测。
-// 旧版（无模型名后缀）的 Kokoro 记录不再读取。
+// 实际键为 BenchPrefKey + "." + 模型名（ADR-0110 决策 5）：旧版（无后缀）的 Kokoro 记录
+// 不会被新模型读到，Kokoro 时代的 too_slow 结论不得复用。
 const BenchPrefKey = "audio.tts_bench"
 
-func benchKey(model string) string { return BenchPrefKey + "." + model }
+// benchKey 是当前（唯一）TTS 模型的存档键。
+const benchKey = BenchPrefKey + "." + tts.ModelName
 
 // BenchSentence 是首次基准使用的固定句（audio-v2-spec §2.4）：含标点、数字与日期，
 // 覆盖 rule_fsts 路径，使 RTF 反映真实朗读负载而非最轻的短句。
@@ -41,7 +41,6 @@ const (
 // BenchRecord 是一次基准的持久化结果。
 type BenchRecord struct {
 	Fingerprint string    `json:"fingerprint"`
-	Model       string    `json:"model"`
 	RTF         float64   `json:"rtf"`
 	Supported   bool      `json:"supported"`
 	MeasuredAt  time.Time `json:"measured_at"`
@@ -136,18 +135,18 @@ func waitCPUIdle(ctx context.Context, usage func() float64, threshold float64, n
 // Fingerprint 返回基准指纹（arch + 逻辑核 + 总内存 GiB 取整 + 模型名）。
 // 指纹变化（换机器、改 VM 配置、换模型）才重测；总内存取整到 GiB，避免 VM 内存统计的微小抖动误触发重测。
 // 含模型名：不同模型的 RTF 不可互相套用，旧 Kokoro 结论也因此不会被新模型复用。
-func Fingerprint(p HardwareProfile, model tts.Model) string {
+func Fingerprint(p HardwareProfile) string {
 	gib := (p.TotalRAMBytes + (1 << 29)) >> 30
-	return fmt.Sprintf("%s/%s;cores=%d;ram_gib=%d;model=%s", p.GOOS, p.GOARCH, p.LogicalCores, gib, model)
+	return fmt.Sprintf("%s/%s;cores=%d;ram_gib=%d;model=%s", p.GOOS, p.GOARCH, p.LogicalCores, gib, tts.ModelName)
 }
 
-// GetBench 读取某模型已持久化的基准；记录不存在、损坏或指纹不匹配都视为"需要重测"（ok=false）。
+// GetBench 读取已持久化的基准；记录不存在、损坏或指纹不匹配都视为"需要重测"（ok=false）。
 // 读取/解析失败不致命（重测即可），但必须留痕而不是静默。
-func GetBench(ctx context.Context, store PrefStore, model tts.Model, fingerprint string) (BenchRecord, bool, error) {
+func GetBench(ctx context.Context, store PrefStore, fingerprint string) (BenchRecord, bool, error) {
 	if store == nil {
 		return BenchRecord{}, false, nil
 	}
-	raw, err := store.GetPreference(ctx, benchKey(string(model)))
+	raw, err := store.GetPreference(ctx, benchKey)
 	if err != nil {
 		return BenchRecord{}, false, apperr.Wrap(apperr.CodeInternal, "audiorun: 读取 TTS 基准失败", err)
 	}
@@ -173,7 +172,7 @@ func SaveBench(ctx context.Context, store PrefStore, rec BenchRecord) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "audiorun: 序列化 TTS 基准失败", err)
 	}
-	if err := store.UpsertPreference(ctx, benchKey(rec.Model), string(b)); err != nil {
+	if err := store.UpsertPreference(ctx, benchKey, string(b)); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "audiorun: 持久化 TTS 基准失败", err)
 	}
 	return nil

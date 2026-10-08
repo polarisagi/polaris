@@ -8,8 +8,8 @@ import (
 // 清单自身格式：任何一项 sha256 / size 录入错误都会让下载永远校验失败。
 func TestAll_ManifestWellFormed(t *testing.T) {
 	all := All()
-	if len(all) != 10 {
-		t.Fatalf("清单应含 5 个平台库 + 5 个模型类资产（STT/标点/Melo/Matcha/声码器），got %d", len(all))
+	if len(all) != 8 {
+		t.Fatalf("清单应含 5 个平台库 + 3 个模型（STT/标点/Melo），got %d", len(all))
 	}
 	seen := map[string]bool{}
 	for _, a := range all {
@@ -44,21 +44,16 @@ func TestLibAssets_BoundToABIVersion(t *testing.T) {
 	}
 }
 
-// 规格实测值抽查（ADR-0110）：Melo 只能是 fp32 归档；Matcha 必须配单文件声码器。
+// 规格实测值抽查（ADR-0110）：Melo 只能是 fp32 归档；清单不得再含 Kokoro / Matcha
+// （Matcha 因训练数据来源不可核验被删除，见 ADR-0110 2026-10-08 修订）。
 func TestTTSModels_Pinned(t *testing.T) {
 	if m := MeloModel(); m.Size != 167006755 || m.File != "vits-melo-tts-zh_en.tar.bz2" || strings.Contains(m.File, "int8") {
 		t.Errorf("Melo 清单项与实测不符：%+v", m)
 	}
-	if m := MatchaModel(); m.Size != 79033838 || m.File != "matcha-icefall-zh-en.tar.bz2" {
-		t.Errorf("Matcha 清单项与实测不符：%+v", m)
-	}
-	v := MatchaVocoder()
-	if v.Kind != KindTTSFile || v.Size != 53882848 || v.File != "vocos-16khz-univ.onnx" || v.Tag != "vocoder-models" {
-		t.Errorf("Matcha 声码器清单项与实测不符：%+v", v)
-	}
 	for _, a := range All() {
-		if strings.Contains(strings.ToLower(a.File), "kokoro") {
-			t.Errorf("清单不得再含 Kokoro：%s", a.File)
+		f := strings.ToLower(a.File)
+		if strings.Contains(f, "kokoro") || strings.Contains(f, "matcha") || strings.Contains(f, "vocos") {
+			t.Errorf("清单不得再含 Kokoro/Matcha/声码器：%s", a.File)
 		}
 	}
 }

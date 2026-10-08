@@ -31,41 +31,33 @@ func TestE2E_RealSynthesis(t *testing.T) {
 	assetDir := filepath.Join(outDir, "assets")
 	const text = "好的，我已经帮你查过了。另外，你昨天提交的 GitHub 代码审查，一共有 12 条评论。我说另外，请打开。"
 
-	for _, m := range []Model{ModelMelo, ModelMatcha} {
-		t.Run(string(m), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-			defer cancel()
-			if err := EnsureAssets(ctx, libDir, assetDir, m, http.DefaultClient, "", nil); err != nil {
-				t.Fatalf("EnsureAssets: %v", err)
-			}
-			if miss := ModelMissing(ModelDir(assetDir, m), m); miss != "" {
-				t.Fatalf("安装后仍缺 %s", miss)
-			}
-			if err := LoadLibrary(filepath.Join(libDir, stt.LibName())); err != nil {
-				t.Fatalf("LoadLibrary: %v", err)
-			}
-			threads := 4
-			if m == ModelMatcha {
-				threads = 2
-			}
-			eng, err := NewEngine(ModelDir(assetDir, m), Options{Model: m, NumThreads: threads})
-			if err != nil {
-				t.Fatalf("NewEngine: %v", err)
-			}
-			defer eng.Close()
-			start := time.Now()
-			a, err := eng.Generate(ctx, text)
-			if err != nil {
-				t.Fatalf("Generate: %v", err)
-			}
-			el := time.Since(start)
-			t.Logf("%s: 音频 %.2fs，合成 %.2fs，RTF %.3f，%d 字节", m, a.Duration.Seconds(), el.Seconds(), el.Seconds()/a.Duration.Seconds(), len(a.Data))
-			if a.Duration < 5*time.Second {
-				t.Fatalf("音频过短：%v", a.Duration)
-			}
-			if err := os.WriteFile(filepath.Join(outDir, "e2e-"+string(m)+".wav"), a.Data, 0o644); err != nil {
-				t.Fatal(err)
-			}
-		})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	if err := EnsureAssets(ctx, libDir, assetDir, http.DefaultClient, "", nil); err != nil {
+		t.Fatalf("EnsureAssets: %v", err)
+	}
+	if miss := ModelMissing(ModelDir(assetDir)); miss != "" {
+		t.Fatalf("安装后仍缺 %s", miss)
+	}
+	if err := LoadLibrary(filepath.Join(libDir, stt.LibName())); err != nil {
+		t.Fatalf("LoadLibrary: %v", err)
+	}
+	eng, err := NewEngine(ModelDir(assetDir), Options{NumThreads: 4})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	start := time.Now()
+	a, err := eng.Generate(ctx, text)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	el := time.Since(start)
+	t.Logf("melo: 音频 %.2fs，合成 %.2fs，RTF %.3f，%d 字节", a.Duration.Seconds(), el.Seconds(), el.Seconds()/a.Duration.Seconds(), len(a.Data))
+	if a.Duration < 5*time.Second {
+		t.Fatalf("音频过短：%v", a.Duration)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "e2e-melo.wav"), a.Data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

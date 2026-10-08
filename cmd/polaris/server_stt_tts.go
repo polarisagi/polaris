@@ -75,7 +75,7 @@ func (a *audioRuntime) Close() {
 func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 	s := in.Server
 	profile := audiorun.HostProfile(in.TotalRAMBytes)
-	support := audiorun.AudioSupport(profile, in.Cfg.TTS.Model)
+	support := audiorun.AudioSupport(profile)
 	idle := time.Duration(in.Cfg.Audio.IdleUnloadMinutes) * time.Minute
 	modelsDir := in.ModelsDir
 	if modelsDir == "" {
@@ -90,8 +90,7 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 
 	slog.Info("audio: support judged from stable hardware profile",
 		"total_ram_mb", in.TotalRAMBytes/(1024*1024), "cores", profile.LogicalCores, "arch", profile.GOARCH,
-		"tier", support.Tier, "stt_supported", support.STT.Supported, "tts_supported", support.TTS.Supported,
-		"tts_model", support.TTSModel, "tts_note", support.TTSNote,
+		"stt_supported", support.STT.Supported, "tts_supported", support.TTS.Supported,
 		"idle_unload", idle.String())
 
 	rt := &audioRuntime{autoInstall: in.AutoInstall}
@@ -109,7 +108,7 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 	})
 	s.SetSTTProvider(&sttAdapter{inner: rt.stt})
 
-	initTTS(ctx, in, rt, profile, support, idle, sttDir)
+	initTTS(ctx, in, rt, profile, support.TTS, idle, sttDir)
 
 	s.SetTTSEnginePref(in.Cfg.TTS.Engine)
 	s.SetAudioInstaller(rt)
@@ -127,7 +126,7 @@ func initAudio(ctx context.Context, in audioInit) *audioRuntime {
 
 // initTTS 按 provider 装配 TTS：http sidecar 立即就绪；sherpa 走按需安装 + 懒加载 + 首次基准。
 func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audiorun.HardwareProfile,
-	support audiorun.Support, idle time.Duration, libDir string) {
+	support audiorun.Capability, idle time.Duration, libDir string) {
 	s := in.Server
 	cfg := in.Cfg.TTS
 
@@ -148,22 +147,21 @@ func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audior
 		modelsDir = filepath.Join(in.DataDir, "models")
 	}
 
-	model, _ := support.Model() // A 档/不支持平台无模型：Support.TTS 不支持，服务只发布 unsupported 状态
 	rt.tts = audiorun.NewTTSService(ctx, audiorun.TTSOptions{
 		LibDir:        libDir,
 		Dir:           filepath.Join(modelsDir, "tts"),
 		SherpaVersion: cfg.SherpaVersion,
-		Model:         model,
 		Speed:         float32(cfg.Speed),
-		LegacyDir:     filepath.Join(modelsDir, "kokoro"), // ADR-0110：新资产校验通过后清理
-		IdleUnload:    idle,
-		HTTPClient:    in.HTTPClient,
-		FreeMemMB:     probe.ProbeAvailableMemoryMB,
-		Support:       support.TTS,
-		Sink:          audioSink{publish: s.PublishTTSStatus},
-		Prefs:         in.Prefs,
-		Profile:       profile,
-		CPUUsage:      in.CPUUsage,
+		// ADR-0110：新资产校验通过后清理旧 Kokoro 目录，以及 Matcha 修订前可能已下载的 models/tts/matcha。
+		LegacyDirs: []string{filepath.Join(modelsDir, "kokoro"), filepath.Join(modelsDir, "tts", "matcha")},
+		IdleUnload: idle,
+		HTTPClient: in.HTTPClient,
+		FreeMemMB:  probe.ProbeAvailableMemoryMB,
+		Support:    support,
+		Sink:       audioSink{publish: s.PublishTTSStatus},
+		Prefs:      in.Prefs,
+		Profile:    profile,
+		CPUUsage:   in.CPUUsage,
 	})
 	s.SetTTSProvider(&ttsAdapter{inner: rt.tts}, "sherpa")
 }

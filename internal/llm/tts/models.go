@@ -3,57 +3,25 @@ package tts
 import (
 	"strings"
 	"unicode"
-
-	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// Model 是服务端 TTS 模型标识（ADR-0110）。
-type Model string
+// ModelName 是服务端 TTS 唯一模型 MeloTTS zh_en fp32 的标识（ADR-0110 修订：Matcha 已删除）。
+// 用于状态接口的 model 字段、基准持久化键与指纹。
+const ModelName = "melo"
 
-const (
-	// ModelMelo MeloTTS zh_en fp32（sherpa VITS 配置，44.1kHz，标准档）。
-	ModelMelo Model = "melo"
-	// ModelMatcha Matcha zh-en + vocos-16khz-univ（sherpa Matcha 配置，16kHz，轻量档）。
-	ModelMatcha Model = "matcha"
-)
-
-// ParseModel 把名字解析为 Model；未知名字返回 CodeInvalidInput。
-func ParseModel(s string) (Model, error) {
-	switch Model(s) {
-	case ModelMelo, ModelMatcha:
-		return Model(s), nil
-	}
-	return "", apperr.New(apperr.CodeInvalidInput, "tts: 未知的 TTS 模型 \""+s+"\"（可选 melo | matcha）")
-}
-
-// requiredFiles 是各模型运行必需的文件（相对模型目录）；末尾带 "/" 的是目录。
+// requiredFiles 是 MeloTTS 运行必需的文件（相对模型目录）；末尾带 "/" 的是目录。
 // 缺任何一项引擎都会创建失败或读错音。
 //
-// Melo 的 model.int8.onnx 在归档里只是 133 字节占位文件，既不使用也不列为必需。
+// 归档里的 model.int8.onnx 只是 133 字节占位文件，既不使用也不列为必需。
 // 规则 FST 不在此列：缺失时只是数字/日期读法退化，由 NewEngine 留痕告警（沿用既有策略）。
-func requiredFiles(m Model) []string {
-	switch m {
-	case ModelMelo:
-		return []string{"model.onnx", "lexicon.txt", "tokens.txt", "dict/"}
-	case ModelMatcha:
-		return []string{"model-steps-3.onnx", MatchaVocoderFile, "lexicon.txt", "tokens.txt", "espeak-ng-data/"}
-	}
-	return nil
+func requiredFiles() []string {
+	return []string{"model.onnx", "lexicon.txt", "tokens.txt", "dict/"}
 }
 
-// MatchaVocoderFile 是 Matcha 声码器在模型目录里的文件名（单文件资产，与归档分开下载）。
-const MatchaVocoderFile = "vocos-16khz-univ.onnx"
-
-// ruleFstFiles 是各模型的文本规整 FST（电话/日期/数字等）。
+// ruleFstFiles 是 MeloTTS 的文本规整 FST（电话/日期/数字/多音字）。
 // 缺失时数字、日期会按字面逐字读错，所以必须传给引擎。
-func ruleFstFiles(m Model) []string {
-	switch m {
-	case ModelMelo:
-		return []string{"phone.fst", "date.fst", "number.fst", "new_heteronym.fst"}
-	case ModelMatcha:
-		return []string{"phone-zh.fst", "date-zh.fst", "number-zh.fst"}
-	}
-	return nil
+func ruleFstFiles() []string {
+	return []string{"phone.fst", "date.fst", "number.fst", "new_heteronym.fst"}
 }
 
 // sentenceDelims 是切句的句末标点（ADR-0110 决策 6）。

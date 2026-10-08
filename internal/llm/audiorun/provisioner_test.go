@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -90,11 +89,7 @@ func TestProvisioner_SkipUnsupported(t *testing.T) {
 	prof := hostProf()
 	prefs := &memPrefs{}
 	_ = SaveBench(context.Background(), prefs, BenchRecord{
-		Fingerprint: Fingerprint(prof, tts.ModelMelo), Model: "melo", RTF: 1.5, Supported: false, RetryOnStart: false,
-	})
-	// 降级链两环都定论 too_slow，TTS 才整体放弃（只有 Melo 慢时会改走 Matcha，见 fallback_test.go）。
-	_ = SaveBench(context.Background(), prefs, BenchRecord{
-		Fingerprint: Fingerprint(prof, tts.ModelMatcha), Model: "matcha", RTF: 1.5, Supported: false, RetryOnStart: false,
+		Fingerprint: Fingerprint(prof), RTF: 1.5, Supported: false, RetryOnStart: false,
 	})
 	ttsSvc := NewTTSService(context.Background(), TTSOptions{
 		LibDir: t.TempDir(), Dir: t.TempDir(), Support: supported(), Prefs: prefs, Profile: prof,
@@ -339,12 +334,11 @@ func TestTTSService_TransientContendedDoesNotPersistTooSlow(t *testing.T) {
 	// 模拟写入一条争用记录（RTF=1.1, Contended=true）
 	rec := decideBench(1.1, true, false)
 	rec.Fingerprint = ttsSvc.fingerprint()
-	rec.Model = "melo"
 	rec.MeasuredAt = time.Now().UTC()
 	_ = SaveBench(context.Background(), prefs, rec)
 
 	// 重新读取
-	loaded, ok, err := GetBench(context.Background(), prefs, tts.ModelMelo, ttsSvc.fingerprint())
+	loaded, ok, err := GetBench(context.Background(), prefs, ttsSvc.fingerprint())
 	if err != nil || !ok {
 		t.Fatalf("读取基准记录失败: %v", err)
 	}

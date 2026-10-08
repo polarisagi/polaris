@@ -66,21 +66,18 @@ func LoadLibrary(libPath string) error {
 
 // Options 是 TTS 引擎的运行参数。
 type Options struct {
-	// Model 选择 Melo 或 Matcha；必填。
-	Model Model
 	// NumThreads 推理线程数；<=0 取 2。
 	NumThreads int
 	// Speed 语速倍率；<=0 取 1.0。
 	Speed float32
 }
 
-// Engine 是 Sherpa-ONNX 本地 TTS 引擎（MeloTTS / Matcha），实现 Provider 接口。
+// Engine 是 Sherpa-ONNX 本地 TTS 引擎（MeloTTS），实现 Provider 接口。
 // 两个模型都是单说话人，sid 恒为 0（ADR-0110 决策 1）。
 type Engine struct {
 	mu    sync.Mutex
 	tts   uintptr
 	lib   *Library
-	model Model
 	speed float32
 }
 
@@ -94,16 +91,13 @@ type Engine struct {
 //	model.vits:    model=0 lexicon=8 tokens=16 data_dir=24 noise_scale=32 noise_scale_w=36
 //	               length_scale=40 dict_dir=48
 //	model.num_threads=56 model.debug=60 model.provider=64
-//	model.matcha:  acoustic_model=72 vocoder=80 lexicon=88 tokens=96 data_dir=104
-//	               noise_scale=112 length_scale=116 dict_dir=120
-//	(model.kokoro 自 128 起，本包不再使用)
+//	（model.matcha 自 72、model.kokoro 自 128 起，本包不使用）
 //	rule_fsts=416 max_num_sentences=424 rule_fars=432 silence_scale=440
 //
-// 注意：1.13.2 的 c-api.cc 创建 TTS 时不拷贝 vits/matcha 的 dict_dir（头文件注明为遗留字段），
+// 注意：1.13.2 的 c-api.cc 创建 TTS 时不拷贝 vits 的 dict_dir（头文件注明为遗留字段），
 // MeloTTS 的 jieba 词典由库内置，所以 dict_dir 写了也不生效；这里仍按偏移写入以对齐
-// 上游 Python 参考配置，不依赖它。noise 参数显式写为模型默认值
-// （vits 0.667/0.8/1.0，matcha 1.0/1.0）：c-api.cc 对 matcha noise_scale 的兜底是 0.667，
-// 与用户试听所用的 Python 默认 1.0 不同，所以不能留 0 让 c-api 兜底。
+// 上游 Python 参考配置，不依赖它。noise 参数显式写为模型默认值（0.667/0.8/1.0），
+// 不留 0 让 c-api 兜底，行为不随上游默认值变动。
 const (
 	ttsConfigSize         = 448
 	offsetModelNumThreads = 56
@@ -123,16 +117,6 @@ const (
 	offsetVitsNoiseScaleW = 36
 	offsetVitsLengthScale = 40
 	offsetVitsDictDir     = 48
-
-	// model.matcha
-	offsetMatchaAcoustic    = 72
-	offsetMatchaVocoder     = 80
-	offsetMatchaLexicon     = 88
-	offsetMatchaTokens      = 96
-	offsetMatchaDataDir     = 104
-	offsetMatchaNoiseScale  = 112
-	offsetMatchaLengthScale = 116
-	offsetMatchaDictDir     = 120
 )
 
 // maxNumSentences 必须是 100：sherpa 按标点（含逗号）切子句，=1 时每个子句单独合成，
@@ -154,10 +138,7 @@ func NewEngine(modelDir string, opts Options) (*Engine, error) {
 	if lib == nil {
 		return nil, apperr.New(apperr.CodeInternal, "tts: library not loaded")
 	}
-	if _, err := ParseModel(string(opts.Model)); err != nil {
-		return nil, err
-	}
-	if miss := ModelMissing(modelDir, opts.Model); miss != "" {
+	if miss := ModelMissing(modelDir); miss != "" {
 		return nil, apperr.New(apperr.CodeInternal, "tts: 模型目录 "+modelDir+" 缺少必需文件 "+miss)
 	}
 	if opts.NumThreads <= 0 {
@@ -183,7 +164,7 @@ func NewEngine(modelDir string, opts Options) (*Engine, error) {
 	defer runtime.KeepAlive(configData)
 
 	var fsts []string
-	for _, f := range ruleFstFiles(opts.Model) {
+	for _, f := range ruleFstFiles() {
 		p := filepath.Join(modelDir, f)
 		if _, err := os.Stat(p); err != nil {
 			// 不是致命错误（引擎仍可合成），但数字/日期读法会退化，必须留痕而非静默。
@@ -198,24 +179,13 @@ func NewEngine(modelDir string, opts Options) (*Engine, error) {
 	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetModelProvider)) = cString("cpu")
 
 	join := func(f string) string { return filepath.Join(modelDir, f) }
-	switch opts.Model {
-	case ModelMelo:
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsModel)) = cString(join("model.onnx"))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsLexicon)) = cString(join("lexicon.txt"))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsTokens)) = cString(join("tokens.txt"))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsDictDir)) = cString(join("dict"))
-		*(*float32)(unsafe.Pointer(cfgPtr + offsetVitsNoiseScale)) = 0.667
-		*(*float32)(unsafe.Pointer(cfgPtr + offsetVitsNoiseScaleW)) = 0.8
-		*(*float32)(unsafe.Pointer(cfgPtr + offsetVitsLengthScale)) = 1.0
-	case ModelMatcha:
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetMatchaAcoustic)) = cString(join("model-steps-3.onnx"))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetMatchaVocoder)) = cString(join(MatchaVocoderFile))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetMatchaLexicon)) = cString(join("lexicon.txt"))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetMatchaTokens)) = cString(join("tokens.txt"))
-		*(*uintptr)(unsafe.Pointer(cfgPtr + offsetMatchaDataDir)) = cString(join("espeak-ng-data"))
-		*(*float32)(unsafe.Pointer(cfgPtr + offsetMatchaNoiseScale)) = 1.0
-		*(*float32)(unsafe.Pointer(cfgPtr + offsetMatchaLengthScale)) = 1.0
-	}
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsModel)) = cString(join("model.onnx"))
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsLexicon)) = cString(join("lexicon.txt"))
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsTokens)) = cString(join("tokens.txt"))
+	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetVitsDictDir)) = cString(join("dict"))
+	*(*float32)(unsafe.Pointer(cfgPtr + offsetVitsNoiseScale)) = 0.667
+	*(*float32)(unsafe.Pointer(cfgPtr + offsetVitsNoiseScaleW)) = 0.8
+	*(*float32)(unsafe.Pointer(cfgPtr + offsetVitsLengthScale)) = 1.0
 
 	*(*uintptr)(unsafe.Pointer(cfgPtr + offsetRuleFsts)) = cString(strings.Join(fsts, ","))
 	*(*int32)(unsafe.Pointer(cfgPtr + offsetMaxNumSentences)) = maxNumSentences
@@ -227,11 +197,8 @@ func NewEngine(modelDir string, opts Options) (*Engine, error) {
 		return nil, apperr.New(apperr.CodeInternal, "tts: failed to create offline tts engine")
 	}
 
-	return &Engine{tts: tts, lib: lib, model: opts.Model, speed: opts.Speed}, nil
+	return &Engine{tts: tts, lib: lib, speed: opts.Speed}, nil
 }
-
-// Model 返回引擎所用模型。
-func (e *Engine) Model() Model { return e.model }
 
 // Generate 实现 Provider 接口：按句末标点切句，逐句合成后拼接 PCM，输出单个 WAV。
 // ctx 仅在句与句之间检查（sherpa 单句推理是同步 FFI，无法中断）。

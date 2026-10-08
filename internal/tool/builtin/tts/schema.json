@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "tts",
-  "description": "Convert text to speech with the local offline TTS engine (MeloTTS / Matcha) and return a base64-encoded audio data URI (audio/wav).",
+  "description": "Convert text to speech with the local offline TTS engine (MeloTTS) and return a base64-encoded audio data URI (audio/wav).",
   "type": "object",
   "properties": {
     "text": {
       "type": "string",
       "maxLength": 1000,
-      "description": "The text to synthesize into speech (at most 1000 characters). The model is chosen by hardware tier or the daemon config (inference.tts.model); speed comes from inference.tts.speed."
+      "description": "The text to synthesize into speech (at most 1000 characters). The voice is fixed (single-speaker MeloTTS); speed comes from the daemon config (inference.tts.speed)."
     }
   },
   "required": ["text"]

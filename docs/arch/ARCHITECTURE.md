@@ -64,7 +64,7 @@ L1 架构散文（本文档 + 模块文档） → L2 结构真相（`internal/pr
 - 存储：嵌入式优先（SQLite + SurrealDB-Core + 本地 FS），禁独立进程 DB
 - 网络：默认 127.0.0.1，远程绑定需显式 + TLS + capability + audit
 - 安全：物理隔离 > 提示词加固，外部内容 Taint=High 默认
-- 语音：STT 强制 Sherpa-ONNX + SenseVoice（零 Python 依赖，极低内存开销，Tier 0）；TTS 服务端按硬件三档选 MeloTTS（C 档）或 Matcha（B 档），A 档关闭（可选 HTTP sidecar），不支持或准备中由前端系统本地语音兜底。资产由后台串行预置，懒加载与空闲卸载，TTS 基准具抗争用门控，Melo 过慢自动降到 Matcha。见 ADR-0107、ADR-0108 与 ADR-0110。
+- 语音：STT 强制 Sherpa-ONNX + SenseVoice（零 Python 依赖，极低内存开销，Tier 0）；TTS 服务端为 MeloTTS（A 档极低配关闭；可选 HTTP sidecar），不支持或准备中由前端系统本地语音兜底。资产由后台串行预置，懒加载与空闲卸载，TTS 基准具抗争用门控，Melo 过慢回系统语音。见 ADR-0107、ADR-0108 与 ADR-0110。
 
 **权威源指引**：
 - HE 六不变量（可观测/可验证/可组合/数据驱动/状态机控制流/State-in-DB）：[00-Global-Dictionary §1-bis](./00-Global-Dictionary.md)

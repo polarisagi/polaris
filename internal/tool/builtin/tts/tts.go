@@ -1,6 +1,6 @@
 // Package tts 是 `tts` 内置工具：把文本合成为语音，返回 data URI。
 //
-// 它不自带任何引擎，只调用调用方注入的本地 TTS Provider（MeloTTS / Matcha，经 AudioService，ADR-0110）。
+// 它不自带任何引擎，只调用调用方注入的本地 TTS Provider（MeloTTS，经 AudioService，ADR-0110）。
 // 此前的 tts_edge 靠外部 `edge-tts` CLI 访问微软在线端点，ADR-0107 随 Edge 整条删除。
 package tts
 

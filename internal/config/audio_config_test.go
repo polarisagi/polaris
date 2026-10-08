@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,11 +22,11 @@ func loadCfg(t *testing.T, toml string) *Config {
 	return cfg
 }
 
-// ADR-0107 / ADR-0108 默认值：sherpa/auto/model=auto/speed=1.0/空闲 10 分钟卸载/自动后台预置开启。
+// ADR-0107 / ADR-0108 默认值：sherpa/auto/speed=1.0/空闲 10 分钟卸载/自动后台预置开启。
 func TestLoad_AudioDefaults(t *testing.T) {
 	cfg := loadCfg(t, "")
 	tts := cfg.Inference.TTS
-	if tts.Provider != "sherpa" || tts.Engine != "auto" || tts.Model != "auto" || tts.Speed != 1.0 {
+	if tts.Provider != "sherpa" || tts.Engine != "auto" || tts.Speed != 1.0 {
 		t.Errorf("TTS 默认值错误: %+v", tts)
 	}
 	if cfg.Inference.Audio.IdleUnloadMinutes != 10 {
@@ -59,7 +62,6 @@ func TestValidate_RejectsBadAudioConfig(t *testing.T) {
 	cases := map[string]string{
 		"provider": "[inference.tts]\nprovider = \"azure\"\n",
 		"engine":   "[inference.tts]\nengine = \"cloud\"\n",
-		"model":    "[inference.tts]\nmodel = \"kokoro\"\n",
 		"idle":     "[inference.audio]\nidle_unload_minutes = -5\n",
 	}
 	for name, body := range cases {
@@ -74,8 +76,8 @@ func TestValidate_RejectsBadAudioConfig(t *testing.T) {
 }
 
 func TestLoad_AudioUserOverrides(t *testing.T) {
-	cfg := loadCfg(t, "[inference.tts]\nmodel = \"matcha\"\nspeed = 1.2\nengine = \"system\"\n[inference.audio]\nidle_unload_minutes = 0\nauto_install = false\n")
-	if cfg.Inference.TTS.Model != "matcha" || cfg.Inference.TTS.Speed != 1.2 || cfg.Inference.TTS.Engine != "system" {
+	cfg := loadCfg(t, "[inference.tts]\nspeed = 1.2\nengine = \"system\"\n[inference.audio]\nidle_unload_minutes = 0\nauto_install = false\n")
+	if cfg.Inference.TTS.Speed != 1.2 || cfg.Inference.TTS.Engine != "system" {
 		t.Errorf("用户覆盖未生效: %+v", cfg.Inference.TTS)
 	}
 	if cfg.Inference.Audio.IdleUnloadMinutes != 0 {
@@ -86,20 +88,20 @@ func TestLoad_AudioUserOverrides(t *testing.T) {
 	}
 }
 
-// 旧键 kokoro_sid 出现时只 Warn 不报错：报错会让升级后的老用户无法启动（ADR-0110）。
-func TestLoad_LegacyKokoroSIDIgnored(t *testing.T) {
-	cfg := loadCfg(t, "[inference.tts]\nkokoro_sid = 3\n")
-	if cfg.Inference.TTS.Model != "auto" {
-		t.Errorf("旧键存在时 model 应保持默认 auto，got %q", cfg.Inference.TTS.Model)
-	}
-}
+// 旧键 kokoro_sid / model 出现时只 Warn 不报错：报错会让升级后的老用户无法启动（ADR-0110）。
+func TestLoad_LegacyTTSKeysWarnOnly(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
 
-// inference.tts.model 三个合法值与默认值。
-func TestLoad_TTSModelValues(t *testing.T) {
-	for _, m := range []string{"auto", "melo", "matcha"} {
-		cfg := loadCfg(t, "[inference.tts]\nmodel = \""+m+"\"\n")
-		if cfg.Inference.TTS.Model != m {
-			t.Errorf("model=%s 未保留，got %q", m, cfg.Inference.TTS.Model)
+	cfg := loadCfg(t, "[inference.tts]\nkokoro_sid = 3\nmodel = \"matcha\"\n")
+	if cfg.Inference.TTS.Provider != "sherpa" {
+		t.Errorf("旧键存在不应影响加载，got %+v", cfg.Inference.TTS)
+	}
+	for _, k := range []string{"kokoro_sid", "model"} {
+		if !strings.Contains(buf.String(), "key="+k) {
+			t.Errorf("旧键 %s 应打 Warn，日志：%s", k, buf.String())
 		}
 	}
 }

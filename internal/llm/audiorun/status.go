@@ -22,7 +22,7 @@ type Status struct {
 	Detail string // 面向用户的当前步骤 / 说明
 	Error  string // 失败原因（State=failed）
 	Reason string // 机器可读原因码（State=unsupported：见 Reason* 常量）
-	// Model 是 TTS 当前模型名："melo" | "matcha" | "none"（不支持/降级链已尽）；STT 状态留空。
+	// Model 是 TTS 模型名："melo"（可用或待安装）| "none"（本机不支持/基准过慢）；STT 状态留空。
 	Model string
 
 	InstallSizeBytes int64 // State=not_installed：还需下载的总字节数

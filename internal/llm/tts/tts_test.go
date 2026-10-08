@@ -157,7 +157,7 @@ func TestNewEngine_NotLoaded(t *testing.T) {
 		libMu.Unlock()
 	}()
 
-	_, err := NewEngine("/some/model/dir", Options{Model: ModelMelo, NumThreads: 2})
+	_, err := NewEngine("/some/model/dir", Options{NumThreads: 2})
 	if err == nil {
 		t.Error("expected error when library not loaded, got nil")
 	}
@@ -165,12 +165,10 @@ func TestNewEngine_NotLoaded(t *testing.T) {
 
 // ── 模型必需文件 ───────────────────────────────────────────────────────────
 
-var allModels = []Model{ModelMelo, ModelMatcha}
-
 // writeModelFiles 在 dir 下按 requiredFiles 造一份"完整"模型目录（内容为占位）。
-func writeModelFiles(t *testing.T, dir string, m Model, skip string) {
+func writeModelFiles(t *testing.T, dir string, skip string) {
 	t.Helper()
-	for _, rel := range requiredFiles(m) {
+	for _, rel := range requiredFiles() {
 		if rel == skip {
 			continue
 		}
@@ -191,76 +189,61 @@ func writeModelFiles(t *testing.T, dir string, m Model, skip string) {
 }
 
 func TestModelMissing(t *testing.T) {
-	for _, m := range allModels {
-		if ModelMissing("/nonexistent/dir", m) == "" {
-			t.Errorf("%s: 不存在的目录必须报缺失", m)
-		}
-		dir := t.TempDir()
-		if got := ModelMissing(dir, m); got != requiredFiles(m)[0] {
-			t.Errorf("%s: 空目录应首先报缺 %s，got %q", m, requiredFiles(m)[0], got)
-		}
-		writeModelFiles(t, dir, m, "")
-		if got := ModelMissing(dir, m); got != "" {
-			t.Errorf("%s: 齐备目录不应报缺失，got %q", m, got)
-		}
-		// 逐项缺失：词典/声码器/espeak-ng-data 缺任何一项引擎都会读错音或创建失败。
-		for _, skip := range requiredFiles(m) {
-			d := t.TempDir()
-			writeModelFiles(t, d, m, skip)
-			if got := ModelMissing(d, m); got != skip {
-				t.Errorf("%s: 缺 %q 时应报该项，got %q", m, skip, got)
-			}
+	if ModelMissing("/nonexistent/dir") == "" {
+		t.Error("不存在的目录必须报缺失")
+	}
+	dir := t.TempDir()
+	if got := ModelMissing(dir); got != "model.onnx" {
+		t.Errorf("空目录应首先报缺 model.onnx，got %q", got)
+	}
+	writeModelFiles(t, dir, "")
+	if got := ModelMissing(dir); got != "" {
+		t.Errorf("齐备目录不应报缺失，got %q", got)
+	}
+	// 逐项缺失：词典/dict 缺任何一项引擎都会读错音或创建失败。
+	for _, skip := range requiredFiles() {
+		d := t.TempDir()
+		writeModelFiles(t, d, skip)
+		if got := ModelMissing(d); got != skip {
+			t.Errorf("缺 %q 时应报该项，got %q", skip, got)
 		}
 	}
 }
 
 // Melo 的 model.int8.onnx 是 133 字节占位文件：既不是必需文件，也不会被落盘。
 func TestMelo_Int8PlaceholderNotRequired(t *testing.T) {
-	for _, rel := range requiredFiles(ModelMelo) {
+	for _, rel := range requiredFiles() {
 		if strings.Contains(rel, "int8") {
-			t.Errorf("Melo 必需文件不得含 int8 占位：%s", rel)
+			t.Errorf("必需文件不得含 int8 占位：%s", rel)
 		}
 	}
-	if _, ok := ttsModelMapper("/m", ModelMelo)("vits-melo-tts-zh_en/model.int8.onnx"); ok {
+	if _, ok := ttsModelMapper("/m")("vits-melo-tts-zh_en/model.int8.onnx"); ok {
 		t.Error("Melo 的 model.int8.onnx 应被 mapper 丢弃")
 	}
 }
 
-// Matcha 声码器是独立单文件：归档齐备但声码器缺失时，只应补声码器这一项。
-func TestMissingAssets_MatchaVocoderSeparate(t *testing.T) {
-	libDir, ttsDir := t.TempDir(), t.TempDir()
-	writeModelFiles(t, ModelDir(ttsDir, ModelMatcha), ModelMatcha, MatchaVocoderFile)
-	names := make([]string, 0, 3)
-	for _, a := range MissingAssets(libDir, ttsDir, ModelMatcha) {
-		names = append(names, a.File)
-	}
-	if !strings.Contains(strings.Join(names, ","), "vocos-16khz-univ.onnx") || strings.Contains(strings.Join(names, ","), "matcha-icefall") {
-		t.Errorf("只应缺声码器，got %v", names)
-	}
-}
-
-// espeak-ng-data 必须是目录：同名普通文件不算数。
+// dict 必须是目录：同名普通文件不算数。
 func TestModelMissing_DirVsFile(t *testing.T) {
 	dir := t.TempDir()
-	writeModelFiles(t, dir, ModelMatcha, "espeak-ng-data/")
-	if err := os.WriteFile(filepath.Join(dir, "espeak-ng-data"), []byte("x"), 0o644); err != nil {
+	writeModelFiles(t, dir, "dict/")
+	if err := os.WriteFile(filepath.Join(dir, "dict"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := ModelMissing(dir, ModelMatcha); got != "espeak-ng-data/" {
-		t.Errorf("espeak-ng-data 是文件而非目录，应判缺失，got %q", got)
+	if got := ModelMissing(dir); got != "dict/" {
+		t.Errorf("dict 是文件而非目录，应判缺失，got %q", got)
 	}
 }
 
 // ── ttsModelMapper ─────────────────────────────────────────────────────────
 
-// 保留归档内完整目录结构，只剥掉顶层目录（espeak-ng-data/dict/lexicon+fst 都要）。
+// 保留归档内完整目录结构，只剥掉顶层目录（dict/lexicon/fst 都要）。
 func TestTTSModelMapper_KeepsStructureStripsTopDir(t *testing.T) {
-	mapper := ttsModelMapper("/models", ModelMatcha)
+	mapper := ttsModelMapper("/models")
 	cases := map[string]string{
-		"matcha-icefall-zh-en/model-steps-3.onnx":      "/models/model-steps-3.onnx",
-		"matcha-icefall-zh-en/espeak-ng-data/en/rules": "/models/espeak-ng-data/en/rules",
-		"matcha-icefall-zh-en/number-zh.fst":           "/models/number-zh.fst",
-		"./matcha-icefall-zh-en/lexicon.txt":           "/models/lexicon.txt",
+		"vits-melo-tts-zh_en/model.onnx":           "/models/model.onnx",
+		"vits-melo-tts-zh_en/dict/jieba.dict.utf8": "/models/dict/jieba.dict.utf8",
+		"vits-melo-tts-zh_en/number.fst":           "/models/number.fst",
+		"./vits-melo-tts-zh_en/lexicon.txt":        "/models/lexicon.txt",
 	}
 	for in, want := range cases {
 		got, ok := mapper(in)
@@ -268,14 +251,10 @@ func TestTTSModelMapper_KeepsStructureStripsTopDir(t *testing.T) {
 			t.Errorf("mapper(%q) = %q, %v; want %q, true", in, got, ok, want)
 		}
 	}
-	got, ok := ttsModelMapper("/models", ModelMelo)("vits-melo-tts-zh_en/dict/jieba.dict.utf8")
-	if !ok || got != "/models/dict/jieba.dict.utf8" {
-		t.Errorf("melo dict 映射错误：%q %v", got, ok)
-	}
 }
 
 func TestTTSModelMapper_DropsTopLevelAndEscapes(t *testing.T) {
-	mapper := ttsModelMapper("/models", ModelMelo)
+	mapper := ttsModelMapper("/models")
 	for _, in := range []string{"loose.txt", "vits-melo-tts-zh_en/", "vits-melo-tts-zh_en"} {
 		if got, ok := mapper(in); ok {
 			t.Errorf("mapper(%q) 应丢弃，got %q", in, got)
@@ -290,42 +269,24 @@ func TestTTSModelMapper_DropsTopLevelAndEscapes(t *testing.T) {
 	}
 }
 
-// ── ModelDir / ParseModel ──────────────────────────────────────────────────
+// ── ModelDir ───────────────────────────────────────────────────────────────
 
 func TestModelDir(t *testing.T) {
-	if got := ModelDir("/tts", ModelMelo); got != "/tts/melo" {
+	if got := ModelDir("/tts"); got != "/tts/melo" {
 		t.Errorf("got %q, want /tts/melo", got)
-	}
-	if got := ModelDir("/tts", ModelMatcha); got != "/tts/matcha" {
-		t.Errorf("got %q, want /tts/matcha", got)
-	}
-}
-
-func TestParseModel(t *testing.T) {
-	for _, ok := range []string{"melo", "matcha"} {
-		if _, err := ParseModel(ok); err != nil {
-			t.Errorf("%s 应合法：%v", ok, err)
-		}
-	}
-	for _, bad := range []string{"", "kokoro", "Melo", "auto"} {
-		if _, err := ParseModel(bad); err == nil {
-			t.Errorf("%q 应被拒绝", bad)
-		}
 	}
 }
 
 // 缺失资产清单与 Installed 一致。
 func TestInstalled_And_MissingAssets(t *testing.T) {
-	for _, m := range allModels {
-		libDir, ttsDir := t.TempDir(), t.TempDir()
-		if Installed(libDir, ttsDir, m) {
-			t.Fatalf("%s: 空目录不应判为已安装", m)
-		}
-		writeModelFiles(t, ModelDir(ttsDir, m), m, "")
-		for _, a := range MissingAssets(libDir, ttsDir, m) {
-			if a.Kind == audioassets.KindTTSModel || a.Kind == audioassets.KindTTSFile {
-				t.Errorf("%s: 模型已齐备，不应再列 %s", m, a.File)
-			}
+	libDir, ttsDir := t.TempDir(), t.TempDir()
+	if Installed(libDir, ttsDir) {
+		t.Fatal("空目录不应判为已安装")
+	}
+	writeModelFiles(t, ModelDir(ttsDir), "")
+	for _, a := range MissingAssets(libDir, ttsDir) {
+		if a.Kind == audioassets.KindTTSModel {
+			t.Errorf("模型已齐备，不应再列 %s", a.File)
 		}
 	}
 }

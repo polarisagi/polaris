@@ -46,7 +46,7 @@ func TestTTSService_RetryOnStartNotTrustedAtBoot(t *testing.T) {
 	prof := hostProf()
 	prefs := &memPrefs{}
 	if err := SaveBench(context.Background(), prefs, BenchRecord{
-		Fingerprint: Fingerprint(prof, tts.ModelMelo), Model: "melo", RTF: 1.07, Supported: false, RetryOnStart: true, MeasuredAt: time.Now(),
+		Fingerprint: Fingerprint(prof), RTF: 1.07, Supported: false, RetryOnStart: true, MeasuredAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
