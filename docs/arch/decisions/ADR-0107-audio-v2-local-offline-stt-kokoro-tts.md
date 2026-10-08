@@ -1,6 +1,6 @@
 # ADR-0107: 语音 v2：本地离线 STT + Kokoro TTS、按需下载、最低配置门控、系统语音兜底
 
-- **状态**: Accepted（决策 3 与反例守护第一条被 ADR-0108 取代）
+- **状态**: Accepted（决策 3 与反例守护第一条被 ADR-0108 取代；决策 1 的 TTS 部分、决策 2 的服务端 TTS 门槛、决策 6 与"拒绝重新引入 Matcha"反例守护被 ADR-0110 取代）
 - **日期**: 2026-10-02
 - **决策者**: 用户（定位与模型裁决）/ Opus（实测）/ Sonnet（实现）
 - **相关模块**: M13 Gateway / `internal/llm/audioassets/` / `internal/llm/audiorun/` / `internal/llm/stt/` / `internal/llm/tts/` / `web/src/js/store/chat.js`
@@ -57,3 +57,4 @@
 |------|------|
 | 2026-10-02 | 初稿 |
 | 2026-10-02 | 决策 3（按需下载）与反例守护第一条（拒绝启动期自动下载语音资产）被 ADR-0108 取代为后台串行预置 |
+| 2026-10-08 | 决策 1(TTS)/2(TTS 门槛)/6 与 Matcha 反例守护被 ADR-0110 取代：Kokoro 改为 MeloTTS / Matcha，服务端 TTS 门槛改为硬件三档（A/B/C） |
