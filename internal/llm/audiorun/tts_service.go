@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,9 @@ type TTSOptions struct {
 	Profile HardwareProfile
 	// CPUUsage 采样系统 CPU 占用率（0–100）。nil 时视为恒 0（仅测试用）。
 	CPUUsage func() float64
+	// ProxyProbe 在下载 Melo 之前用 SenseVoice 对固定噪声测速并外推 Melo RTF（ADR-0110 修订三）。
+	// nil 表示不做代理测速（直接下载 + 真实基准，行为同修订二）。
+	ProxyProbe ProxyProbeFunc
 }
 
 // TTSService 把 tts.Engine（MeloTTS）包成"按需安装、懒加载、首次基准、空闲卸载"的服务，实现 tts.Provider。
@@ -45,6 +49,8 @@ type TTSService struct {
 	rootCtx    context.Context
 	slot       *Slot[*tts.Engine]
 	installing atomic.Bool
+	// assetMu 串行化"下载/解压资产"与"回收资产目录"，保证不会一边删一边写 models/tts/melo。
+	assetMu sync.Mutex
 	// slow 非 nil 表示本机已被基准判定为过慢（同指纹）：服务端 TTS 置 unsupported，前端用系统语音。
 	slow atomic.Pointer[BenchRecord]
 	// nextLoadOrigin 记录下一次引擎加载的发起方（"auto"|"user"）。
@@ -120,7 +126,7 @@ func (t *TTSService) restoreBench(ctx context.Context) {
 		slog.Warn("audio: tts bench record unreadable, will re-measure on first load", "err", err)
 		return
 	}
-	if ok && !rec.Supported && rec.RetryOnStart {
+	if ok && !rec.Supported && rec.RetryOnStart && rec.Method != MethodProxy {
 		// 上次的过慢结论可能是瞬时负载造成：本次启动不采信，用户触发朗读/安装时重测一次。
 		slog.Info("audio: tts previously judged too slow, will re-measure once on next use", "rtf", rec.RTF)
 		return
@@ -133,11 +139,11 @@ func (t *TTSService) restoreBench(ctx context.Context) {
 
 func (t *TTSService) tooSlowStatus() Status {
 	rec := t.slow.Load()
-	return Status{
-		State: StateUnsupported, Reason: ReasonTooSlow,
-		Detail: "本机服务端语音合成速度不足（实时率 " + rtfText(rec.RTF) + " > " + rtfText(MaxTTSRTF) + "），朗读改用系统语音",
-		Model:  "none",
+	detail := "本机服务端语音合成速度不足（实时率 " + rtfText(rec.RTF) + " > " + rtfText(MaxTTSRTF) + "），朗读改用系统语音"
+	if rec.Method == MethodProxy {
+		detail = "本机 CPU 合成速度不足（预测实时率 " + rtfText(rec.Predicted) + " > " + rtfText(proxyMaxPredicted) + "），已跳过语音合成模型下载，朗读改用系统语音"
 	}
+	return Status{State: StateUnsupported, Reason: ReasonTooSlow, Detail: detail, Model: "none"}
 }
 
 // base 计算"无进行中操作"时的状态：不支持 / 过慢 / 未安装 / 就绪。
@@ -201,7 +207,8 @@ func (t *TTSService) NeedsBench(ctx context.Context) bool {
 	if rec.Supported {
 		return false
 	}
-	return rec.RetryOnStart
+	// 代理记录不是 Melo 的真实测量：手动安装覆盖代理结论后必须补跑真实基准。
+	return rec.RetryOnStart || rec.Method == MethodProxy
 }
 
 // BenchIfNeeded 在 NeedsBench 为真时经 slot.AcquireWait 加载运行基准，跑完立即释放并卸载（ADR-0108）。
@@ -221,6 +228,10 @@ func (t *TTSService) BenchIfNeeded(ctx context.Context) error {
 
 // loadEngine 由 Slot 在后台调用：内存检查 → 加载库 → 创建引擎 → （首次）基准。
 func (t *TTSService) loadEngine(ctx context.Context) (*tts.Engine, error) {
+	if t.slow.Load() != nil {
+		// 并发的 Generate 在定论前已越过 gate：定论后（资产可能已回收）不得再加载。
+		return nil, notReady(CodeUnsupported, t.tooSlowStatus().Detail)
+	}
 	if free := t.o.FreeMemMB(); free < ttsMinFreeMB {
 		return nil, notReady(CodeInsufficientMemory, memMsg("语音合成", free, ttsMinFreeMB))
 	}
@@ -239,7 +250,8 @@ func (t *TTSService) loadEngine(ctx context.Context) (*tts.Engine, error) {
 		return eng, nil
 	}
 	prev, ok, _ := GetBench(ctx, t.o.Prefs, t.fingerprint())
-	return t.firstBench(ctx, eng, ok && !prev.Supported, origin)
+	// 代理记录不算"已重测过"：它没有测过 Melo，真实基准的第一次慢结果仍享有一次重测机会。
+	return t.firstBench(ctx, eng, ok && !prev.Supported && prev.Method != MethodProxy, origin)
 }
 
 // firstBench 在首次加载后测 RTF 并持久化；过慢则卸载并置 unsupported(too_slow)。
@@ -267,6 +279,7 @@ func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine, retried bo
 	rec := decideBench(rtf, contended, retried)
 	rec.Fingerprint = t.fingerprint()
 	rec.MeasuredAt = time.Now().UTC()
+	rec.Method = MethodReal
 
 	slog.Info("audio: tts benchmark",
 		"rtf", rtf, "max_rtf", MaxTTSRTF, "supported", rec.Supported,
@@ -282,14 +295,21 @@ func (t *TTSService) firstBench(ctx context.Context, eng *tts.Engine, retried bo
 	if cerr := eng.Close(); cerr != nil {
 		slog.Warn("audio: tts engine close after slow bench failed", "err", cerr)
 	}
+	return nil, t.finishSlow(rec)
+}
+
+// finishSlow 处理"真实基准未通过"的收尾（调用时引擎已 Close）：
+// 定论（非争用且已重测）→ 置 slow 并回收 models/tts/melo；争用造成的暂时不可用 → 绝不删资产，下次空闲重测。
+func (t *TTSService) finishSlow(rec BenchRecord) error {
 	if !rec.RetryOnStart {
-		// 定论：非争用且已重测过仍慢
 		t.slow.Store(&rec)
-		return nil, notReady(CodeUnsupported, t.tooSlowStatus().Detail)
+		// 回收 167MB：引擎已 Close 且 slow 已置位，此刻目录无人使用。
+		t.reclaimAssets()
+		return notReady(CodeUnsupported, t.tooSlowStatus().Detail)
 	}
 	// 暂时不可用：本次请求降级系统语音，RetryOnStart=true，不写 t.slow，状态发布为 ready（资产完备，下次空闲重测）
 	t.pub(t.base(false))
-	return nil, notReady(CodeUnsupported, "本机服务端语音合成暂时不可用：此刻 CPU 繁忙，朗读暂用系统语音，空闲时会自动重测")
+	return notReady(CodeUnsupported, "本机服务端语音合成暂时不可用：此刻 CPU 繁忙，朗读暂用系统语音，空闲时会自动重测")
 }
 
 // gate 在加载前拦截"根本不可能服务"的状态。
@@ -323,10 +343,17 @@ func (t *TTSService) Generate(ctx context.Context, text string) (tts.Audio, erro
 	return eng.Generate(ctx, text) //nolint:wrapcheck // tts 包已用 apperr 包装
 }
 
-func (t *TTSService) installSync(ctx context.Context, origin string) error {
+// installSync 下载并校验资产。forceReal=true（用户手动安装）跳过代理测速，直接下载并跑真实基准。
+func (t *TTSService) installSync(ctx context.Context, origin string, forceReal bool) error {
 	defer t.installing.Store(false)
+	if !forceReal && len(t.missing()) > 0 && t.proxyTooSlow(ctx, origin) {
+		return nil
+	}
 	t.pub(Status{State: StateDownloading, Origin: origin, Detail: "准备下载语音合成模型"})
-	if err := tts.EnsureAssets(ctx, t.o.LibDir, t.o.Dir, t.o.HTTPClient, t.o.SherpaVersion, downloadProgress(t.o.Sink, origin)); err != nil {
+	t.assetMu.Lock()
+	err := tts.EnsureAssets(ctx, t.o.LibDir, t.o.Dir, t.o.HTTPClient, t.o.SherpaVersion, downloadProgress(t.o.Sink, origin))
+	t.assetMu.Unlock()
+	if err != nil {
 		slog.Error("audio: tts install failed", "err", err)
 		t.pub(Status{State: StateFailed, Error: err.Error()})
 		return apperr.Wrap(apperr.CodeInternal, "tts: ensure assets failed", err)
@@ -343,11 +370,14 @@ func (t *TTSService) installSync(ctx context.Context, origin string) error {
 
 // Install 启动后台安装（下载 + sha256 校验 + 首次加载与基准）。
 // started=false 表示无需或已在进行中；不支持的机器返回 *NotReadyError（unsupported）。
+//
+// 逃生口：代理测速给出的 too_slow 只是预测，用户手动点"启用服务端朗读"时无视它，
+// 下载并跑真实基准，真实结果覆盖代理记录。真实基准的定论过慢则仍拒绝（已测过，且资产已回收）。
 func (t *TTSService) Install() (started bool, err error) {
 	if !t.o.Support.Supported {
 		return false, notReady(CodeUnsupported, t.o.Support.Message)
 	}
-	if t.slow.Load() != nil {
+	if s := t.slow.Load(); s != nil && s.Method != MethodProxy {
 		return false, notReady(CodeUnsupported, t.tooSlowStatus().Detail)
 	}
 	if len(t.missing()) == 0 {
@@ -356,8 +386,13 @@ func (t *TTSService) Install() (started bool, err error) {
 	if !t.installing.CompareAndSwap(false, true) {
 		return false, nil
 	}
+	// CAS 之后再清代理结论：与后台预置器互斥（同一时刻只有一个安装者），gate() 也随之放行加载。
+	if s := t.slow.Load(); s != nil && s.Method == MethodProxy {
+		t.slow.Store(nil)
+		slog.Info("audio: manual tts install overrides proxy too_slow verdict, will run real bench")
+	}
 	concurrent.SafeGo(t.rootCtx, "audiorun.tts_install", func(ctx context.Context) {
-		if err := t.installSync(ctx, "user"); err != nil {
+		if err := t.installSync(ctx, "user", true); err != nil {
 			slog.Warn("audio: tts background install failed", "err", err)
 		}
 	})
@@ -373,7 +408,7 @@ func (t *TTSService) InstallBlocking(ctx context.Context) (ran bool, err error) 
 	if !t.installing.CompareAndSwap(false, true) {
 		return false, nil
 	}
-	return true, t.installSync(ctx, "auto")
+	return true, t.installSync(ctx, "auto", false)
 }
 
 // warm 安装完成后立即加载一次：既验证资产能真正跑起来，也触发首次基准（结果落库）。

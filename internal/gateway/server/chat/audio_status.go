@@ -31,7 +31,7 @@ type AudioAssetStatus struct {
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
 	Error  string `json:"error,omitempty"`
-	// Reason 是 State=unsupported 时的机器可读原因码（insufficient_ram / insufficient_cores /
+	// Reason 是 State=unsupported 时的机器可读原因码（insufficient_ram / insufficient_cores / tts_ram_tier(B 档仅 TTS) /
 	// unsupported_platform / too_slow），前端据此选文案。
 	Reason string `json:"reason,omitempty"`
 	// Model 是 TTS 当前模型名："melo" | "none"（本机不支持或基准过慢）；STT 状态不填（ADR-0110）。

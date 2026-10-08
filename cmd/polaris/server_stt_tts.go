@@ -162,6 +162,8 @@ func initTTS(ctx context.Context, in audioInit, rt *audioRuntime, profile audior
 		Prefs:      in.Prefs,
 		Profile:    profile,
 		CPUUsage:   in.CPUUsage,
+		// ADR-0110 修订三：下载 167MB 前先用已装好的 SenseVoice 外推 Melo 速度，弱 CPU 不白下。
+		ProxyProbe: rt.stt.ProbeRTF,
 	})
 	s.SetTTSProvider(&ttsAdapter{inner: rt.tts}, "sherpa")
 }

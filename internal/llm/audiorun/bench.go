@@ -50,7 +50,19 @@ type BenchRecord struct {
 	// 下次守护进程启动后不直接采信，等用户再次触发朗读/安装时重测一次；
 	// 重测仍过慢则写入 false，此后同指纹不再重测。supported 结论同指纹始终复用。
 	RetryOnStart bool `json:"retry_on_start,omitempty"`
+	// Method 区分结论来源："proxy"=下载前用 SenseVoice 代理测速（未下载 Melo），""/"real"=Melo 真实基准。
+	// 代理记录的 RTF 字段存 predicted，真实基准覆盖同键记录（ADR-0110 修订三）。
+	Method string `json:"method,omitempty"`
+	// STTRTF / Predicted 仅代理记录有值：SenseVoice 实测 RTF 与据此外推的 Melo RTF。
+	STTRTF    float64 `json:"stt_rtf,omitempty"`
+	Predicted float64 `json:"predicted,omitempty"`
 }
+
+// 结论来源取值。
+const (
+	MethodProxy = "proxy"
+	MethodReal  = "real"
+)
 
 // decideBench 根据 RTF、CPU 争用标志以及是否已重测计算基准判定结论（纯函数，供表驱动测试）。
 func decideBench(rtf float64, contended, retried bool) BenchRecord {

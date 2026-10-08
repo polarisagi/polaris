@@ -196,6 +196,42 @@ func (s *STTService) InstallBlocking(ctx context.Context) (ran bool, err error) 
 	return true, s.installSync(ctx, "auto")
 }
 
+// ProbeRTF 实现 TTS 下载前代理测速的探针（ADR-0110 修订三）：用临时引擎在 threads 线程下
+// 对固定噪声测 SenseVoice 的 RTF，测完立即释放，不占用也不扰动 Slot 里的常驻引擎。
+// ok=false 表示无法测量（不支持 / 资产缺失 / 正在安装 / 内存不足 / 加载失败），调用方应跳过代理。
+func (s *STTService) ProbeRTF(_ context.Context, threads int) (float64, bool) {
+	if !s.o.Support.Supported || s.installing.Load() || len(stt.MissingAssets(s.o.Dir)) > 0 {
+		return 0, false
+	}
+	if free := s.o.FreeMemMB(); free < sttMinFreeMB {
+		slog.Info("audio: stt proxy probe skipped (low free memory)", "free_mb", free)
+		return 0, false
+	}
+	if err := stt.LoadLibrary(filepath.Join(s.o.Dir, stt.LibName())); err != nil {
+		slog.Warn("audio: stt proxy probe skipped (library load failed)", "err", err)
+		return 0, false
+	}
+	lang := s.o.Language
+	if lang == "" {
+		lang = "zh"
+	}
+	eng, err := stt.NewEngine(stt.ModelDir(s.o.Dir), stt.PunctModelDir(s.o.Dir), lang, threads, s.o.UseITN)
+	if err != nil {
+		slog.Warn("audio: stt proxy probe skipped (engine init failed)", "err", err)
+		return 0, false
+	}
+	defer eng.Close() // 临时引擎：测完即释放，避免与随后下载的 Melo 叠加内存
+	rtf, err := MeasureSTTRTF(func(samples []float32, rate int) error {
+		_, terr := eng.Transcribe(samples, rate)
+		return terr //nolint:wrapcheck // MeasureSTTRTF 统一包装
+	})
+	if err != nil {
+		slog.Warn("audio: stt proxy probe failed", "err", err)
+		return 0, false
+	}
+	return rtf, true
+}
+
 // Close 关闭服务并卸载引擎。
 func (s *STTService) Close() { s.slot.Close() }
 

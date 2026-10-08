@@ -60,7 +60,52 @@
 2. **两者不对称**：朗读有零成本替代——前端系统语音在用户本地设备合成，不耗 VPS 资源；语音输入没有离线本地替代（浏览器语音识别多为云端，违反离线原则），因此 2GB 保 STT、舍服务端 TTS。STT 懒加载 + 空闲卸载 + 600MB 空闲门槛已有保护。
 3. **TTS 核数门槛取 2 而非旧 Kokoro 的 4**：Melo 2 线程 RTF 0.42（M1），弱核机器由基准兜底，不再用核数预判（A 档已保证 ≥2 核）。
 
-B 档 TTS 的 Capability 原因码为 `insufficient_ram`，用户说明"服务端朗读需要至少 4GB 内存，已使用系统语音"。最低配置表述：语音输入 2GB/2 核；服务端朗读 4GB（≥3600MB）/2 核 + 基准通过。
+B 档 TTS 的 Capability 原因码为 `insufficient_ram`（**已被「修订三」改为 `tts_ram_tier`**），用户说明"服务端朗读需要至少 4GB 内存，已使用系统语音"。最低配置表述：语音输入 2GB/2 核；服务端朗读 4GB（≥3600MB）/2 核 + 基准通过。
+
+## 2026-10-08 修订三：分档提示与下载前代理测速
+
+### 问题 1：前端不区分档位
+
+B 档 TTS 沿用 `insufficient_ram` 与 A 档同码，前端无法区分"语音输入可用、只是服务端朗读关闭"和"全部不可用"，用户设为"仅服务端朗读"时 B 档会被 `unsupported` toast 打扰。
+
+- 新增原因码 `tts_ram_tier`，**仅 B 档的 TTS** 使用（STT 支持、TTS 因总内存 <3600MB 关闭）；A 档仍为 `insufficient_ram` / `insufficient_cores`。
+- 前端：服务端朗读 `unsupported`（任何原因）时，系统语音可用则直接朗读、**不弹任何 toast**；仅系统里也没有本地中文语音时才提示。原因文案只出现在状态 chip 下拉里（新增 `info` 级别，静态、不转圈），全部走 i18n：
+
+| reason | 文案 |
+|---|---|
+| `tts_ram_tier` | 朗读使用系统语音（服务端朗读需 4GB 内存）；语音输入可用 |
+| `insufficient_ram` / `insufficient_cores` | 本机配置不足（需 2GB 内存、2 核），语音输入与服务端朗读不可用 |
+| `too_slow` | 本机 CPU 合成速度不足，朗读使用系统语音 |
+
+### 问题 2：弱 CPU 白下 167MB
+
+下载前用已装好的 SenseVoice 对固定噪声测速并外推 Melo RTF，过慢则不下载。
+
+**测量**：10s、16kHz、幅度 0.01、固定种子噪声（不依赖资产文件）；1 次预热 + 3 次计时取最小；线程数 = Melo 线程数 `min(4, 逻辑核)`；用临时 STT 引擎，测完释放，不扰动 Slot 常驻引擎。
+
+**标定**（M1，Opus 实测）：
+
+| 线程 | SenseVoice RTF | Melo RTF | 比值 |
+|---|---|---|---|
+| 1 | 0.0391 | 0.79 | 20.2 |
+| 2 | 0.0223 | 0.42 | 18.8 |
+| 4 | 0.0172 | 0.233 | 13.5 |
+
+**公式**：`predicted = sttRTF × 13`（取最乐观的 4 线程比值：宁可放行偏慢机器交给真实基准，也不误杀可用机器）；`predicted > 1.0` 判代理过慢（对应 sttRTF > 0.0769）。1.0 比真实基准的 0.8 宽松，因为代理有误差。
+
+**流程**：
+- 代理过慢：不下载 Melo，TTS 置 `unsupported/too_slow`，落库 `audio.tts_bench.melo`（`method:"proxy"`、`stt_rtf`、`predicted`，`rtf` 存 predicted），后台预置器尊重该结论，重启后同指纹直接生效。
+- 否则下载并走原真实基准（ADR-0108 D2）。
+- 复用 D2 的 CPU 空闲采样与 Contended 判定：测前/测后 CPU ≥50% 视为争用，**无结论**，走原路径（下载 + 真实基准），不落库。
+- STT 资产缺失、内存不足或加载失败：跳过代理，走原路径。
+- **逃生口**：用户主动 `POST /v1/audio/tts/install` 无视代理结论，清除代理 slow、下载并跑真实基准，真实结果覆盖代理记录（代理记录不算"已重测"，真实基准的首个慢结果仍享有一次重测）。真实基准的定论过慢仍拒绝安装（已测过且资产已回收）。
+- **回收**：真实基准定论过慢（非争用、已重测仍慢、`RetryOnStart=false`）后删除 `models/tts/melo/`，状态保持 `unsupported/too_slow`。争用造成的暂时不可用绝不删除。
+
+**并发与资源安全**：回收发生在 Slot 加载回调内、引擎已 `Close` 之后，此刻无驻留引擎与 inflight；`slow` 先于删除置位，`gate()` 与 `loadEngine` 入口均据此拒绝后续加载，不会再触碰该目录；`assetMu` 使"下载/解压"与"回收"互斥；安装本身由 `installing` CAS 保证预置器与手动安装互斥；回收只删目录名恰为 `melo` 的确切路径。
+
+**可观测（HE-1）**：slog 记录 stt_rtf / predicted / contended / 回收；计数器 `polaris.audio.tts_proxy_bench_total`、`tts_proxy_too_slow_total`、`tts_proxy_skipped_total`、`tts_reclaim_total`。
+
+**已知局限**：标定来自空闲 M1；同一台 M1 在约 30–40% 后台 CPU 占用（未触发 50% 争用线）下实测 SenseVoice 4 线程 RTF 0.057–0.070（predicted 0.74–0.90），明显高于标定值 0.0172，说明代理对中等负载敏感、偏悲观。因此 1.0 的放行线是"宁可放行"的上限，边缘机型由真实基准定夺；重新标定见下方重新评估触发条件。
 
 ## 决策
 
@@ -111,6 +156,7 @@ B 档 TTS 的 Capability 原因码为 `insufficient_ram`，用户说明"服务�
 
 ## 重新评估触发条件
 
+0. 代理测速在空闲机器上的 predicted 与真实 Melo RTF 偏差持续超过 2 倍（见修订三「已知局限」），需重新标定系数 13。
 1. sherpa-onnx 上游修复子句拆批吞字，或 MeloTTS 提供英文 G2P 回退（可恢复长英文词）。
 2. 出现 RTF 与音质均优于 MeloTTS 且单句 RSS ≤ 600MB 的中文模型。
 
@@ -121,3 +167,4 @@ B 档 TTS 的 Capability 原因码为 `insufficient_ram`，用户说明"服务�
 | 2026-10-08 | 初稿 |
 | 2026-10-08 | 修订：删除 Matcha（许可证链路不可核验），档位收敛为两档，删除 `inference.tts.model` 与降级链 |
 | 2026-10-08 | 修订二：2GB 档（B）关闭服务端 TTS 只开 STT，档位改为 A/B/C 三档，TTS 总内存门槛 3600MB、核数门槛 2 |
+| 2026-10-08 | 修订三：新增原因码 `tts_ram_tier` 与前端分档提示（系统语音可用时不弹 toast）；下载前 SenseVoice 代理测速（predicted=sttRTF×13，>1.0 不下载）、手动安装逃生口、真实定论过慢后回收 `models/tts/melo` |

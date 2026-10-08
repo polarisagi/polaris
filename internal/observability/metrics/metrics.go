@@ -46,6 +46,14 @@ var (
 	GlobalLLMResponseCacheHitTotal  atomic.Int64
 	GlobalLLMResponseCacheMissTotal atomic.Int64
 
+	// GlobalAudioTTSProxyBenchTotal / ...TooSlowTotal / ...SkippedTotal / GlobalAudioTTSReclaimTotal
+	// 记录服务端 TTS 下载前代理测速（ADR-0110 修订三）：执行次数、判定过慢（省下 167MB 下载）次数、
+	// 因 STT 资产缺失/加载失败/CPU 争用而无结论的次数，以及真实基准定论过慢后回收 models/tts/melo 的次数。
+	GlobalAudioTTSProxyBenchTotal   atomic.Int64
+	GlobalAudioTTSProxyTooSlowTotal atomic.Int64
+	GlobalAudioTTSProxySkippedTotal atomic.Int64
+	GlobalAudioTTSReclaimTotal      atomic.Int64
+
 	// GlobalBlindZoneRoutingTotal 因 BlindZone 检测强制升级为 System2 的累计次数（V8-S4）。
 	GlobalBlindZoneRoutingTotal atomic.Int64
 

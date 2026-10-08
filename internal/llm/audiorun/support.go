@@ -60,7 +60,10 @@ const (
 	ReasonUnsupportedPlatform = "unsupported_platform"
 	ReasonInsufficientRAM     = "insufficient_ram"
 	ReasonInsufficientCores   = "insufficient_cores"
-	ReasonTooSlow             = "too_slow"
+	// ReasonTTSRAMTier 仅用于 B 档：STT 可用，服务端 TTS 因总内存 <3600MB 关闭、朗读走系统语音。
+	// 与 A 档的 insufficient_ram 区分，前端才能给出"语音输入可用"而不是"不可用"的提示（ADR-0110 修订三）。
+	ReasonTTSRAMTier = "tts_ram_tier"
+	ReasonTooSlow    = "too_slow"
 )
 
 // HardwareProfile 是判定"是否支持"所用的稳定硬件画像。
@@ -103,7 +106,7 @@ func AudioSupport(p HardwareProfile) Support {
 		if p.totalMB() < ttsMinTotalMB {
 			// B 档：只开 STT。2GB 上 STT 门槛 600MB + Melo 800MB 无法同驻，共存只会让后加载者随机 503；
 			// 朗读有零成本替代（前端系统语音在用户本地合成），语音输入没有离线本地替代。
-			s.TTS = Capability{Reason: ReasonInsufficientRAM, Message: fmt.Sprintf(
+			s.TTS = Capability{Reason: ReasonTTSRAMTier, Message: fmt.Sprintf(
 				"服务端朗读需要至少 4GB 内存，已使用系统语音（本机总内存 %dMB）", p.totalMB())}
 		}
 		return s
