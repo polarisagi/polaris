@@ -97,3 +97,4 @@ add | L-19f | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_ll
 add | L-19g | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_g.go | tools/testdata/selftest/L19g_provider_method_call.go.txt
 add | L-19h | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_h.go | tools/testdata/selftest/L19h_exempt_no_reason.go.txt
 add | L-19i | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_i.go | tools/testdata/selftest/L19i_empty_purpose.go.txt
+patch | F-8b | tools/ffi_symbol_check.go | tools/baselines/ffi_exports.txt | surreal_vec_clear\nsurreal_vec_delete | surreal_vec_delete

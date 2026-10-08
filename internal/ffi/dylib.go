@@ -34,7 +34,12 @@ import (
 // cedar_load_policies 新增 timeout_ms 参数、cedar_policy_count 新增 timeout_ms
 // 参数（原为零参数），三者均改函数签名，见 lib.rs SUBSTRATE_ABI_MAJOR 处注释。
 const ExpectedABIMajor uint16 = 3
-const ExpectedABIMinor uint16 = 3
+
+// ExpectedABIMinor 是 Go 端期望的 ABI 次版本。
+// minor 是加法变更计数：Go 侧 RegisterLibFunc 的符号集合随 minor 单调增长，
+// 新增导出符号必须同步递增（tools/ffi_symbol_check.go 的快照对账会拦截忘记递增的情况）。
+// 4：新增 surreal_vec_dimension / surreal_vec_clear。
+const ExpectedABIMinor uint16 = 4
 
 var (
 	libHandle uintptr
@@ -130,11 +135,24 @@ func verifyABI(lib uintptr) error {
 		))
 	}
 
-	gotMinor := uint16(got & 0xFFFF)
-	if gotMinor != ExpectedABIMinor {
-		slog.Warn("substrate ABI minor mismatch — rebuild recommended",
-			"want_minor", ExpectedABIMinor, "got_minor", gotMinor, "raw", got)
-	}
+	return checkMinor(uint16(got&0xFFFF), ExpectedABIMinor, got)
+}
 
+// checkMinor 是 minor 版本判定的纯函数（便于不加载真 dylib 做单测）。
+//
+// minor 只记录加法变更：dylib 的 minor 低于 Go 期望值 = dylib 缺 Go 需要的符号，
+// 继续往下走会在 RegisterLibFunc 处 dlsym 失败 panic，所以在这里提前返回明确的"过旧"错误
+// （不 panic，调用方可降级或报给用户）；高于期望值 = 向前兼容，只记 Debug。
+// （2026-10-09 起；此前 minor 不匹配只 Warn，旧 dylib 因而溜过校验。）
+func checkMinor(gotMinor, wantMinor uint16, raw uint32) error {
+	switch {
+	case gotMinor < wantMinor:
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf(
+			"substrate dylib 过旧（want minor=%d got=%d, raw=0x%08x），缺少 Go 侧需要的导出符号；请运行 `make rust-build` 重新构建",
+			wantMinor, gotMinor, raw))
+	case gotMinor > wantMinor:
+		slog.Debug("substrate ABI minor newer than expected (compatible)",
+			"want_minor", wantMinor, "got_minor", gotMinor, "raw", raw)
+	}
 	return nil
 }

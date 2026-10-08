@@ -137,7 +137,14 @@ const SUBSTRATE_ABI_MAJOR: u16 = 3;
 ///    以便 Go 侧 verifyABI 精确识别 dylib 版本（minor 不匹配只 Warn 不 panic，
 ///    见 internal/ffi/dylib.go verifyABI）。破坏性语义的权威记录在上方 major
 ///    2→3 段落，此处仅作符号级变更清单。
-const SUBSTRATE_ABI_MINOR: u16 = 3;
+///    【2026-10-09 修订】上句括号内"minor 不匹配只 Warn 不 panic"已作废：minor 是加法变更，
+///    dylib minor < Go 期望值意味着缺 Go 需要的符号，verifyABI 现在返回 apperr 错误
+///    （"substrate dylib 过旧，运行 make rust-build"，不 panic）；dylib minor > 期望值为兼容，仅 Debug 日志。
+/// 4: 新增 surreal_vec_dimension（读取向量索引当前维度，commit 62c10b6）与
+///    surreal_vec_clear（同维模型切换时清空向量表，commit d160503），均为 2026-10-03 加入；
+///    此前这两个符号加入时 minor 未递增，旧 dylib 因此通过 verifyABI 却在
+///    purego.RegisterLibFunc 处 dlsym 失败 panic。
+const SUBSTRATE_ABI_MINOR: u16 = 4;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
 /// Go 侧用 `(version >> 16) & 0xFFFF` 提取 major。

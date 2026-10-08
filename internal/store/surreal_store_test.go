@@ -42,7 +42,11 @@ func TestSurrealStore_BasicOps(t *testing.T) {
 }
 
 func TestSurrealStore_Scan(t *testing.T) {
-	s, _ := OpenSurrealDBCore("mem", "", 3, 2)
+	// 不得吞掉 open 错误：dylib 过旧或缺失时 s 为 nil，吞错会把清晰的 ABI 错误变成后续空指针 panic。
+	s, err := OpenSurrealDBCore("mem", "", 3, 2)
+	if err != nil {
+		t.Fatalf("OpenSurrealDBCore: %v", err)
+	}
 	defer s.Close()
 	ctx := context.Background()
 
@@ -68,7 +72,11 @@ func TestSurrealStore_Scan(t *testing.T) {
 }
 
 func TestSurrealStore_Vector(t *testing.T) {
-	s, _ := OpenSurrealDBCore("mem", "", 3, 2)
+	// 不得吞掉 open 错误：dylib 过旧或缺失时 s 为 nil，吞错会把清晰的 ABI 错误变成后续空指针 panic。
+	s, err := OpenSurrealDBCore("mem", "", 3, 2)
+	if err != nil {
+		t.Fatalf("OpenSurrealDBCore: %v", err)
+	}
 	defer s.Close()
 
 	s.VecUpsert("vec1", []float32{1.0, 0.0, 0.0})
@@ -86,7 +94,11 @@ func TestSurrealStore_Vector(t *testing.T) {
 }
 
 func TestSurrealStore_Graph(t *testing.T) {
-	s, _ := OpenSurrealDBCore("mem", "", 3, 2)
+	// 不得吞掉 open 错误：dylib 过旧或缺失时 s 为 nil，吞错会把清晰的 ABI 错误变成后续空指针 panic。
+	s, err := OpenSurrealDBCore("mem", "", 3, 2)
+	if err != nil {
+		t.Fatalf("OpenSurrealDBCore: %v", err)
+	}
 	defer s.Close()
 
 	s.GraphRelate("nodeA", "knows", "nodeB", 1.0)
@@ -111,7 +123,11 @@ func TestSurrealStore_Graph(t *testing.T) {
 }
 
 func TestSurrealStore_FTS(t *testing.T) {
-	s, _ := OpenSurrealDBCore("mem", "", 3, 2)
+	// 不得吞掉 open 错误：dylib 过旧或缺失时 s 为 nil，吞错会把清晰的 ABI 错误变成后续空指针 panic。
+	s, err := OpenSurrealDBCore("mem", "", 3, 2)
+	if err != nil {
+		t.Fatalf("OpenSurrealDBCore: %v", err)
+	}
 	defer s.Close()
 
 	s.FTSIndex("doc1", "Hello world surreal")
@@ -128,7 +144,11 @@ func TestSurrealStore_FTS(t *testing.T) {
 }
 
 func TestSurrealStore_Capabilities(t *testing.T) {
-	s, _ := OpenSurrealDBCore("mem", "", 3, 2)
+	// 不得吞掉 open 错误：dylib 过旧或缺失时 s 为 nil，吞错会把清晰的 ABI 错误变成后续空指针 panic。
+	s, err := OpenSurrealDBCore("mem", "", 3, 2)
+	if err != nil {
+		t.Fatalf("OpenSurrealDBCore: %v", err)
+	}
 	defer s.Close()
 
 	caps := s.Capabilities()

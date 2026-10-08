@@ -99,3 +99,33 @@ func TestDoLoad_PathNotFound_ReturnsError(t *testing.T) {
 	// 既没有成功加载也没有返回 error 是异常状态
 	t.Error("期望 doLoad 要么返回有效 handle，要么返回 non-nil error")
 }
+
+// TestCheckMinor 覆盖 minor 版本判定的三种结果；纯函数，不需要真实 dylib。
+// 背景：minor 过旧意味着缺少 Go 侧新增绑定的符号，若放行会在 purego dlsym 处 panic，
+// 因此必须在 verifyABI 阶段以带修复指引的 error 拦下。
+func TestCheckMinor(t *testing.T) {
+	const want = uint16(4)
+	raw := func(minor uint16) uint32 { return uint32(ExpectedABIMajor)<<16 | uint32(minor) }
+
+	t.Run("过旧返回错误", func(t *testing.T) {
+		err := checkMinor(3, want, raw(3))
+		if err == nil {
+			t.Fatal("got<want 应返回 error")
+		}
+		for _, s := range []string{"过旧", "make rust-build", "want minor=4", "got=3"} {
+			if !strings.Contains(err.Error(), s) {
+				t.Errorf("error 缺少 %q: %v", s, err)
+			}
+		}
+	})
+	t.Run("相等通过", func(t *testing.T) {
+		if err := checkMinor(want, want, raw(want)); err != nil {
+			t.Fatalf("got==want 不应报错: %v", err)
+		}
+	})
+	t.Run("更新兼容", func(t *testing.T) {
+		if err := checkMinor(want+1, want, raw(want+1)); err != nil {
+			t.Fatalf("got>want 应兼容: %v", err)
+		}
+	})
+}

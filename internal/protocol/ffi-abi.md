@@ -66,12 +66,15 @@ Rust 导出 `substrate_abi_version() -> u32`（高16位=major, 低16位=minor）
 
 | 侧 | 当前值 |
 | Go `ExpectedABIMajor` | 3 |
-| Go `ExpectedABIMinor` | 3 |
+| Go `ExpectedABIMinor` | 4 |
 | Rust `SUBSTRATE_ABI_MAJOR` | 3 |
-| Rust `SUBSTRATE_ABI_MINOR` | 3 |
+| Rust `SUBSTRATE_ABI_MINOR` | 4 |
 
 ABI 1.1 新增：`surreal_set_worker_threads` / `surreal_vec_delete` / `surreal_fts_delete` / `surreal_graph_delete_edges`；`surreal_stats` 扩展四路计数字段；HNSW 替换 MTREE。
 ABI 3.3 新增：版本递增，同步 Rust 侧定义。
+ABI 3.4 新增：`surreal_vec_dimension` / `surreal_vec_clear`（2026-10-03 加入时漏递增 minor，2026-10-09 补）。
+
+minor 语义（2026-10-09 起）：dylib minor < Go 期望值 → `verifyABI` 返回"substrate dylib 过旧"错误（不 panic，提示 `make rust-build`）；dylib minor > 期望值 → 兼容，仅 Debug 日志。新增导出符号必须递增 minor，`tools/ffi_symbol_check.go` 用 `tools/baselines/ffi_exports.txt` 快照对账。
 
 ### 3.2 校验机制（`internal/ffi/dylib.go` `verifyABI`）
 

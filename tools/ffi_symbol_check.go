@@ -8,7 +8,13 @@
 //
 // 使用：
 //
-//	go run tools/ffi_symbol_check.go
+//	go run tools/ffi_symbol_check.go            # 校验
+//	go run tools/ffi_symbol_check.go -update    # 刷新 tools/baselines/ffi_exports.txt（须同时 bump ABI minor）
+//
+// 附加规则（导出面快照）：Rust 导出符号集合必须与 tools/baselines/ffi_exports.txt 一致，
+// 且快照头 minor 必须等于 lib.rs 的 SUBSTRATE_ABI_MINOR。导出集合变化而 minor 未变会失败。
+// 动机：2026-10 新增 surreal_vec_dimension/surreal_vec_clear 时漏 bump minor，
+// 旧 dylib 仍通过 verifyABI，运行时在 purego dlsym 处 panic。
 package main
 
 import (
@@ -17,12 +23,30 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
+
+const exportsBaselinePath = "tools/baselines/ffi_exports.txt"
 
 var errCount int
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-update" {
+		rs := collectRustSymbols("rust/substrate/src")
+		minor, err := rustABIMinor("rust/substrate/src/lib.rs")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ffi_symbol_check:", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(exportsBaselinePath, []byte(renderBaseline(minor, rs)), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "ffi_symbol_check:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("ffi_symbol_check: baseline updated (minor=%d, %d symbols)\n", minor, len(rs))
+		return
+	}
 	rustDir := "rust/substrate/src"
 	goDirs := []string{"internal", "cmd", "pkg"}
 	allowlistPath := "tools/baselines/deadcode-allowlist.txt"
@@ -72,6 +96,8 @@ func main() {
 			errCount++
 		}
 	}
+
+	errCount += checkExportsBaseline(rustSymbols)
 
 	if errCount > 0 {
 		fmt.Fprintf(os.Stderr, "ffi_symbol_check: FAIL — %d violation(s)\n", errCount)
@@ -190,4 +216,84 @@ func collectGoSymbols(dirs []string) map[string]string {
 		})
 	}
 	return symbols
+}
+
+var abiMinorRe = regexp.MustCompile(`const\s+SUBSTRATE_ABI_MINOR\s*:\s*u16\s*=\s*(\d+)`)
+
+func rustABIMinor(libRs string) (int, error) {
+	data, err := os.ReadFile(libRs)
+	if err != nil {
+		return 0, err
+	}
+	m := abiMinorRe.FindSubmatch(data)
+	if m == nil {
+		return 0, fmt.Errorf("%s 中未找到 SUBSTRATE_ABI_MINOR 常量", libRs)
+	}
+	return strconv.Atoi(string(m[1]))
+}
+
+func renderBaseline(minor int, syms map[string]string) string {
+	names := make([]string, 0, len(syms))
+	for n := range syms {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	b.WriteString("# Rust substrate 导出符号快照，由 go run tools/ffi_symbol_check.go -update 生成，勿手改。\n")
+	b.WriteString("# 导出集合变化时必须同时 bump lib.rs SUBSTRATE_ABI_MINOR 与 internal/ffi ExpectedABIMinor。\n")
+	fmt.Fprintf(&b, "minor=%d\n", minor)
+	for _, n := range names {
+		b.WriteString(n + "\n")
+	}
+	return b.String()
+}
+
+// checkExportsBaseline 返回违规数。同 minor 下导出集合必须与快照一致；minor 变了则要求刷新快照。
+func checkExportsBaseline(rust map[string]string) int {
+	if len(rust) == 0 {
+		return 0
+	}
+	data, err := os.ReadFile(exportsBaselinePath)
+	if err != nil {
+		fmt.Printf("%s: 读取导出快照失败: %v（运行 go run tools/ffi_symbol_check.go -update 生成）\n", exportsBaselinePath, err)
+		return 1
+	}
+	baseMinor := -1
+	base := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if v, ok := strings.CutPrefix(line, "minor="); ok {
+			baseMinor, _ = strconv.Atoi(v)
+			continue
+		}
+		base[line] = true
+	}
+	cur, err := rustABIMinor("rust/substrate/src/lib.rs")
+	if err != nil {
+		fmt.Println("ffi_symbol_check:", err)
+		return 1
+	}
+	n := 0
+	if baseMinor != cur {
+		fmt.Printf("%s: 快照 minor=%d 与 lib.rs SUBSTRATE_ABI_MINOR=%d 不一致；bump minor 后请运行 go run tools/ffi_symbol_check.go -update\n",
+			exportsBaselinePath, baseMinor, cur)
+		return 1
+	}
+	for sym, loc := range rust {
+		if !base[sym] {
+			fmt.Printf("%s: 新增导出符号 %q 但 ABI minor 未 bump（旧 dylib 将通过 verifyABI 后在 dlsym 处 panic）；"+
+				"请 bump SUBSTRATE_ABI_MINOR/ExpectedABIMinor 并 -update 刷新快照\n", loc, sym)
+			n++
+		}
+	}
+	for sym := range base {
+		if rust[sym] == "" {
+			fmt.Printf("%s: 快照中的导出符号 %q 已从 Rust 侧消失但 ABI minor 未 bump（删除导出属 breaking，应 bump major）\n", exportsBaselinePath, sym)
+			n++
+		}
+	}
+	return n
 }

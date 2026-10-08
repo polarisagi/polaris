@@ -274,11 +274,14 @@ run_step "[5/13] 执行 docs/arch 一致性检查" "make docs-check && make docs
 
 run_step "[6/13] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
 
-run_step "[7/13] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "make test-ci"
+# Rust dylib 必须先于 Go 测试构建：store/ffi 等包的测试会 dlopen rust/substrate/target/release 下的
+# libsubstrate，若先测后建，拿到的是磁盘上任意旧产物（2026-10-08 实测：旧 dylib 缺
+# surreal_vec_dimension，purego 在 RegisterLibFunc 处 panic）。ci.yml 的 test job 已 needs rust-build。
+run_step "[7/13] 编译 Rust Substrate 模块 (Go 测试依赖其产物)" "make rust-build"
 
-run_step "[8/13] 运行 Rust 单元测试" "make rust-test"
+run_step "[8/13] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "make test-ci"
 
-run_step "[9/13] 编译 Rust Substrate 模块" "make rust-build"
+run_step "[9/13] 运行 Rust 单元测试" "make rust-test"
 
 run_step "[10/13] 执行全量编译 (make build)" "make build"
 
