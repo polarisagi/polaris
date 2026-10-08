@@ -202,13 +202,16 @@
             <template x-if="$store.audio.chipLevel === 'warn'">
               <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             </template>
-            <template x-if="$store.audio.chipLevel !== 'warn'">
+            <template x-if="$store.audio.chipLevel === 'info'">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </template>
+            <template x-if="$store.audio.chipLevel === 'ok'">
               <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
             </template>
             
-            <span class="font-sans font-medium" x-text="$store.i18n.t('audio_chip_label') + ($store.audio.combinedPct !== null ? ` ${$store.audio.combinedPct}%` : ($store.audio.chipLevel === 'warn' ? '' : '…'))"></span>
+            <span class="font-sans font-medium" x-text="$store.i18n.t('audio_chip_label') + ($store.audio.combinedPct !== null ? ` ${$store.audio.combinedPct}%` : ($store.audio.chipLevel === 'ok' ? '…' : ''))"></span>
             
-            <template x-if="$store.audio.combinedPct !== null && $store.audio.chipLevel !== 'warn'">
+            <template x-if="$store.audio.combinedPct !== null && $store.audio.chipLevel === 'ok'">
               <progress class="progress progress-primary w-12 h-1.5 bg-base-300" :value="$store.audio.combinedPct" max="100"></progress>
             </template>
           </div>
@@ -236,6 +239,9 @@
                   <span x-text="`${$store.audio.pct('stt')}%`"></span>
                 </div>
               </template>
+              <template x-if="$store.audio.reasonText('stt')">
+                <div class="text-[11px] opacity-70" x-text="$store.audio.reasonText('stt')"></div>
+              </template>
               <template x-if="$store.audio.stt?.state === 'failed'">
                 <div class="flex items-center justify-between text-error text-[11px] mt-0.5">
                   <span class="truncate max-w-[170px]" :title="$store.audio.stt?.error || $store.audio.stt?.detail" x-text="$store.audio.stt?.error || $store.audio.stt?.detail || '下载失败'"></span>
@@ -260,6 +266,9 @@
                   <span x-text="`${Math.round($store.audio.tts.progress.bytes_done / 1048576)}MB / ${Math.round($store.audio.tts.progress.bytes_total / 1048576)}MB`"></span>
                   <span x-text="`${$store.audio.pct('tts')}%`"></span>
                 </div>
+              </template>
+              <template x-if="$store.audio.reasonText('tts')">
+                <div class="text-[11px] opacity-70" x-text="$store.audio.reasonText('tts')"></div>
               </template>
               <template x-if="$store.audio.tts?.state === 'failed'">
                 <div class="flex items-center justify-between text-error text-[11px] mt-0.5">

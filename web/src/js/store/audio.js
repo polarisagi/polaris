@@ -54,16 +54,38 @@ Alpine.store('audio', {
     return Math.floor((done * 100) / total)
   },
 
+  // 档位/不可用原因文案（ADR-0110 修订三）。只对 unsupported 状态有值，按后端 reason 码区分：
+  //   tts_ram_tier（B 档：语音输入可用、仅服务端朗读关闭）/ too_slow / insufficient_*（A 档：两者都不可用）。
+  // 文案走 i18n，仅在状态 chip 下拉里展示，不弹 toast（非打扰）。
+  reasonText(kind) {
+    const st = this[kind]
+    if (!st || st.state !== 'unsupported') return ''
+    const t = (k) => Alpine.store('i18n')?.t(k) || k
+    switch (st.reason) {
+      case 'tts_ram_tier': return t('audio_reason_tts_ram_tier')
+      case 'too_slow': return t('audio_reason_too_slow')
+      case 'insufficient_ram':
+      case 'insufficient_cores': return t('audio_reason_tier_a')
+      default: return ''
+    }
+  },
+
+  get hasReasonHint() {
+    return !!(this.reasonText('stt') || this.reasonText('tts'))
+  },
+
   get chipVisible() {
     const hasActive = this.activeKinds.length > 0
     const hasFail = (this.stt && this.stt.state === 'failed') || (this.tts && this.tts.state === 'failed')
-    return hasActive || hasFail
+    return hasActive || hasFail || this.hasReasonHint
   },
 
+  // warn=有失败；ok=有进行中的下载/加载（显示转圈）；info=仅有不可用原因提示（静态、无转圈）。
   get chipLevel() {
     const hasFail = (this.stt && this.stt.state === 'failed') || (this.tts && this.tts.state === 'failed')
     if (hasFail) return 'warn'
-    return 'ok'
+    if (this.activeKinds.length > 0) return 'ok'
+    return 'info'
   },
 
   isDownloading(kind) {

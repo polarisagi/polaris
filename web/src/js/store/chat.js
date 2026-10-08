@@ -352,6 +352,11 @@ Alpine.store('chat', {
     if (!st) return 'server'
     if (st.state === 'ready' || st.state === 'loading') return 'server'
 
+    // 服务端朗读不可用（B 档内存不足 / 本机 CPU 过慢 / A 档）：系统语音能读就直接读，不弹任何 toast，
+    // 原因文案只在状态 chip 展示；仅当系统里也没有本地中文语音时才由 useSystem() 提示（ADR-0110 修订三）。
+    // 必须先于 engine==='server' 分支：用户曾选"仅服务端"时，B 档也不该被 unsupported toast 打扰。
+    if (st.state === 'unsupported') return useSystem()
+
     if (engine === 'server') {
       await this._ensureAudioAsset('tts')
       return null
