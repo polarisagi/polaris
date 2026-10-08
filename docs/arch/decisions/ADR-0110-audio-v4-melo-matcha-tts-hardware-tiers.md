@@ -1,4 +1,4 @@
-# ADR-0110: 语音 v4：MeloTTS 取代 Kokoro，按硬件两档开放语音能力
+# ADR-0110: 语音 v4：MeloTTS 取代 Kokoro，按硬件三档开放语音能力
 
 - **状态**: Accepted
 - **日期**: 2026-10-08
@@ -31,7 +31,7 @@
 1. **许可证链路不可核验**：`matcha-icefall-zh-en` 来自 modelscope `dengcunqin/matcha_tts_zh_en_20251010`，其元数据声明 Apache-2.0，但 README 写明从 `dengcunqin/matcha_tts_zh_en` 微调，而后者 README 写"使用 icefall 例子下的 baker tts 模型训练而成"——即源自标贝 DataBaker 中文标准女声音库（CSMSC，非商业使用条款）训练的模型，训练数据未公开。Apache-2.0 声明与上游数据条款冲突，链路不可核验。另外 Matcha 归档附带 `espeak-ng-data`（GPL-3.0）。polaris 是开源自托管项目，默认下发来源存疑的权重不可接受。MeloTTS 为 MyShell MIT（"free for both commercial and non-commercial use"），且不依赖 `espeak-ng-data`。
 2. **系统更简**：单模型 = 单资产、单 FFI 路径、单基准、无降级分支；音质为用户裁决第一。低配机器失去的只是"服务端朗读"，前端系统语音本就是兜底（VPS 场景语音在用户本地浏览器合成，不耗 VPS 资源）。
 
-新的两档（取代决策 2 的三档表）：
+新的两档（取代决策 2 的三档表；**已被下方「修订二」的三档取代**）：
 
 | 档 | 条件 | STT（SenseVoice） | 服务端 TTS | 后台预置（auto_install） |
 |---|---|---|---|---|
@@ -43,6 +43,24 @@
 - 基准持久化键保留含模型名（`audio.tts_bench.melo`，指纹含 `model=melo`），防止 Kokoro 时代结论被复用。`/v1/audio/status` 的 `tts_status.model` 为 `melo`（可用/待安装）或 `none`（本机不支持/基准过慢）。
 - 清理：新 Melo 资产校验成功后删除 `models/kokoro/`，同时删除修订前可能已下载的 `models/tts/matcha/`；只删这两个确切路径，失败 Warn。
 - 被删除的代码：`MatchaModel()`、`MatchaVocoder()`、`KindTTSFile`、Matcha FFI 偏移与引擎构造、降级链与预置器第二轮。
+
+## 2026-10-08 修订二：2GB 档关闭服务端 TTS，只开 STT
+
+**裁决**：档位改为三档（只看稳定画像），取代上方修订的两档表：
+
+| 档 | 条件 | STT | 服务端 TTS（Melo） | 后台预置 |
+|---|---|---|---|---|
+| A | 总内存 < 1800MB 或逻辑核 < 2 | 关 | 关 | 无 |
+| B | 非 A 且总内存 < 3600MB | 开 | 关（前端系统语音） | 仅 STT |
+| C | 总内存 ≥ 3600MB 且逻辑核 ≥ 2 | 开 | 开（ADR-0108 D2 基准 RTF ≤ 0.8 门控，定论 too_slow → 系统语音） | STT → Melo |
+
+理由：
+
+1. **2GB 上无法共存**：STT 空闲门槛 600MB + Melo 800MB 无法同驻，核心路径（最低 2GB）还要预算；共存只会让后加载者随机 503，行为不可预期。
+2. **两者不对称**：朗读有零成本替代——前端系统语音在用户本地设备合成，不耗 VPS 资源；语音输入没有离线本地替代（浏览器语音识别多为云端，违反离线原则），因此 2GB 保 STT、舍服务端 TTS。STT 懒加载 + 空闲卸载 + 600MB 空闲门槛已有保护。
+3. **TTS 核数门槛取 2 而非旧 Kokoro 的 4**：Melo 2 线程 RTF 0.42（M1），弱核机器由基准兜底，不再用核数预判（A 档已保证 ≥2 核）。
+
+B 档 TTS 的 Capability 原因码为 `insufficient_ram`，用户说明"服务端朗读需要至少 4GB 内存，已使用系统语音"。最低配置表述：语音输入 2GB/2 核；服务端朗读 4GB（≥3600MB）/2 核 + 基准通过。
 
 ## 决策
 
@@ -102,3 +120,4 @@
 |------|------|
 | 2026-10-08 | 初稿 |
 | 2026-10-08 | 修订：删除 Matcha（许可证链路不可核验），档位收敛为两档，删除 `inference.tts.model` 与降级链 |
+| 2026-10-08 | 修订二：2GB 档（B）关闭服务端 TTS 只开 STT，档位改为 A/B/C 三档，TTS 总内存门槛 3600MB、核数门槛 2 |

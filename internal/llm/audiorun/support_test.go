@@ -13,32 +13,48 @@ func prof(ram uint64, cores int) HardwareProfile {
 	return HardwareProfile{TotalRAMBytes: ram, LogicalCores: cores, GOOS: "linux", GOARCH: "amd64"}
 }
 
-// 两档判定矩阵（ADR-0110 修订）：边界取 1799/1800MB 与 1/2 核；STT 与 TTS 同进退。
+// 三档判定矩阵（ADR-0110 修订二）：边界取 1799/1800/3599/3600MB × 1/2/4 核。
 func TestAudioSupport_Tiers(t *testing.T) {
 	cases := []struct {
-		name string
-		p    HardwareProfile
-		ok   bool
-		why  string
+		name     string
+		p        HardwareProfile
+		stt, tts bool
+		sttWhy   string
+		ttsWhy   string
 	}{
-		{"1GB/1核", prof(1*gib, 1), false, ReasonInsufficientRAM},
-		{"1799MB/4核", prof(1799*mib, 4), false, ReasonInsufficientRAM},
-		{"1800MB/2核 恰好支持", prof(1800*mib, 2), true, ""},
-		{"1800MB/1核", prof(1800*mib, 1), false, ReasonInsufficientCores},
-		{"16GB/1核 单核即使内存充足也关", prof(16*gib, 1), false, ReasonInsufficientCores},
-		{"2GB VPS 实际可见 1.9GB/2核", prof(gib*19/10, 2), true, ""},
-		{"4GB 双核旧笔记本", prof(4*gib, 2), true, ""},
-		{"16GB/16核", prof(16*gib, 16), true, ""},
+		{"1799MB/4核 A", prof(1799*mib, 4), false, false, ReasonInsufficientRAM, ReasonInsufficientRAM},
+		{"1800MB/1核 A", prof(1800*mib, 1), false, false, ReasonInsufficientCores, ReasonInsufficientCores},
+		{"1800MB/2核 恰好 B", prof(1800*mib, 2), true, false, "", ReasonInsufficientRAM},
+		{"1800MB/4核 B", prof(1800*mib, 4), true, false, "", ReasonInsufficientRAM},
+		{"2GB VPS 实际可见 1.9GB/2核 B", prof(gib*19/10, 2), true, false, "", ReasonInsufficientRAM},
+		{"3599MB/2核 B", prof(3599*mib, 2), true, false, "", ReasonInsufficientRAM},
+		{"3599MB/4核 B", prof(3599*mib, 4), true, false, "", ReasonInsufficientRAM},
+		{"3600MB/1核 A", prof(3600*mib, 1), false, false, ReasonInsufficientCores, ReasonInsufficientCores},
+		{"3600MB/2核 恰好 C", prof(3600*mib, 2), true, true, "", ""},
+		{"3600MB/4核 C", prof(3600*mib, 4), true, true, "", ""},
+		{"16GB/1核 单核即使内存充足也全关", prof(16*gib, 1), false, false, ReasonInsufficientCores, ReasonInsufficientCores},
+		{"16GB/16核 C", prof(16*gib, 16), true, true, "", ""},
 	}
 	for _, c := range cases {
 		got := AudioSupport(c.p)
-		if got.STT.Supported != c.ok || got.TTS.Supported != c.ok {
-			t.Errorf("%s: stt=%v tts=%v, want %v", c.name, got.STT.Supported, got.TTS.Supported, c.ok)
+		if got.STT.Supported != c.stt || got.TTS.Supported != c.tts {
+			t.Errorf("%s: stt=%v tts=%v, want %v/%v", c.name, got.STT.Supported, got.TTS.Supported, c.stt, c.tts)
 			continue
 		}
-		if !c.ok && (got.STT.Reason != c.why || got.TTS.Reason != c.why) {
-			t.Errorf("%s: reason stt=%q tts=%q, want %q", c.name, got.STT.Reason, got.TTS.Reason, c.why)
+		if !c.stt && got.STT.Reason != c.sttWhy {
+			t.Errorf("%s: stt reason=%q, want %q", c.name, got.STT.Reason, c.sttWhy)
 		}
+		if !c.tts && got.TTS.Reason != c.ttsWhy {
+			t.Errorf("%s: tts reason=%q, want %q", c.name, got.TTS.Reason, c.ttsWhy)
+		}
+	}
+}
+
+// B 档 TTS 的用户说明点明 4GB 门槛与系统语音。
+func TestAudioSupport_TierBMessage(t *testing.T) {
+	got := AudioSupport(prof(2*gib, 2))
+	if !strings.Contains(got.TTS.Message, "4GB") || !strings.Contains(got.TTS.Message, "系统语音") {
+		t.Errorf("B 档 TTS 说明应含 4GB 与系统语音: %q", got.TTS.Message)
 	}
 }
 
@@ -48,7 +64,7 @@ func TestAudioSupport_CoreBoundaries(t *testing.T) {
 		t.Error("1 核不应支持")
 	}
 	if !AudioSupport(prof(8*gib, 2)).TTS.Supported {
-		t.Error("2 核应支持")
+		t.Error("2 核 + 4GB 以上应支持 TTS")
 	}
 }
 

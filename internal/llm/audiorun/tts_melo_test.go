@@ -70,3 +70,21 @@ func TestRemoveLegacy(t *testing.T) {
 	}
 	s.removeLegacy() // 已不存在时静默
 }
+
+// B 档（非 A 且 <3600MB）：只预置 STT，TTS 的安装与基准一次都不调用。
+func TestProvisioner_TierBOnlySTT(t *testing.T) {
+	a := AudioSupport(prof(2*gib, 2))
+	sttSvc := NewSTTService(context.Background(), STTOptions{Dir: t.TempDir(), Support: a.STT})
+	ttsSvc := NewTTSService(context.Background(), TTSOptions{LibDir: t.TempDir(), Dir: t.TempDir(), Support: a.TTS, Profile: hostProf()})
+	defer ttsSvc.Close()
+	var sttCalls, ttsCalls atomic.Int32
+	runProvisioner(context.Background(), ProvisionerOptions{
+		STT: sttSvc, TTS: ttsSvc,
+		STTInstallFunc: func(context.Context) (bool, error) { sttCalls.Add(1); return true, nil },
+		TTSInstallFunc: func(context.Context) (bool, error) { ttsCalls.Add(1); return true, nil },
+		TTSBenchFunc:   func(context.Context) error { ttsCalls.Add(1); return nil },
+	})
+	if sttCalls.Load() != 1 || ttsCalls.Load() != 0 {
+		t.Errorf("B 档应只预置 STT，stt=%d tts=%d", sttCalls.Load(), ttsCalls.Load())
+	}
+}

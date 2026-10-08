@@ -13,18 +13,22 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/audioassets"
 )
 
-// 硬件两档阈值（ADR-0110 2026-10-08 修订；STT 门槛沿用 ADR-0107）。
+// 硬件三档阈值（ADR-0110 2026-10-08 修订二；STT 门槛沿用 ADR-0107）。
 //
 // 为什么名义 2GB 的总内存阈值要留余量：2GB 的 VPS 在 Linux 下 MemTotal 实测只有
 // ≈1.9GB（内核/固件保留），按字面 2048MB 判定会把标称 2GB 的机器全部误判为不支持，
 // 而这正是语音要覆盖的目标机型。取名义值的 ≈88%，仍能挡住 1GB 机器。
 //
 //	A 极低配：总内存 < 1800MB 或逻辑核 < 2 → STT/TTS 都不开，不预置任何资产
-//	支持档：  其余 → STT + MeloTTS；Melo 能否实际使用由抗争用基准（RTF ≤ 0.8）决定，
-//	          过慢则回退前端系统语音（没有更轻的服务端模型：Matcha 因训练数据来源不可核验已删除，见 ADR-0110 修订）
+//	B 低配：  非 A 且总内存 < 3600MB → 只开 STT，朗读用前端系统语音，只预置 STT
+//	C 标准：  总内存 ≥ 3600MB（且 ≥2 核）→ STT + MeloTTS；Melo 能否实际使用由抗争用基准
+//	          （RTF ≤ 0.8）决定，过慢则回退前端系统语音（Matcha 因训练数据来源不可核验已删除，见 ADR-0110 修订）
 const (
 	sttMinTotalMB = 1800
 	sttMinCores   = 2
+	// ttsMinTotalMB 是服务端 TTS（Melo）的总内存门槛（≈4GB 的 88%）。核数不再预判：
+	// Melo 2 线程 RTF 0.42（M1），弱核由抗争用基准兜底；A 档已保证 ≥2 核。
+	ttsMinTotalMB = 3600
 
 	// 加载时空闲内存门槛：只决定"此刻能否加载"，不参与"是否支持"的判定。
 	// 各取单句 RSS 实测值的约 1.5 倍余量：STT≈420MB、Melo≈530MB。
@@ -86,7 +90,7 @@ type Capability struct {
 	Message   string // Supported=false 时面向用户的说明（含最低配置）
 }
 
-// Support 汇总 STT 与 TTS 两项能力。两者门槛相同（A 档同关），TTS 另需基准通过。
+// Support 汇总 STT 与 TTS 两项能力。A 档两者同关；B 档只开 STT；TTS 另需基准通过。
 type Support struct {
 	STT, TTS Capability
 }
@@ -95,7 +99,14 @@ type Support struct {
 func AudioSupport(p HardwareProfile) Support {
 	c := judge(p)
 	if c.Supported {
-		return Support{STT: c, TTS: c}
+		s := Support{STT: c, TTS: c}
+		if p.totalMB() < ttsMinTotalMB {
+			// B 档：只开 STT。2GB 上 STT 门槛 600MB + Melo 800MB 无法同驻，共存只会让后加载者随机 503；
+			// 朗读有零成本替代（前端系统语音在用户本地合成），语音输入没有离线本地替代。
+			s.TTS = Capability{Reason: ReasonInsufficientRAM, Message: fmt.Sprintf(
+				"服务端朗读需要至少 4GB 内存，已使用系统语音（本机总内存 %dMB）", p.totalMB())}
+		}
+		return s
 	}
 	// 文案按能力点名，其余字段（原因码）共用。
 	stt, tts := c, c

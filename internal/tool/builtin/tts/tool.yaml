@@ -1,5 +1,5 @@
 name: tts
-description: "Convert text to speech with the local offline TTS engine (MeloTTS) and return a base64-encoded audio data URI (audio/wav). Fails with a clear error if the engine is not installed or this machine is below the minimum spec (2GB RAM / 2 cores)."
+description: "Convert text to speech with the local offline TTS engine (MeloTTS) and return a base64-encoded audio data URI (audio/wav). Fails with a clear error if the engine is not installed or this machine is below the minimum spec (4GB RAM / 2 cores)."
 version: "2.0.0"
 capability: read-only
 risk_level: low

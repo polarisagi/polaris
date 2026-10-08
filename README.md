@@ -176,7 +176,7 @@ Every improvement in Polaris — prompt tuning, skill distillation, config chang
 |------------|---------|-------------------|
 | Core path (no voice) | 2GB RAM / 1 vCPU | n/a |
 | Voice input (STT, SenseVoice int8, ~230MB download) | 2GB RAM / 2 logical cores | Unavailable |
-| Server read-aloud (TTS; first-load benchmark must reach RTF ≤ 0.8): MeloTTS, ~167MB download | 2GB RAM / 2 logical cores | Client-side system voice (`speechSynthesis`, local Chinese voices only) |
+| Server read-aloud (TTS; first-load benchmark must reach RTF ≤ 0.8): MeloTTS, ~167MB download | 4GB RAM / 2 logical cores | Client-side system voice (`speechSynthesis`, local Chinese voices only) |
 
 Microphone access needs a secure context: `localhost` / `127.0.0.1` work as-is; a remote browser reaching a VPS must use HTTPS.
 

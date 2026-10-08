@@ -68,9 +68,11 @@ backend = "pebble"
 # 资产（动态库/模型）的 URL 与 sha256 由代码内清单 internal/llm/audioassets 钉死，不开放配置。
 # 最低配置（按稳定硬件画像判定，空闲内存只决定"此刻能否加载"）：
 #   STT  2GB 总内存 + 2 逻辑核（SenseVoice int8）
-#   硬件两档（ADR-0110）：
+#   硬件三档（ADR-0110）：
 #     A 极低配（总内存 <1800MB 或 <2 逻辑核）：STT/TTS 都关，不预置任何资产，朗读用浏览器/WebView 系统语音
-#     其余：STT + MeloTTS（167MB），后台串行预置；MeloTTS 首次启用基准 RTF>0.8 则回退系统语音
+#     B 低配（非 A 且总内存 <3600MB）：只开 STT（最低 2GB/2 核），只预置 STT，朗读用系统语音
+#     C 标准（总内存 ≥3600MB 且 ≥2 核）：STT + MeloTTS（167MB），后台串行预置 STT→Melo；
+#       服务端朗读最低 4GB/2 核，且首次启用基准 RTF≤0.8，否则回退系统语音
 [inference.audio]
 idle_unload_minutes = 10   # 引擎空闲多久卸载释放内存；0 = 不卸载
 auto_install = true   # 守护进程启动后在后台串行下载语音模型（STT→TTS），仅预置本机硬件支持的能力；false = 首次使用时再下载
