@@ -3,6 +3,7 @@ package audiorun
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -190,7 +191,17 @@ func TestProvisioner_Backoff(t *testing.T) {
 
 // 4. 与用户点击互斥：预置器安装进行中时调用 Install() 返回 started=false，资产只下载一次。
 func TestProvisioner_UserMutualExclusion(t *testing.T) {
-	sttSvc := NewSTTService(context.Background(), STTOptions{Dir: t.TempDir(), Support: supported()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	nc := &netCount{}
+	sttSvc := NewSTTService(ctx, STTOptions{
+		Dir:        t.TempDir(),
+		Support:    supported(),
+		HTTPClient: &http.Client{Transport: nc},
+	})
+	defer sttSvc.Close()
+
 	// 人工将 installing 置为 true（模拟预置器正在运行 InstallBlocking）
 	sttSvc.installing.Store(true)
 
@@ -205,6 +216,15 @@ func TestProvisioner_UserMutualExclusion(t *testing.T) {
 	started, err = sttSvc.Install()
 	if !started || err != nil {
 		t.Fatalf("空闲时应返回 started=true, got started=%v err=%v", started, err)
+	}
+
+	// 等待后台安装协程结束，避免协程泄漏与并发读写 TempDir 导致清理失败
+	deadline := time.Now().Add(5 * time.Second)
+	for sttSvc.installing.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sttSvc.installing.Load() {
+		t.Fatal("后台安装未能及时完成")
 	}
 }
 

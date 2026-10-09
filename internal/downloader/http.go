@@ -97,6 +97,9 @@ func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath s
 //
 //nolint:gocyclo
 func downloadResumeP(ctx context.Context, client *http.Client, rawURL, destPath string, prog *progressSink) error {
+	if client == nil {
+		return apperr.New(apperr.CodeInternal, "downloader: http.Client is required; use substrate.NewSafeHTTPClient")
+	}
 	if _, err := os.Stat(destPath); err == nil {
 		if prog != nil {
 			prog.begin(prog.hint, prog.hint) // 缓存命中：无需下载，进度直接满格

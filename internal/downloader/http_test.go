@@ -87,6 +87,11 @@ func TestDownloadFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil err on retry, got %v", err)
 	}
+
+	// Test nil client error
+	if err := DownloadFile(context.Background(), nil, "http://dummy", dest); err == nil {
+		t.Errorf("expected error for nil client")
+	}
 }
 
 func TestDownloadExtract(t *testing.T) {

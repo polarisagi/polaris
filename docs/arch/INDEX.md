@@ -93,6 +93,12 @@
 - **根因类别**：`web/src/index.html` 采用 `<page-fragment>` 扁平拼装页面，当前面某个页面（如 `settings.html`）遗漏闭合 `</div>` 时，后续页面会被意外吞入父级 `<div x-show="...">`，在非父页面路由激活时因父容器 `display: none` 导致整体空白。
 - **排查起点**：`web/src/pages/` 下执行 HTML 标签平衡检查，定位未闭合标签文件；查看 DevTools DOM 树中空白页面的父节点是否属于其他页面。
 
+### 症状 15：CI 单测报 TempDir RemoveAll cleanup: directory not empty 或 nil pointer dereference
+- **症状特征**：CI 跑单测时测试失败伴随 `TempDir RemoveAll cleanup: unlinkat ...: directory not empty`，或日志打印 `SafeGo` 捕获的空指针 panic（如 `downloader.downloadResumeP`）。
+- **归类模块**：M00 / L0
+- **根因类别**：测试调用触发异步后台协程（如 `Install()`）但测试函数提前退出，后台协程仍持有或向 `t.TempDir()` 写文件，与测试清理发生并发争用；且未注入测试用 `HTTPClient` 导致下载组件空指针解引用。
+- **排查起点**：检查该测试用例是否通过 channel/轮询等待后台协程终态（如 `installing.Load() == false`）；检查 service 构造是否注入模拟离线客户端（`netCount`）与可取消 context。
+
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。
 - 相似症状优先合并成一项（用"/"列举变体），不要为每个变体开新项。

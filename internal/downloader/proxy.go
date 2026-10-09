@@ -190,6 +190,9 @@ func raceFastestMirror(ctx context.Context, baseClient *http.Client) string {
 
 // headOK 发起 HEAD 请求，有响应则返回 true。
 func headOK(ctx context.Context, client *http.Client, url string) bool {
+	if client == nil {
+		return false
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return false
