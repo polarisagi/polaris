@@ -9,7 +9,7 @@
 #   REPO               - owner/repo 格式
 #   GH_TOKEN           - GitHub token（gh CLI 自动使用）
 # 可选:
-#   REVIEWER_MODEL     - 默认 deepseek-chat；不可与开发者用模型同型号
+#   REVIEWER_MODEL     - 默认 deepseek-flash；不可与开发者用模型同型号
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ CONSTITUTION="docs/specs/00-Constitution.md"
 # "Generate Diff" step 生成并写入，此处路径为双方约定常量（不可随意修改）。
 DIFF_FILE="/tmp/pr.diff"
 MAX_DIFF_BYTES=100000  # 100KB 截断阈值，防 prompt 爆 context
-MODEL="${REVIEWER_MODEL:-deepseek-chat}"
+MODEL="${REVIEWER_MODEL:-deepseek-flash}"
 API_BASE="${REVIEWER_API_BASE:-}"
 API_KEY="${REVIEWER_API_KEY:-}"
 

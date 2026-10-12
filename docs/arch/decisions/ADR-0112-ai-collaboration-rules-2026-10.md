@@ -56,14 +56,28 @@
 
 | # | 冲突 | 裁决 |
 |---|---|---|
-| 1 | XR-12 / ADR-0087 决策五依赖 `internal/bootstrap`（全仓零 import），实际装配在 `cmd/polaris/boot_*.go` | 手工装配为规范。ADR-0087 决策五改为「长驻任务继承进程根 ctx（`cmd/polaris` 创建并经 boot 装配注入）」；XR-12 去掉对 bootstrap 的依赖表述。`internal/bootstrap` 的去留按 ADR-0088 重新评估触发条件（装配链 > 6000 行，现 5805）处理，本 ADR 不删除 |
+| 1 | XR-12 / ADR-0087 决策五依赖 `internal/bootstrap`（全仓零 import），实际装配在 `cmd/polaris/boot_*.go` | 手工装配为规范。ADR-0087 决策五改为「长驻任务继承进程根 ctx（`cmd/polaris` 创建并经 boot 装配注入）」；XR-12 去掉对 bootstrap 的依赖表述。`internal/bootstrap` 的去留按 ADR-0088 重新评估触发条件（装配链 > 6000 行，现 5805）处理（同日由决策八 #1 改为删除） |
 | 2 | 03 AGENT-7 Tier-0 CodeAct | 维持已改：容器请求降级 SandboxNativeOS，仅 `CapPrivileged` 拒绝（ADR-0008 决策一） |
 | 3 | 灰度阶梯：`state.yaml` `canary_steps: [0.01, 0.10, 0.50, 1.00]` vs `rollout.go` 硬编码 1/5/25/50/100 | `state.yaml` 是规范性 SSoT，改代码为 1/10/50/100 |
 | 4 | M04 §4.3 补偿声明 | 无冲突：M04 已按 ADR-0088 2026-09-20 复核改为不强制（误报） |
 | 5 | M09 §6「GraphRAG LLM 调用日预算超限」与 M10 inv_M10_05、代码（无日预算） | 删除 M09 该行 |
-| 6 | M13 §8.9 禁止 `translateX` 手工侧滑 vs 日志抽屉实现 | 无冲突：日志抽屉已是 DaisyUI `drawer`（`web/src/index.html`，误报）。另发现 `web/src/pages/automation.html` 运行记录面板用 `translate-x-*` 手工侧滑，属 §8.9 违例，列为前端后续工作 |
+| 6 | M13 §8.9 禁止 `translateX` 手工侧滑 vs 日志抽屉实现 | 无冲突：日志抽屉已是 DaisyUI `drawer`（`web/src/index.html`，误报）。另发现 `web/src/pages/automation.html` 运行记录面板用 `translate-x-*` 手工侧滑，初判为 §8.9 违例，经决策八 #5 收窄规则后不属违例 |
 | 7 | `tools/docs_gen.go` M04 摘要「状态机 13 态」 | 改为 14 态并重新生成 INDEX 生成块 |
 | 8 | 杂散文件 `internal/knowledge/patch_chunk.py`、`internal/knowledge/graphrag/coverage.out` | 删除 |
+
+## 决策八：第二批裁决（2026-10-12 追加）
+
+| # | 问题 | 裁决 |
+|---|---|---|
+| 1 | `internal/bootstrap`（566 行）与 `internal/swarm` `PhasedStartup` 两套启动编排零接线，登记于 `tools/baselines/wiring-allowlist.txt`；`Bootable` 契约无法表达两阶段装配与顺序性副作用 | **删除两者**。决策七 #1 已将手工装配定为规范，未接线的替代编排只剩误导作用（ADR-0062 死代码判定）。ADR-0088 决策七「重评触发条件」改为：装配链 > 6000 行时重新评估装配方案（可从 git 历史取回）。模块计数 29 → 28 |
+| 2 | CI 对抗审查默认 `REVIEWER_MODEL=deepseek-chat` | 改为 `deepseek-flash`（与 `internal/llm/adapter` DeepSeek 默认模型 ID 一致） |
+| 3 | `00 R2.6` 指标名规定下划线，代码 OTel instrument 11/11 用点号（`polaris.llm.input_tokens_total`） | **改规范**：instrument 名用 `polaris.<subsystem>.<name>_<unit>`（OTel 约定），Prometheus 导出时自动转下划线；M03 中的指标名按代码实际订正 |
+| 4 | ADR-0008 决策一 / M11 D3 / M07 §4.1 描述 L3 为 microVM（Firecracker/VZ），代码无 microVM 后端，L3 实际为 bwrap（Linux）/ Seatbelt（macOS），`FeatureL3Sandbox` 注释仍写 microVM | 按代码订正：L3 现状 = bwrap / Seatbelt 容器隔离；microVM 为 Tier2 规划未实现。沿革记录「先改代码后补文档」的偏差 |
+| 5 | M13 §8.9 抽屉规则 vs `automation.html` 运行记录侧栏（Tailwind `translate-x-*` + Alpine 过渡 + 遮罩） | **收窄规则**：禁止的是手写 CSS `transform: translateX` 侧滑；页面级抽屉用 DaisyUI `drawer`，页内临时侧滑面板允许 Tailwind 工具类 + Alpine 过渡。代码不改 |
+| 6 | `08 H3` state.yaml 漂移「尚无门控」；灰度阶梯漂移未被发现 | 现有 `internal/protocol/spec_consistency_test.go` 即该门控，覆盖面不全：补入 m9 `canary_steps` 与 config 默认值一致性断言；08 H3 改指该测试并如实写覆盖范围 |
+| 7 | M10 inv_M10_04「SurrealDB 双索引隔离表」与 ADR-0109 统一 512 维、按 `embed_model_version` 路由 | 不变量按 ADR-0109（后决策）改写，语义为「不同嵌入模型版本的向量不得混检」 |
+| 8 | 过时注释：`internal/sandbox/assign.go` 头部「Tier0 Container 全平台拒绝」、`cmd/polaris/boot_agent.go` `dummyImmuneGateway` | 按代码订正注释 |
+| 9 | `state.yaml` `thresholds.m5_memory` 重复定义：第一处插在 `m2_storage` 中间，把 4 个 m2 键（`mutation_bus_channel_cap` / `max_rows_per_tx` / `max_batch_size` / `ticker_interval_ms`）与 m2 的重评条件归到 m5 名下；yaml.v3 解码 `thresholds` 因重复键失败 | 结构修复，数值零改动：m2 键归位、两个 m5 块合并、重复的 `rrf_k` / `graph_max_depth`（同值）去重。多重集比对与重复键检测通过 |
 
 ## 重新评估触发条件
 
@@ -74,7 +88,7 @@
 
 | 日期 | 变更 |
 |---|---|
-| 2026-10-12 | 首次。依据 2026-10-12 文档第四轮精简的复核结论。落地时发现 `config.M9SelfImprove.CanarySteps` 早已存在但无读取方，`NewProgressiveRollout` 改为读取该配置；`ConfirmShadow` 的硬编码 5% 同步改为阶梯第二档 |
+| 2026-10-12 | 首次；同日追加决策八（第二批裁决）。依据 2026-10-12 文档第四轮精简的复核结论。落地时发现 `config.M9SelfImprove.CanarySteps` 早已存在但无读取方，`NewProgressiveRollout` 改为读取该配置；`ConfirmShadow` 的硬编码 5% 同步改为阶梯第二档 |
 
 ## 引用代码
 

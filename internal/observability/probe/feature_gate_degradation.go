@@ -61,7 +61,7 @@ func (fg *FeatureGate) DegradationOrder() []Feature {
 		FeatureComputerUseGUI,      // 38: VLM + screen control
 		FeatureVisionDisplayServer, // 39: LAM Linux Xvfb backend
 		FeaturePresidioPII,         // 36: NER sidecar
-		FeatureL3Sandbox,           // 30: microVM
+		FeatureL3Sandbox,           // 30: ContainerSandbox (bwrap/Seatbelt)
 		FeatureLocalInference,      // 20: local model
 		FeatureOTelExporter,        // 18: OTel exporter
 		FeatureWebUI,               // 15: Web dashboard
@@ -153,11 +153,12 @@ func TierLocalModel(tier Tier) (modelID string, enabled bool) {
 }
 
 // TierSandboxConfig returns the sandbox configuration for the current tier.
-// l3Backend 取值：
-//   - "firecracker"              Tier2+ Linux：microVM 强隔离
-//   - "virtualization_framework" Tier1+ macOS：Apple Virtualization Framework
-//   - "wsl2"                     Tier2+ Windows：WSL2 容器
-//   - "native"                   Tier1 Linux：bwrap + Linux 命名空间隔离（无需 Firecracker）
+// L3 实际实现 = ContainerSandbox（bwrap / Seatbelt，经 Rust CmdRunner）；
+// 无 microVM 后端（ADR-0112 决策八 #4）。l3Backend 仅为能力标签，取值：
+//   - "firecracker"              Tier2+ Linux：能力标签，无后端使用
+//   - "virtualization_framework" Tier1+ macOS：能力标签
+//   - "wsl2"                     Tier2+ Windows：能力标签
+//   - "native"                   Tier1 Linux：bwrap + Linux 命名空间隔离
 func TierSandboxConfig(tier Tier, platform string) (l3Available bool, l3Backend string) {
 	switch {
 	case tier >= Tier2 && platform == "linux":
@@ -167,7 +168,7 @@ func TierSandboxConfig(tier Tier, platform string) (l3Available bool, l3Backend 
 	case tier >= Tier2 && platform == "windows":
 		return true, "wsl2"
 	case tier >= Tier1 && platform == "linux":
-		// Tier1 Linux：使用 bwrap + 命名空间隔离（比 Firecracker 轻量，满足最低安全要求）
+		// Tier1 Linux：使用 bwrap + 命名空间隔离（满足最低安全要求）
 		return true, "native"
 	default:
 		return false, ""

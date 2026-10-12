@@ -13,7 +13,7 @@ env:
 # 所需 GitHub 配置（Settings → Secrets and variables）:
 #   Secrets : REVIEWER_API_KEY   — OpenAI-compatible API 密钥
 #   Variables: REVIEWER_API_BASE — API base URL（如 https://api.deepseek.com/v1）
-#              REVIEWER_MODEL    — 可选，默认 deepseek-chat
+#              REVIEWER_MODEL    — 可选，默认 deepseek-flash
 
 on:
   pull_request:

@@ -27,7 +27,7 @@
 
 判定边界：数字背后是否承载语义关系——是 → 留；否 → 下推。
 
-门控状态：state.yaml 同名常量数值漂移**尚无机械门控**（原计划的 `lint_doc_state_yaml_drift` 未实现），靠 H8 人工核对。
+门控状态：state.yaml 漂移由 `internal/protocol/spec_consistency_test.go` 守护（taint / par 状态与迁移 / kill_switch / task 与 outbox 状态 ↔ Go 枚举）；`internal/protocol/spec_header_counts_test.go` 校验 state.yaml 头注释状态数 = 实际列表长度，`internal/agent/fsm/fsm_spec_test.go` 校验 FSM 实现 ↔ state.yaml `par`。**只覆盖部分键，新增阈值须同步补断言**；未覆盖的键靠 H8 人工核对。
 
 ## H4 EntryPoint 化（分文件 review）
 

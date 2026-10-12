@@ -14,7 +14,7 @@ const (
 	FeatureLocalEmbedding Feature = "local_embedding" // M1: local embedding model
 	FeatureQLoRA          Feature = "qlora"           // M9: QLoRA gradient training
 	FeaturePRMTraining    Feature = "prm_training"    // M9: PRM trainer worker
-	FeatureL3Sandbox      Feature = "l3_sandbox"      // M7: microVM sandbox (Firecracker/VZ)
+	FeatureL3Sandbox      Feature = "l3_sandbox"      // M7: ContainerSandbox (bwrap / Seatbelt via Rust CmdRunner)
 	FeatureL2Sandbox      Feature = "l2_sandbox"      // M7: Wasmtime sandbox
 	FeatureGraphRAGFull   Feature = "graphrag_full"   // M10: Leiden + KuzuDB + LLM community summary
 	FeatureSurrealDBCore  Feature = "surrealdb_core"  // M2: SurrealDB-Core 认知轴 (KV+HNSW+BM25+图，CGO-Free FFI)

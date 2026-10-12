@@ -3,7 +3,7 @@
 
 > Go | L3 治理层 | [Code-Package-Mapping] → internal/eval/> [HE-Rule-4]: Eval 第 0 行存在，失败 = PR 不能合并
 > 黄金测试集 + 轨迹回放 + 影子执行 + 回归基线 + 自动熔断
-<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:32 EvalCase / 2:59 Evaluator5层 / 3:79 轨迹录制 / 4:87 Runner / 4.1:102 开放基准适配器 / 5:115 Suite分区 / 6:143 IncidentToEval / 7:147 AutoBootstrap / 8:157 影子执行 / 9:165 连续采样 / 10:177 增量快照 / 11:189 回归检测 / 12:197 集成回放 / 13:201 InvariantTestSuite / 14:211 EvalStore / 15:215 闭环 / 17:221 (SOFT)降级 / 16:239 RedTeam常态化对抗 / 17-bis:253 283 已知Bug修复记录 / 18:259 289 依赖 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:32 EvalCase / 2:59 Evaluator5层 / 3:79 轨迹录制 / 4:87 Runner / 4.1:102 开放基准适配器 / 5:115 Suite分区 / 6:143 IncidentToEval / 7:147 AutoBootstrap / 8:157 影子执行 / 9:165 连续采样 / 10:177 增量快照 / 11:189 回归检测 / 12:199 集成回放 / 13:203 InvariantTestSuite / 14:213 EvalStore / 15:217 闭环 / 17:223 (SOFT)降级 / 16:241 RedTeam常态化对抗 / 17-bis:255 283 已知Bug修复记录 / 18:261 289 依赖 -->
 ## 0-bis. 职责边界
 
 | M12 **是** | M12 **不是** |
@@ -191,6 +191,8 @@ Eval Harness 仅提供对比原语；流量分发由 M9 ProgressiveRollout + M13
 两条实现：
 - **RegressionDetector**（`internal/eval/harness/eval.go`）：`Check(baseline, current *RunMetrics) *RegressionAlert`，30 天滚动窗口相对百分比——TaskSuccessRate 降 >5%、AvgLatencyMs 升 >20%、TokenBurnRate 升 >30%（成本软约束）触发。`RegressionAlert{Metric, Baseline, Current, Threshold}`，nil=无回归；**不含 Level/Action**，无侧效应，后续动作由 M9 外环决定。
 - **LightweightRegressionDetector**（`internal/eval/regression/detector.go`）：基于 EventLog `events` 结构化列（type/topic，不解码 payload）对比近期 vs 基线窗口（各 200 条）的新增事件 type 与错误类事件占比，产出 `Report`（Severe/Warning/Minor/Pass）。
+
+两者互补、互不替代：`RegressionDetector.Check` 比较两次评测运行的 `RunMetrics`，由 eval `Runner`（`internal/eval/harness/runner.go`）在评测流程内调用；`LightweightRegressionDetector` 不依赖评测运行，直接查 EventLog，经 `cmd/polaris/adapters_eval.go` 适配为 HITL 的 `RegressionDetector`，在 HITLGateway 的 L3 回归检查点使用（`cmd/polaris/boot_agent.go`）。
 
 **连续采样退化告警**：`ContinuousSamplingMonitor.CheckDegradation()` 返回 `(degraded, *DegradationAlert)`；degraded=true 时 `slog.Warn("SilentDegradationAlert")` 并调用注入的 `onDegradation`（M9 注入冻结 Auto-Curriculum + 回滚链）。
 

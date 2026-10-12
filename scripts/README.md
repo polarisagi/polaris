@@ -46,4 +46,4 @@
 |---|---|---|
 | `REVIEWER_API_BASE` | `https://api.deepseek.com/v1` | OpenAI 兼容接口 BaseURL |
 | `REVIEWER_API_KEY` | `sk-xxxxxx` | 厂商的 API 鉴权秘钥 |
-| `REVIEWER_MODEL` | `deepseek-chat` | 调用的模型名称（留空默认 `deepseek-chat`） |
+| `REVIEWER_MODEL` | `deepseek-flash` | 调用的模型名称（留空默认 `deepseek-flash`） |

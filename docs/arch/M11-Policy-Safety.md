@@ -28,7 +28,7 @@ M11 与 M3/M12 的分工：M3 看到一切发生（原始事实）、M12 评判�
 |---|------|------|---------|---------|
 | **D1** | 数据污点追踪 | Taint 5 级 + Slot 物理分离 | 输入 | `internal/security/` |
 | **D2** | 能力令牌 | 短寿命 Ed25519 + 最小权限（任务派生深度 ≤3 由 M8 `MaxSpawnDepth` 强制；Token 委托链机制已移除，M7 §4.6） | 权限 | `internal/security/token/capability_token.go` |
-| **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(Rust 脚本沙箱) / L3(平台原生 microVM: Linux Firecracker / macOS VZ / Windows WSL2，gVisor 仅作 Linux KVM 不可用 fallback；现状 ContainerSandbox 经 Rust bwrap/Seatbelt，M7 §4.1) | 执行 | `internal/sandbox/sandbox_impl.go` |
+| **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(Rust 脚本沙箱) / L3(容器级隔离：`ContainerSandbox` 经 Rust bwrap / Seatbelt；microVM 为 Tier2 规划未实现，M7 §4.1) | 执行 | `internal/sandbox/sandbox_impl.go` |
 | **D4** | 宪法分层 | Layer 1(编译期常量) / 2(Cedar forbid) / 3(Cedar permit) / 4(多 Agent) | 决策 | `internal/security/` |
 | **D5** | Kill Switch + Audit | 三阶段 FSM（Finite State Machine，有限状态机） + hash chain 仅追加 | 系统 | `internal/security/` |
 | **D6** | [FactualityGuard] | 引用核验 + 数值一致性 + 抽样 LLM（Large Language Model，大语言模型）-as-Judge | **输出真实性** | `internal/security/` |

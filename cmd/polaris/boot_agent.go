@@ -370,8 +370,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// AgentBundle.SamplingMonitor 传给 boot_server.go 的
 	// Server.SetSamplingMonitor 注入 ChatHandler，由生产回复路径按 1%
 	// 概率触发 LLM Judge 打分回灌（sampling_scorer.go）。onDegradation
-	// 回调仍为 nil：M9 autoRollback 触发链需要 dummyImmuneGateway 之外的
-	// 真实免疫网关实现，属独立待设计项（见 polaris-m9-immune-system-dormant
+	// 回调仍为 nil：M9 autoRollback 触发链需要一个真实的免疫网关实现
+	// （原 dummyImmuneGateway 占位符已不存在，仓内无任何 ImmuneGateway 符号），属独立待设计项（见 polaris-m9-immune-system-dormant
 	// memory），此处不强行接入伪回调。
 	samplingMonitor := analysis.NewContinuousSamplingMonitor(nil)
 	// 7 天基线快照数据源（2026-08-10 接线）：不注入时 sevenDayAvg 恒为 0，

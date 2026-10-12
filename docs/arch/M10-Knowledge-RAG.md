@@ -24,7 +24,7 @@
 | inv_M10_01 | M10 不是独立存储——消费 M2 Store 接口，共享 M5 HybridRetriever 底层引擎 | 架构审计 |
 | inv_M10_02 | 知识源拉取内容默认 taint=high——对于受信任的本地文件系统插件，可按策略降为 low | M11 Connector-Taint-Table |
 | inv_M10_03 | 每 chunk 携带 lineage metadata——source_uri + doc_version + chunk_seq + content_hash | DDL（Data Definition Language，数据定义语言） NOT NULL 约束 |
-| inv_M10_04 | Embedding 维度变更时禁止跨模型投影——通过 SurrealDB-Core 双索引隔离表实现无缝切换 | M10 §1.5 |
+| inv_M10_04 | 不同嵌入模型版本（`embed_model_version`）的向量不得混检——切模型/切档按版本重嵌（`rag_chunks.embed_model_version`、M5 `OnlineReindexer`），同维换模型亦然（ADR-0109 D5）。**现状**：检索路径（`internal/knowledge/retriever.go` `searchVectorFallback`）目前未按 `embed_model_version` 过滤（仅校验向量维度与查询一致），「不得混检」由重嵌收敛保证，而非检索期过滤 | M10 §1.5 |
 | inv_M10_05 | GraphRAG LLM 取消严苛日预算限制（得益于 DeepSeek 的低成本）——全量生成高质量图谱 | M10 §2.7 预算释放 |
 | inv_M10_06 | 主引擎 M10 彻底剥离出站网络权限——任何第三方 API 调用必须在沙箱化的 Plugin 进程中执行 | 代码审计（M10 内无 HTTP（HyperText Transfer Protocol，超文本传输协议） Client） |
 
@@ -70,7 +70,7 @@ Embedder 模型切换致向量不兼容时，禁止全量同步重嵌（`[Tier-0
 
 | 阶段 | 触发 | 操作 | 延迟 |
 |------|------|------|------|
-| Phase 1: 双索引无缝切换 | Embedder.Dimension() / 模型版本变更 | SurrealDB-Core 内维护单张动态维度表（`vec_dim` 列随模型切换更新），检索请求路由至新索引。**禁止永久降级 BM25** | <1ms |
+| Phase 1: 版本标记切换 | Embedder 模型/档位变更（`embed_model_version` 变化） | 无双索引、无 `vec_dim` 动态维度表：HNSW 维度恒 512 不重建，新写入向量带新 `embed_model_version`；仅当库内旧维度（如旧 2560）≠ 期望维度时启动期删旧向量与索引重建（ADR-0109 D5）。重嵌完成前 FTS/BM25 兜底，**禁止永久降级 BM25** | <1ms |
 | Phase 2: 优先级热恢复 | Phase 1 后 | 优先级队列重嵌 Top 50 Chunk: 0.4×M5 WorkingMemory引用频次 + 0.3×DurativeGroup活跃度 + 0.2×7天查询频率 + 0.1×访问时间倒数；每 Chunk 2s 超时，原子替换 | ~25-75s |
 | Phase 3: 全量回填 | CPU idle>70% + 空闲内存>500MB | 后台单线程，5 文档/批 + 1s 冷却 | ~5.5h (10K docs) |
 | BM25 永久降级 | >30 天未访问 | 不重嵌，永久 BM25 | 0 |
@@ -241,7 +241,7 @@ Knowledge Plugins → Document → 结构解析 → 文档树 + 父子双存 + �
 | 故障场景 | 降级路径 | 恢复策略 |
 |---------|---------|---------|
 | 知识插件不可达 | dead_letter + WARN + metric++ | 下次 doSync 重试 |
-| Embedding 模型/维度变更 | 路由切换至对应 `embed_model_version` 索引，后台静默回填增量（§1.5） | 新索引就绪即切换 |
+| Embedding 模型/维度变更 | 按 `embed_model_version` 标记切换，后台低速重嵌增量，期间 FTS 兜底（§1.5） | 新索引就绪即切换 |
 | GraphRAG 实体数超 Tier 0 上限 (50K) | 拒绝摄入新文档 + polaris status 提示清理/升级 | 用户删除旧文档或升级 Tier |
 | GraphRAG CPU/内存资源层触发 M9 BackgroundTaskScheduler 异常 | 跳过剩余 graph_build_task + GlobalSearch 降级纯 Leiden 社区检测 | 资源释放后下一窗口期恢复 |
 | Chunk 检索超时 (>200ms) | 仅返回 BM25 结果（跳过重排） | — |

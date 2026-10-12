@@ -740,7 +740,7 @@ automations 的**有序链式/DAG 扩展**：将多个 Agent 任务编排为流�
 |------|-------------|---------|
 | **弹窗** | `<dialog class="modal">` + `<div class="modal-box">`，关闭用 `<form method="dialog">` 或 `modal-backdrop` | 自定义 `position:fixed` 遮罩 |
 | **标签页** | `<div role="tablist" class="tabs tabs-boxed">` + `<a role="tab" class="tab">`，激活仅加 `tab-active` | `tab-active bg-base-200 shadow-sm` 等手工覆盖导致圆角失效 |
-| **抽屉** | DaisyUI `drawer`：`drawer` → `drawer-toggle` → `drawer-content` → `drawer-side` → `drawer-overlay` | CSS `transform: translateX` 手工侧滑 |
+| **抽屉** | 页面级抽屉用 DaisyUI `drawer`：`drawer` → `drawer-toggle` → `drawer-content` → `drawer-side` → `drawer-overlay`；页内临时侧滑面板允许 Tailwind `translate-x-*` 工具类 + Alpine 过渡（ADR-0112 决策八 #5） | 手写 CSS `transform: translateX` 侧滑 |
 | **聊天气泡** | `chat chat-start/chat-end` + `chat-bubble` | 自定义 flexbox 对齐 + 气泡背景 |
 | **Flex 页面滚动** | `overflow-y-auto` 容器必须同时加 `min-h-0` | 仅 `overflow-y-auto` |
 | **表单字段** | `form-control` + `label`/`label-text` + `input input-bordered` | 自定义 `.form-group` 等 class |

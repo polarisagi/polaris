@@ -100,7 +100,7 @@
 
 ### R2.6 指标命名
 
-格式 `polaris_<subsystem>_<name>_<unit>`。subsystem：`inference/storage/observability/policy/cognition/action/swarm/governance/edge`；unit：`total/count/bytes/seconds/ratio/rate`（无单位 Gauge 可省略）。示例：`polaris_inference_tokens_total`、`polaris_storage_write_latency_seconds`。
+OTel instrument 名格式 `polaris.<subsystem>.<name>_<unit>`（点号分段）；Prometheus 导出时由 OTel exporter 自动转为下划线（`polaris_<subsystem>_<name>_<unit>`），代码与文档均写点号形态。subsystem 以代码实际出现值为准：`llm/tokens/tool/sandbox/swarm/agent/cognition/retrieval/embedding/rerank/cedar/memory/knowledge/outbox/killswitch/token_burn/ffi/api/mesh/hitl/shadow/updater` 等（新增前 `git grep -ho '"polaris\.[a-z_]*\.' internal` 检查同义）；unit：`total/count/bytes/seconds/ms/mb/ratio/rate`（无单位 Gauge 可省略）。示例：`polaris.llm.input_tokens_total`、`polaris.llm.call_latency_ms`、`polaris.sandbox.executions_total`。直接用 Prometheus 客户端（`promauto`）注册的原生指标（现有 `polaris_background_admission_total` 等）不在此列，自建须经 `internal/observability/metrics` 豁免。
 
 ## R3 HE-Rules 可验证工程量表
 

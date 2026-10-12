@@ -7,7 +7,7 @@
 定义见 [00-Dict §5](../00-Global-Dictionary.md)：
 - **L1 原生层**：仅内置确定性工具，Fail-Closed（隔离组件缺失直接失败，禁向无沙箱原生 exec 静默降级）
 - **L2 Rust 脚本沙箱**（wasmtime，deny-by-default）：Wasm 二进制专用
-- **L3 平台原生 microVM**：Linux Firecracker/gVisor 回退、macOS Virtualization.framework、Windows WSL2+Hyper-V
+- **L3 容器级隔离（现状）**：`ContainerSandbox` 经 Rust `CmdRunner` 调用 Linux bwrap（namespace+seccomp）/ macOS Seatbelt（Windows 经 WSL2），无 microVM 后端。microVM（Linux Firecracker/gVisor 回退、macOS Virtualization.framework）为 Tier2 规划，未实现；`probe` 中的 `firecracker` 仅是 Tier2+ Linux 的能力标签，无后端消费
 
 Tier-0 规则（2026-09-20 修订，取代原"一律 `ErrTier0SandboxLimit`"）：L3 在 Tier-0 不可用（≥256MB/实例超预算）。Container 请求在 Tier-0 降级为 `SandboxNativeOS`（Rust FFI → bwrap namespace+seccomp / Seatbelt，物理可验证隔离，满足 HE-2，不属"无沙箱原生 exec"）；`CapPrivileged` 在 Tier-0 仍返回 `ErrTier0SandboxLimit`（bwrap/Seatbelt 无法替代 microVM 硬件边界）。实现 `internal/sandbox/assign.go`。
 
@@ -71,6 +71,7 @@ TrustOfficial 及以上在 Wasm/Container/Remote 均不可用时，默认不降�
 | 2026-07-29 | 决策五（Component Model 现状核实） |
 | 2026-08-09 | 决策六（引用 ADR-0087） |
 | 2026-09-20 | 决策一 Tier-0 规则修订：Container 降级 NativeOS，仅 Privileged 拒绝 |
+| 2026-10-12 | L3 microVM 描述订正为现状 bwrap/Seatbelt；记录先改代码后补文档的偏差（ADR-0112 决策八 #4） |
 
 ## 引用代码
 

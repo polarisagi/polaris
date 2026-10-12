@@ -15,7 +15,7 @@
 - `.github/workflows/constitutional-review.yml` + `scripts/constitutional_review.sh`：PR 触发独立 LLM 审查，覆盖 lint/golden 机械不可检的语义反模式（R1.4/R1.8/R1.9/R1.10 等）。
 - 审查模型不可与开发模型同型号（防"被告判自己"）；Reviewer 只看 diff + `00-Constitution.md`；输出严格机器化（"R<编号> | 文件:行 | 说明" 或 "NONE"），禁建议/表扬/推理。
 - **warning-only，不阻断 CI**：LLM 会误报，硬阻断会让团队学会绕过。拒绝同一开发者会话 self-review。
-- 订正：脚本默认模型现为 `deepseek-chat`（环境变量 `REVIEWER_MODEL` 可覆盖），原文"默认 claude-sonnet-4-6"已过时。
+- 订正：脚本默认模型现为 `deepseek-flash`（环境变量 `REVIEWER_MODEL` 可覆盖），原文"默认 claude-sonnet-4-6"已过时。
 
 ## 决策三：lint 规则扫描根接回 internal/（原 ADR-0089 决策一）
 

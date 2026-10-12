@@ -918,29 +918,6 @@ thresholds:
     eventlog_hot_size_mb: 500 # toml:"eventlog.hot_size_mb"
     snapshot_retention_hourly_24h: 7
     snapshot_retention_weekly: 4
-
-  m5_memory:
-    episodic_ttl_days: 30
-    consolidation_interval_ms: 60000
-    core_immutable_max: 100
-    core_memory_block_max_kb: 2
-    core_memory_total_max_kb: 8
-    core_memory_max_blocks: 16 # toml:"core.memory_max_blocks" — ADR-0082 MemFS 块数上限
-    # [阶段06 D-plan 归并说明] 06-docs-adr-sync.md §6 speculative 阈值草案曾拟设独立
-    # core_memory:{max_blocks,default_block_max_bytes,total_max_bytes} 分组；核实后
-    # max_blocks 已是本组 core_memory_max_blocks（同值 16），default/total 已是本组
-    # core_memory_block_max_kb(2KB)/core_memory_total_max_kb(8KB)（单位 KB 非 bytes，
-    # 与草案 4096/65536 bytes 数值不同——以本组既有实现值为准，不重复登记新键）。
-    rrf_k: 60
-    graph_max_depth: 2
-    relation_weight_delta_threshold: 0.2 # toml:"graph.relation_weight_delta_threshold" — ADR-0083 关系边信念修正阈值
-    # [阶段06 D-plan 归并说明] speculative knowledge_graph.relation_weight_delta_threshold
-    # 草案与本组同名同值（0.2），确认为同一阈值，不新增 knowledge_graph 分组重复登记。
-    re_eval_when:
-      - episodic_ttl_days: ["storage_cost_exceeds_budget"]
-      - core_memory_block_max_kb: ["llm_context_window_pressure"]
-      - core_memory_max_blocks: ["agent_hits_block_cap_frequently"]
-      - relation_weight_delta_threshold: ["belief_revision_version_chain_explosion", "belief_revision_never_triggers"]
     mutation_bus_channel_cap: 4096
     max_rows_per_tx: 50
     max_batch_size: 64
@@ -1029,7 +1006,22 @@ thresholds:
       - plan_dag_max_nodes: ["complex_pipeline_appears"]
 
   m5_memory:
+    episodic_ttl_days: 30
+    consolidation_interval_ms: 60000
+    core_immutable_max: 100
+    core_memory_block_max_kb: 2
+    core_memory_total_max_kb: 8
+    core_memory_max_blocks: 16 # toml:"core.memory_max_blocks" — ADR-0082 MemFS 块数上限
+    # [阶段06 D-plan 归并说明] 06-docs-adr-sync.md §6 speculative 阈值草案曾拟设独立
+    # core_memory:{max_blocks,default_block_max_bytes,total_max_bytes} 分组；核实后
+    # max_blocks 已是本组 core_memory_max_blocks（同值 16），default/total 已是本组
+    # core_memory_block_max_kb(2KB)/core_memory_total_max_kb(8KB)（单位 KB 非 bytes，
+    # 与草案 4096/65536 bytes 数值不同——以本组既有实现值为准，不重复登记新键）。
     rrf_k: 60
+    graph_max_depth: 2
+    relation_weight_delta_threshold: 0.2 # toml:"graph.relation_weight_delta_threshold" — ADR-0083 关系边信念修正阈值
+    # [阶段06 D-plan 归并说明] speculative knowledge_graph.relation_weight_delta_threshold
+    # 草案与本组同名同值（0.2），确认为同一阈值，不新增 knowledge_graph 分组重复登记。
     retriever_top_k_vector: 20
     retriever_top_k_fts: 20
     retriever_top_k_graph: 10
@@ -1038,7 +1030,6 @@ thresholds:
     chunk_text_overlap_tokens: 64
     mem_l0_cache_mb: 80
     mem_l0_cache_ttl_minutes: 30
-    graph_max_depth: 2
     consolidation_period_hours: 24
     decay_half_life_days: 14
     backfill_concurrency: 2
@@ -1046,6 +1037,10 @@ thresholds:
     drift_threshold: 0.05 # toml:"drift.threshold"
     drift_anchor_sample_rate: 0.02 # toml:"drift.anchor_sample_rate"
     re_eval_when:
+      - episodic_ttl_days: ["storage_cost_exceeds_budget"]
+      - core_memory_block_max_kb: ["llm_context_window_pressure"]
+      - core_memory_max_blocks: ["agent_hits_block_cap_frequently"]
+      - relation_weight_delta_threshold: ["belief_revision_version_chain_explosion", "belief_revision_never_triggers"]
       - chunk_*: ["recall_at_10<0.85"]
       - mem_l0_cache_*: ["hit_ratio<0.60"]
       - graph_max_depth: ["super_graph_tasks_appear"]

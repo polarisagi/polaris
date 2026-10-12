@@ -9,6 +9,8 @@ package protocol
 //   - par.states          ↔ AgentState 枚举
 //   - par.transitions     ↔ from/to 必须引用已定义的状态（结构性校验）
 //   - kill_switch.stages  ↔ KillState 三阶段（不含隐式 Normal base）
+//   - thresholds.m9_self_improve.canary_steps ↔ config 默认 M9SelfImprove.CanarySteps
+//     （thresholds.m6_skill.canary_steps 无对应 config 字段，暂不断言）
 //
 // Tier 2/3 在后续迭代增量补充——见 ADR-0006 决策二（原 ADR-0012）§测试范围分级。
 
@@ -20,6 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -310,6 +313,61 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 
 		if _, ok := expectedTriggers[eventStr]; !ok && !allowedExtraEvents[eventStr] {
 			t.Errorf("par.transitions[%d].event = %q 未在 Go AgentTrigger 枚举中定义", i, eventStr)
+		}
+	}
+}
+
+// yamlPath 沿映射键路径在 yaml.Node 树中取值节点。
+// 不经结构体解码: thresholds 下 m5_memory 在 state.yaml 中出现两次，
+// 结构体/map 解码会触发 yaml.v3 的重复键报错；Node 遍历对此宽容。
+func yamlPath(t *testing.T, root *yaml.Node, path ...string) *yaml.Node {
+	t.Helper()
+	n := root
+	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	for _, key := range path {
+		var next *yaml.Node
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i].Value == key {
+				next = n.Content[i+1]
+				break
+			}
+		}
+		if next == nil {
+			t.Fatalf("state.yaml 缺少路径 %v（停在 %q）", path, key)
+		}
+		n = next
+	}
+	return n
+}
+
+// TestSpecM9CanarySteps 验证 state.yaml thresholds.m9_self_improve.canary_steps
+// 与 internal/config 默认 M9SelfImprove.CanarySteps 一致（ADR-0112 决策八 #6）。
+func TestSpecM9CanarySteps(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "docs", "arch", "spec", "state.yaml"))
+	if err != nil {
+		t.Fatalf("读取 state.yaml 失败: %v", err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("解析 state.yaml 失败: %v", err)
+	}
+	var want []float64
+	if err := yamlPath(t, &doc, "thresholds", "m9_self_improve", "canary_steps").Decode(&want); err != nil {
+		t.Fatalf("解码 canary_steps 失败: %v", err)
+	}
+	got := config.DefaultThresholds().M9SelfImprove.CanarySteps
+	if len(want) == 0 {
+		t.Fatal("state.yaml thresholds.m9_self_improve.canary_steps 为空")
+	}
+	if len(got) != len(want) {
+		t.Fatalf("canary_steps 长度: config=%v，state.yaml=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("canary_steps[%d]: config=%v ≠ state.yaml=%v", i, got[i], want[i])
 		}
 	}
 }

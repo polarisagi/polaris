@@ -133,7 +133,7 @@ L1 层生存套件以 Go 原生代码执行，受原生沙箱策略约束。核�
 
 L3 平台选择由 `AutoConfig.computeSandboxConfig()` 自动化，`FeatureGate.FeatureL3Sandbox` 检测平台+内存；调用方仅检查 `GlobalFeatureGate().IsEnabled(FeatureL3Sandbox)`（M03 §5）。
 
-L3 目标架构（统一 SandboxProvider 接口，平台无感）：Linux Firecracker（~125MB/VM，需 KVM；无 KVM → gVisor runsc）；macOS Virtualization.framework（~80MB/VM）；Windows WSL2 + Hyper-V（~150MB/VM）。**现状**：Firecracker/VZ/WSL2 后端已删除，`ContainerSandbox` 统一经 Rust bwrap/Seatbelt `CmdRunner`（`internal/sandbox/sandbox_container.go`，ADR-0008）。
+L3 现状：`ContainerSandbox` 统一经 Rust bwrap（Linux）/ Seatbelt（macOS）`CmdRunner`（`internal/sandbox/sandbox_container.go`，ADR-0008）。microVM（Linux Firecracker，无 KVM 回退 gVisor；macOS Virtualization.framework）为 Tier2 规划，未实现。
 
 Tier 0（每 L3 ≥256MB，内存不足）：L3 不可用；Container 请求按 §4.2 降级 NativeOS，`CapPrivileged` 返回 `ErrTier0SandboxLimit`。**不提供无隔离原生子进程降级**。
 
