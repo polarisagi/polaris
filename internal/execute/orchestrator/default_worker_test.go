@@ -362,3 +362,48 @@ func TestSubagentRunner_ResolveRules(t *testing.T) {
 		t.Fatalf("unknown agent must fail the task, got %v", err)
 	}
 }
+
+// TestDefaultTaskWorker_PeerTaskRunsWithPeerProfile ADR-0111：对端委派任务必须以注入的
+// peer 角色（只读、禁止再委派）执行。
+func TestDefaultTaskWorker_PeerTaskRunsWithPeerProfile(t *testing.T) {
+	bb := &mockBlackboard{tasks: make(map[string]*types.TaskEntry), events: make(chan types.BlackboardEvent, 10)}
+	bb.tasks["peer-1"] = &types.TaskEntry{ID: "peer-1", Type: PeerDelegationTaskType, Status: types.TaskPending,
+		Intent: []byte("x"), Namespace: "peer:abc"}
+	pool := &spawnDepthCapturingPool{replyOutput: "ok"}
+	spec := &types.AgentProfileSpec{Name: "peer-delegation", ReadOnly: true}
+	worker := NewDefaultTaskWorker(bb, pool).WithPeerProfile(func(*types.TaskSnapshot) *types.AgentProfileSpec { return spec })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "peer-1"}
+	time.Sleep(50 * time.Millisecond)
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if pool.lastProfile != spec || pool.lastNamespace != "peer:abc" {
+		t.Fatalf("peer task must run with the peer profile in its isolated namespace, got %+v ns=%q", pool.lastProfile, pool.lastNamespace)
+	}
+}
+
+// TestDefaultTaskWorker_PeerTaskFailsClosedWithoutProfile 负向用例：未注入 peer 角色时，
+// 对端任务不得以本机用户的完整权限执行，而是直接失败。
+func TestDefaultTaskWorker_PeerTaskFailsClosedWithoutProfile(t *testing.T) {
+	bb := &mockFailTrackingBlackboard{mockBlackboard: mockBlackboard{tasks: make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 10)}}
+	bb.tasks["peer-2"] = &types.TaskEntry{ID: "peer-2", Type: PeerDelegationTaskType, Status: types.TaskPending, Intent: []byte("rm -rf")}
+	pool := &mockAgentPool{replyOutput: "must not run"}
+	worker := NewDefaultTaskWorker(bb, pool)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "peer-2"}
+	time.Sleep(50 * time.Millisecond)
+
+	if len(pool.queriesForTest()) != 0 || !bb.failCalledForTest() {
+		t.Fatalf("peer task without profile must fail closed, queries=%v failCalled=%v", pool.queriesForTest(), bb.failCalledForTest())
+	}
+}

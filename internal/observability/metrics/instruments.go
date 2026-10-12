@@ -142,6 +142,11 @@ var (
 	GlobalSubagentRunsTotal       atomic.Int64
 	GlobalSubagentToolDeniedTotal atomic.Int64
 
+	// GlobalMeshInboundAcceptedTotal / GlobalMeshInboundRejectedTotal 跨节点入站委派受理与拒绝次数
+	// （ADR-0111）。拒绝的具体原因（depth/chain/input）见 WARN 日志与 audit_log 的 deny_reason。
+	GlobalMeshInboundAcceptedTotal atomic.Int64
+	GlobalMeshInboundRejectedTotal atomic.Int64
+
 	// GlobalSchemaValidationFailureTotal LLMFillEffect.SchemaRef 结构校验失败的累计次数
 	// （internal/agent/schemavalidate，GR-4-005 复核修复）。持续增长说明 Prompt 模板与
 	// LLM 实际产出的结构存在系统性偏差，或模型幻觉率异常，值得单独告警而非静默降级。

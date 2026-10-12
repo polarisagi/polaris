@@ -1,6 +1,6 @@
 # ADR-0017: MCP 传输层与协同架构合集（Streamable HTTP + TaintPreservingDecoder + A2A 战略方向，含原 ADR-0018/0070）
 
-- **状态**: Accepted（已执行，A2A 决策三实现了标准 A2A 1.0 最小子集）| **日期**: 2026-05-21（合并 2026-07-28）| **模块**: M7 `internal/extension/mcp/` / M11
+- **状态**: Accepted（已执行；决策三的入站端点为私有 v0.3 风格协议，并非标准 A2A 1.0——2026-10-12 订正，见 ADR-0111）| **日期**: 2026-05-21（合并 2026-07-28）| **模块**: M7 `internal/extension/mcp/` / M11
 
 ## 决策一：默认传输层选用 Streamable HTTP，SSE 降级为 legacy（原决策）
 
@@ -31,3 +31,6 @@ MCP JSON-RPC 动态嵌套结构禁止用 `encoding/json` 直解到 `map[string]i
 > 前须先确认信任模型判断逻辑（按被委派 Agent 沙盒信任等级）与 M11/ADR-0016
 > 一致，不得为赶进度绕过；② MCP spec 若发布新的强制传输层要求，重议是否跟进，
 > 但 SSE 仅作 legacy 兼容的定位不因此改变。
+
+> 2026-10-12 追记（ADR-0111）：决策三「入站（已实现）」描述的端点经复核不是标准 A2A：方法名私有（`delegate_task`）、只回 `accepted`、调用方取不回结果、任务 ID 取自调用方、`SpawnDepth` 恒 0、`TaintHigh` 字段未落库（实际污点由 headless 路径硬编码兜底）。已由 ADR-0111 的 A2A 1.0 门面 `/a2a/v1` 取代，旧端点降为默认关闭的过渡入口。决策三「出站不复用 M7 MCP 客户端」早已被 ADR-0084 推翻，以 ADR-0084 为准。
+

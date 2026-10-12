@@ -205,7 +205,8 @@ Telegram · Discord · Slack · 飞书 · 钉钉 · 企业微信 · Matrix · Ma
 
 ### 可扩展性
 
-- **MCP（Model Context Protocol）**：Streamable HTTP，支持作为 MCP 客户端和服务端
+- **MCP（Model Context Protocol）**：Streamable HTTP 客户端（2026-07-28 无状态纪元 + Tasks 扩展）；服务端只暴露跨节点委派工具（`/mcp`，见下条），不对外暴露本机工具目录
+- **多台电脑互相委派（ADR-0111）**：每台电脑一个完整 Polaris，经 Tailscale 或局域网互相委派任务（`polaris peer invite` / `polaris peer accept` 两两配对）；对外同时提供标准 A2A 1.0 入口（`/a2a/v1`，签名 Agent Card），可与其他框架的 A2A Agent 互通。对端任务默认只读执行、不可再委派，审批只在执行任务的那台电脑上由本人完成
 - **Plugin Bundle**：多组件插件包，含 MCP 服务 + 技能 + 自动化
 - **Shell Script Hooks**：`~/.polaris/hooks/` 目录，无需改源码定制生命周期
 - **官方插件市场**：所有的默认插件、Wasm 技能和 MCP 服务均在我们的官方开源仓库 [polarisagi/polaris-plugins-official](https://github.com/polarisagi/polaris-plugins-official) 中独立维护。Polaris 主引擎会在运行时动态从该市场下载分发。

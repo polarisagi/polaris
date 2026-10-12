@@ -205,7 +205,8 @@ Telegram · Discord · Slack · Feishu · DingTalk · WeCom · Matrix · Matterm
 
 ### Extensibility
 
-- **MCP (Model Context Protocol)**: Streamable HTTP, supports both MCP client and server roles
+- **MCP (Model Context Protocol)**: Streamable HTTP client (2026-07-28 stateless era + Tasks extension); the server side exposes only cross-node delegation tools (`/mcp`), never the local tool catalog
+- **Multi-machine delegation (ADR-0111)**: run one full Polaris per computer and let them delegate tasks to each other over Tailscale or LAN (`polaris peer invite` / `polaris peer accept`); also serves a standard A2A 1.0 endpoint (`/a2a/v1`, signed Agent Card) for agents from other frameworks. Peer tasks run read-only and cannot re-delegate by default; approvals happen only on the machine that executes the task
 - **Plugin Bundle**: multi-component plugin packages (MCP server + skills + automations)
 - **Shell Script Hooks**: drop scripts into `~/.polaris/hooks/` — no source changes needed
 - **Official Plugin Marketplace**: All default plugins, Wasm skills, and MCP servers are developed and maintained at our official open-source repository: [polarisagi/polaris-plugins-official](https://github.com/polarisagi/polaris-plugins-official). Extensions are dynamically downloaded at runtime.

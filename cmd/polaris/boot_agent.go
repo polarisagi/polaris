@@ -50,6 +50,7 @@ import (
 	"github.com/polarisagi/polaris/internal/security/credential"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/mesh"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/agents"
@@ -70,7 +71,9 @@ type AgentBundle struct {
 	MetaEvalSentinel *analysis.MetaEvalSentinel
 
 	// Blackboard & Scheduler
-	Blackboard     *orchestrator.SQLiteBlackboard
+	Blackboard *orchestrator.SQLiteBlackboard
+	// Mesh 跨节点委派服务（ADR-0111）；a2a.enabled=false 时为 nil。
+	Mesh           *mesh.Service
 	Sched          *automation.SQLiteScheduler
 	AgentRegistry  *orchestrator.AgentRegistry
 	PipelineOrch   *orchestrator.PipelineOrchestrator
@@ -643,12 +646,22 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ADR-0103 决策三：agent_handoff:<name> 按插件/项目/用户子 Agent 定义以角色执行，
 	// 并触发 SubagentStart/SubagentStop hook（决策六）。
 	defaultTaskWorker.WithSubagents(subagentRunner)
+	// ADR-0111：对端委派任务（peer_delegation）按 mesh 角色执行（默认只读、不可再委派）；
+	// meshSvc 为 nil（a2a 关闭）时不注入，DefaultTaskWorker 对此类任务 fail-closed。
+	meshSvc := bootMesh(sb, blackboard)
+	if meshSvc != nil {
+		defaultTaskWorker.WithPeerProfile(meshSvc.PeerProfile)
+	}
 
 	// ADR-0084：MCP A2A 出站委派专用 Worker，认领 "agent_handoff:mcp:<server>/<agent>"
 	// 任务，转译为对目标 MCP Server 的 a2a_delegate 工具调用。*mcp.MCPManager 已天然
 	// 满足 orchestrator.MCPToolCaller（结构子类型，无需适配器）。
 	mcpA2AWorker := orchestrator.NewMCPA2AWorker(blackboard, tb.MCPMgr,
 		time.Duration(sb.Cfg.Thresholds.M8Orchestrator.A2AHandoffTimeoutSeconds)*time.Second)
+	if meshSvc != nil {
+		// ADR-0111 决策四：出站委派携带 spawn_depth 与 chain（上游链 + 本节点）。
+		mcpA2AWorker.WithDelegation(meshSvc)
+	}
 
 	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
 		Name:   "agent-0",
@@ -1194,6 +1207,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	return &AgentBundle{
+		Mesh:             meshSvc,
 		SurpriseCalc:     surpriseCalc,
 		EvalRunner:       evalRunner,
 		EvalStore:        evalStore,

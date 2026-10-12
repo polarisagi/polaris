@@ -126,7 +126,7 @@
 | `M06-Skill-Library.md` | L1 技能 | 15K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
 | `M03-Observability.md` | L0 可观测 | 13K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
 | `M12-Eval-Harness.md` | L3 评测 | 12K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |
-| `ARCHITECTURE.md` | 总览 | 10K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
+| `ARCHITECTURE.md` | 总览 | 11K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
 | `ROADMAP.md` | 路线 | 9K | 时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载） |
 | `DIAGRAMS.md` | 图谱 | 6K | 时序图（**人类参考**，AI 默认不加载） |
 | `Module-Dependency-Axioms.md` | 依赖公理 | 4K | 包间依赖方向、防循环依赖底线、领域模型正交性 |

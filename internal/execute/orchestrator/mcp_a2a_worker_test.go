@@ -301,3 +301,35 @@ func TestMCPA2AWorker_MissingAgentSegmentDefaultsToDefault(t *testing.T) {
 		t.Errorf("expected target_agent=default when agent segment is empty, got %v", caller.lastArgs["target_agent"])
 	}
 }
+
+type fakeChainSource struct{ upstream map[string][]string }
+
+func (f fakeChainSource) SelfNodeID() string { return "pn-self" }
+func (f fakeChainSource) UpstreamChain(_ context.Context, ns string) ([]string, bool) {
+	c, ok := f.upstream[ns]
+	return c, ok
+}
+
+// TestMCPA2AWorker_CarriesDepthAndChain ADR-0111 决策四：出站委派携带 spawn_depth 与
+// chain = 上游链 + 本节点（本机直接发起的任务上游为空）。
+func TestMCPA2AWorker_CarriesDepthAndChain(t *testing.T) {
+	bb := newFakeA2ABlackboard()
+	caller := &fakeMCPToolCaller{servers: map[string]string{"desktop": "srv-1"}, callResult: "ok"}
+	worker := NewMCPA2AWorker(bb, caller, time.Second).
+		WithDelegation(fakeChainSource{upstream: map[string][]string{"peer:t1": {"pn-laptop"}}})
+
+	startAndPost(t, bb, worker, &types.TaskEntry{
+		ID: "task-chain-1", Type: "agent_handoff:mcp:desktop/default",
+		Status: types.TaskPending, Intent: []byte("x"), Namespace: "peer:t1", SpawnDepth: 2,
+	})
+	if _, ok := bb.doneResult("task-chain-1"); !ok {
+		t.Fatalf("expected completion, failed: %v", bb.failed)
+	}
+	if caller.lastArgs["spawn_depth"] != 2 {
+		t.Errorf("spawn_depth must be forwarded, got %v", caller.lastArgs["spawn_depth"])
+	}
+	chain, _ := caller.lastArgs["chain"].([]string)
+	if len(chain) != 2 || chain[0] != "pn-laptop" || chain[1] != "pn-self" {
+		t.Errorf("chain must be upstream + self, got %v", caller.lastArgs["chain"])
+	}
+}

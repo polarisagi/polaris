@@ -39,9 +39,23 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/mcp-apps/views/{viewID}/state", s.handleMCPAppsViewState)
 	mux.HandleFunc("PUT /v1/mcp-apps/views/{viewID}/model-context", s.handleMCPAppsViewModelContext)
 
-	// A2A v0.3 Endpoints
-	mux.HandleFunc("GET /.well-known/agent-card.json", a2a.AgentCardHandler(s.a2aCfg))
-	mux.HandleFunc("POST /v1/a2a/tasks", a2a.TaskSubmitHandler(s.blackboard))
+	// 跨节点委派（ADR-0111）：Agent Card + A2A 1.0 + MCP 门面，实现在 meshapi，经 serveMesh 分发
+	// （委派服务晚于 NewServer 注入）。a2a.enabled=false 时 serveMesh 一律 404。
+	mux.HandleFunc("GET /.well-known/agent-card.json", s.serveMesh)
+	mux.HandleFunc("/a2a/v1", s.serveMesh)
+	mux.HandleFunc("/mcp", s.serveMesh)
+	// 跨节点委派本机管理（配对 / 令牌）。/v1 下：对端令牌被路由白名单拒绝。
+	mux.HandleFunc("GET /v1/mesh/self", s.handleMeshSelf)
+	mux.HandleFunc("POST /v1/mesh/invites", s.handleMeshCreateInvite)
+	mux.HandleFunc("GET /v1/mesh/peers", s.handleMeshListPeers)
+	mux.HandleFunc("POST /v1/mesh/peers", s.handleMeshAcceptPeer)
+	mux.HandleFunc("DELETE /v1/mesh/peers/{name}", s.handleMeshRemovePeer)
+	mux.HandleFunc("GET /v1/mesh/tokens", s.handleMeshListTokens)
+	mux.HandleFunc("DELETE /v1/mesh/tokens/{tokenID}", s.handleMeshRevokeToken)
+	// 旧私有端点 delegate_task 保留一个版本，默认关闭（ADR-0111 决策二第 7 条）。
+	if s.a2aCfg.Enabled && s.a2aCfg.LegacyEndpoint {
+		mux.HandleFunc("POST /v1/a2a/tasks", a2a.TaskSubmitHandler(s.blackboard))
+	}
 
 	// KillSwitch (M11) 管理端点
 	mux.HandleFunc("POST /_admin/kill", s.sysadminHandler.HandleKill)

@@ -50,9 +50,24 @@ type MCPToolCaller interface {
 // Type 前缀为 MCPA2AHandoffPrefix 的任务，转译为对目标 MCP Server 的
 // a2a_delegate 工具调用（ADR-0084）。
 type MCPA2AWorker struct {
-	bb      protocol.Blackboard
-	mcp     MCPToolCaller
-	timeout time.Duration
+	bb         protocol.Blackboard
+	mcp        MCPToolCaller
+	timeout    time.Duration
+	delegation DelegationChainSource
+}
+
+// DelegationChainSource 跨节点委派链来源（ADR-0111 决策四；实现为 mesh.Service）。
+// UpstreamChain 按任务的记忆命名空间反查「本任务是哪条入站委派链的延续」，
+// 本机用户直接发起的任务返回 false。
+type DelegationChainSource interface {
+	SelfNodeID() string
+	UpstreamChain(ctx context.Context, namespace string) ([]string, bool)
+}
+
+// WithDelegation 注入委派链来源。未注入时出站不携带 chain（对端按外部调用方处理，depth 仍透传）。
+func (w *MCPA2AWorker) WithDelegation(src DelegationChainSource) *MCPA2AWorker {
+	w.delegation = src
+	return w
 }
 
 // NewMCPA2AWorker 构造 MCPA2AWorker。timeout<=0 时回落到 10 分钟默认值
@@ -151,11 +166,7 @@ func (w *MCPA2AWorker) tryClaimAndExecute(ctx context.Context, taskID string) {
 
 	// context_summary 在投递前已由 executeTransferToAgent 做 PII 脱敏
 	// （ADR-0084 A6），此处原样透传，不重复处理。
-	args := map[string]any{
-		"target_agent":    agentName,
-		"context_summary": string(snap.Intent),
-		"namespace":       snap.Namespace,
-	}
+	args := w.delegateArgs(ctx, snap, agentName)
 	raw, err := w.mcp.CallTool(callCtx, serverID, mcpA2ADelegateToolName, args)
 	if err != nil {
 		w.failTask(ctx, taskID, err.Error())
@@ -165,6 +176,23 @@ func (w *MCPA2AWorker) tryClaimAndExecute(ctx context.Context, taskID string) {
 	if err := w.bb.CompleteTask(ctx, taskID, mcpA2AWorkerAgentID, []byte(raw)); err != nil {
 		slog.Warn("mcp a2a worker: CompleteTask failed", "task_id", taskID, "err", err)
 	}
+}
+
+// delegateArgs 组装 a2a_delegate 入参（ADR-0084 契约 + ADR-0111 决策四）。
+func (w *MCPA2AWorker) delegateArgs(ctx context.Context, snap *types.TaskSnapshot, agentName string) map[string]any {
+	args := map[string]any{
+		"target_agent":    agentName,
+		"context_summary": string(snap.Intent),
+		"namespace":       snap.Namespace,
+		// 深度与委派链跨网络传递。snap.SpawnDepth 已是本子任务的深度
+		// （executeTransferToAgent 投递时 +1），对端据此继续累加并校验上限。
+		"spawn_depth": snap.SpawnDepth,
+	}
+	if w.delegation != nil {
+		upstream, _ := w.delegation.UpstreamChain(ctx, snap.Namespace)
+		args["chain"] = append(append([]string(nil), upstream...), w.delegation.SelfNodeID())
+	}
+	return args
 }
 
 // failTask 标记任务失败。FailTask 自身失败必须 Error 级 + counter（L2 脑裂

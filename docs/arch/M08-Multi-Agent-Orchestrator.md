@@ -16,7 +16,7 @@
 | Agent Card 注册与能力发现（AgentRegistry.Register/Get，供 SpawnDepth 校验） | Agent 自身的能力实现（各 Agent 自行声明） |
 | Task DAG（Directed Acyclic Graph，有向无环图） 分解（跨 Agent 边界的子任务） | 子任务内部的工具调用 DAG（那是 M4 Micro-DAG） |
 | 单进程内多 Agent 消息/任务流转（Blackboard CAS 认领 + Handoff） | Provider 路由（那是 M1） |
-| — | **A2A 跨机互操作（gRPC/HTTP）**：ADR-0017 状态 Proposed 未落码，且 `ROADMAP.md §3.4`「跨节点 Agent 永远不在计划」+ `ARCHITECTURE.md §1` 单进程主体硬约束明确禁止。M8 不承担跨机职责 |
+| — | **A2A 跨机互操作（gRPC/HTTP）**：ADR-0017 状态 Proposed 未落码，且 `ROADMAP.md §3.4`「跨节点 Agent 永远不在计划」+ `ARCHITECTURE.md §1` 单进程主体硬约束明确禁止。M8 不承担跨机职责（2026-10-12 追记：独立节点间的任务委派已由 ADR-0111 在 M13 网关层实现——入站 `internal/gateway/mesh` 把对端任务投成黑板 `peer_delegation` 任务，由 `DefaultTaskWorker` 以只读 peer 角色执行；出站仍是 ADR-0084 的 `MCPA2AWorker`，增补 `spawn_depth`/`chain`。M8 本身仍不做跨机调度） |
 
 ---
 

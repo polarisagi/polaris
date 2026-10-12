@@ -71,6 +71,11 @@ type SafeDialer struct {
 	// ns.allowlist.IsAllowed（domain+port 精确匹配，Ed25519 签名 + Tier3 上限 5 条）。
 	localOnlyAllowlistCheck func(host string, port int) bool
 
+	// peerAllowlist 跨节点委派登记过的对端（ADR-0111 决策六第 2 条）：只对 [mesh.peers] 中
+	// 显式登记的 host:port 精确放行私网 / CGNAT 拦截。刻意不提供「放行 100.64.0.0/10」这类
+	// 按网段的开关——Tailscale 网段里同样可能有别人的机器与云厂商内部服务。
+	peerAllowlist func(host string, port int) bool
+
 	// allowLoopback 允许连接 loopback 地址（127.0.0.0/8 与 ::1）。
 	// 仅用于系统级受控本地服务（如 Ollama），跳过该 CIDR 段的 SSRF 阻断。
 	// 不影响其余私有 CIDR（10.x / 172.16.x / 192.168.x 等）仍被拦截。
@@ -200,7 +205,14 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	// 是全部 LLM Provider 调用——按 ctx 收紧会把默认空白名单下的所有推理出站一并拒绝。
 	// 数据外发的污点拦截由 Gate4 / TaintEgressCheck 在工具层按"载荷"污点执行（M11 §6）；
 	// 本分支仅服务于显式以 taintLevel>=Medium 构造的专用 Dialer（当前生产无此实例）。
-	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium {
+	peerOK := false
+	if sd.peerAllowlist != nil {
+		if portInt, convErr := strconv.Atoi(port); convErr == nil {
+			peerOK = sd.peerAllowlist(host, portInt)
+		}
+	}
+
+	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium && !peerOK {
 		allowed := false
 		for _, d := range sd.allowedDomains {
 			if strings.EqualFold(host, d) || strings.HasSuffix(strings.ToLower(host), "."+strings.ToLower(d)) {
@@ -220,7 +232,7 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	// Phase 2: blockedCIDRs 校验
-	if sd.containsBlockedCIDR(ips1) {
+	if !peerOK && sd.containsBlockedCIDR(ips1) {
 		return nil, &SSRFBlockedError{Host: host, IPs: ips1}
 	}
 
@@ -232,7 +244,7 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "safe_dialer phase3 dns", err)
 	}
-	if sd.containsBlockedCIDR(ips2) {
+	if !peerOK && sd.containsBlockedCIDR(ips2) {
 		return nil, &SSRFBlockedError{Host: host, IPs: ips2}
 	}
 
@@ -249,7 +261,9 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	// 只豁免"local_only 非 loopback 拒绝"这一条规则，上面 Phase 1-3.5 的 SSRF/
 	// TOCTOU 检查对白名单条目同样完整生效，不受影响。
 	control := sd.dialerControl
-	if sd.localOnlyAllowlistCheck != nil {
+	if peerOK {
+		control = nil
+	} else if sd.localOnlyAllowlistCheck != nil {
 		portInt, convErr := strconv.Atoi(port)
 		if convErr == nil && sd.localOnlyAllowlistCheck(host, portInt) {
 			control = nil
@@ -333,6 +347,12 @@ func (sd *SafeDialer) SetLocalOnlyFilter(filter func(net.IP) bool) {
 // 匹配）。由 NetworkSandbox.Enable() 调用，见该方法文档说明作用范围与边界。
 func (sd *SafeDialer) SetLocalOnlyAllowlistCheck(check func(host string, port int) bool) {
 	sd.localOnlyAllowlistCheck = check
+}
+
+// SetPeerAllowlist 注入跨节点委派对端的精确 host:port 放行检查（ADR-0111 决策六第 2 条）。
+// 只应在装配期调用一次（与 SetLocalOnlyAllowlistCheck 同一约定）。
+func (sd *SafeDialer) SetPeerAllowlist(check func(host string, port int) bool) {
+	sd.peerAllowlist = check
 }
 
 // resolveDNS 解析 DNS（缓存 + TTL）。

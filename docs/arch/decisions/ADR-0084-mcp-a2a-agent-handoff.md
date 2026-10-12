@@ -68,3 +68,4 @@ ADR-0017 决策三已实现 A2A v0.3 入站端点（`GET /.well-known/agent-card
 | 2026-08-02 | 初稿，随阶段05 P-03 落地 |
 | 2026-08-09 | 追记：重新评估触发条件——`NamespaceID`/角色路由对 `DefaultTaskWorker` 本地非 `mcp:` 委派路径的缺口是独立于本 ADR 的既有 bug（登记于 `99-new-findings.md`），须单独 ADR 评审，不得在本 ADR 范围内顺手修复；新增独立 A2A HTTP 客户端的提议须先证明 `MCPManager.CallTool` 复用路径已无法满足需求。 |
 | 2026-09-26 | 追记（ADR-0103 决策三补充）：`list_a2a_agents` 并入 `list_agents`（本地子 Agent + `mcp:` 目标 + `general-purpose`），`RegisterA2ATools` → `RegisterDelegationTools`，文件 `internal/tool/builtin/{list_agents,list_agents_exec,delegation_tools}.go`；`transfer_to_agent` 同时注册为内置工具。2026-08-09 所记本地角色路由缺口由 ADR-0103 解决（`DefaultTaskWorker.WithProfileResolver`）。本 ADR 的 A1~A7 约束不变。 |
+| 2026-10-12 | 追记（ADR-0111）：`a2a_delegate` 入参增补 `spawn_depth`（子任务深度）与 `chain`（上游委派链 + 本节点 ID），由 `MCPA2AWorker.WithDelegation` 注入；Polaris 节点自身经 `/mcp` 门面实现本契约（`a2a_delegate` / `a2a_list_agents` + `get_task` / `cancel_task`），Polaris 之间的委派即走本 ADR 的出站链路。A1~A7 不变。 |

@@ -297,6 +297,12 @@ type InterfaceConfig struct {
 	// AppsEnabled 控制 MCP Apps 能力总开关（含沙箱监听器是否启动、
 	// GET /v1/mcp-apps/config 的 enabled 字段）。默认 true。
 	AppsEnabled bool `toml:"apps_enabled"`
+	// ExtraListen 额外监听地址（ADR-0111 决策六），如 Tailscale 地址 "100.101.102.103:28888"
+	// 或局域网地址 "192.168.1.20:28888"，供其他节点访问。默认空 = 只监听 Host:Port。
+	// 通配地址（0.0.0.0 / ::）被拒绝，除非 AllowWildcardListen=true。
+	ExtraListen []string `toml:"extra_listen"`
+	// AllowWildcardListen 危险开关：允许 ExtraListen 含通配地址（会暴露到所有网卡，含公网）。
+	AllowWildcardListen bool `toml:"allow_wildcard_listen"`
 }
 
 type SecurityConfig struct {
@@ -366,9 +372,54 @@ type CompressorConfig struct {
 	MaxThrashCount int `toml:"max_thrash_count"`
 }
 
-// A2AConfig 控制 Agent-to-Agent (A2A) 接口配置。
+// A2AConfig 跨节点委派对外接口（ADR-0111）：Agent Card、A2A 1.0 门面（/a2a/v1）与 MCP 门面（/mcp）。
 type A2AConfig struct {
-	Enabled bool     `toml:"enabled"`
-	Name    string   `toml:"name"`
-	Skills  []string `toml:"skills"`
+	// Enabled 两个门面与对端令牌鉴权的总开关；false 时路由一律不注册。
+	Enabled     bool   `toml:"enabled"`
+	Name        string `toml:"name"`
+	Description string `toml:"description"`
+	// AdvertisedURL Agent Card 里对外可见的源（反向代理 / TLS 终结时填写）；空 = 按请求 Host 推导。
+	AdvertisedURL string `toml:"advertised_url"`
+	// Skills 旧格式（字符串数组），保留兼容首次启动时复制出去的用户配置；
+	// 新配置用 [[a2a.skill]]（SkillDefs）。两者都有时以 SkillDefs 为准。
+	Skills    []string         `toml:"skills"`
+	SkillDefs []A2ASkillConfig `toml:"skill"`
+	// LegacyEndpoint 保留旧的私有 POST /v1/a2a/tasks（delegate_task）一个版本；默认关闭，调用时打 deprecation 日志。
+	LegacyEndpoint bool `toml:"legacy_endpoint"`
+}
+
+// A2ASkillConfig Agent Card 上的一项技能（A2A 1.0 AgentSkill）。
+type A2ASkillConfig struct {
+	ID          string   `toml:"id"`
+	Name        string   `toml:"name"`
+	Description string   `toml:"description"`
+	Tags        []string `toml:"tags"`
+	Examples    []string `toml:"examples"`
+}
+
+// CardSkills 规整后的技能列表：优先 SkillDefs，否则由旧格式字符串派生。
+func (c A2AConfig) CardSkills() []A2ASkillConfig {
+	if len(c.SkillDefs) > 0 {
+		return c.SkillDefs
+	}
+	out := make([]A2ASkillConfig, 0, len(c.Skills))
+	for _, s := range c.Skills {
+		out = append(out, A2ASkillConfig{ID: s, Name: s, Description: s, Tags: []string{s}})
+	}
+	return out
+}
+
+// MeshConfig 入站委派的执行边界（ADR-0111 决策三 / 决策七）。
+type MeshConfig struct {
+	// PeerReadOnly 对端任务以只读角色执行（写文件/起进程/改状态的工具在执行入口硬拒绝）。默认 true。
+	PeerReadOnly bool `toml:"peer_read_only"`
+	// AllowRelay 对端任务能否继续委派（含转发第三个节点）。默认 false。
+	AllowRelay bool `toml:"allow_relay"`
+	// ResultRetentionHours 入站任务结果留存时长（对端可能休眠数天）。默认 168（7 天）。
+	ResultRetentionHours int `toml:"result_retention_hours"`
+	// MaxInputBytes 单次委派输入上限。默认 65536。
+	MaxInputBytes int `toml:"max_input_bytes"`
+	// BlockingWaitSeconds A2A SendMessage 未设 returnImmediately 时的最长阻塞秒数。默认 60。
+	BlockingWaitSeconds int `toml:"blocking_wait_seconds"`
+	// 已登记的对端存放在数据库（mesh_peers，State-in-DB），由 `polaris peer` 命令维护，不在配置文件里。
 }

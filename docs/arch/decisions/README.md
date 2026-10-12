@@ -113,6 +113,7 @@ ADR 被代码引用时，源文件头部加：
 | 0108 | 语音 v3：后台串行预置、抗 CPU 争用基准门控与前端单一进度指示；取代 ADR-0107 决策 3 与反例守护第一条 | Accepted | 2026-10-02 |
 | 0109 | 本地推理默认关闭：向量化改用独立的进程内 ONNX 嵌入器（默认 EmbeddingGemma-300M，弱 CPU 降 bge-small-zh），llama-server/Ollama 仅显式配置启用；删除 Embedding 内存阶梯与本地对话 Provider 自动注册；取代 ADR-0062 Tier1 embedding 选型部分 | Proposed | 2026-10-02 |
 | 0110 | 语音 v4：MeloTTS 取代 Kokoro，语音按硬件三档开放（A 极低配全关；B <3600MB 只开 STT；C ≥3600MB STT+Melo），Melo 须 max_num_sentences=100 并服务端分句，基准指纹含模型名，过慢回系统语音；下载前 SenseVoice 代理测速（修订三）省去弱 CPU 的 167MB 白下，B 档原因码 tts_ram_tier；Matcha 因训练数据许可证链路不可核验被删除（2026-10-08 修订）；取代 ADR-0107 决策 1(TTS)/2(TTS 门槛)/6 | Accepted | 2026-10-08 |
+| 0111 | 跨节点委派：Polaris 之间走 MCP 门面（复用 ADR-0084 a2a_delegate 契约，新增 spawn_depth/chain），外部互通走 A2A 1.0 入站（a2a-go/v2）；对端令牌与 admin 分离，HITL 仅本地 | Accepted | 2026-10-12 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

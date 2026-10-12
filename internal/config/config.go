@@ -3,8 +3,10 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -33,6 +35,7 @@ type Config struct {
 	Sandbox       SandboxConfig       `toml:"sandbox"`
 	Security      SecurityConfig      `toml:"security"`
 	A2A           A2AConfig           `toml:"a2a"`
+	Mesh          MeshConfig          `toml:"mesh"`
 	Thresholds    Thresholds          `toml:"-"`
 }
 
@@ -160,7 +163,27 @@ func (c *Config) Validate() error {
 		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: system.go_memlimit_mb must be >= 64 when set, got %d", c.System.GoMemLimitMB))
 	}
 
+	if err := validateListen(&c.Interface); err != nil {
+		return err
+	}
 	return validateEmbeddingConfig(&c.Embedding)
+}
+
+// validateListen 额外监听地址必须是显式 host:port；通配地址需显式开启危险开关（ADR-0111 决策六）。
+func validateListen(iface *InterfaceConfig) error {
+	for _, addr := range iface.ExtraListen {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil || port == "" {
+			return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("config: interface.extra_listen entry %q must be host:port", addr))
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		wildcard := host == "" || (ip != nil && ip.IsUnspecified())
+		if wildcard && !iface.AllowWildcardListen {
+			return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf(
+				"config: interface.extra_listen %q listens on all interfaces; list the specific address (e.g. your Tailscale or LAN IP) or set allow_wildcard_listen = true", addr))
+		}
+	}
+	return nil
 }
 
 func validateAudioConfig(inf *InferenceConfig) error {

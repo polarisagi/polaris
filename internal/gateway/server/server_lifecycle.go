@@ -285,6 +285,7 @@ func (s *Server) Start() error {
 			slog.Error("polaris-server: serve error", "err", err)
 		}
 	})
+	s.startExtraListeners()
 	// 启动所有已配置平台的 poller
 	concurrent.SafeGo(context.Background(), "gateway.server.restore_channels", func(context.Context) {
 		s.channelMgr.RestoreChannelsFromDB(s.db)

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -41,6 +42,11 @@ const (
 	// taskCancelTimeout ctx 取消时尽力发送 tasks/cancel 使用的独立超时（不能复用已取消的
 	// ctx，否则请求根本发不出去）。
 	taskCancelTimeout = 5 * time.Second
+
+	// taskPollGrace 轮询 tasks/get 连续失败的宽限期（ADR-0111 决策七）：远端可能是一台
+	// 刚合上盖子的笔记本，或 Wi-Fi 切换中的台式机。宽限期内的失败只重试；超出后放弃等待，
+	// 但错误里带上远端任务 ID——远端醒来后任务会继续跑完，结果留存在那边，事后可取回。
+	taskPollGrace = 120 * time.Second
 )
 
 // mcpTaskState CreateTaskResult 与 tasks/get 响应共用的信封。DetailedTask 按 status
@@ -85,6 +91,7 @@ func (c *MCPClient) awaitTask(ctx context.Context, createResult json.RawMessage)
 	var ttl *int64 // 每轮 tasks/get 后立即刷新为服务器最新值，见循环体
 	answered := make(map[string]struct{})
 	status := seed.Status
+	lastOK := time.Now()
 
 	for {
 		select {
@@ -96,8 +103,20 @@ func (c *MCPClient) awaitTask(ctx context.Context, createResult json.RawMessage)
 
 		state, err := c.getTask(ctx, seed.TaskID)
 		if err != nil {
-			return nil, err
+			// 只有「没联系上」才值得等：服务器明确回了 JSON-RPC 错误（任务不存在、参数错）说明它在线，
+			// 重试没有意义，按原样立即失败。
+			var rpcErr *RPCError
+			if !errors.As(err, &rpcErr) && ctx.Err() == nil && time.Since(lastOK) < taskPollGrace {
+				slog.Warn("mcp: tasks/get failed, retrying within grace period", "server", c.cfg.ServerName,
+					"taskId", seed.TaskID, "err", err)
+				continue
+			}
+			return nil, apperr.Wrap(apperr.CodeNetworkUnavailable, fmt.Sprintf(
+				"mcp: lost contact with server %s while waiting for task %s; it may still finish there "+
+					"(results are kept on that server) — query it later with that server's get_task tool",
+				c.cfg.ServerName, seed.TaskID), err)
 		}
+		lastOK = time.Now()
 		interval, ttl = clampPollInterval(state.PollIntervalMs), state.TTLMs
 		if state.Status != status {
 			status = state.Status

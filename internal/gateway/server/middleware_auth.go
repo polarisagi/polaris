@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
+	"github.com/polarisagi/polaris/internal/gateway/mesh"
+	"github.com/polarisagi/polaris/internal/gateway/server/meshapi"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -120,7 +122,8 @@ func isStaticShellRequest(r *http.Request) bool {
 		return false
 	}
 	p := r.URL.Path
-	return !strings.HasPrefix(p, "/v1/") && !strings.HasPrefix(p, "/_admin")
+	// 委派门面（ADR-0111）不是静态外壳：GET /mcp 若被当成静态页放行，就绕过了鉴权。
+	return !strings.HasPrefix(p, "/v1/") && !strings.HasPrefix(p, "/_admin") && !meshapi.IsMeshPath(p)
 }
 
 // checkOrigin 判定请求来源与目标主机是否同源，用于 Cookie 分支的 CSRF 防护。
@@ -213,6 +216,23 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		w.Header().Set("Retry-After", "300")
 		http.Error(w, "429 Too Many Requests - Auth Cooldown", http.StatusTooManyRequests)
 		return ctx, false
+	}
+
+	// ②' 对端令牌（ADR-0111 决策三）：固定前缀，与 API Key / 本地令牌互不比较。
+	// 身份是 ClientTypePeer，只能访问委派门面（withMiddleware 里强制路由白名单）。
+	if strings.HasPrefix(presented, mesh.TokenPrefix) {
+		p, err := s.verifyPeerToken(ctx, presented)
+		if err != nil {
+			authManager.RecordFailure(clientIP)
+			slog.Warn("http: peer token rejected", "ip", clientIP, "path", r.URL.Path, "err", err)
+			http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+			return ctx, false
+		}
+		authManager.RecordSuccess(clientIP)
+		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{
+			UserID: "peer:" + p.PeerNodeID, ClientType: authcontext.ClientTypePeer, TraceID: traceID, Authenticated: true,
+			PeerTokenID: p.TokenID, PeerName: p.PeerName, PeerNodeID: p.PeerNodeID, PeerScopes: p.Scopes,
+		}), true
 	}
 
 	// ② 远程 API Key
@@ -345,9 +365,17 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 			clientType = authCtx.ClientType
 		}
 
-		// 注入污点：默认本地客户端 TaintMedium，API 调用（外部网络） TaintHigh
+		// 对端令牌只能访问委派门面（ADR-0111 决策三第 2 条）：发给另一台机器的凭证
+		// 不得触及 /_admin/kill、/v1/system/update、Provider 配置等任何其他路由。
+		if clientType == authcontext.ClientTypePeer && !meshapi.PeerAllowedPath(r.URL.Path) {
+			slog.Warn("http: peer token used outside mesh routes", "ip", clientIP, "path", r.URL.Path, "peer", authCtx.PeerName)
+			http.Error(w, "403 Forbidden: peer tokens may only access /a2a/v1 and /mcp", http.StatusForbidden)
+			return
+		}
+
+		// 注入污点：默认本地客户端 TaintMedium，API 调用与对端节点（外部网络） TaintHigh
 		taint := types.TaintMedium
-		if clientType == authcontext.ClientTypeAPI {
+		if clientType == authcontext.ClientTypeAPI || clientType == authcontext.ClientTypePeer {
 			taint = types.TaintHigh
 		}
 		ctx = taint.InjectToContext(ctx)

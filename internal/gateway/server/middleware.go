@@ -66,6 +66,7 @@ func builtinClientQuotas() map[string]clientQuota {
 		"grpc":                                {Rate: 50, Max: 100},
 		"admin":                               {Rate: 10, Max: 20},
 		string(authcontext.ClientTypeAPI):     {Rate: 30, Max: 60},
+		string(authcontext.ClientTypePeer):    {Rate: 10, Max: 30}, // 对端节点（ADR-0111）：委派 + 轮询，量级远低于 UI
 		string(authcontext.ClientTypeUnknown): {Rate: 10, Max: 20},
 	}
 }

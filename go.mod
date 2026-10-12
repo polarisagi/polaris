@@ -5,8 +5,10 @@ go 1.26.2
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/semver/v3 v3.3.0
+	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/ebitengine/purego v0.10.1
+	github.com/eliben/go-sentencepiece v0.7.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-python/gpython v0.2.0
 	github.com/google/uuid v1.6.0
@@ -25,8 +27,8 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	golang.org/x/sync v0.21.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.44.0
 	golang.org/x/time v0.15.0
 	google.golang.org/protobuf v1.36.11
@@ -44,7 +46,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/eliben/go-sentencepiece v0.7.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/hhrutter/lzw v1.0.0 // indirect
@@ -65,7 +66,8 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/image v0.41.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	modernc.org/libc v1.73.5 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

@@ -6,6 +6,16 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-12（ADR-0111 跨节点委派 — 含**契约变更**）
+
+- **[契约] 新增 `ClientTypePeer`**（`authcontext`）：对端令牌 `pmt_…` 的持有者只能访问 `/a2a/v1`、`/mcp`、Agent Card，其余路由中间件一律 403；`AuthContext` 增 `Peer*` 字段。
+- **[契约] 新黑板任务类型 `peer_delegation`**：`DefaultTaskWorker.WithPeerProfile` 未注入时此类任务 fail-closed；记忆命名空间 `peer:<task_id>`（与本机记忆隔离）。
+- **[契约] `a2a_delegate` 入参增 `spawn_depth` / `chain`**（ADR-0084 契约扩展），`MCPA2AWorker.WithDelegation` 注入链来源。
+- **[契约] `SafeDialer.SetPeerAllowlist`**：只对 `mesh_peers` 登记的精确 host:port 放行私网 / CGNAT，不提供按网段放行。
+- **[配置] `[a2a]` 改为 Agent Card 配置（`[[a2a.skill]]`、`advertised_url`、`legacy_endpoint`，旧 `skills=[…]` 仍兼容）；新增 `[mesh]`；`[interface]` 增 `extra_listen` / `allow_wildcard_listen`。**
+- **[Schema] 新增 `048_mesh.sql`**（`mesh_peer_tokens` / `mesh_peer_tasks` / `mesh_peers`）；`PostTask` 补写 `tasks.intent_taint`。
+- **[依赖] `github.com/a2aproject/a2a-go/v2` v2.6.0**（仅 JSON-RPC 绑定，无 CGO，二进制 +0.86MB）。
+
 ## 2026-10-02（R7 文件行数软硬上限调整）
 
 - **[阈值] R7 文件行数**：由软 500 / 硬 550 调整为软 800 / 硬 850。801–850 门控仅告警（`go test -v` 可见），> 850 拦截须拆分（`00-Constitution.md §R7`，`internal/lint/naming_and_size_test.go`）。

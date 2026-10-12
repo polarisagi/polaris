@@ -208,6 +208,10 @@ apps_sandbox_port = 0
 apps_sandbox_origin = ""
 apps_host_origin = ""
 apps_enabled = true
+# 额外监听地址，供其他电脑访问（ADR-0111）。写本机的 Tailscale 地址（100.x.y.z）或局域网地址，
+# 不要写 0.0.0.0——那会暴露到所有网卡；确需如此须同时设 allow_wildcard_listen = true。
+extra_listen = []
+allow_wildcard_listen = false
 
 [security]
 # Tier 3（≥64GB）本地大模型专用的出站网络彻底隔离模式：为真时启用 NetworkSandbox
@@ -296,7 +300,40 @@ backend              = "auto"
 onnx_model           = "auto"
 dim                  = 0
 
+# 跨节点委派对外接口（ADR-0111）：Agent Card + A2A 1.0（/a2a/v1）+ MCP（/mcp）。
+# 默认只监听本机；要让其他电脑访问，在 [interface] extra_listen 里写本机的 Tailscale 或局域网地址。
 [a2a]
 enabled = true
 name = "polaris-agent-0"
-skills = ["general", "coding", "planning"]
+description = ""
+advertised_url = ""
+legacy_endpoint = false
+# skills = ["general"] 为旧格式（字符串数组），仍兼容；新配置用下面的 [[a2a.skill]]。
+skills = []
+
+[[a2a.skill]]
+id = "general"
+name = "General assistant"
+description = "Answer questions and carry out multi-step tasks"
+tags = ["general"]
+
+[[a2a.skill]]
+id = "coding"
+name = "Coding"
+description = "Read, explain and write code"
+tags = ["coding"]
+
+[[a2a.skill]]
+id = "planning"
+name = "Planning"
+description = "Break down goals into executable plans"
+tags = ["planning"]
+
+# 入站委派的执行边界（ADR-0111 决策三 / 决策七）。
+[mesh]
+peer_read_only = true          # 对端任务只读执行：写文件/起进程/改状态的工具一律拒绝
+allow_relay = false            # 对端任务不能再委派（从源头杜绝成环）
+result_retention_hours = 168   # 结果留存 7 天，对端休眠醒来后仍可取回
+max_input_bytes = 65536
+blocking_wait_seconds = 60
+# 已登记的对端存放在数据库（mesh_peers），用 `polaris peer invite` / `polaris peer accept` 配对，不在本文件里。

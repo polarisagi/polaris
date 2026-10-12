@@ -50,6 +50,19 @@ type DefaultTaskWorker struct {
 	excludeTypes    map[string]struct{}
 	excludePrefixes []string
 	subagents       *SubagentRunner
+	peerProfile     func(*types.TaskSnapshot) *types.AgentProfileSpec
+}
+
+// PeerDelegationTaskType 对端节点经 A2A / MCP 门面委派来的任务类型（ADR-0111）。
+// 由 internal/gateway/mesh 投递；本 Worker 认领后必须以 WithPeerProfile 注入的角色执行。
+const PeerDelegationTaskType = "peer_delegation"
+
+// WithPeerProfile 注入对端任务的执行角色（只读、禁止再委派等，见 mesh.Service.PeerProfile）。
+// 未注入时对端任务一律失败（fail-closed）：宁可让对端看到失败，也不能以本机用户的完整权限
+// 执行一段来自网络的文本。
+func (w *DefaultTaskWorker) WithPeerProfile(fn func(*types.TaskSnapshot) *types.AgentProfileSpec) *DefaultTaskWorker {
+	w.peerProfile = fn
+	return w
 }
 
 // AgentProfileResolver 子 Agent 名称 → 角色规格（ADR-0103 决策三；调用方定义接口，实现由
@@ -196,8 +209,15 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		w.bb.PublishTaskEvent(taskID, ev)
 	})
 
-	output, err := w.execute(bgCtx, snap, prompt,
-		[]types.HeadlessOption{types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb})
+	opts := []types.HeadlessOption{types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb}
+	if snap.Type == PeerDelegationTaskType {
+		if w.peerProfile == nil {
+			w.failTask(taskID, "peer delegation profile not configured on this node (fail-closed)")
+			return
+		}
+		opts = append(opts, types.WithAgentProfile(w.peerProfile(snap)))
+	}
+	output, err := w.execute(bgCtx, snap, prompt, opts)
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())
