@@ -2,16 +2,18 @@
 
 > MCP（Model Context Protocol，模型上下文协议） 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:184 三级沙箱(CANONICAL) / 5:385 PolicyGate / 6:448 Capability / 7:473 动作扩展 / 8:616 Usage演化 / 12:658 (SOFT)降级 / 13:676 跨模块契约 / 14:696 Plugin / 15:738 Hook -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:33 MCP双向 / 2:66 A2A（Agent-to-Agent，智能体间通信） / 3:74 注册 / 4:130 三级沙箱(CANONICAL) / 5:282 PolicyGate / 6:343 Capability / 7:355 动作扩展 / 8:434 616 Usage演化 / 12:468 658 (SOFT)降级 / 13:485 676 跨模块契约 / 14:505 696 Plugin / 15:521 738 Hook -->
 ## 0-bis. 职责边界
 
-- M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
-- M7 **是**: MCP 双向桥接（Host 消费 + Server 暴露） | M7 **不是**: MCP 协议实现（依赖 Go MCP SDK）
-- M7 **是**: 沙箱分级执行（Sbx-L1/L2/L3） | M7 **不是**: 沙箱选型决策（那是 M11 PolicyGate）
-- M7 **是**: Capability Token 签发与校验（沙箱门口） | M7 **不是**: 凭证长期存储（那是 M11 CredentialVault）
-- M7 **是**: ExecuteTool 调用入口（含 SideEffectPreCheck） | M7 **不是**: 工具调用时机决策（那是 M4 状态机）
-- M7 **是**: 技能脚本执行（Logic Collapse Python 脚本委托 ContainerSandbox；普通 script 技能委托 InProcessSandbox） | M7 **不是**: 技能发现与匹配（那是 M6 SkillSelector）
-- M7 **是**: 所有出站网络连接强制经 M11 SafeDialer | M7 **不是**: 网络策略制定（那是 M11 SSRFGuard）
+| M7 是 | M7 不是 |
+|---|---|
+| 工具注册中心（ToolRegistry）+ 五大工具类别管理 | 工具语义定义者（各模块注册自己的工具） |
+| MCP 双向桥接（Host 消费 + Server 暴露） | MCP 协议实现（依赖 Go MCP SDK） |
+| 沙箱分级执行（Sbx-L1/L2/L3） | 沙箱选型决策（M11 PolicyGate） |
+| Capability Token 签发与校验（沙箱门口） | 凭证长期存储（M11 CredentialVault） |
+| ExecuteTool 调用入口（含 SideEffectPreCheck） | 工具调用时机决策（M4 状态机） |
+| 技能脚本执行（Logic Collapse Python → ContainerSandbox；普通 script 技能 → InProcessSandbox） | 技能发现与匹配（M6 SkillSelector） |
+| 所有出站网络连接强制经 M11 SafeDialer | 网络策略制定（M11 SSRFGuard） |
 
 ---
 
@@ -20,7 +22,7 @@
 - 编号: inv_M7_01 | 不变量: 所有工具（含 builtin）必须经 Capability Token 验证——禁止后门路径 | 验证方式: CI（Continuous Integration，持续集成） `no_backdoor_lint`
 - 编号: inv_M7_02 | 不变量: MCP 获取内容默认 taint=high——trusted_sources 白名单例外 | 验证方式: M11 Connector-Taint-Table
 - 编号: inv_M7_03 | 不变量: 沙箱选择不可被调用方手动覆盖——`AssignSandboxTier()` 由 M11 PolicyGate 决定 | 验证方式: 代码审计
-- 编号: inv_M7_04 | 不变量: Agent 任务派生深度最大 3 | 验证方式: M8 `orchestrator.MaxSpawnDepth`（见 M7 §4.6-bis，原 Capability Token 委托链机制已于 2026-07-14 移除，此不变量现由 M8 覆盖）
+- 编号: inv_M7_04 | 不变量: Agent 任务派生深度最大 3 | 验证方式: M8 `orchestrator.MaxSpawnDepth`（M7 §4.6-bis；Token 委托链已移除）
 - 编号: inv_M7_05 | 不变量: 不可逆操作（write_network/privileged）执行前须 DryRun + HITL（Human-in-the-loop，人机协同） | 验证方式: M7 §5.3 Shadow Sink + §5.4 DryRunMode
 - 编号: inv_M7_06 | 不变量: 所有出站连接强制经 M11 SafeDialer.DialContext——禁止裸 net.Dial/grpc.Dial/http.Get | 验证方式: CI `safe_dialer_lint`
 
@@ -30,154 +32,98 @@
 
 ## 1. MCP 双向架构
 
-MCP Server 暴露端: `mcp.Server("polaris-agent" v0.1.0)` → 注册工具 `execute_skill`（skillLib.LookupByName→Wasm执行） + 注册资源 `memory://episodic/recent`（memory.Episodic().GetRecent(20)）
-
-MCP Client 消费端: `ConnectExternalMCP(serverCmd)` → CommandTransport/StreamableHTTP → OAuth 2.1 + PKCE 认证（远程 server）→ ListTools → 发现外部工具
-
-**MCP OAuth 2.1 + PKCE 流程**: Client → 重定向至 IdP → 带回 access_token → 注入 MCP request header `Authorization: Bearer <access_token>`。OAuth access_token 用于跨进程认证；Capability Token 用于本地沙箱内的能力收缩，两者分工明确。
-
-**Streamable HTTP（HyperText Transfer Protocol，超文本传输协议）** 为默认远程传输层；SSE（Server-Sent Events，服务器发送事件） 仅向后兼容（legacy）。决策见 [ADR-0017（Architecture Decision Record，架构决策记录）](./decisions/ADR-0017-mcp-streamable-http-default.md)。
-
-**MCP Transport 污点保护反序列化**：MCP Client 路径强制使用 TaintPreservingDecoder（`internal/extension/mcp/taint_decoder.go`），禁用标准 JSON 直解动态 schema——所有 string 叶子包装为 TaintedString（Source=MCP, Origin=server_name），初始 `[TaintLevel]` 按 M11 §2.4 `[Connector-Taint-Table]` 判定。决策与被驳回方案见 [ADR-0017](./decisions/ADR-0017-mcp-streamable-http-default.md)（决策二，含原 ADR-0018）。
-
-**MCPManager.CallTool 直接路径安全**：`MCPManager.CallTool` 提供面向外部调用方的直接路由接口。该入口在调用 MCP Client 前强制执行 `PolicyGate.IsAuthorized`（deny-by-default），信任等级根据服务器是否在白名单（Trusted）动态设置。与 `InMemoryToolRegistry.ExecuteTool` 保持一致的安全语义，两条路径均不绕过策略层。
-
-**MCP stdio 子进程环境隔离（R1.15）**：stdio 子进程启动时禁止直接继承父进程完整环境，必须经 `internal/extension/mcp/` 的父环境净化逻辑过滤 `*_KEY/_TOKEN/_SECRET/_PASSWORD` 等密钥类键名，再叠加显式配置。Go exec 在 Env 为 nil 时同样继承完整父进程环境，因此必须显式赋值，不得依赖条件分支。
-
-**MCP 工具注册路径与 AssignSandboxTier 的关系**：`AssignSandboxTier` 规定 `ToolMCP → SandboxWasm`，描述的是**工具调用层**的沙箱要求。`MCPManager` 的实际执行路径是：MCP 工具以 `InProcessRichFn` 注册到 `InProcessSandbox`，执行时通过 JSON-RPC 调用外部 MCP 进程（stdio/HTTP），外部进程本身即为隔离边界。Wasm 级别的隔离发生在 MCP Server 进程内部，而非宿主侧 `InProcessSandbox.Run`。这是当前已知的沙箱层级差异，Tier 0 macOS 无 microVM 时接受此设计，Tier 1+ Linux 可在 MCP Server 进程外再套 Firecracker。
-
-**LoadFromDB 必须读取 trust_tier**：启动时从 `mcp_servers` 表加载 MCP Server 时，必须 SELECT `trust_tier` 并以 `trust_tier >= 3` 设置 `MCPClientConfig.Trusted = true`，否则所有服务器（含官方）均降级为 `TaintHigh`，破坏 publisherTrustMap 的设计意图。
+- **Server 暴露端**：Polaris 间 `/mcp` 门面 + A2A 1.0 `/a2a/v1` 门面，见 [ADR-0111](./decisions/ADR-0111-cross-node-delegation-mcp-facade-and-a2a-1-0.md)（`internal/gateway/server/meshapi/`）。
+- **Client 消费端**：`internal/extension/mcp`（`MCPManager`）；传输 stdio / Streamable HTTP（默认）/ SSE（legacy）；远程 server 走 OAuth 2.1 + PKCE，access_token 注入 `Authorization: Bearer`（跨进程认证；Capability Token 负责本地沙箱内能力收缩，二者分工）。决策见 [ADR-0103](./decisions/ADR-0103-extension-dual-vendor-standard.md)（原 ADR-0017/0018）。
+- **污点保护反序列化**：Client 路径强制 TaintPreservingDecoder（`internal/extension/mcp/taint_decoder.go`），禁用标准 JSON 直解动态 schema——所有 string 叶子包装为 TaintedString（Source=MCP, Origin=server_name），初始 `[TaintLevel]` 按 M11 §2.4 `[Connector-Taint-Table]` 判定。
+- **`MCPManager.CallTool` 直接路径**：调用 Client 前强制 `PolicyGate.IsAuthorized`（deny-by-default），信任等级按服务器是否在白名单（Trusted）设置；与 `InMemoryToolRegistry.ExecuteTool` 同一安全语义，两条路径均不绕过策略层。
+- **stdio 子进程环境隔离（R1.15）**：禁止继承父进程完整环境，必须经 `internal/extension/mcp/` 的环境净化过滤 `*_KEY/_TOKEN/_SECRET/_PASSWORD` 键名，再叠加显式配置；Go exec 在 Env 为 nil 时同样继承父环境，故必须显式赋值。
+- **沙箱层级**：`AssignSandboxTier` 对 `ToolMCP` 返回 `SandboxInProcess`（§4.2）；MCP 工具以 `InProcessRichFn` 注册，执行 = JSON-RPC 调外部进程（stdio/HTTP），外部进程即隔离边界。
+- **`LoadFromDB` 必须读取 trust_tier**：加载 `mcp_servers` 时 SELECT `trust_tier`，`>= 3` → `MCPClientConfig.Trusted = true`；否则全部降级 `TaintHigh`，破坏 publisherTrustMap。
 
 统一错误映射（transport-agnostic）:
 
-- 传输层: stdio | 典型错误: broken pipe, EOF, exit≠0 | Code: CONNECTION_LOST
-- 传输层: stdio | 典型错误: stderr JSON-RPC error | Code: REMOTE_ERROR
-- 传输层: SSE (legacy) | 典型错误: 连接超时>30s | Code: CONNECTION_TIMEOUT
-- 传输层: Streamable HTTP | 典型错误: 连接超时>30s | Code: CONNECTION_TIMEOUT
-- 传输层: Streamable HTTP | 典型错误: 无 close frame | Code: CONNECTION_LOST
-- 传输层: HTTP | 典型错误: 502/503/504 | Code: REMOTE_UNAVAILABLE
-- 传输层: HTTP | 典型错误: 4xx / 401 OAuth 过期 | Code: CLIENT_ERROR
-- 传输层: HTTP | 典型错误: DNS/TCP 失败 | Code: CONNECTION_FAILED
-- 传输层: gRPC (A2A) | 典型错误: UNAVAILABLE/DEADLINE_EXCEEDED | Code: REMOTE_UNAVAILABLE
-- 传输层: gRPC (A2A) | 典型错误: PERMISSION_DENIED | Code: CLIENT_ERROR
+| 传输层 | 典型错误 | Code |
+|---|---|---|
+| stdio | broken pipe, EOF, exit≠0 | CONNECTION_LOST |
+| stdio | stderr JSON-RPC error | REMOTE_ERROR |
+| SSE / Streamable HTTP | 连接超时>30s | CONNECTION_TIMEOUT |
+| Streamable HTTP | 无 close frame | CONNECTION_LOST |
+| HTTP | 502/503/504；gRPC(A2A) UNAVAILABLE/DEADLINE_EXCEEDED | REMOTE_UNAVAILABLE |
+| HTTP | 4xx / 401 OAuth 过期；gRPC PERMISSION_DENIED | CLIENT_ERROR |
+| HTTP | DNS/TCP 失败 | CONNECTION_FAILED |
 
 重试: CONNECTION_LOST/FAILED/TIMEOUT→2次指数退避；CLIENT_ERROR→0；REMOTE_ERROR/UNAVAILABLE→1次
 
 ### 1.1 MCP 扩展原语与安全护栏 (Sampling/Roots/Elicitation/Prompts)
 
-M7 桥接层对 MCP 扩展原语强制物理级护栏：
-
-- **Sampling (Server 请求本地 LLM（Large Language Model，大语言模型）)**
-  - Deny-by-default，仅 `allow_sampling` Capability Token 放行
-  - Empty Context 隔离执行，禁止携带 ImmutableCore / Episodic
-  - 产出强制 `[TaintHigh]`（禁入 instruction slot），Token 计入 Session 预算，受 M3 TokenBurnRate 熔断
-- **Roots (Server 请求文件树边界)**
-  - 严格收敛于 Sandbox `allowed_paths`，拦截真实路径，仅返回沙箱挂载点（如 `/tmp/sandbox/{skill_id}/`），防目录穿越与探活
-- **Elicitation (Server 请求人工交互)**
-  - 禁止阻塞宿主，封装为异步结构化意图 → M8 `[Blackboard]` → M13 HITLGateway 展示
-  - 默认 5 分钟超时未响应 → 向 Server 返回异常，防会话死锁
-- **Prompts (Server 提供预置模板)**
-  - 视为不可信外部负载，强制 `ZoneTaintedData`
-  - 初始 `[TaintLevel]`=High（白名单 Server → Medium），配合 Spotlighting 防间接 Prompt Injection
+- **Sampling**（Server 请求本地 LLM）：deny-by-default，仅 `allow_sampling` Capability Token 放行；Empty Context 隔离，禁止携带 ImmutableCore / Episodic；产出强制 `[TaintHigh]`（禁入 instruction slot），Token 计入 Session 预算，受 M3 TokenBurnRate 熔断。
+- **Roots**（Server 请求文件树边界）：严格收敛于 Sandbox `allowed_paths`，只返回沙箱挂载点（如 `/tmp/sandbox/{skill_id}/`），防目录穿越与探活。
+- **Elicitation**（Server 请求人工交互）：禁止阻塞宿主，封装为异步结构化意图 → M8 `[Blackboard]` → M13 HITLGateway；默认 5 分钟未响应 → 向 Server 返回异常，防会话死锁。
+- **Prompts**（Server 预置模板）：不可信外部负载，强制 `ZoneTaintedData`；初始 `[TaintLevel]`=High（白名单 Server → Medium），配合 Spotlighting 防间接 Prompt Injection。
 
 ---
 
-## 2. A2A Agent Card
+## 2. A2A 与 ContainerSandbox 进程隔离
 
-```json
-{
-  "name": "Polaris Code Reviewer", "version": "1.0.0",
-  "url": "http://localhost:9090/.well-known/agent-card.json",
-  "capabilities": {"streaming": true, "pushNotifications": false},
-  "authentication": {"schemes": ["bearer"]},
-  "defaultInputModes": ["text", "file"], "defaultOutputModes": ["text", "file"],
-  "skills": [{"id": "go-concurrency-review", "name": "Go Concurrency Review",
-    "description": "Detects goroutine leaks, race conditions, and channel misuse",
-    "tags": ["go", "concurrency", "code-review"]}]
-}
-```
-
-Agent Card 服务端路径: `/.well-known/agent-card.json`（A2A v0.3+ 强制）。远程 Agent Card 签名校验见 M11 §2.6 VerifyExternalAgentCard。
-
-**ContainerSandbox 进程隔离**（2026-07-02 起统一至 Rust V2 沙箱；Go 侧手工 namespace 注入已统一合并至 `internal/sandbox/native_os_sandbox.go` 和 `internal/sandbox/sandbox_container.go`）：
-当 SandboxRouter 路由至 `ContainerSandbox`（Tier1+）时，`sandbox.CmdRunner`（`internal/tool/sandbox/cmd_runner_adapter.go`）统一构造 `protocol.SandboxContext` 并调用 `native_sandbox_exec_v2`，由 Rust 层按平台分发：
-- Linux: `exec_bwrap_v2`（bubblewrap，PID/Mount/User namespace 隔离）
-- macOS: `exec_seatbelt_v2`（`sandbox-exec` profile）
-- 均不可用: `exec_bare_v2` / `exec_namespace_fallback_v2`（降级路径）
-Go 层不再自行注入 `SysProcAttr`；隔离策略统一在 Rust 侧实现。`SandboxContext.CallerType`（`"builtin"`/`"hook"`/`"codeact"`/`"skill"`/`"mcp"`/`"plugin"`）标记调用来源以选择 `env_preset`，`bash` 工具与 Hook Runner 复用同一 Rust 沙箱调用，而非同一 Go 属性。
-**✅ 文件系统白名单需求已实现（技术方案非 Landlock，等效替代）**：Landlock LSM 本身未在 Rust 侧集成，但"文件系统白名单"这个需求已经通过统一 Rust 沙箱重构后的两条独立机制等价满足：L2 Wasm 层靠 WASI capability 模型做路径级白名单（见 §4.4 WASI 权限矩阵，`path_open` 按 L1/L2/L3 分别限定 `/workspace`、`/tmp/sandbox/`、`/tmp/sandbox/{skill_id}/`，是真实接入的能力约束而非设计稿）；L1/L3 原生进程层靠 bubblewrap（Linux, `exec_bwrap_v2`）/ Seatbelt（macOS, `exec_seatbelt_v2`）profile 做路径白名单。两者都是 fail-closed（隔离工具不可用时拒绝执行，不静默降级）。（备注：Landlock 级别的内核态强制访问控制是比当前方案更强的纵深防御选项，属于可选增强，非当前功能缺口，不建议现阶段投入。）
-A2A 同进程黑板模式（M8）；跨机: HTTP/gRPC 端点。构建时按部署配置选择。
+- **A2A**：入站 Agent Card（`/.well-known/agent-card.json`，A2A 1.0）与 `/a2a/v1`、出站 `a2a_delegate` 见 ADR-0111；远程 Agent Card 签名校验见 M11 §2.6 VerifyExternalAgentCard。同进程走 Blackboard（M8），跨机走 `/mcp`、`/a2a/v1`。
+- **ContainerSandbox**：SandboxRouter 路由至 `ContainerSandbox`（Tier1+）时，`sandbox.CmdRunner`（`internal/tool/sandbox/cmd_runner_adapter.go`）构造 `protocol.SandboxContext` 调用 `native_sandbox_exec_v2`，Rust 层按平台分发：Linux `exec_bwrap_v2`（PID/Mount/User namespace）；macOS `exec_seatbelt_v2`；均不可用 → `exec_bare_v2` / `exec_namespace_fallback_v2`（降级路径）。Go 层不再注入 `SysProcAttr`；`SandboxContext.CallerType`（builtin/hook/codeact/skill/mcp/plugin）决定 `env_preset`；`bash` 工具与 Hook Runner 复用同一 Rust 沙箱调用。
+- **文件系统白名单**（非 Landlock，等效实现）：L2 Wasm 靠 WASI capability 路径级白名单（§4.4）；L1/L3 原生进程靠 bwrap / Seatbelt profile。两者均 fail-closed（隔离工具不可用 → 拒绝执行，不静默降级）。Landlock 为可选增强，非缺口。
 
 ---
 
 ## 3. 工具注册系统
 
-Tool/CapabilityLevel/SideEffect/RiskLevel/SandboxTier/ToolSource/ToolResult 类型定义见 `internal/protocol/types.go`。ToolRegistry 接口见 `internal/protocol/interfaces_*.go`。
-其中 `ToolResult` 支持携带 `ImageParts []ImagePart`，解决 MCP 等外部工具返回图片数据的能力需求。
+类型定义见 `internal/protocol/types.go`，ToolRegistry 接口见 `internal/protocol/interfaces_*.go`。`ToolResult` 可携带 `ImageParts []ImagePart`（MCP 等外部工具返回图片）。
 
-Schema 版本化（防技能断裂）: 新增可选字段=Patch, 新增必填字段=Minor, 移除/重命名字段=Major。Minor/Patch 向后兼容；Major→Logic Collapse 重生成（`needs_adaptation`）。工具来源: Built-in(~20) | MCP(inf) | Skill(inf) | A2A(inf) | LLM-generated(临时，[Sandbox-L3])
-
-**ToolRegistry.Quarantine(toolID, reason)**: 工具发现安全漏洞时紧急摘除——调用后该工具立即从可用列表摘除，所有进行中调用接收 ErrToolQuarantined。配套 CLI `polaris tool quarantine <toolID>`。
-
-**OAuth Scope 字段**: Tool 类型补充 OAuthScope 字段，MCP 远程工具与 Cedar 策略关联:
-  - `mcp:{server_id}:{scope}` token 格式
-  - Cedar 策略可基于 scope 做 permit/forbid 决策
+- **Schema 版本化**（防技能断裂）：新增可选字段=Patch，新增必填字段=Minor，移除/重命名字段=Major。Minor/Patch 向后兼容；Major → Logic Collapse 重生成（`needs_adaptation`）。
+- **工具来源**：Built-in(~20) | MCP | Skill | A2A | LLM-generated（临时，[Sandbox-L3]）。
+- **`ToolRegistry.Quarantine(toolID, reason)`**（设计条款，代码未实现）：发现安全漏洞时紧急摘除，进行中调用接收 `ErrToolQuarantined`。
+- **OAuth Scope**：Tool 带 `OAuthScope`，MCP 远程工具 token 格式 `mcp:{server_id}:{scope}`，Cedar 策略可基于 scope permit/forbid。
 
 ### 3.1 核心内置工具层 (Built-in Tools)
 
-Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接执行，提供最高性能且受限于原生沙箱策略。
-
-核心内置工具清单（共 **45 个**，分 6 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配），严禁在外部或扩展层绕过它们（2026-09-20 追记 GR-12-008：原"42 个 / 4 入口"遗漏入口 5、6）：
+L1 层生存套件以 Go 原生代码执行，受原生沙箱策略约束。核心内置工具共 **45 个**、6 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配，严禁在外部或扩展层绕过：
 
 **入口 1 — `builtin.RegisterBuiltinTools`（31 个，元数据来自 `internal/tool/builtin/<name>/tool.yaml` + `schema.json`）**
 
-- **文件读写**：`read_file`、`write_file`、`list_dir`、`str_replace_editor`（防漂移编辑器，含 undo 缓冲）、`multi_edit`（单文件多处原子修改）、`glob`（受限目录/文件模式匹配）
-- **搜索**：`grep`（工作区全文正则）
-- **网络**：`fetch_url`（SafeDialer 出站保护）、`web_search`（原生网页检索）
-- **执行**：`bash`（平台原生沙箱）、`run_command`（受限构建，如 `go test`）、`data_query`（工作区结构化数据查询）
-- **数据/文本处理**：`csv_parse`（CSV 解析）、`diff_text`（文本差异）、`template_render`（模板渲染）
-- **多媒体**：`video_analysis`（视频内容分析）、`tts`（本地 MeloTTS 语音合成，经网关 `Synthesize`，ADR-0107 / ADR-0110）
-- **系统**：`get_datetime`（当前时间）、`sys_probe`（硬件探针，M03 §5）
-- **辅助**：`todo_read`/`todo_write`（任务列表按会话持久化于 `session_todos` 表，会话 ID 取 `CtxTaskIDKey`，缺失即报错；ADR-0104 决策三）、`notebook_read`/`notebook_edit`（Jupyter Notebook）、`read_tool_ref`（工具定义自省）
-- **Git**：`git_diff`、`git_commit`（`git_text_tools.go`，Agent 可直接调用无需 MCP 扩展）
-- **Cron**（条件注册，`cronRepo != nil` 时才注册；单元测试无 Repo 时跳过）：`cron_list`、`cron_create`、`cron_delete`
-- **Rich 工具**（`RegisterRich`，默认 `TaintHigh`）：`execute_wasm`（Wasm 沙箱执行）、`get_task_result`（异步任务结果回取，GD-08-001）
+- 文件：`read_file`、`write_file`、`list_dir`、`str_replace_editor`（防漂移，含 undo 缓冲）、`multi_edit`（单文件多处原子修改）、`glob`；搜索：`grep`
+- 网络：`fetch_url`（SafeDialer 出站）、`web_search`
+- 执行：`bash`（平台原生沙箱）、`run_command`（受限构建，如 `go test`）、`data_query`
+- 数据/文本：`csv_parse`、`diff_text`、`template_render`
+- 多媒体：`video_analysis`、`tts`（本地 MeloTTS，经网关 `Synthesize`，ADR-0110）
+- 系统：`get_datetime`、`sys_probe`（M03 §5）
+- 辅助：`todo_read`/`todo_write`（按会话持久化于 `session_todos` 表，会话 ID 取 `CtxTaskIDKey`，缺失即报错；ADR-0104）、`notebook_read`/`notebook_edit`、`read_tool_ref`
+- Git：`git_diff`、`git_commit`（`git_text_tools.go`，原生内置，无需 MCP 扩展；rebase/branch 等高级操作走 L3 MCP 扩展）
+- Cron（`cronRepo != nil` 时才注册）：`cron_list`、`cron_create`、`cron_delete`
+- Rich 工具（`RegisterRich`，默认 `TaintHigh`）：`execute_wasm`、`get_task_result`（异步任务结果回取）
 
-**入口 2 — `builtin.RegisterMemoryTools`（8 个，`internal/tool/builtin/memory_tools.go`；元数据内联构造不走 `tool.yaml`）**
+**入口 2 — `builtin.RegisterMemoryTools`（8 个，`internal/tool/builtin/memory_tools.go`，元数据内联）**：`memory_write`/`memory_search`/`memory_append`/`memory_expire`/`memory_reflect`、`core_memory_edit`（编辑 ZoneCoreMemory 块）、`memory_page_out`/`memory_page_in`。详见 M05 §5-bis 与 ADR-0033。
 
-`memory_write`（写入语义事实）、`memory_search`（混合检索记忆）、`memory_append`（追加属性到已有实体）、`memory_expire`（标记事实失效）、`memory_reflect`（写反思记忆）、`core_memory_edit`（编辑 ZoneCoreMemory 块）、`memory_page_out`/`memory_page_in`（核心记忆换出/换入）— 详见 M05 §5-bis 与 ADR-0033。
+**入口 3 — `builtin.RegisterSkillTools`（2 个）**：`skill_save`、`skill_generate`（Logic Collapse 蒸馏，M06 §2.2）。
 
-**入口 3 — `builtin.RegisterSkillTools`（2 个，`internal/tool/builtin/skill_tools.go`）**：`skill_save`、`skill_generate`（Logic Collapse 蒸馏，详见 M06 §2.2）。
+**入口 4 — 惰性目录（`CompositeCatalog`）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold` 时按需检索定义，避免全量 schema 撑爆 prompt）。
 
-**入口 4 — 惰性目录（`boot_tools.go:457`，`CompositeCatalog`）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold`＝40 时用于按需检索工具定义，避免全量 schema 撑爆 prompt）。
+**入口 5 — `builtin.RegisterDelegationTools`（2 个，`internal/tool/builtin/delegation_tools.go`，ADR-0111 / ADR-0103 决策三）**：`list_agents`（本地子 Agent + `mcp:` A2A 目标 + `general-purpose`）、`transfer_to_agent`（经 S_VALIDATE/PolicyGate；执行由 Agent 内核特判，直接经 Dispatcher 调用返回错误）。装配在 `cmd/polaris/boot_delegation.go`。
 
-**入口 5 — `builtin.RegisterDelegationTools`（2 个，`internal/tool/builtin/delegation_tools.go`，ADR-0084 + ADR-0103 决策三）**：`list_agents`（本地子 Agent + MCP A2A 目标 + `general-purpose`）、`transfer_to_agent`（注册使其进入目录并经 S_VALIDATE/PolicyGate；执行由 Agent 内核特判，直接经 Dispatcher 调用返回错误）。装配在 `cmd/polaris/boot_delegation.go`。
+**入口 6 — `native.RegisterExtensionTools`（2 个，`internal/extension/native/extension_tools.go`）**：`search_extension`、`install_extension`（InstallManager + HITL）。第三参 `knowledgeSearcher` 当前传 nil；`knowledge_search` 由 `cmd/polaris/boot_knowledge.go` 经 `native.RegisterExtensionTool` 单独注册（M10 §2.5）。
 
-**入口 6 — `native.RegisterExtensionTools`（2 个，`internal/extension/native/extension_tools.go`）**：`search_extension`、`install_extension`（按需检索/安装扩展，安装走 InstallManager + HITL）；第三参 `knowledgeSearcher` 非 nil 时额外注册 `knowledge_search`，生产装配当前传 nil 不注册。
-
-> 历史遗留的 Wasm 版 `file_read`/`file_write`/`web_fetch`/`shell_exec` 技能已全部废弃并清理。
-
-**write_file 禁止目录黑名单**：`makeWriteFileFn`（`internal/tool/builtin/`）在 `checkAllowedPath` 通过后追加 `checkForbiddenPath` 二次过滤，硬编码禁止写入 `~/.polaris/config/`、`~/.polaris/data/`、`~/.ssh/`、`~/.gnupg/`、`/etc/`、`/usr/`、`/bin/`、`/sbin/` 等敏感目录；当 `os.UserHomeDir()` 获取失败时兜底禁写 `/root/.polaris`；路径比较走 `filepath.Clean + strings.HasPrefix`，不可被配置覆盖。
-
-**Git 内置工具**：`internal/tool/builtin/git_text_tools.go` 已将 `git_diff` 和 `git_commit` 实现为 M07 原生内置工具（`makeGitDiffFn` / `makeGitCommitFn`），Agent 可直接调用，无需挂载外部 MCP 扩展。Git 高级操作（rebase、branch 管理等）仍可通过 L3 MCP 扩展扩充。
+**write_file 禁止目录黑名单**：`makeWriteFileFn`（`internal/tool/builtin/`）在 `checkAllowedPath` 通过后追加 `checkForbiddenPath`，硬编码禁写 `~/.polaris/config/`、`~/.polaris/data/`、`~/.ssh/`、`~/.gnupg/`、`/etc/`、`/usr/`、`/bin/`、`/sbin/` 等；`os.UserHomeDir()` 失败时兜底禁写 `/root/.polaris`；路径比较走 `filepath.Clean + strings.HasPrefix`，不可被配置覆盖。
 
 ### 3.2 平台原生进程沙箱（Rust V2 统一沙箱）
 
-`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/bash/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/sandbox/native_os_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
+`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/bash/sandboxed_exec.go`（Go 封装）为 `bash`/`run_command`/`git_*`/`video_analysis`/`tts` 等内置工具提供进程级隔离，与 Wasmtime 互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口已删除，全部走 V2 `native_sandbox_exec_v2`。
 
-`runSandboxedArgv(ctx, callerType, execPath, execArgs, workDir, allowedPaths, netAllow, timeoutMs, sandboxEnabled, bwrapPath)` 构造 `protocol.SandboxContext`（`ExecPath`+`ExecArgs` argv 模式，不经 shell 解释，杜绝命令注入）并调用 `native_sandbox_exec_v2`，按平台分发：
+`runSandboxedArgv` 构造 `protocol.SandboxContext`（`ExecPath`+`ExecArgs` argv 模式，不经 shell，杜绝命令注入）：
 
 | 平台 | 实现 | 隔离机制 |
 |------|------|---------|
-| macOS | `exec_seatbelt_v2`（Apple Seatbelt `sandbox-exec`） | 按 `CallerType` 选择 `env_preset`；`AllowedPaths` 收紧到调用方实际所需目录，不再默认放行 `/` |
-| Linux | `exec_bwrap_v2`（bubblewrap） | PID/Mount/User namespace 隔离 + `AllowedPaths` bind |
-| 均不可用 | `exec_bare_v2` / `exec_namespace_fallback_v2` | 降级路径，env 清理 |
+| macOS | `exec_seatbelt_v2`（`sandbox-exec`） | 按 `CallerType` 选 `env_preset`；`AllowedPaths` 收紧到调用方所需目录，不默认放行 `/` |
+| Linux | `exec_bwrap_v2`（bubblewrap） | PID/Mount/User namespace + `AllowedPaths` bind |
+| 均不可用 | `exec_bare_v2` / `exec_namespace_fallback_v2` | 降级，env 清理 |
 
-`sandboxEnabled=false` 时退化为 `exec.CommandContext` 直接执行——仅限有明确技术原因不适合走一次性沙箱调用的工具（如 `audio_convert.go`：沙箱合并 stdout/stderr 会破坏二进制 PCM 音频流；`display_server_xvfb.go`：Xvfb 为长驻进程，不符合一次性沙箱调用语义），原因均在对应代码注释中说明。
+`sandboxEnabled=false` 时退化为 `exec.CommandContext`——仅限有明确技术原因不适合一次性沙箱调用的工具（`audio_convert.go`：合并 stdout/stderr 会破坏二进制 PCM；`display_server_xvfb.go`：Xvfb 为长驻进程），原因见代码注释。
 
-配置入口：`configs/defaults.toml [sandbox]`（`enabled=true`, `network_policy=block`）→ `internal/config.SandboxConfig`。
-`RegisterBuiltinTools(sandboxEnabled, netPolicy, bwrapPath)` 将配置注入各工具闭包。
-bwrap 不可用时自动降级 `wrapFallback`（WARN 审计），不向上层抛出错误。
+配置：`configs/defaults.toml [sandbox]`（`enabled=true`, `network_policy=block`）→ `RegisterBuiltinTools(sandboxEnabled, netPolicy, bwrapPath)` 注入各工具闭包；bwrap 不可用时降级 `wrapFallback`（WARN 审计），不向上抛错。
 
 ---
 
@@ -185,44 +131,35 @@ bwrap 不可用时自动降级 `wrapFallback`（WARN 审计），不向上层抛
 
 ### 4.1 Tier x Platform 能力矩阵
 
-L3 平台选择由 `AutoConfig.computeSandboxConfig()` 自动化，`FeatureGate.FeatureL3Sandbox` 检测平台+内存。Tier 0 内存不足 → ErrFeatureUnavailable，不降级原生子进程。调用方仅检查 `GlobalFeatureGate().IsEnabled(FeatureL3Sandbox)`。详见 M03 §5。
+L3 平台选择由 `AutoConfig.computeSandboxConfig()` 自动化，`FeatureGate.FeatureL3Sandbox` 检测平台+内存；调用方仅检查 `GlobalFeatureGate().IsEnabled(FeatureL3Sandbox)`（M03 §5）。
 
-L3 平台原生 microVM (统一 SandboxProvider 接口，调用方平台无感):
-- **Linux**: Firecracker (~125MB/VM, 需硬件 KVM)；KVM 不可用 → gVisor (runsc) 用户态内核
-- **macOS**: Virtualization.framework (~80MB/VM)
-- **Windows**: WSL2 + Hyper-V (~150MB/VM)
+L3 目标架构（统一 SandboxProvider 接口，平台无感）：Linux Firecracker（~125MB/VM，需 KVM；无 KVM → gVisor runsc）；macOS Virtualization.framework（~80MB/VM）；Windows WSL2 + Hyper-V（~150MB/VM）。**现状**：Firecracker/VZ/WSL2 后端已删除，`ContainerSandbox` 统一经 Rust bwrap/Seatbelt `CmdRunner`（`internal/sandbox/sandbox_container.go`，ADR-0008）。
 
-Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256MB)。CapWriteNetwork/Privileged 在 Tier 0 → ErrTier0SandboxLimit。**不提供原生子进程降级**（避免突破安全底线）。
+Tier 0（每 L3 ≥256MB，内存不足）：L3 不可用；Container 请求按 §4.2 降级 NativeOS，`CapPrivileged` 返回 `ErrTier0SandboxLimit`。**不提供无隔离原生子进程降级**。
 
 ### 4.2 自动分级
 
-`AssignSandboxTier(tool, hwTier, goos) -> SandboxTier`（实现见 `internal/sandbox/assign.go`）:
-1. Source→最小级别: Builtin→InProcess；LLMGenerated→Wasm；MCP/A2A→Wasm
-2. Capability提升: WriteNetwork+→Wasm；Privileged→Container
-3. SideProcessSpawn→Container
-4. Tier0 Container 请求全平台拒绝：`AssignSandboxTier` 返回 `(SandboxTier, error)`；hwTier==0 需要 Container 的工具返回 `ErrTier0SandboxLimit`，不区分 goos，不降级 Wasm，调用方必须显式处理（M07 §4.2）。
+`AssignSandboxTier(tool, trustTier, hwTier, goos) -> (SandboxTier, error)`（`internal/sandbox/assign.go`；error 非 nil 时调用方不得执行工具）:
+1. Source：Builtin / MCP → `SandboxInProcess`（MCP 隔离边界为外部进程）；其余来源（LLMGenerated / A2A / Skill）至少 `SandboxWasm`，且不低于 `trustTier.SandboxFloor()`
+2. Capability 提升：WriteNetwork+ → 至少 Wasm；Privileged → Container
+3. SideProcessSpawn → Container
+4. Tier0 + Container：降级 `SandboxNativeOS`（Rust bwrap/Seatbelt，OS 级隔离，非无沙箱原生 exec）；仅 `CapPrivileged` 返回 `ErrTier0SandboxLimit`，调用方必须显式处理（ADR-0008 决策一）
 
-> **2026-09-20 复核**：Tier-0 + Container 改为降级 SandboxNativeOS（Rust bwrap/Seatbelt OS 级隔离），
-> 不再返回 ErrTier0SandboxLimit。仅 CapPrivileged 保留 ErrTier0SandboxLimit。
-> 理由：NativeOS 具有 OS 原生隔离边界，不同于 ADR-0008 当时禁止的无隔离裸子进程。见 ADR-0008 决策四。
-
-**脚本风险评估默认沙箱等级**：来源不明或 LLM 生成的脚本默认分配 L2 Wasm 隔离等级；仅明确白名单来源（builtin）的脚本可走 L1 InProcess。
-
-当前 `sandbox.go` 实现与规则 1–4 对齐：`LLMGenerated`/`MCP`/`A2A` 分配 L2 Wasm，`CapWriteNetwork` 最低 L2，`CapPrivileged`/`SideProcessSpawn` 升至 L3；Tier0 Container 全平台返回 `ErrTier0SandboxLimit`，不降级。
+来源不明或 LLM 生成的脚本默认 L2 Wasm；仅 builtin 白名单来源可走 L1 InProcess。`SandboxRouter.Execute` 的 `SandboxSpec.SandboxTier` 为升级后的实际 tier（审计与执行层一致）。
 
 Auto-Curriculum: M9 `bash_restricted` 强制 L2 Wasm，字符集 `[A-Za-z0-9 ./\-_=:,]`，禁止管道/重定向/命令替换/`~/.polaris`。`bash` 永久禁止。
 
 ### 4.3 Rust 脚本沙箱（CANONICAL SOURCE）
 
-Wasm 沙箱由 Rust Wasmtime 引擎驱动，通过 purego FFI 桥接至 Go 层。实现文件：`internal/tool/sandbox/wasmtime_sandbox.go`（Go 封装）+ `internal/tool/sandbox/rust_wasmtime_sandbox.go`（purego FFI 桥）。
+Wasm 沙箱由 Rust Wasmtime 引擎驱动，经 purego FFI 桥接：`internal/tool/sandbox/wasmtime_sandbox.go`（Go 封装）+ `internal/tool/sandbox/rust_wasmtime_sandbox.go`（FFI 桥）。
 
-`WasmtimeSandbox.Run` 执行流程：DryRun 模式直接返回 mocked 结果 → `CalculateWasmQuota(systemTier, taintLevel)` 计算内存页数（maxPages）与 fuel 配额 → `WasmtimeExecute(scriptBytes, inputJSON, workspaceDir, memoryPages, networkAllowed, fuel, maxOutputBytes)` 调用 Rust 引擎完成编译、实例化与执行 → 返回 `ToolResult{Success, Output, LatencyMs}`。
+`WasmtimeSandbox.Run`：DryRun 直接返回 mocked 结果 → `CalculateWasmQuota(systemTier, taintLevel)` 计算 maxPages 与 fuel → `WasmtimeExecute(...)` 完成编译、实例化、执行 → `ToolResult`。启动时 `WasmtimeInit()` + `WasmtimePoolInit(5)` 预热；编译缓存由 Rust 引擎管理。
 
-启动时 `WasmtimeInit()` 初始化引擎，`WasmtimePoolInit(5)` 预热 5 个实例。编译缓存与生命周期管理由 Rust Wasmtime 引擎内部处理，Go 层不自管缓存。
+- **PII SecureUnredact：已实现**——`internal/agent/context/pii_vault.go` 的 `SessionPIIVault`（AES-256-GCM）提供 `Snapshot`/`Load` 按需还原（`task_pii_vault` 表），M11 §5.1 已同步。
+- **Host Functions 权限矩阵**：不用独立 `WASIPermission`/`ResourceLimits` 结构体，分别由 `internal/security/token/capability_token.go`（Ed25519 能力令牌）+ `internal/security/network/safe_dialer.go`（网络出口）+ §4.4 WASI 矩阵（FS）承载。
+- **PostExecution Redact**：CodeAct 路径已实现（`internal/action/codeact/code_act.go` 输出端 `RedactWithMode`）；通用 Wasm 路径未见接线。
 
-**PII（Personally Identifiable Information，个人敏感信息） SecureUnredact：已实现**——`internal/agent/context/pii_vault.go` 的 `SessionPIIVault` 用 AES-256-GCM 加密存储 PII，提供 `Snapshot`/`Load` 按需还原（存 `task_pii_vault` 表），语义上等价于本节设想的 SecureUnredact（M11 §5.1 已同步标注）。**Host Functions FS/网络权限矩阵：已通过统一机制实现**，未采用独立 `WASIPermission`/`ResourceLimits` 结构体的形式，而是拆分承载在：`internal/security/token/capability_token.go`（Ed25519 能力令牌，鉴权层面）+ `internal/security/network/safe_dialer.go`（SafeDialer，网络出口约束）+ 下方 §4.4 WASI 权限矩阵表（FS 层面，已是具体接入值而非占位设计）。**PostExecution Redact**（执行结果输出后二次脱敏）暂未找到明确的接线证据，若 CodeAct/工具输出确实需要这一步兜底，建议列入待办核实。
-
-资源硬限制（超限→ErrSandboxResourceExhausted，不重试）：
+资源硬限制（超限→ErrSandboxResourceExhausted，不重试；per-instance，非全局共享）：
 
 | 维度 | Built-in | User | LLM生成 |
 |------|---------|------|--------|
@@ -230,15 +167,7 @@ Wasm 沙箱由 Rust Wasmtime 引擎驱动，通过 purego FFI 桥接至 Go 层�
 | 调用次数 | 10000 | 5000 | 2000 |
 | I/O 总量 | 100MB | 10MB | 1MB |
 
-内存上限不按 Built-in/User/LLM 生成分档，而按沙箱等级 + 资源档位分档，SSoT 在 `spec/state.yaml §thresholds.m7_tool`（对应 `internal/config/thresholds.go` `M7ToolThresholds`）：
-
-| 键 | 值 | 适用 |
-|---|---|---|
-| `sbx_l2_low_mem_mb` | 64 MB | L2 Wasm 低档（低配硬件 / 低信任脚本） |
-| `sbx_l2_medium_mem_mb` | 256 MB | L2 Wasm 中档（默认，与 `script.max_memory_mb` 一致） |
-| `sbx_l3_high_mem_mb` | 512 MB | L3 容器高档 |
-
-**SandboxSpec tier 一致性**: `SandboxRouter.Execute` 传入 `SandboxSpec.SandboxTier` 为 `AssignSandboxTier` 升级后的实际 tier，确保审计日志与执行层一致。
+内存上限按沙箱等级 + 资源档位分档（SSoT：`spec/state.yaml §thresholds.m7_tool`，对应 `internal/config/thresholds.go` `M7ToolThresholds`）：`sbx_l2_low_mem_mb`=64（L2 低档）、`sbx_l2_medium_mem_mb`=256（L2 默认，与 `script.max_memory_mb` 一致）、`sbx_l3_high_mem_mb`=512（L3 高档）。
 
 共用约束: 每次 I/O ≤ 64KB，同函数 ≤ 100 calls/s（超频 throttle 10ms），Host Func 单次 ≤ 100ms（**仅限低层 I/O 原语**；MCP/A2A 宿主侧独立运行不受此限）；超额 → cancel 优雅 → 1s 后 CloseWithExitCode 强制。
 强制契约: 阻塞调用前必须 `select{case <-ctx.Done():return ctx.Err() default:}`，CI lint `host_func_audit` 强制检查。
@@ -247,138 +176,106 @@ Syscall 防逃逸: Go 堆缓冲区（严禁线性内存切片）→ 独立 gorou
 
 ### 4.4 WASI 权限矩阵
 
-- WASI 能力: fd_read/write | L1 Built-in: stdio only | L2 User: stdio only | L3 LLM生成: stdio only
-- WASI 能力: path_open (read) | L1 Built-in: 工作目录+/usr/local/bin/ | L2 User: /tmp/sandbox/ | L3 LLM生成: /tmp/sandbox/{skill_id}/
-- WASI 能力: path_open (write) | L1 Built-in: 工作目录 | L2 User: /tmp/sandbox/ | L3 LLM生成: /tmp/sandbox/{skill_id}/
-- WASI 能力: sock_send/recv | L1 Built-in: Egress白名单域名 | L2 User: ❌ | L3 LLM生成: ❌
-- WASI 能力: clock_time_get | L1 Built-in: ✅ | L2 User: ✅ | L3 LLM生成: ✅
-- WASI 能力: random_get | L1 Built-in: ✅ | L2 User: ✅ | L3 LLM生成: ✅
-- WASI 能力: environ_get | L1 Built-in: ❌ | L2 User: ❌ | L3 LLM生成: ❌
-- WASI 能力: proc_exit | L1 Built-in: ❌ | L2 User: ❌ | L3 LLM生成: ❌
-- WASI 能力: args_get | L1 Built-in: 仅tool input JSON | L2 User: 仅tool input JSON | L3 LLM生成: 仅tool input JSON
+| WASI 能力 | L1 Built-in | L2 User | L3 LLM生成 |
+|---|---|---|---|
+| fd_read/write | stdio only | stdio only | stdio only |
+| path_open (read) | 工作目录+/usr/local/bin/ | /tmp/sandbox/ | /tmp/sandbox/{skill_id}/ |
+| path_open (write) | 工作目录 | /tmp/sandbox/ | /tmp/sandbox/{skill_id}/ |
+| sock_send/recv | Egress白名单域名 | ❌ | ❌ |
+| clock_time_get / random_get | ✅ | ✅ | ✅ |
+| environ_get / proc_exit | ❌ | ❌ | ❌ |
+| args_get | 仅 tool input JSON | 仅 tool input JSON | 仅 tool input JSON |
 
 目录挂载: Builtin→/workspace+/usr/local/bin(只读)；User→/tmp/sandbox；LLMGenerated→/tmp/sandbox/{skill_id}(0700)
 
 ### 4.5 Workspace Bridge
 
+> 设计条款：代码中暂无 `workspace_read`/`workspace_write` 同名实现（2026-10 核实）；`workspace_write` 此前即标注"未实现"。
+
 **`workspace_read(artifactID,offset,length)->([]byte,error)`**:
-1. **路径校验**: `filepath.Clean` → 分量级 `..` 检测 + IsAbs 拦截。Linux 5.6+: `Openat2(workspaceRootFd, path, RESOLVE_NO_SYMLINKS|RESOLVE_IN_ROOT)`。非 Linux: component-by-component walk → 逐级 openat + Fstat 校验 dev/inode
-2. **读取禁止路径（eval 数据隔离）**: 目标路径前缀匹配以下任一 → 立即返回 `ErrEvalDataAccessForbidden` + CRITICAL 审计，不触发 Capability Token 校验（快速拒绝，防止绕过）:
+1. **路径校验**: `filepath.Clean` → 分量级 `..` 检测 + IsAbs 拦截。Linux 5.6+: `Openat2(workspaceRootFd, path, RESOLVE_NO_SYMLINKS|RESOLVE_IN_ROOT)`；非 Linux: 逐级 openat + Fstat 校验 dev/inode
+2. **读取禁止路径（eval 数据隔离）**: 前缀匹配以下任一 → 立即返回 `ErrEvalDataAccessForbidden` + CRITICAL 审计，不触发 Capability Token 校验（快速拒绝）:
     - `~/.polaris/eval/holdout/`（Holdout Set，防 M9 过拟合，M12 §5）
-    - `~/.polaris/eval/training/`（Training Set，仅 Eval API（Application Programming Interface，应用程序接口） 层允许 M9 通过 Ed25519 签名访问，不走 Workspace Bridge）
-  > 注: `~` 展开为运行时 `polaris_home` 变量（与 M11 Cedar Layer 2 的 `context.polaris_eval_holdout_path` 同源）。物理层 `Openat2(RESOLVE_IN_ROOT)` 已阻止路径逃逸，此检查为防御纵深。
-3. **验证 Capability Token 读权限**
-4. **`Pread(fd,buf,offset)`**
-5. **每次 <=64KB**
-6. **Audit Trail**
+    - `~/.polaris/eval/training/`（仅 Eval API 层允许 M9 通过 Ed25519 签名访问，不走 Workspace Bridge）
+  > `~` 展开为运行时 `polaris_home`（与 M11 Cedar Layer 2 的 `context.polaris_eval_holdout_path` 同源）；`Openat2(RESOLVE_IN_ROOT)` 已阻止路径逃逸，此检查为防御纵深。
+3. 验证 Capability Token 读权限 → `Pread(fd,buf,offset)` → 每次 ≤64KB → Audit Trail
 
 **`workspace_write(artifactID,data)->(int,error)`**:
-> 2026-08-12 复核：该工具目前未实现，以下内容为设计超前描述。
-1. **路径白名单校验**: 仅允许写入以下三类路径:
-   - (a) `~/.polaris/workspace/<task_id>/`（M2 WorkspaceManager 托管目录）
-   - (b) 经 `[Sandbox-L2]` 显式挂载的临时目录 `/tmp/sandbox/{skill_id}/`
-   - (c) 启动时传入的 Workspace Root（用户项目根目录），需经 `[Cedar-Gate]` 显式授权——Cedar 策略 `permit write_local when resource.path in WorkspaceRoot` 控制可写子路径范围
-   > 默认拒绝所有其他绝对和相对路径。白名单外路径 → `ErrWorkspacePathNotAllowed` + WARN + 审计
-2. **禁止覆盖保护**: 即使白名单内，仍禁止覆盖 `~/.polaris/config/`、`~/.polaris/secrets/`、`~/.polaris/data/`（含 SQLite/SurrealDB-Core 数据库文件）、`~/.polaris/audit/`——此四目录为系统关键数据区，独立于 Workspace 白名单做第二层拒绝
+1. **路径白名单**: 仅 (a) `~/.polaris/workspace/<task_id>/`（M2 WorkspaceManager 托管）、(b) `[Sandbox-L2]` 显式挂载的 `/tmp/sandbox/{skill_id}/`、(c) 启动时传入的 Workspace Root（需 `[Cedar-Gate]` 授权：`permit write_local when resource.path in WorkspaceRoot`）。其他路径 → `ErrWorkspacePathNotAllowed` + WARN + 审计
+2. **禁止覆盖**: 即使白名单内，仍禁止覆盖 `~/.polaris/config/`、`secrets/`、`data/`（含 SQLite/SurrealDB-Core 库文件）、`audit/`——独立于白名单的第二层拒绝
 3. **前置**: `CapabilityLevel>=write_local`
-4. **Taint Gate**（路径 × TaintLevel 决策表）:
+4. **Taint Gate**（路径 × TaintLevel）:
 
   | 路径 | TaintLevel | 结果 |
   |------|-----------|------|
-  | (c) Workspace Root | ≤Medium | 允许；TaintLevel 继承+`[Taint-Prop]`；Cedar 做最终授权 |
+  | (c) Workspace Root | ≤Medium | 允许；TaintLevel 继承+`[Taint-Prop]`；Cedar 最终授权 |
   | (c) Workspace Root | ≥High | `ErrTaintGateBlockedWrite`；重定向 `ephemeral/` |
   | (a) task workspaces | ≤Medium | 允许；TaintLevel 继承+`[Taint-Prop]` |
   | (a) task workspaces | ≥High | `ErrTaintGateBlockedWrite`；需人工介入 |
   | (b) 临时沙箱 | ≤Low | 允许；TaintLevel 继承 |
   | (b) 临时沙箱 | ≥Medium | `ErrTaintGateBlockedWrite`；重定向 `ephemeral/` |
 
-5. **每次 <=64KB**，追加模式
+5. 每次 ≤64KB，追加模式
 
-### 4.6 Capability Token 委托链（已移除，2026-07-14）
+### 4.6 Capability Token 委托链（已移除）
 
-`action.ValidateDelegation`/`action.intersectCapabilities`（业务层）与
-`policy.TokenManager.Delegate`/`policy.TokenManager.ValidateDelegation`
-（协议层，Token 携带 `DelegatedFrom` 溯源）曾设计为"子 Agent 请求比父级更受限的
-子 Token"跨层委托机制，但 deadcode 全程序可达性分析确认：`NewJITToken` 唯一生产
-调用点（`agent_execute_dag.go`）固定 `depth=0` 单层铸造，委托链场景从未被触发；
-polaris 实际的多 Agent 任务派生深度限制诉求已由 `internal/execute/orchestrator`
-的 `MaxSpawnDepth=3`（`PostTask`/`PostBatch` 前置校验，见 §4.6-bis）独立覆盖，
-两套机制长期并存无必要，遂删除此处四个函数及其唯一依赖的测试。**若未来出现真实
-的跨 Agent Capability 降权委托场景**（而非当前"每个子任务重新走 S_PLAN→JIT 铸造
-depth=0 Token"的模式），应重新设计而非恢复本节描述的旧实现——旧实现的
-`effectiveCapability = min(caller, target)` 交集语义与 MaxSpawnDepth 的深度计数
-语义解决的是两个不同问题，不建议简单拼接。
+`action.ValidateDelegation` / `policy.TokenManager.Delegate` 等委托链机制已删除：`NewJITToken` 唯一生产调用点固定 `depth=0` 单层铸造，委托链从未触发；多 Agent 派生深度由 `MaxSpawnDepth=3`（§4.6-bis）独立覆盖。若未来出现真实的跨 Agent Capability 降权委托场景，应重新设计而非恢复旧实现（`min(caller, target)` 交集语义与深度计数解决的是两个不同问题）。
 
-### 4.6-bis Agent 任务派生深度限制（现行机制）
+### 4.6-bis Agent 任务派生深度限制与运行时策略重检
 
-`internal/execute/orchestrator.SQLiteBlackboard.PostTask`/`PostBatch` 校验
-`task.SpawnDepth`，超过 `MaxSpawnDepth=3` 直接返回 `ErrSpawnDepthExceeded`
-（纯任务派生深度计数器，不涉及 Capability 交集/沙箱单调等 Token 语义）。
-2026-07-14：内存版 `Blackboard`（曾与 SQLiteBlackboard 并存的实现）已删除，
-SQLiteBlackboard 是唯一生产实现，见 ADR-0062。
+`internal/execute/orchestrator` 的 `SQLiteBlackboard.PostTask`/`PostBatch` 校验 `task.SpawnDepth`，超过 `MaxSpawnDepth=3` 返回 `ErrSpawnDepthExceeded`（纯深度计数，不涉及 Capability 交集）；SQLiteBlackboard 是唯一生产实现（ADR-0062）。
 
-运行时策略重检: Host Function I/O前比对Cedar policy etag与Wasm实例化时policy_etag_at_start。etag变更→重调[Cedar-Gate] Review→FORBID返回ErrPolicyRevoked。etag比对O(1)，仅变更时触发完整评估。
+运行时策略重检: Host Function I/O 前比对 Cedar policy etag 与 Wasm 实例化时 `policy_etag_at_start`。etag 变更 → 重调 [Cedar-Gate] Review → FORBID 返回 `ErrPolicyRevoked`。etag 比对 O(1)，仅变更时触发完整评估。
 
-**TOCTOU 防御**: 
-- **(a) 可逆操作** (`read_local` 等): 接受窗口；
-- **(b) 不可逆操作** (`write_network` 等): `PreCheck` → `I/O` → `PostCheck` 三重校验:
+**TOCTOU 防御**:
+- **(a) 可逆操作**（`read_local` 等）: 接受窗口
+- **(b) 不可逆操作**（`write_network` 等）: `PreCheck` → `I/O` → `PostCheck` 三重校验:
   1. **PreCheck**: `etag` + M8 Blackboard Lease Version 比对
   2. **I/O**: 执行工具调用（须尊重 `ctx.Done()`——M8 Reaper 回收任务前会 cancel agent context）
-  3. **PostCheck**: 重新校验 `etag` + Lease Version。`etag` 变更 → 审计 `policy_etag_diverged_during_io(CRITICAL)`+标记 `policy_stale`；Lease Version 不匹配（任务已被 Reaper 回收）→ 审计 `side_effect_orphaned(CRITICAL)` + 写入 M3 `decision_log`（非 events 表——任务所有权已转移至新 Agent，孤儿记录仅作审计轨迹，不参与 Blackboard 状态变更）
-- **(c) 特权操作** (`privileged`): 不走快捷路径，每次完整 `PolicyGate.Review`。M8 Reaper 在重置任务前先 `cancel(agent.ContextCancel)` 并等待 5s 宽限期（M8 §1.7），工具实现须在 5s 内通过 `ctx.Done()` 感知取消并中止
+  3. **PostCheck**: 重新校验 `etag` + Lease Version。`etag` 变更 → 审计 `policy_etag_diverged_during_io(CRITICAL)` + 标记 `policy_stale`；Lease Version 不匹配（任务已被 Reaper 回收）→ 审计 `side_effect_orphaned(CRITICAL)` + 写入 M3 `decision_log`（非 events 表——任务所有权已转移，孤儿记录仅作审计轨迹，不参与 Blackboard 状态变更）
+- **(c) 特权操作**（`privileged`）: 不走快捷路径，每次完整 `PolicyGate.Review`。M8 Reaper 重置任务前先 `cancel(agent.ContextCancel)` 并等待 5s 宽限期（M8 §1.7），工具须在 5s 内经 `ctx.Done()` 中止
 
-配额隔离: per-instance（10000/5000/2000），非全局共享。深度3+白名单+per-instance=三层纵深。
+配额隔离 per-instance（10000/5000/2000）；深度3 + 白名单 + per-instance = 三层纵深。
 
 ### 4.7 L3 策略监视器
 
-L3 microVM (Firecracker / Virtualization.framework / WSL2) 的 I/O 路径不经过 Wasmtime host function——syscall 由 VM 内核栈或 gVisor sentry 拦截。这些路径均不触发 Host Function 层的 etag 重检，因此需要独立的策略监视器。
-
-L3PolicyMonitor goroutine (每个 L3 sandbox 一个):
+L3 的 I/O 路径不经过 Wasmtime host function（syscall 由 VM 内核栈 / gVisor sentry 拦截），不触发 etag 重检，故需独立监视器。L3PolicyMonitor goroutine（每个 L3 sandbox 一个）:
 - (a) 订阅 [Cedar-Gate] SubscribeEtagChange（channel 推送）
-- (b) etag 变更 → 重评 CapToken: 允许 → 更新 etag；FORBID → 三级阻断:
-    (1) 关闭网络出口（各平台拆除方式见 `internal/sandbox/sandbox_impl.go`）
-    (2) context cancel M4（通知 Agent 任务被策略吊销）
-    (3) 审计 `l3_policy_revoked_network_killed` (CRITICAL)
-- (c) 毫秒级阻断，闭合 etag 变更到下一次 I/O 之间的策略逃逸窗口（最长 4min CapToken TTL 窗口）
-- (d) L3 不可用时（Tier 0 全平台 / 平台 microVM 不可用）→ L3PolicyMonitor 不实例化
+- (b) etag 变更 → 重评 CapToken: 允许 → 更新 etag；FORBID → 三级阻断: (1) 关闭网络出口（各平台方式见 `internal/sandbox/sandbox_impl.go`）；(2) context cancel M4（通知 Agent 策略吊销）；(3) 审计 `l3_policy_revoked_network_killed` (CRITICAL)
+- (c) 毫秒级阻断，闭合 etag 变更到下一次 I/O 之间的逃逸窗口（最长 4min CapToken TTL）
+- (d) L3 不可用时（Tier 0 / 平台后端不可用）不实例化
 
 ### 4.8 Remote Sandbox（Sbx-L4，可选非硬依赖）
 
-> 实现: `internal/sandbox/remote_sandbox.go`（`RemoteSandbox`）+ `internal/sandbox/sandbox_router.go`（`WithRemote`/`RouteByTier`）
-> 配置: `internal/config/config_types.go`（`RemoteSandboxConfig`，`[sandbox.remote]`）
-> 装配: `cmd/polaris/boot_tools.go` §6（`sb.Cfg.Sandbox.Remote.Enabled` 为 true 且 `Endpoint` 非空时注入）
+实现 `internal/sandbox/remote_sandbox.go`（`RemoteSandbox`）+ `internal/sandbox/sandbox_router.go`（`WithRemote`/`RouteByTier`）；配置 `internal/config/config_types.go`（`RemoteSandboxConfig`，`[sandbox.remote]`）；装配 `cmd/polaris/boot_tools.go`（`Remote.Enabled` 且 `Endpoint` 非空时注入）。
 
-**用途**: Tier-0（2GB VPS）主机无法启动 L3 容器/microVM 沙箱（内存不足），或需要更高计算力/隔离度的场景（如 Python 数据科学类 Skill 本地无力承载）时，将工具执行**委托**给远端 HTTP 执行器（自托管 VPS、E2B、Modal、Daytona 等任意兼容端点），作为 L3 不可用时的可选降级路径。遵循 `docs/arch/00-Global-Dictionary.md [Tier-0-Limit]`："超出能力通过硬件门控解锁，不作硬依赖"——本能力走**显式配置门控**（而非硬件探测门控）：默认关闭（`enabled=false`），运营者需显式配置 `endpoint` 后启用，因为涉及用户代码/数据离开本机发往第三方服务，属于成本/隐私权衡而非纯硬件能力问题。
+**用途**：Tier-0 无法启动 L3、或需更高算力/隔离度时，将工具执行委托给远端 HTTP 执行器（自托管 VPS、E2B、Modal、Daytona 等），作为 L3 不可用时的可选降级路径。走**显式配置门控**（默认 `enabled=false`，需显式配置 `endpoint`）——用户代码/数据离开本机属成本/隐私权衡，非纯硬件问题（`[Tier-0-Limit]`，00-Global-Dictionary）。
 
-**路由优先级**（`sandbox_router.go RouteByTier`）:
-- 工具显式声明 `sandbox: remote`（`tool.yaml` → `types.SandboxRemote`）→ 优先路由至 `RemoteSandbox`；未注入（`r.remote == nil`，即未在配置中启用）时不阻断——按既有 fallback 链降级至 Wasmtime → Container → （不可信来源）fail-closed 拒绝。
-- `SandboxContainer`（L3）请求在本地 `ContainerSandbox` 不可用时，若 `RemoteSandbox` 已注入，则降级路由至远端执行（`RouteByTier` `case types.SandboxContainer`）。
+**路由优先级**（`RouteByTier`）:
+- 工具声明 `sandbox: remote`（`types.SandboxRemote`）→ 优先 `RemoteSandbox`；未注入时按 fallback 链降级 Wasmtime → Container → （不可信来源）fail-closed 拒绝
+- `SandboxContainer` 请求在本地 `ContainerSandbox` 不可用且 `RemoteSandbox` 已注入 → 路由至远端
 
 **安全约束**:
-- 出站 HTTP 经 `network.NewSafeHTTPClient`（XR-06 SafeDialer 出口约束），非旁路直连。
-- `AuthToken` 走 Bearer 认证；配置文件留空时读取 `POLARIS_REMOTE_SANDBOX_TOKEN` 环境变量，避免密钥明文落盘（对齐 `EmbeddingConfig.APIKey` 先例）。
-- 远端返回体读取上限 32MB（`io.LimitReader`），防止响应体膨胀攻击。
-- **不改变信任边界**：`RemoteSandbox` 仍受 `AssignSandboxTier`/Cedar/CapabilityToken 前置校验约束，只是执行载体从本地进程/VM 换成远端 HTTP 端点；`mustIsolate`（`trustTier < TrustOfficial`）语义不变。
+- 出站 HTTP 经 `network.NewSafeHTTPClient`（XR-06 SafeDialer），非旁路直连
+- `AuthToken` Bearer 认证；配置留空时读 `POLARIS_REMOTE_SANDBOX_TOKEN`，避免密钥落盘
+- 响应体读取上限 32MB（`io.LimitReader`）
+- **不改变信任边界**：仍受 `AssignSandboxTier`/Cedar/CapabilityToken 前置校验，`mustIsolate`（`trustTier < TrustOfficial`）语义不变
 
-**已知限制**（非本轮范围，供未来评估）：远端执行器侧的沙箱强度由第三方保证，Polaris 侧无法验证其物理隔离边界（HE-Rule-2 "可验证执行"在此退化为对第三方的信任假设，而非物理/密码学可验证）；成本计量与配额尚未接入 `internal/observability/budget`。
+**已知限制**：远端沙箱强度由第三方保证，HE-Rule-2 "可验证执行"在此退化为信任假设；成本计量与配额未接入 `internal/observability/budget`。
 
-### 4.7 Sandbox-L4-Persistent（D4/ADR-0008，可选，Tier2+）
+### 4.7 Sandbox-L4-Persistent（ADR-0008 决策三，可选，Tier2+）
 
-**定位**：`types.SandboxPersistent` 是**真实可用**的长程有状态 CodeAct 会话后端——session-scoped 长驻解释器进程池，不是 CRIU/Firecracker 式 checkpoint/restore（原 ADR-0078 曾把 D4 判定为不可行、诚实占位，ADR-0008 决策三/原 ADR-0079 推翻了这一结论，见下）。Tier-0/Tier-1 环境不受影响、默认关闭（`sandbox.l4_enabled=false`）。
-
-**动机**：长程有状态 CodeAct 会话（`internal/action/codeact/code_act_stateful.go` 的 `StatefulSession`）历史上的"持久化"是每次调用仍起全新一次性沙箱进程，脚本首尾注入样板代码把 Python `globals()` 通过标准库 `pickle` 序列化到磁盘文件（Bash 则用 `declare -p` 导出到 `.env` 文件）下次再反序列化回来，文件句柄、线程、数据库连接等不可序列化对象被静默跳过。原始设计（GD-14-003）设想用 CRIU/Firecracker checkpoint/restore 解决——但那只是达成"状态不因重启进程而丢失"这个目标的一种手段。**让解释器进程在多次调用之间根本不退出，是达成同一目标的另一种手段**，且不依赖本仓库缺失的任何操作系统级 checkpoint/restore 原语。
-
-**为什么不用 CRIU/Firecracker**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径，统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语；CRIU 理论上能对 bwrap 派生的进程树做 dump，但需要额外套一层 PID namespace 工程且仅覆盖 Linux。详见 ADR-0008 决策三（保留原 ADR-0078 的安全分析）。
+`types.SandboxPersistent` 是真实可用的长程有状态 CodeAct 会话后端：session-scoped 长驻解释器进程池（非 CRIU/Firecracker checkpoint/restore——bwrap/Seatbelt 无对应原语）。默认关闭（`sandbox.l4_enabled=false`），Tier-0/1 不受影响。
 
 **实现**（`internal/sandbox/sandbox_persistent.go` + `sandbox_persistent_session.go` + `sandbox_persistent_harness.go`）：
-- `PersistentSandbox` 实现 `SandboxProvider`；`Available()` 真实检测——`ArgvWrapper` 已注入且宿主 PATH 上至少有 python3/bash 之一时为 `true`。
-- 每个 `SessionID` 对应一个长驻子进程（Python：`python3 -u -c <harness>`，逐行 JSON 协议；Bash：`bash --noprofile --norc -s`，哨兵 echo 协议），通过 `ArgvWrapper`（`internal/sandbox/argv_wrapper.go` 消费方接口，`internal/tool/sandbox.RustArgvWrapper` 实现）取得与 L3/MCP stdio 长进程同一条 Rust FFI 沙箱封装（`native_sandbox_wrap_argv`），Go 侧自己 `exec.Command` 并长期持有 stdin/stdout 管道——隔离强度与 L3 一致，不构成 inv_global_07 的降级例外。
-- 生命周期：`PersistentSandboxConfig{IdleTTL, MaxSessions, ExecTimeout, ReapInterval}`（默认 10min/8/30s/30s），后台回收 goroutine（`pkg/concurrent.SafeGo`）按 IdleTTL 终止空闲会话，超过 MaxSessions 淘汰最久未用；协议层任何失败（写入/读取/超时/格式错误）判定会话不可信，立即终止，下次调用拿到全新会话。`Shutdown()` 由 `cmd/polaris/main.go` 优雅关闭时调用，终止全部存活会话进程。
-- `sandbox_router.go RouteByTier` 的 `case types.SandboxPersistent`：`persistent.Available()==true` 时路由至 L4，否则按 Container 同等的降级链回退（Container → Remote → fail-closed）。
-- `code_act.go Execute()` 在构造脚本内容**之前**同步查询 `ca.envelope.PersistentSandboxAvailable()`：可用时发送原始代码（长驻进程自己保有状态，跳过 pickle/env 包装），不可用时维持既有 `buildExecutableScript` 包装路径（零回归）。`ExecEnvelope.Execute` 在 `StatefulSession && SessionID!=""` 时把 tier 覆盖为 `SandboxPersistent`。
-- 硬件门控 + 配置阈值：`M7ToolThresholds.SandboxL4Enabled`（默认 `false`）/`SandboxL4Backend`（诊断标签，固定 `"live_process_pool"`）/`SandboxL4IdleTTLSeconds`/`SandboxL4MaxSessions`/`SandboxL4ExecTimeoutSeconds`/`SandboxL4ReapIntervalSeconds`；`sandbox.l4_enabled && Tier>=2` 才装配。
+- `PersistentSandbox` 实现 `SandboxProvider`；`Available()` = `ArgvWrapper` 已注入且宿主 PATH 上有 python3/bash 之一。
+- 每个 `SessionID` 一个长驻子进程（Python `python3 -u -c <harness>` 逐行 JSON 协议；Bash `bash --noprofile --norc -s` 哨兵 echo 协议），经 `ArgvWrapper`（`internal/sandbox/argv_wrapper.go`，实现 `internal/tool/sandbox` 的 `RustArgvWrapper`）取得与 L3/MCP stdio 长进程同一条 Rust FFI 沙箱封装——隔离强度与 L3 一致，不构成 inv_global_07 降级例外。
+- 生命周期 `PersistentSandboxConfig{IdleTTL, MaxSessions, ExecTimeout, ReapInterval}`（默认 10min/8/30s/30s）：后台回收按 IdleTTL 终止空闲会话，超 MaxSessions 淘汰最久未用；协议层任何失败即判会话不可信并终止，下次调用拿全新会话。`Shutdown()` 由 `cmd/polaris/main.go` 优雅关闭时调用。
+- `RouteByTier` 的 `SandboxPersistent`：`Available()` 时路由 L4，否则按 Container 同等降级链（Container → Remote → fail-closed）。
+- `code_act.go Execute()` 在构造脚本**前**查询 `PersistentSandboxAvailable()`：可用则发送原始代码（长驻进程自持状态），否则走 `buildExecutableScript` 包装路径；`StatefulSession && SessionID!=""` 时 tier 覆盖为 `SandboxPersistent`。
+- 配置 `M7ToolThresholds.SandboxL4Enabled`/`SandboxL4Backend`（固定 `"live_process_pool"`）/`SandboxL4IdleTTLSeconds`/`SandboxL4MaxSessions`/`SandboxL4ExecTimeoutSeconds`/`SandboxL4ReapIntervalSeconds`；`l4_enabled && Tier>=2` 才装配。
 
-**已知边界**：沙箱边界（AllowedPaths/网络策略）在会话创建时固化，同一 SessionID 后续调用无法更改；Python 用户代码内 `input()` 等阻塞式 stdin 操作会挂起至 ExecTimeout 熔断；单会话同一时刻只处理一次调用（`execMu` 串行化）；未接入 OOM Guard 联动，`MaxSessions`/`IdleTTL` 是当前唯一的资源治理手段。
+**已知边界**：沙箱边界（AllowedPaths/网络）在会话创建时固化；Python `input()` 等阻塞 stdin 挂起至 ExecTimeout 熔断；单会话同时只处理一次调用（`execMu` 串行）；未接入 OOM Guard，`MaxSessions`/`IdleTTL` 是唯一资源治理手段。
 
 ---
 
@@ -408,16 +305,14 @@ permit(principal in Role::"Agent", action == Action::"call_tool", resource) when
 - **Gate2 Capability Token 验证**: Ed25519 签名 + 5min TTL + scope + 未撤销
 - **Gate3 Rate Limiter**: 全局 / 每工具 / 每 Session
 - **Gate4 Taint 追踪**: 外部输入标记 tainted，不入 system prompt。工具参数逐字段标 TaintLevel——任一 ≥ `[Taint-Medium]` 且 Capability ≥ write_network → 拒绝（需 SanitizeByUserReview）。覆盖文件写入（§4.5）+ 网络出口（M11 SafeDialer）两层
-- **Gate5 出站预检**: 目标 URL 静态 CIDR 匹配（阻 `127.0.0.0/8` `10.0.0.0/8` `172.16.0.0/12` `192.168.0.0/16` `::1`），白名单域名放行。实际连接委托 M11 SafeDialer（§6）执行五阶段 SSRF（Server-Side Request Forgery，服务端请求伪造） 防护（DNS + TOCTOU + IP 锁定）
+- **Gate5 出站预检**: 目标 URL 静态 CIDR 匹配（阻 `127.0.0.0/8` `10.0.0.0/8` `172.16.0.0/12` `192.168.0.0/16` `::1`），白名单域名放行。实际连接委托 M11 SafeDialer（§6）执行五阶段 SSRF 防护（DNS + TOCTOU + IP 锁定）
 - 通过 → 执行 L1/L2/L3
 
-三层防线: 语义([Cedar-Gate])→数据([TaintLevel])→网络(SSRF)
+三层防线: 语义([Cedar-Gate])→数据([TaintLevel])→网络(SSRF)。安全闭环: [TaintLevel] [Taint-Prop]→[Cedar-Gate]→CapabilityToken→[Sandbox-L1/L2/L3]→RateLimit→[EventLog]
 
-**trust_level 动态推导**: `InMemoryToolRegistry.ExecuteTool` 向 PolicyGate 传入的 `trust_level` 刷根据工具来源（`tool.Source`）动态计算：Builtin → 4（系统信任），MCP/A2A → 2（社区信任），其余 → 1。`capability_token_valid` 根据 `tool.Capability <= CapReadOnly` 动态设置。Cedar 策略中 `trust_level >= N` 的条件正确生效。
+**trust_level 动态推导**: `InMemoryToolRegistry.ExecuteTool` 按 `tool.Source` 计算传给 PolicyGate 的 `trust_level`：Builtin → 4（系统信任），MCP/A2A → 2（社区信任），其余 → 1。
 
-> 2026-09-25 订正（ADR-0098 决策五）：上句 `capability_token_valid` 的描述与代码不符——执行闸门 `sandbox.ExecEnvelope` 实为"ctx 中持有且验签通过的令牌"。Agent 路径现按 §6 在节点通过 S_VALIDATE 后 JIT Mint（MaxCalls=1、TTL 5min），经 `protocol.CtxCapabilityTokenKey` 注入该次调用、返回即撤销；S_VALIDATE L1 预检以"通过即签发"评估该条件。
->
-> 2026-09-25 复核（ADR-0098 决策五追记）：JIT 签发限定为本 Agent 最近一次通过 S_VALIDATE 的计划节点（工具名 + 参数字节一致），不在其中的调用（含未经 L1 校验的 Saga 补偿动作）拒签。令牌证明"调用属于已校验计划"，不是 trust<3 工具的独立审批。
+**`capability_token_valid`**：表示本次请求携带通过 `tokenVerifier.Verify` 的能力令牌（`ExecEnvelope.Execute` Step 1），与 `tool.Capability` 级别无关。Agent 路径在节点通过 S_VALIDATE 后 JIT Mint（MaxCalls=1、TTL 5min），经 `protocol.CtxCapabilityTokenKey` 注入该次调用、返回即撤销；S_VALIDATE L1 预检以"通过即签发"评估该条件（ADR-0098 决策五）。签发限定为本 Agent 最近一次通过 S_VALIDATE 的计划节点（工具名 + 参数字节一致），不在其中的调用（含未经 L1 校验的 Saga 补偿动作）拒签——令牌证明"调用属于已校验计划"，不是 trust<3 工具的独立审批。
 
 ### 5.3 Shadow Sink
 
@@ -447,26 +342,13 @@ DryRun结果→[EventLog]（tool.dry_run_result），Reflexion回顾。
 
 ## 6. Capability Token
 
-短寿命权限令牌，沙箱门口 JIT 签发。实现见 `internal/action/capability_token.go`。
+短寿命权限令牌，沙箱门口 JIT 签发。实现 `internal/action/capability_token.go`。
 
-**JIT Minting 流程**:
-1. Planner 决定调用工具
-2. 生成 ToolIntent（不签发 Token）
-3. M8 Blackboard CAS（Compare-And-Swap，比较并交换） 认领
-4. HITL 审批（可能 10+ 分钟）
-5. Worker 进入沙箱 Gate
-6. Gate1-5 全过
-7. JIT Mint Token (`MaxCalls=1, TTL=5min`)
-8. 沙箱执行
-审批期间无有效 Token 泄露。
+**JIT Minting**: 1 Planner 决定调用工具 → 2 生成 ToolIntent（不签发）→ 3 M8 Blackboard CAS 认领 → 4 HITL 审批（可能 10+ 分钟）→ 5 Worker 进入沙箱 Gate → 6 Gate1-5 全过 → 7 JIT Mint (`MaxCalls=1, TTL=5min`) → 8 沙箱执行。审批期间无有效 Token 泄露。
 
-**Token 续期**: 长任务（预估 >4min）宿主 goroutine 每 (TTL-60s) 续期。续期校验:
-  - 租约: Agent Lease 未过期
-  - 策略: 比对 Cedar-Gate etag；变更则 PolicyGate.Review 重评——允许 → 新 Token + 更新 etag；FORBID → 取消沙箱 + 审计 `token_renewal_policy_revoked` (CRITICAL)
-默认 MaxRenewals=5 次（30min 窗口）。长程覆盖: compile=10 次/60min, crawl=8 次/48min, index=8 次/48min。
+**续期**: 长任务（预估 >4min）宿主 goroutine 每 (TTL-60s) 续期，校验：Agent Lease 未过期；比对 Cedar-Gate etag，变更则 PolicyGate.Review 重评——允许 → 新 Token + 更新 etag；FORBID → 取消沙箱 + 审计 `token_renewal_policy_revoked` (CRITICAL)。默认 MaxRenewals=5（30min 窗口）；长程覆盖: compile=10 次/60min, crawl=8 次/48min, index=8 次/48min。
 
-**任务派生深度**: Capability Token 委托链溯源机制已移除（见 §4.6），当前深度限制
-由 M8 `orchestrator.MaxSpawnDepth=3` 在任务派生（非 Token 铸造）层面强制。
+**任务派生深度**: 委托链已移除（§4.6），深度限制由 M8 `orchestrator.MaxSpawnDepth=3` 在任务派生层强制。
 
 ---
 
@@ -474,128 +356,64 @@ DryRun结果→[EventLog]（tool.dry_run_result），Reflexion回顾。
 
 ### 7.1 Computer Use / GUI 自动化架构
 
-**架构定位**: 采用独立的外部 MCP 插件/微服务（如通过插件市场分发的 Computer MCP Server）作为底层驱动。`computer_use` 能力不再作为硬编码的系统内置侧车运行，而是通过标准的 MCP 协议扩展接入，这确保了主干 Agent 进程的绝对安全与生命周期解耦。严禁在外部扩展中内嵌任何核心 AI 模型（OmniParser / VLM 均保留在主干推理网关）。
+`computer_use` 通过独立外部 MCP 插件/微服务（如 Computer MCP Server）接入，不再是硬编码系统内置侧车，保证主干 Agent 进程安全与生命周期解耦。严禁在外部扩展内嵌核心 AI 模型（OmniParser / VLM 均留在主干推理网关）。
 
-**核心技术栈**:
-1. **感知层 (Sensor)**:
-   - **截图**: 使用 `xcap` ([GitHub](https://github.com/nashaofu/xcap)) 跨平台截屏。
-   - **语义 UI 树**: 直接调用 OS（Operating System，操作系统） 原生 API (Win: `uiautomation-rs`, Mac: `axuielement`, Linux: `AT-SPI2`)，弃用抽象封装库以确保精度。
-2. **执行层 (Actuator)**:
-   - **键鼠注入**: 使用 `enigo` ([GitHub](https://github.com/enigo-rs/enigo)) 跨平台模拟。
-   - **Linux 特化兜底**: 弃用实验性的 Wayland `libei`，直接采用 `evdev` 向 `/dev/uinput` 写入内核级输入信号。
+- **感知**: `xcap` 跨平台截屏；语义 UI 树直调 OS 原生 API（Win `uiautomation-rs`、Mac `axuielement`、Linux `AT-SPI2`）
+- **执行**: `enigo` 键鼠注入；Linux 兜底用 `evdev` 写 `/dev/uinput`（弃用实验性 Wayland `libei`）
+- **模式**: ForegroundIntent → physical（依赖 Computer MCP 插件）；BackgroundTask/AutoCurriculum → headless（Tier 1+，`Xvfb :99 -screen 0 1280x800x24`）
+- **耗时追踪**: 底层追踪表（`decision_log` / `agent_actions`）须录入 `created_at` 与 `updated_at`
+- **GUI Action Loop**: `see → decide → act` 循环 `maxSteps` 次：Capture + UITree → VLM DecideAction（主干）→ MCP Command → executeAction → GUIResult
 
-Execute: ForegroundIntent→physical；BackgroundTask/AutoCurriculum→headless。
-- **physical 模式**: 依赖外部的 Computer MCP 插件服务。
-- **headless 模式**: Tier 1+ → `Xvfb :99 -screen 0 1280x800x24` 启动虚拟显示器执行。
-
-**执行耗时追踪**: 底层追踪表（如 `decision_log` 或 `agent_actions`）必须录入 `created_at` 与 `updated_at` 时间戳，供前端渲染耗时。
-
-**GUI Action Loop**: `see → decide → act` 循环 `maxSteps` 次。
-`Capture + UITree → VLM DecideAction(在主干) → 发送 MCP Command → executeAction(left_click/type等) → GUIResult`
-
-**HITL 拦截门控**（`interceptComputerUse`，`internal/agent/agent_execute_util.go`）:
-- 触发工具: `computer_use` 和 `browser_use`（均需经此门控）
-- 受全局 `permission_mode` 控制（由 `PreferencesRepo.GetPermissionMode` 注入）:
-  - `full_access`: 自动放行（依赖 Cedar 的最终防线预检）
-  - `auto_review`（默认）: 仅危险动作触发 HITL
-  - `default`: 所有调用均触发 HITL
-- 危险动作定义:
-  - `computer_use`: `key / type / left_click / right_click / double_click / left_click_drag`
-  - `browser_use`: `click / type / key`
-- HITL 路径: `a.hitl.Prompt()` → 用户 approve/deny → deny 返回 `CodeForbidden`（任务中止）
+**HITL 拦截门控**（`interceptComputerUse`，`internal/agent/agent_execute_util.go`）：触发工具 `computer_use`、`browser_use`；受全局 `permission_mode`（`PreferencesRepo.GetPermissionMode`）控制：`full_access` 自动放行（依赖 Cedar 最终防线）/ `auto_review`（默认）仅危险动作触发 HITL / `default` 全部触发。危险动作：`computer_use` 的 `key/type/left_click/right_click/double_click/left_click_drag`；`browser_use` 的 `click/type/key`。HITL 路径 `a.hitl.Prompt()`，deny 返回 `CodeForbidden`（任务中止）。
 
 ### 7.2 LAM（Large Action Model）— ComputerUseEngine
 
-**LAM（Large Action Model）— ComputerUseEngine**
-实现见 `internal/action/lam/lam.go`（`ComputerUseEngine`，实现 `LargeActionModel` 接口）。将自然语言意图转为 GUI 动作并执行，路径：`intent + ScreenState → VLM → computerUseArgs JSON → ExecutorFn`。
+`internal/action/lam/lam.go`（`ComputerUseEngine`，实现 `LargeActionModel`）：`intent + ScreenState → VLM → computerUseArgs JSON → ExecutorFn`。
 
-**硬件门控**: `FeatureComputerUseGUI`（`internal/observability`）在 `ExecuteAction` 入口前检查。未通过 → 返回 `ToolResult{Success:false, Error:"FeatureComputerUseGUI not enabled"}`，不抛错。
-
-**双路径架构**:
-```
-Tier 0 / DOM-only 路径（screenshot == nil 或 >2MB）:
-  userContent = "DOM 结构:\n{dom}\n\n用户意图: {intent}"
-  → 零图片 token，保护 Tier 0 内存预算
-
-Tier 1+ / vision 路径（screenshot ≤ 2MB）:
-  userContent = "屏幕分辨率: {W}x{H}\nDOM 结构:\n{dom}\n\n用户意图: {intent}"
-  → base64(ScreenshotBytes) 注入 protocol.Message.Parts
-```
-
-**VLM 响应结构** (`vlmActionOutput`):
-```
-action:     screenshot | left_click | right_click | mouse_move | type | key
-coordinate: [x, y]（可选）
-text:       输入文本（可选）
-reasoning:  推理说明（仅日志，不转发 executor）
-```
-
-**ExecutorFn 注入模式**: `executor ExecutorFn` 由调用方注入（通常 `action.NewComputerUseTool().Execute`），解耦 `internal/action/lam` 与 `internal/action` 父包，防止循环依赖。`executor=nil` → dry-run 模式，返回解析的动作 JSON 供调试。当前 boot 以 `sb.Router` 作为 VLM provider 注入，executor 暂为 nil（dry-run），待 Tier-1+ GUI 执行器接入后填充。
-
-> 2026-09-20 复核（GR-4.2-007）：`ExecuteAction` / `StreamBus` 当前**无生产调用入口**——`internal/tool/builtin` 不存在 computer_use 工具，Agent 仅经 `lamPolicyAdapter` 使用 `CheckPolicy`。在 GUI 执行器落地前刻意不接线（接上也只能得到 dry-run JSON，属假接线）；接入时须同时提供 builtin 工具与 executor，二者缺一不算完成。
-
-**Agent Kernel 集成**（ADR-0025 BUG-1）: `ComputerUseEngine` 提供导出方法 `CheckPolicy(ctx context.Context, actionJSON []byte) error`，由 `Agent.interceptComputerUse`（`internal/agent/agent_execute_util.go`）在 HITL 审批**前**调用，实施 Cedar `browser_automate/lam/{allow_net:true}` deny-by-default 预检。Agent struct 持有 `lamEngine *lam.ComputerUseEngine` 字段，boot 通过 `agent.SetLAMEngine(lamEngine)` 注入。`lamEngine==nil` 时跳过 Cedar 预检（nil-safe，兼容无 LAM 场景）。调用顺序：Cedar PolicyGate（快速拒绝）→ HITL 审批（人工确认）。
-
-**LAMConfig**:
-```
-Enabled:        bool
-PerceptionMode: string  // "auto" (按内存自动降级) | "local_omniparser" (强制本地) | "cloud_vlm" (强制云端多模态)
-ResolverModel:  string  // 视觉解析模型真实 ID；空串 = 由 InferenceRouter 按图像 Part 选 Vision Provider（boot 默认留空，GR-4.2-003）
-```
-
-**ActionDiscretizer**（`internal/action/lam/continuous_action.go`）: 已实现基于余弦相似度的离散化投影（`Discretize` 方法，含 `keyToCentroid` + `cosineSim` 算法）。连续向量 → 离散工具调用，延迟 ~1-5ms。Vision 解析路径（DisplayServer）待 Tier-1+ 接入。
+- **硬件门控**: `FeatureComputerUseGUI`（`internal/observability`）在 `ExecuteAction` 入口检查，未通过返回 `ToolResult{Success:false}`，不抛错。
+- **双路径**: Tier 0 / DOM-only（screenshot 为空或 >2MB）只送 DOM 文本，零图片 token；Tier 1+ / vision（≤2MB）额外带分辨率并把 base64 截图注入 `protocol.Message.Parts`。
+- **VLM 响应** (`vlmActionOutput`): `action`（screenshot|left_click|right_click|mouse_move|type|key）、`coordinate [x,y]`、`text`、`reasoning`（仅日志，不转发 executor）。
+- **ExecutorFn 注入**: 由调用方注入（通常 `action.NewComputerUseTool().Execute`），解耦 `internal/action/lam` 与父包防循环依赖；`executor=nil` → dry-run，返回解析的动作 JSON。当前 boot 以 `sb.Router` 作 VLM provider、executor 为 nil。
+- **接线状态**: `ExecuteAction` / `StreamBus` 无生产调用入口（`internal/tool/builtin` 无 computer_use 工具，Agent 仅经 `lamPolicyAdapter` 用 `CheckPolicy`）；GUI 执行器落地前刻意不接线，接入须同时提供 builtin 工具与 executor。
+- **Agent Kernel 集成**（ADR-0025）: `CheckPolicy(ctx, actionJSON)` 由 `Agent.interceptComputerUse` 在 HITL 审批**前**调用，实施 Cedar `browser_automate/lam/{allow_net:true}` deny-by-default 预检；`lamEngine==nil` 时跳过（nil-safe）。顺序：Cedar PolicyGate（快速拒绝）→ HITL。
+- **LAMConfig**: `Enabled`；`PerceptionMode`（`auto` 按内存降级 / `local_omniparser` / `cloud_vlm`）；`ResolverModel`（空串 = 由 InferenceRouter 按图像 Part 选 Vision Provider）。
+- **ActionDiscretizer**（`internal/action/lam/continuous_action.go`）: 余弦相似度离散化（`Discretize`），连续向量 → 离散工具调用，~1-5ms。
 
 ### 7.3 StreamingActionBus（CANONICAL SOURCE）
 
-`internal/action/lam/streaming_action_bus.go` 已实现 `StreamAction()`（含速率控制令牌桶 + ActionClipper 向量钳制 + maxSteps=1000 步数限制）。`DisplayServer` 接口已定义；Xvfb 平台适配已实现（`display_server_xvfb.go` 的 `XvfbDisplayServer`，依赖 `xdotool`/`xwd`/`convert`），已在 `cmd/polaris/boot_agent.go` 接入探测逻辑；VNC/Wayland 两种平台适配仍无实现代码，待 Tier-1+ 接入，nil 时以 no-op 安全降级。探测逻辑除 `FeatureVisionDisplayServer`（MinTier1，OS: linux）的 OS/Tier/内存三项条件外，叠加 `lam.XvfbAvailable()` 对 `xdotool`/`xwd`/`convert` 三个外部二进制的探测（满足硬件条件但未装依赖时不会装配必然报错的 `XvfbDisplayServer`）；三态日志区分"Feature 未启用"vs"二进制缺失"vs"正常注入"，不满足任一条件时均安全降级为 nil no-op。
+`internal/action/lam/streaming_action_bus.go` 的 `StreamAction()`：步数检查（超 maxSteps=1000 报错）→ 令牌桶速率控制（阻塞至取得令牌或 ctx 取消）→ ActionClipper 向量钳制（可选）→ `DisplayServer.SendAction`（nil 时 no-op 安全降级）。类型校验与 ASCII 白名单为设计目标，当前 `StreamAction` 不对 `ActionType` 做枚举约束，由调用方保证。
 
-StreamAction 已实现流程：步数检查（超 maxSteps 返回错误）→ 令牌桶速率控制（阻塞直到获得令牌或 ctx 取消）→ ActionClipper 向量钳制（可选）→ DisplayServer.SendAction（nil 时 no-op 安全降级）。
+DisplayServer：Xvfb 适配已实现（`display_server_xvfb.go`，依赖 `xdotool`/`xwd`/`convert`），`cmd/polaris/boot_agent.go` 探测接入——`FeatureVisionDisplayServer`（MinTier1，linux）满足且 `lam.XvfbAvailable()` 通过才装配，否则 nil no-op；VNC/Wayland 适配无实现。
 
-**实现状态**：令牌桶（滑动窗口+令牌桶混合）和 ActionClipper 已在 `internal/action/lam/streaming_action_bus.go` 完整实现；类型校验和 ASCII 白名单属于文档设计目标，当前 `StreamAction` 对 `ContinuousAction.ActionType` 不做枚举约束，由调用方保证合法性。
+M4 S_EXECUTE 路由: tool_call→ActionDiscretizer→ToolCall；mouse_delta / key_sequence→StreamingActionBus→虚拟帧缓冲；其他→ErrUnsupportedActionType。工具调用走离散化（~1-5ms），GUI 走总线（<0.5ms 背压），混合按 Type 分流并行双通道。
 
-M4 S_EXECUTE路由: tool_call→ActionDiscretizer→ToolCall；mouse_delta→StreamingActionBus→虚拟帧缓冲；key_sequence→StreamingActionBus→虚拟帧缓冲；其他→ErrUnsupportedActionType
-
-LAM路径: 工具调用→ActionDiscretizer(~1-5ms离散化)；GUI→StreamingActionBus(<0.5ms背压)；混合→按Type分流并行双通道
-
-Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需CapGUIAutomation（Tier1+默认启用，Tier0需显式授权）。
+Security: StreamingActionBus 不绕过 Capability——mouse_delta/key_sequence 需 CapGUIAutomation（Tier1+ 默认启用，Tier0 需显式授权）。
 
 ### 7.4 `[CodeAct]` — 即时代码执行行动空间
 
-> 对齐 2024 CodeAct (Wang et al.) / OpenInterpreter / SWE-agent。区别于 [Logic-Collapse]（沉淀型 Python 技能，走 staging 流水线后写入 Skill Library）——CodeAct 是 **ad-hoc 一次性代码 + 立即执行**，不沉淀。共用 ContainerSandbox 执行路径，运行时依赖一致。
->
-> "不沉淀"指的是不写入 Skill Library、不参与 Staging/Eval Gate——每次调用仍是全新的一次性沙箱进程，这一点 GD-4-002 之后依然成立。但 `StatefulSession=true`（可选，默认关闭）时，同一 SessionID 的连续多次调用之间可以延续变量状态，详见下方"REPL 状态保持"小节，读者不应再假设 CodeAct 各次调用之间必然完全无关联。
-
-**用途**: M4 S_EXECUTE 可选行为空间。当任务需要"组合多个工具 + 中间计算 + 条件分支"时，LLM 直接生成 Python/JS 代码片段，由 M7 执行——比多次 tool_call 更紧凑、组合性更强。
+区别于 [Logic-Collapse]（沉淀型 Python 技能，走 staging 后入 Skill Library）：CodeAct 是 **ad-hoc 一次性代码 + 立即执行**，不沉淀（不写 Skill Library、不走 Staging/Eval Gate），共用 ContainerSandbox 路径。M4 S_EXECUTE 在"组合多工具 + 中间计算 + 条件分支"时可选。
 
 **`inv_global_07` 强制约束**（无豁免）:
 - Source: `ToolSource=LLMGenerated`
 - Sandbox: 强制 Level≥3（ContainerSandbox），`policyGate` + `sandbox.Level()` 双重门控，任一不满足立即 fail-closed
-- Capability Token: 由调用方通过 `req.CapabilityID` 传入（CodeAct 不自行 Mint，调用方须事先 JIT 签发）
-- Cedar 策略: deny-by-default，需 `permit code_act when ... approval_status == "approved"`；`policyGate` 未注入时 fail-closed
-- Audit: 完整代码 + stdout + exit_code，通过 `toolExec.RecordAudit(ctx, "code_act", auditPayload)` 写入 EventLog（已实现，`internal/action/codeact/code_act.go`）
+- Capability Token: 由调用方经 `req.CapabilityID` 传入（CodeAct 不自行 Mint）
+- Cedar: deny-by-default，需 `permit code_act when ... approval_status == "approved"`；`policyGate` 未注入 fail-closed
+- Audit: 完整代码 + stdout + exit_code，经 `toolExec.RecordAudit(ctx, "code_act", ...)` 写 EventLog
 
-**`Execute` 已实现并接线**（`internal/action/codeact/code_act.go`）：语言校验（python|bash）→ CapabilityID 非空检查 → Cedar 策略评估（fail-closed）→ sandbox.Level()≥3 断言 → 构造 SandboxSpec 调用 sandbox.Run → 返回 CodeActResult。`boot_server.go` 在 `FeatureL3Sandbox` 启用时构造引擎，注入 `agent.SetCodeAct()` 和 `httpServer.SetCodeActEngine()`（Batch 3+4 完成）。
+**`Execute`**（`internal/action/codeact/code_act.go`，已接线）: 语言校验（python|bash）→ CapabilityID 非空 → Cedar 评估（fail-closed）→ sandbox.Level()≥3 断言 → `sandbox.Run` → `CodeActResult`；输出端 Post-Execution PII 脱敏。`boot_server.go` 在 `FeatureL3Sandbox` 启用时构造引擎并注入 `agent.SetCodeAct()` / `httpServer.SetCodeActEngine()`。代码上限 `MaxCodeSizeBytes`（默认 16384，`WithMaxCodeSize`）。污点门控由 Cedar 评估 + Level≥3 断言间接覆盖。
 
-16KB 代码大小限制已实现（配置为 `MaxCodeSizeBytes`，默认 16384，`internal/action/codeact/code_act.go` 构造时通过 `WithMaxCodeSize` 传入强制阻断）。Post-Execution PII Redact 章节改为：✅ 已实现，复用任务 20 的脱敏工具类。Taint 检查已在 `Execute` 流程中通过 Cedar 策略评估 + `sandbox.Level()≥3` 断言间接覆盖污点等级门控（见上一段"已实现并接线"），不属于本条遗留缺口。
+**REPL 状态保持**（`internal/action/codeact/code_act_stateful.go`）: `StatefulSession=true`（默认 false）且带 SessionID 时，同 SessionID 的连续调用延续变量状态。L4 可用（§4.7 Sandbox-L4）时由长驻进程自持状态；否则脚本前后注入样板（Python pickle 快照 `globals()` 到按 SessionID 命名的状态文件，Bash `declare -p` 导出再 `source`）。L0 AST / L1 GovernanceAgent / L2 LLM 评审（§7.5）作用于用户原始代码，早于样板注入；SessionID 经路径净化后才用于文件命名。
 
-**REPL 状态保持**（GD-4-002 已实现，`internal/action/codeact/code_act_stateful.go`）：`CodeActRequest.StatefulSession` 为 true 且携带 SessionID 时，实际写入沙箱执行的脚本会在用户代码前后被注入固定的样板代码——Python 用 pickle 把执行后的 `globals()` 快照写入按 SessionID 命名的状态文件，下次同 SessionID 调用时先加载回填；Bash 用 `declare -p` 导出变量、下次调用时 `source` 回来。这不是常驻进程/Jupyter Kernel（那类方案的进程生命周期管理、内存占用核算、Tier 分级门控被评估为工作量较大，留作独立 Feature，未在本次范围内实现）——每次调用依然是 §7.4 顶部约束的全新一次性 L3 容器进程，`inv_global_07` 的沙箱与审计边界不变；L0 AST / L1 GovernanceAgent / L2 LLM 同行评审三层安全检查作用于用户原始代码，早于样板代码注入，不受影响。SessionID 经路径净化后才用于状态文件命名，防路径穿越。默认关闭（`StatefulSession=false`），不影响未选用此特性的既有调用方行为。
-
-**与 Logic Collapse Python 技能的区别**:
-
-| 维度 | CodeAct (本节) | Logic Collapse Python 技能 (M6) |
-|------|---------------|--------------------------------|
-| 沉淀 | 否（一次性） | 是（写入 Skill Library，HE-6） |
-| Staging 流水线 | 不走 | 完整 7 阶段（ValidatePython + Eval Gate + 签名）|
-| Sandbox | L3 ContainerSandbox（共用） | L3 ContainerSandbox（共用） |
-| 执行路径 | `stageScript`（VFS `StageEphemeralFile`，未接入 VFS 时降级 `writeTempScript`）→ sandbox.Run | SkillRegistry 读 skill.py → sandbox.Run |
-| 用途 | 即时复杂组合 | 高频可复用模式（零 LLM System 1）|
-| 触发 | M4 显式选择 | M9 自动后台触发（≥50 成功轨迹）|
+| 维度 | CodeAct | Logic Collapse Python 技能 (M6) |
+|------|---------|--------------------------------|
+| 沉淀 | 否（一次性） | 是（Skill Library，HE-6） |
+| Staging | 不走 | 完整 7 阶段（ValidatePython + Eval Gate + 签名）|
+| Sandbox | L3 ContainerSandbox | L3 ContainerSandbox |
+| 执行路径 | `stageScript`（VFS `StageEphemeralFile`，未接入时降级 `writeTempScript`）→ sandbox.Run | SkillRegistry 读 skill.py → sandbox.Run |
+| 触发 | M4 显式选择 | M9 自动后台（≥50 成功轨迹）|
 | HT0 可用 | 否（L3 依赖）| 否（L3 + FeatureLogicCollapse 双门控）|
 
-**M4 S_EXECUTE 决策树**（扩展 §5 RouteReasoning）:
-- 单工具调用 → 标准 tool_call
-- 组合 ≥3 工具 + 中间计算 → 候选 CodeAct（M4 询问 LLM 偏好 + Cedar 校验）
-- 高频可复用 → 后台进入 Logic Collapse / Auto-Curriculum 沉淀
+**M4 S_EXECUTE 决策树**: 单工具 → 标准 tool_call；组合 ≥3 工具 + 中间计算 → 候选 CodeAct（询问 LLM 偏好 + Cedar 校验）；高频可复用 → 后台 Logic Collapse / Auto-Curriculum 沉淀。
 
 ### 7.5 GovernanceAgent 代码安全三层防线
 
@@ -615,57 +433,48 @@ Layer 0/1 为同步卡口，失败直接阻断代码进入沙箱。Layer 2 为�
 
 ## 8. Tool Usage Policy Evolution
 
-Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略——从历史调用轨迹学习最优参数和失败模式。
+Logic Collapse (M6) 创建新技能；本机制提升已有工具的使用策略（从调用轨迹学最优参数与失败模式）。
 
 ### 8.1 与 Logic Collapse 的分工
 
-- 维度: 进化对象 | Logic Collapse (M6): 创建新技能 | Tool Usage Policy Evolution (M7): 已有工具的使用策略
-- 维度: 触发条件 | Logic Collapse (M6): 50+ 成功 | Tool Usage Policy Evolution (M7): 每次调用后更新统计
-- 维度: 输出 | Logic Collapse (M6): Python 技能（src/skill.py）+ SKILL.md | Tool Usage Policy Evolution (M7): 策略提示词 + 参数建议
-- 维度: 粒度 | Logic Collapse (M6): 工具级 | Tool Usage Policy Evolution (M7): 调用级
+| 维度 | Logic Collapse (M6) | Tool Usage Policy Evolution (M7) |
+|---|---|---|
+| 进化对象 | 创建新技能 | 已有工具的使用策略 |
+| 触发 | 50+ 成功 | 每次调用后更新统计 |
+| 输出 | Python 技能（src/skill.py）+ SKILL.md | 策略提示词 + 参数建议 |
+| 粒度 | 工具级 | 调用级 |
 
 ### 8.2 策略模型
 
-持久化类型定义见 `internal/action/tool_usage_policy.go`:
+持久化类型见 `internal/action/tool_usage_policy.go`：**ToolUsagePolicy**（`ToolName` / `ParamHints map[string]ParamHint` / `BestFor` / `NotRecommendedFor`）、**ParamHint**（`DefaultValue` / `Description` / `MinValue` / `MaxValue`）。
 
-- **ToolUsagePolicy** — 工具的最优参数建议和适用场景。字段: `ToolName` / `ParamHints map[string]ParamHint`（最优参数建议）/ `BestFor []string`（适用场景）/ `NotRecommendedFor []string`（不适用场景）
-- **ParamHint** — 参数级别的最优值约束。字段: `DefaultValue any` / `Description string` / `MinValue any` / `MaxValue any`
-
-以下数据由 PolicyEvolver（§8.3）运行时维护，不单独持久化；进程重启后由 `WarmStart` 从 `session_trajectory`（045）每工具最近 window 条工具事件重放恢复（2026-09-29 订正，ADR-0104 决策七：原重启清零；Params 不还原）:
-- **FailurePattern** — 失败模式签名（ErrorType × 输入特征），含频率计数和 LLM 生成的缓解策略
-- **CoToolPattern** — 工具组合模式（ToolName × Relationship ∈ {before, after}），按频率排序
-- **运行时统计** — `SuccessRate`（加权平均）、`AvgLatencyMs`、`UseCount`，每次调用后更新
+PolicyEvolver（§8.3）运行时维护、不单独持久化的数据；重启后由 `WarmStart` 从 `session_trajectory`（045）每工具最近 window 条工具事件重放恢复（Params 不还原，ADR-0104 决策七）:
+- **FailurePattern**: 失败签名（ErrorType × 输入特征）+ 频率 + LLM 生成的缓解策略
+- **CoToolPattern**: 工具组合（ToolName × Relationship ∈ {before, after}），按频率排序
+- **运行时统计**: `SuccessRate`（加权平均）、`AvgLatencyMs`、`UseCount`
 
 ### 8.3 PolicyEvolver
 
-`internal/action/tool_usage_policy.go` 实现：
+`internal/action/tool_usage_policy.go`：
+- `WarmStart(outcomes)`：启动期按时间序重放历史结果进滑动窗口（与 `RecordOutcome` 同一写入路径）
+- `RecordOutcome`：SuccessRate 滑动窗口加权更新 + 失败模式提取（连续 3 次同类失败自动生成缓解建议）
+- `GetContextHint(toolName)`：历史调用 ≥20 次返回 ParamHint 建议 + 高频失败警告，否则空（冷启动不注入噪声）
+- `BuildSystemHintBlock()`：聚合已激活工具提示为 `<tool-hints>...</tool-hints>`，M4 DAG 节点执行前注入 System Prompt ZoneMutableSkill 区；无提示返回空串。不修改工具定义和 schema
 
-- `WarmStart(outcomes)`：启动期把轨迹账本中的历史结果按时间序重放进滑动窗口（与实时 `RecordOutcome` 同一写入路径）
-- `RecordOutcome`：SuccessRate 滑动窗口加权更新 + 失败模式提取（ErrorType+频率，连续 3 次同类失败自动生成缓解建议）
-- `GetContextHint(toolName)`：历史调用 ≥20 次时返回 ParamHint 建议 + 高频失败警告；否则返回空（冷启动不注入噪声）
-- `BuildSystemHintBlock()`：聚合所有已激活工具的提示，生成标准 `<tool-hints>...</tool-hints>` XML 块，供 M4 DAG（Directed Acyclic Graph，有向无环图） 构建 InferRequest 时注入 System Prompt 的 ZoneMutableSkill 区。无任何提示时返回空字符串（调用方不注入）。
-
-**注入位置**：M4 DAG 节点执行前，调用 `PolicyEvolver.BuildSystemHintBlock()` 获取聚合提示块，注入 System Prompt ZoneMutableSkill 区。不修改工具定义和 schema。
-
-**启用条件**：单工具 ≥20 次历史调用自动激活。Tier 0 低频下以冷启动默认值运行；Tier 1+ 持续优化。
-
----
-
-> 安全闭环: [TaintLevel] [Taint-Prop]→[Cedar-Gate]→CapabilityToken→[Sandbox-L1/L2/L3]→RateLimit→[EventLog]
+启用条件：单工具 ≥20 次历史调用自动激活；Tier 0 低频下用冷启动默认值。
 
 ---
 
 ## 12. 降级与失败模式
 
-- 故障场景: 沙箱启动失败 (L2 Wasm) | 降级路径: 拒绝执行该工具 + [EventLog] | 恢复策略: 重启沙箱宿主后恢复
-- 故障场景: 沙箱启动失败 (L3 gVisor) | 降级路径: 拒绝执行该工具 + AuditEvent | 恢复策略: gVisor 重装后恢复
-- 故障场景: Capability Token 校验失败 | 降级路径: 拒绝执行 + AuditEvent | 恢复策略: 重新申请 Token
-- 故障场景: MCP 外部 server 不可达 | 降级路径: mark_unreachable → 该工具从可用列表移除 | 恢复策略: 心跳恢复后重新注册
-- 故障场景: Rate Limiter 触发 | 降级路径: 429 排队 + Retry-After | 恢复策略: 窗口过期自动恢复
-- 故障场景: 不可逆操作 DryRun 失败 | 降级路径: 拒绝执行 + HITL 升级 | 恢复策略: 手动审批后签发一次性 Token
-- 故障场景: Linux Firecracker KVM 不可用 | 降级路径: 降级 gVisor (runsc) 用户态内核 | 恢复策略: KVM 可用后自动切换回 Firecracker
-- 故障场景: macOS Virtualization.framework 不可用 (旧版本系统) | 降级路径: L3 不可实例化 → ErrFeatureUnavailable | 恢复策略: 系统升级后恢复
-- 故障场景: Windows WSL2 不可用 | 降级路径: L3 不可实例化 → ErrFeatureUnavailable | 恢复策略: 启用 WSL2 + Hyper-V 后恢复
+| 故障场景 | 降级路径 | 恢复策略 |
+|---|---|---|
+| 沙箱启动失败 (L2 Wasm / L3) | 拒绝执行该工具 + [EventLog]/AuditEvent | 重启沙箱宿主 / 重装后恢复 |
+| Capability Token 校验失败 | 拒绝执行 + AuditEvent | 重新申请 Token |
+| MCP 外部 server 不可达 | mark_unreachable → 工具从可用列表移除 | 心跳恢复后重新注册 |
+| Rate Limiter 触发 | 429 排队 + Retry-After | 窗口过期自动恢复 |
+| 不可逆操作 DryRun 失败 | 拒绝执行 + HITL 升级 | 手动审批后签发一次性 Token |
+| L3 平台后端不可用（Linux 无 KVM 回退 gVisor；macOS 旧系统 / Windows 无 WSL2） | L3 不可实例化 → ErrFeatureUnavailable | 平台条件满足后恢复 |
 
 与 OSMemoryGuard 协同: L1 预警 → 禁止启动新 Wasm 实例 / L2 紧急 → kill 空闲沙箱 / L3 临界 → kill 全部非关键沙箱，仅保留当前交互任务。
 
@@ -693,61 +502,35 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 ---
 
-## 14. Plugin Registry（ADR-0016 §2.1）
+## 14. Plugin Registry（ADR-0103）
 
-> End-User 可通过 Plugin Bundle（tar.gz）打包分发技能+MCP 组合，无需修改源码。
-> 参见 [ADR-0016](./decisions/ADR-0016-unified-trust-extension-model.md)（决策二，含原 ADR-0015）与 M13-bis §5.3。
+End-User 可通过 Plugin Bundle（tar.gz）分发技能 + MCP 组合，无需改源码。决策见 [ADR-0103](./decisions/ADR-0103-extension-dual-vendor-standard.md)（原 ADR-0016/0015）与 M13-bis §5.3。
 
-**Plugin manifest 格式** (`plugin.json`，即 `PluginBundleManifest`）:
-```json
-{
-  "name": "github",
-  "version": "1.0.0",
-  "description": "GitHub MCP integration",
-  "mcp_inline": {
-    "github-mcp": { "command": "npx", "args": ["-y", "@github/mcp-server"] }
-  },
-  "mcp_servers": ".mcp.json",
-  "skills": [{ "path": "skills/pr-review/SKILL.md", "name": "pr-review" }]
-}
-```
+**Plugin manifest**（`plugin.json`，`PluginBundleManifest`）字段：`name` / `version` / `description` / `mcp_inline`（server 名 → command+args）/ `mcp_servers`（`.mcp.json` 路径）/ `skills[]`（`path`、`name`）。bundle 目录下还可含外部厂商格式（`ai-plugin.json` / `plugin.toml` / `skills.yaml`），由 `internal/extension/pluginspec` 唯一解析器解析。
 
-同一 bundle 目录下还可同时包含外部厂商格式（`ai-plugin.json` / `plugin.toml` / `skills.yaml`），由 `adapter.ParseManifestDir()` 解析后各自安装对应的运行时组件。
+**安装路径**：`~/.polaris/extensions/plugin/{ext_id}/`（HTTP tar.gz 下载解压）。
 
-**安装路径**：`~/.polaris/extensions/plugin/{ext_id}/`（HTTP tar.gz 下载解压）
+**加载流程**：`POST /v1/plugins/install` → `internal/gateway/server/plugin/catalog_download.go` `downloadAndInstallExtension()` → 解析 `plugin.json` → `mcp_inline` / `.mcp.json` 经 `installBundleMCP()` 写 `mcp_servers` + `MCPManager.Add()`；`skills[]` 经 `installBundleSkill()` 写 `skills`（runtime=script）→ INSERT `plugins`（021）写 bundle 元数据。
 
-**加载流程**:
-```
-POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.downloadAndInstallExtension()
-  → 解析 plugin.json（PluginBundleManifest）
-  → mcp_inline / .mcp.json  → installBundleMCP() → mcp_servers + MCPManager.Add()
-  → skills[]                → installBundleSkill() → skills（runtime=script）
-  → adapter.ParseManifestDir() 处理外部厂商格式
-  → INSERT plugins（021）写 bundle 元数据
-```
+**安全约束**：所有子路径经 `safeJoin()` 校验，防 bundle 内路径穿越；Plugin Bundle MCP 默认 Taint=High（inv_M7_02）；Script Skills trust_tier 继承 extension_catalog。
 
-**安全约束**:
-- 所有子路径通过 `safeJoin()` 校验，防止 bundle 内路径穿越到安装目录外
-- Plugin Bundle MCP 默认 Taint=High（M7 inv_M7_02）
-- Script Skills trust_tier 继承 extension_catalog
-
-**代码位置**: `internal/gateway/server/plugin/catalog*.go`（HTTP 入口）、`internal/extension/marketplace/catalog_{sync,install,versions}.go` + `sources.go`（同步 / 来源取回 / 依赖安装）、`internal/extension/pluginspec`（唯一解析器；2026-09-27 删除 `marketplace/adapter.go` 多厂商启发式解析，ADR-0103 决策七）
+**代码位置**: `internal/gateway/server/plugin/catalog*.go`（HTTP 入口）、`internal/extension/marketplace/catalog_{sync,install,versions}.go` + `sources.go`（同步 / 来源取回 / 依赖安装）、`internal/extension/pluginspec`（唯一解析器）。
 
 ---
 
 ## 15. Hook 框架（hooks.json，ADR-0103 决策六）
 
-> 2026-09-26：由两家共同的 `hooks.json` 模型取代原 `hooks.yaml` 工具事件引擎与 `[ShellHooks]` 私有脚本事件（见 `00-Global-Dictionary.md` `[Hooks]`）。
+两家共同的 `hooks.json` 模型取代原 `hooks.yaml` 工具事件引擎与 `[ShellHooks]`（见 `00-Global-Dictionary.md` `[Hooks]`）。
 
 **模型**：`internal/action/hook` —— `hook.go` 事件/处理器/配置解析；`registry.go` 来源快照（`SourceProvider` 注入，`Reload` 原子替换）；`io.go` 标准输入与输出决策合并（退出码 0/2/其他、`continue`/`decision`/`hookSpecificOutput.{permissionDecision,updatedInput,additionalContext}`，deny > ask > allow）；`runner.go` 分发（事件级 PolicyGate、PII 脱敏、同步并发 + async 后台）；`exec_command.go`（shell / exec 形式、`${CLAUDE_PLUGIN_ROOT}` 等路径变量、`CLAUDE_PLUGIN_OPTION_*`，shell 形式禁止 `${user_config.*}`）；`exec_remote.go`（http 经 SafeDialer、`allowedEnvVars`；mcp_tool 模板替换；prompt/agent 经 Provider 路由判定 `{"ok":…}`）；`filter_if.go`（`if` 规则 `Tool(glob)`）；`firer.go`（实现 `sandbox.HookFirer` 与 `hitl.PermissionHooks`）。
 
-**来源**：`extension/lifecycle/hook_sources.go` 组装用户级 / 项目级 hooks.json 与已启用插件的 hooks；信任按定义哈希存 `hook_trust`；`GET /v1/hooks`、`POST|DELETE /v1/hooks/trust` 审阅管理。插件安装/卸载/启停与信任变更后刷新快照。
+**来源**：`extension/lifecycle/hook_sources.go` 组装用户级 / 项目级 hooks.json 与已启用插件的 hooks；信任按定义哈希存 `hook_trust`；`GET /v1/hooks`、`POST|DELETE /v1/hooks/trust` 审阅管理；插件安装/卸载/启停与信任变更后刷新快照。
 
 **触发点**：
 
 | 事件 | 触发点 |
 |------|--------|
-| `PreToolUse` | `ExecEnvelope.Execute` Step 1.5：veto-only；`updatedInput` 改写后重新执行 PolicyGate；`ask` 按拒绝处理（无逐次交互权限通道） |
+| `PreToolUse` | `ExecEnvelope.Execute` Step 1.5：veto-only；`updatedInput` 改写后重新执行 PolicyGate；`ask` 按拒绝处理（无逐次交互通道） |
 | `PostToolUse` / `PostToolUseFailure` | `ExecEnvelope.Execute` 执行后同步触发；`decision:block` 原因与 `additionalContext` 以 `<hook-feedback>` 追加到工具输出并强制 TaintHigh |
 | `SessionStart` / `UserPromptSubmit` | `session` 编排入口（交互式与 Headless）；阻断即拒绝本轮，附加上下文以 `<hook-context>` 随任务意图下发 |
 | `Stop` / `StopFailure` | 回合结束：`decision:block` 以原因续跑，最多 3 次（`stop_hook_active` 标记）；空响应触发 StopFailure |
@@ -756,8 +539,6 @@ POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.
 | `PermissionRequest` / `Notification` | `hitl.GatewayImpl.Prompt`：deny 直接拒绝（allow 不代替人工批准）；审批发起时发 Notification |
 | `Interrupt` | 用户中断接口 |
 
-**执行**：命令处理器经 `sandbox.RunStdio`（`ArgvWrapper` → Rust 沙箱封装 argv；stdin 注入、stdout/stderr 分离、退出码、超时与输出上限），封装失败拒绝执行；原 `ExecEnvelope` Command 分支与 `KindHookExecute` 已删除。
+Hook 输出强制 `TaintLevel=High`，经 PolicyGate 决定注入，禁止进入 Immutable Zone。
 
-> **✅ 已修复（native_sandbox mutex 中毒）**：`rust/substrate/src/native_sandbox/mod.rs` 中 stdout/stderr 采集子线程的 `buf.lock().unwrap()` 已改为 `unwrap_or_else(|e| e.into_inner())`，锁中毒时取回内部数据而非 panic，子线程不再因锁异常丢失输出。
-
-`capability_token_valid` 表示本次请求是否携带通过 `tokenVerifier.Verify` 的能力令牌，与 `tool.Capability` 级别无关。根据 `ExecEnvelope.Execute` Step 1 的逻辑，`tokenVerifier.Verify` 成功 → true，否则 false。2026-08-12 复核：原描述"根据 tool.Capability <= CapReadOnly 动态设置"与代码不符，已订正。
+**执行**：命令处理器经 `sandbox.RunStdio`（`ArgvWrapper` → Rust 沙箱封装 argv；stdin 注入、stdout/stderr 分离、退出码、超时与输出上限），封装失败拒绝执行。

@@ -16,7 +16,7 @@ import (
 // 采纳"模式：SQLiteRegistryImpl 独立实现了同名的 markReverseDependenciesCompatCheck
 // 反向依赖扫描，证明内存版不是生产依赖的唯一来源。
 //
-// 历史决策见 docs/arch/decisions/ADR-0002-skill-registry-consolidation.md
+// 历史决策见 docs/arch/decisions/ADR-0103-extension-dual-vendor-standard.md（原 ADR-0002，决策十二）
 //   —— 已消除本地 Registry/Skill/LogicCollapse/Trajectory/Step/LifecycleState 类型，
 //   统一直接使用 types.SkillMeta 存储与传递。
 

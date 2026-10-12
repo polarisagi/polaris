@@ -1,74 +1,85 @@
-# ADR-0091：审计门控的「覆盖面」而非「结果」——能删的覆盖清单一律删掉
+# ADR-0091: 质量门控治理：覆盖面优先、扫描根、负向自测
 
-- 状态：Accepted（已执行）
-- 日期：2026-08-09
-- 关联：ADR-0089（lint 扫描根接回 internal/）、ADR-0062（deadcode 门控）
+> 状态：Accepted ｜ 首次：2026-05-16 ｜ 最近复核：2026-10-12 ｜ 含原 ADR-0013/0014/0089 ｜ 模块：`.golangci.yml` / `internal/lint/` / `tools/` / `Makefile` / `.github/workflows/`
 
-## 背景
+核心命题：CI 全绿的含义是"当前检查没看见"，不是"没有问题"。门控的**覆盖面**比其**结果**重要；手维护的覆盖清单是失效温床，能删就删，不能删就加机械校验。
 
-ADR-0089 处理的是 8 条规则「扫错了目录」。顺着同一条线索复查全部门控的**覆盖面**
-（而不是它们的运行结果），又找到三处同类问题。共同特征：**CI 全绿，但绿的含义是
-「当前的检查没看见」，不是「没有问题」**。
+## 决策一：golangci-lint 机械化守护宪法规则（原 ADR-0013 决策一）
 
-手维护的覆盖清单是这类失效的温床——清单和它声称的选取标准之间没有任何机械约束，
-漂了多久无人知晓，而漂移后的输出与正常输出完全一样。
+- 已启用：`depguard`（B1 层依赖 + R6 隔离）、`errorlint`（R1.2）、`nestif`（R7 嵌套≤3）、`gocyclo`（R7 圈复杂度≤15）；Phase 2 的 `wrapcheck`、`gochecknoglobals` 现已启用（`.golangci.yml`）。
+- `funlen` 判定不采用（2026-07-04）：与 `gocyclo` 冗余，Go 的 err 处理天然拉长行数、误报率高；复杂度治理收敛到 `gocyclo` 一家。
+- 不用 baseline 锁定 golangci 既有违规（等于规则空转）：按优先级修复，或显式 `//nolint` + 关联 ADR；无 ADR 佐证的 `//nolint:depguard` 跨层 import 拒绝。
 
-## 决策一：`make test-race` 从 7 个手选目录改为全仓
+## 决策二：对抗审查 GitHub Action（原 ADR-0013 决策二 / 原 ADR-0014）
 
-原清单自称覆盖「并发高发区」。实测按并发原语密度排序，前三名一个都不在里面：
+- `.github/workflows/constitutional-review.yml` + `scripts/constitutional_review.sh`：PR 触发独立 LLM 审查，覆盖 lint/golden 机械不可检的语义反模式（R1.4/R1.8/R1.9/R1.10 等）。
+- 审查模型不可与开发模型同型号（防"被告判自己"）；Reviewer 只看 diff + `00-Constitution.md`；输出严格机器化（"R<编号> | 文件:行 | 说明" 或 "NONE"），禁建议/表扬/推理。
+- **warning-only，不阻断 CI**：LLM 会误报，硬阻断会让团队学会绕过。拒绝同一开发者会话 self-review。
+- 订正：脚本默认模型现为 `deepseek-chat`（环境变量 `REVIEWER_MODEL` 可覆盖），原文"默认 claude-sonnet-4-6"已过时。
 
-| 包 | 含并发原语的非测试文件数 | 原清单是否覆盖 |
+## 决策三：lint 规则扫描根接回 internal/（原 ADR-0089 决策一）
+
+- 事实：`pkg/*`→`internal/*` 迁移后 `internal/lint` 有 8 条规则（5 条守 HE-2：污点 `.Content()` 审计、SSRF、裸 `net.Dial`、FFI 边界）仍扫 `pkg/`，1189 个文件从未被检查；`NoRawDBExecWriteInGateway` 的根目录已不存在而静默通过；4 个豁免表共 24 键全指向旧路径。**豁免失配与规则空转互相掩盖**。
+- 决策：`walkPkgGoFiles` 更名 `walkRepoGoFiles` 并遍历 `internal/`+`pkg/`（改名是决策的一部分：旧名是空转载体）；直接 `filepath.Walk` 的规则改走 `walkDirsErr(root, []string{"internal","pkg"}, ...)`；豁免表按现址重建，**豁免表为空是正确状态**。
+- 接回后暴露的真实违规（FFI 边界 74 处合法入豁免表；storage 层外持 `*sql.DB` 3、Gateway 裸 DB 写 2、遗留 DEBUG 打印 1）已修复。
+- 触发条件（包路径迁移后必查，除 `make docs-refs` 外）：`internal/lint` 各规则扫描根字面量；`internal/lint/testdata/*.json` 豁免键仍 `os.Stat` 得到。
+
+## 决策四：裸 error 判定按 err 来源收窄（原 ADR-0089 决策二）
+
+- `Test_inv_BareErrorReturnRatchet` 只在 err 来自**标准库/三方调用**时报违规。本仓被调方按 `pkg/apperr` 约定自行包装，调用点再包一层只得 apperr 套 apperr；且旧规则文本要求的 `fmt.Errorf`/`errors.Wrap` 与 CLAUDE.md "禁裸 `fmt.Errorf` 泄漏调用链"直接冲突。
+- 作用域限最内层函数体；`err` 为该函数形参则跳过（`filepath.WalkFunc`、sql 事务闭包是把错误交还框架）。
+- 106 条 baseline 溯源：104 条本仓调用、1 条库调用、1 条无法定位；收窄后全仓零违规，`internal/lint/testdata/bare_error_return_baseline.json` 为空（债务清零，非重新接受）。已验证非空转：注入 `os.ReadFile` + `return err` 稳定被捕获。
+- 删除 `cmd/gen_bare_error_baseline`（持有并行判定副本，且"一键接受全部违规"是空 baseline 与空转规则共存的原因）；需重建档时以规则失败输出为清单。
+- 触发条件：`pkg/apperr` 不再要求被调方自行包装时，本决策失效，恢复全量判定。
+
+## 决策五：失效路径门控扩展到 .go 注释（原 ADR-0089 决策三）
+
+- `make docs-refs` 原只覆盖 `docs/*.md`+`CLAUDE.md`，`.go` 注释攒下 139 处失效引用（docs/arch 重命名 41、`pkg/*` 残留、`interfaces.go` 拆分后遗留）。
+- 新增 `tools/comment_refs.go`，由 `scripts/docs-refs.sh` 串联，与文档侧共用 `tools/baselines/docs-refs-allowlist.txt`。用 Go 而非 shell：注释路径无反引号定界，需"前一字符非 `/`/单词字符"回溯判断（BSD grep 无 `-P`）。
+- 刻意不报四类：URL 片段、Go 符号点记法、白名单条目、非顶层目录开头的相对路径。白名单只收"记载历史"的合法引用；白名单膨胀是规则失准的症状，须收紧规则而非扩白名单。（门控全貌见 ADR-0081）
+
+## 决策六：覆盖清单改全仓 / 并入 check-all（原 ADR-0091 决策一~三）
+
+- **race 全仓**：`make test` 默认 `-race -count=1 -shuffle=on` 覆盖 `./internal/... ./cmd/... ./pkg/...`，`test-race` 为别名（specs 09 引用）。原 7 目录清单自称"并发高发区"，实测并发原语密度前三（`internal/gateway` 33、`internal/llm` 23、`internal/extension` 18）一个都不在内；"race 慢 5-10x"理由不成立（包间并行，全仓墙钟约 100s 增量）。扩面零 DATA RACE，仅暴露低并行度掩盖的脆弱死线（`TestPool_Acquire_StartsKernelRunLoop` 3s→15s）。触发条件：全仓 race 墙钟 >10 分钟成瓶颈才谈裁剪，且裁剪必须带"凭什么这么裁"的机械校验，不得退回手维护清单。
+- **fuzz 入 check-all**：`fuzz-taint`、`fuzz-skill` 守 Taint 五级传播（HE-2）与 Skill 校验管线，不能靠"偶尔想起来"；现 `check-all` 含二者。
+- **docs-refs 不设 `-maxdepth`**：原 `-maxdepth 3` 恰好卡在最深的 `internal/gateway/server/CLAUDE.md`，"刚好够用"与"已经失效"在 CI 输出上无法区分（`scripts/docs-refs.sh` 现已去除）。
+
+## 决策七：门控落地必须带负向自测（CLAUDE.md §新增/修改门控规则）
+
+- `tools/*_lint.go` / `tools/*_check.go` 须在 `tools/lint-selftest.txt` 登记负向用例并使 `make lint-selftest` 通过（注入违规→报红→还原→转绿）；未经负向验证的规则不算 landed。判定由门控做，不接受自述。
+- 覆盖面盲区实证（2026-08-13）：`tools/safe_dialer_lint.go` 曾漏 `net/smtp` 全族（EmailAdapter SSRF 旁路，P0；现已覆盖 `smtp.SendMail`/`smtp.Dial`）；`tools/route_coverage_check.go` 曾未比对路由 `{param}` 与 handler `PathValue` 键集（`checkPathValueConsistency` 已补）；`tools/taint_typed_fields_check.go` 曾未覆盖赋值点写死常量（污点硬编码降级，P1）。
+- 审核闭环自 2026-08-12 起由 `make review-check` 门控（审核方禁读报告、修复方必须读正文，误报下降）。
+
+## 未改动项（复查确认健康）
+
+- `errcheck_enforced_dirs.json`：未覆盖的 `pkg/*` 包有明确排除理由与接入触发条件，可作为覆盖清单"被认真管过"的参照。
+- `deadcode` 入口 `./cmd/polaris/...`（`cmd/` 仅此一个入口）；`internal/lint/testdata/*.json` 僵尸键 0。
+
+## 反例守护
+
+- golangci baseline 锁定既有违规 — 规则空转 — 2026-05-16
+- 重提 `funlen` — 须证明 `gocyclo` 存在其无法覆盖的真实漏检 — 2026-07-04
+- reviewer 给详细 fix 建议 / fail CI on any violation — 信号稀释 / 误报致团队学会绕过 — 2026-05-16
+- 恢复"一键接受当前全部违规"类 baseline 生成工具 — 与空转规则共存 — 2026-08-08
+- 为"看起来在管事"保留空豁免表条目 — 虚假保证 — 2026-08-08
+- 恢复手选目录的覆盖清单 — 漂移源 — 2026-08-09
+
+## 重新评估触发条件
+
+- 审查意见长期零响应（团队学会忽略而非绕过）才重议分级阻断；`wrapcheck`/`gochecknoglobals` 类新规则开启前须先盘点存量，防止大量存量报错淹没信号。
+- 其余触发条件见各决策。
+
+## 沿革
+
+| 日期 | 变更 | 原编号/理由 |
 |---|---|---|
-| `internal/gateway` | 33 | ✗ |
-| `internal/llm` | 23 | ✗ |
-| `internal/extension` | 18 | ✗ |
-| `internal/agent` | 16 | ✓ |
-| `internal/prompt` | ≤2 | ✓ |
+| 2026-05-16 | 决策一、二 | 原 ADR-0013 / ADR-0014 |
+| 2026-07-04 | `funlen` 判定不采用 | 原 ADR-0013 修订 |
+| 2026-08-08 | 决策三~五 | 原 ADR-0089 |
+| 2026-08-09 | 决策六（覆盖面优先） | 原 ADR-0091 |
+| 2026-08-13 | 决策七覆盖盲区三例 | 原 ADR-0091 追记 |
+| 2026-10-12 | 并入 0013/0089；Phase 2 linter 现状、reviewer 默认模型、白名单路径按代码订正 | 文档合并 |
 
-`internal/gateway` 是 SSE 流式推送 + 会话编排 + HTTP 并发处理的所在，密度第一却从未
-被 race detector 扫过。
+## 引用代码
 
-原注释给的理由是「race detector 慢 5-10x，仅针对并发高发区」——**实测不成立**：
-包之间并行，全仓 106 包墙钟 97~164s，比原清单只多约 100s。
-
-故直接改为 `./internal/... ./cmd/... ./pkg/...`，**删掉清单等于删掉漂移源**。
-
-### 后果边界
-
-- 扩面后全仓 107 包通过、0 DATA RACE——**没有掩盖中的竞态**，此前的盲区是运气好。
-- 但扩面立刻暴露一处 flaky：`TestPool_Acquire_StartsKernelRunLoop` 的 3s 死线在
-  并行包数从 7 涨到 106 后兜不住调度抖动（同文件的姊妹用例本来就用 15s，3s 是离群值）。
-  已对齐为 15s。这不是新缺陷，是**低并行度掩盖了脆弱的死线**——与 commit 9587503
-  （SendIntent 3s → 5s）同因。
-- **重新评估触发条件**：若全仓 race 墙钟超过 10 分钟而成为 CI 瓶颈，再谈按目录裁剪；
-  裁剪时必须同时留下「凭什么这么裁」的机械校验，不能再退回手维护清单。
-
-## 决策二：`fuzz-taint` / `fuzz-skill` 并入 `check-all`
-
-两个 target 一直存在，但从未进入 `check-all`——只能靠人手动想起来跑。它们守的是
-Taint 五级传播（HE-2 的密码学可验证边界）与 Skill 校验管线，恰恰是最不该
-靠「偶尔想起来」的两处。三个 fuzz 目标合计约 90s，实跑均 RC=0。
-
-## 决策三：`docs-refs` 去掉 `-maxdepth 3`
-
-扫描 `internal/*/CLAUDE.md` 时限定 `-maxdepth 3`，而现存最深的
-`internal/gateway/server/CLAUDE.md` 恰好就在第 3 层——**刚好够用**。再多一层子包
-就会被静默漏掉，且「扫描面刚好够用」和「扫描面已经失效」在 CI 输出上长得一模一样。
-去掉深度限制。
-
-## 未改动项（复查后确认健康）
-
-- `errcheck_enforced_dirs.json`：151 个含 `.go` 的包目录覆盖 145 个，未覆盖的 6 个
-  全是 `pkg/*`，且文件内有明确的排除理由与「将来出现真实 IO 路径需一并接入」的触发
-  条件。这是覆盖清单**被认真管过**的样子，可作为其它清单的参照。
-- `deadcode` 入口 `./cmd/polaris/...`：`cmd/` 下仅 `polaris` 一个入口，覆盖完整。
-- 全部 16 个 `internal/lint/testdata/*.json`：僵尸键 0。
-
-> 2026-08-13 补充：本论的「馈评-修复闭环」已自 2026-08-12 起全面远行，该论的“颈评方禁读报告”与“修复方必须读正文”互掖约束已确认减少误报
-> 
-> 2026-08-13 追记：本轮修复（2026-08-13）再次发现了三个「门控覆盖面存在盲区」的实证（各对应一个 P0/P1/P2 缺陷）：
-> 1. `tools/safe_dialer_lint.go` 覆盖了 `net.Dial`、`http.Get`、`grpc.Dial` 等，但**漏了 `net/smtp` 全族**，导致 `EmailAdapter` 出现 SSRF 旁路（GR-10-004, P0）。
-> 2. `tools/route_coverage_check.go` 比对了 handler 注册与实现，但**未比对**路由模式中的 `{param}` 与 handler 内 `r.PathValue("<key>")` 的键集合，导致 `TogglePluginMCP` 路由参数名不匹配而恒 400（GR-9-003, P2）。
-> 3. `tools/taint_typed_fields_check.go` 校验了结构体字段类型的合法性，但**未覆盖**赋值点直接写死常量的情况，导致 `BuildReflectContext` 发生污点硬编码降级（GR-4-002, P1）。
-> 
-> 这些实证进一步支撑了本 ADR 的核心观点：门控全绿不等于没有问题，仅代表门控未看见。
+`.golangci.yml`、`Makefile`（`check-all`/`test`/`test-race`/`lint-selftest`/`deadcode`）、`tools/lint-selftest.txt`、`tools/safe_dialer_lint.go`、`tools/route_coverage_check.go`、`tools/taint_typed_fields_check.go`、`tools/comment_refs.go`、`tools/baselines/docs-refs-allowlist.txt`、`scripts/docs-refs.sh`、`scripts/constitutional_review.sh`、`.github/workflows/ci.yml`、`.github/workflows/constitutional-review.yml`、`internal/lint/inv_lint_test.go`、`internal/lint/testdata/bare_error_return_baseline.json`、`internal/lint/testdata/errcheck_enforced_dirs.json`

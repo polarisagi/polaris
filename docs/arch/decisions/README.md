@@ -10,7 +10,7 @@
 > 决策（5 份：互补技术选型、SSoT+其验证测试、CI 门禁批次、同管线纵深防线、控制流基础决策
 > +其后续治理路线）——同一模块的多份"生产接线/新增模式/阶段性加固"系列 ADR、以及正文
 > 互相引用（取代/补充/推翻/互补/前置条件）的 ADR 合入单一锚点文件，用"决策一/决策二/…"
-> 分节承载，不再各自独立成文件。
+> 分节承载，不再各自独立成文件。2026-10-12 第四轮：59 份 → 32 份（按主题合并 27 份，存活文件以「旧引用映射」表承接代码注释里的旧「ADR-xxxx 决策N」）。
 >
 > **编号不重排**：文件被合并删除后原编号永久留空，不做序号压缩整理。理由：（1）编号本身
 > 不承载语义，只是分配顺序标记，稀疏不影响检索——README 索引表与文件名前缀已是唯一入口；
@@ -56,67 +56,39 @@ ADR 被代码引用时，源文件头部加：
 | 编号 | 标题 | 状态 | 日期 |
 |------|------|------|------|
 | 0001 | observability 一等公民指标使用包级全局变量（R1.3 豁免） | Accepted | 2026-05-16 |
-| 0002 | skill 子包内本地接口/类型消除（R1.4 合规） | Accepted（已执行完毕） | 2026-05-16 |
-| 0003 | 主存储引擎选型合集（modernc/sqlite 主持久化 + SurrealDB 认知检索轴，含原 ADR-0010） | Accepted | 2026-05-16 |
-| 0004 | Tier-0 8GB 内存硬上限 + Hardware Tier 解锁机制 | Accepted | 2026-05-16 |
-| 0006 | state.yaml SSoT + 一致性回归测试合集（含原 ADR-0012） | Accepted | 2026-05-16 |
-| 0007 | TaintLevel 五级 + 只升不降 + Sanitizer 受控降级（含原 ADR-0045/0047） | Accepted | 2026-05-16 |
-| 0008 | Sandbox 与代码安全防线合集（三级基座 + Logic Collapse L3 + L4 长驻进程池 + 三层代码安全防线，含原 ADR-0024/0026/0078/0079） | Accepted | 2026-05-16 |
-| 0009 | KillSwitch 熔断与恢复合集（三阶段熔断 + 进程内活恢复模型，含原 ADR-0072/0073） | Accepted | 2026-05-16 |
-| 0011 | purego（零 CGO）FFI 桥接合集（含原 ADR-0005/0030/0034/0063，含 Tree-sitter 例外） | Accepted（已执行） | 2026-05-16 |
-| 0013 | CI 质量门禁合集（lint 机械化 Phase 1 + 对抗审查 GitHub Action，含原 ADR-0014） | Accepted（已执行完毕） | 2026-05-16 |
-| 0016 | 扩展/插件系统治理合集（统一信任模型 + Codex 特性集成 + 安装/升级生命周期，含原 ADR-0015/0019/0075） | Accepted | 2026-05-21 |
-| 0017 | MCP 传输层与协同架构合集（Streamable HTTP + TaintPreservingDecoder + A2A 战略方向，含原 ADR-0018/0070） | Accepted / Proposed | 2026-05-21 |
-| 0020 | LLM Provider 选型与推理路由合集（DeepSeek V4 默认 + ThinkingMode 三档，含原 ADR-0022） | Accepted | 2026-06-08 |
+| 0003 | 主存储引擎选型（modernc/sqlite 主持久化 + SurrealDB 认知检索轴） | Accepted | 2026-05-16 |
+| 0004 | Tier-0 内存地板 + Hardware Tier 解锁机制 | Accepted | 2026-05-16 |
+| 0006 | state.yaml SSoT + 一致性回归测试 | Accepted | 2026-05-16 |
+| 0007 | TaintLevel 五级 + 只升不降 + Sanitizer 受控降级 | Accepted | 2026-05-16 |
+| 0008 | Sandbox 与代码安全防线（三级基座 + Logic Collapse L3 + L4 长驻池 + 三层代码审计） | Accepted | 2026-05-16 |
+| 0009 | KillSwitch 三阶段熔断 + 进程内活恢复 | Accepted | 2026-05-16 |
+| 0011 | purego（零 CGO）作为 Go→Rust FFI 桥接方式 | Accepted（已执行） | 2026-05-16 |
+| 0020 | LLM Provider 选型、推理路由与上下文溢出/spill 故障语义 | Accepted | 2026-06-08 |
 | 0021 | 核心机制实现（SurpriseIndex / ScriptTester / BM25 / FSM） | Accepted | 2026-06-09 |
-| 0025 | 全局架构审查与系统加固综合档案（含原 ADR-0027/0028/0029/0038） | Accepted | 2026-06-14 |
-| 0031 | TTS 三路 Provider 架构（Edge / HTTP / Sherpa） | Accepted | 2026-06-27 |
-| 0033 | M05 记忆子系统架构决策合集（写路径 + 范围限制 + 容量压缩，含原 ADR-0023/0035/0036/0060） | Accepted | 2026-06-13 |
-| 0042 | Gateway 交互式提案合集：HITL AskUser 咨询闭环 + Generative UI SSE（含原 ADR-0043） | Proposed（均未实现） | 2026-07-11 |
-| 0046 | internal/execute 模块创建 + 编排模式演进（模式9 PatternDAG / 模式10 StateGraph / 模式11 Debate-Critic，含原 ADR-0037/0041/0080） | Implemented | 2026-07-13 |
-| 0048 | M9 自进化引擎生产接线合集（含原 ADR-0049/0054/0055/0056/0058） | Accepted（已执行） | 2026-07-14 |
-| 0062 | 死代码治理：判定方法论 + `make deadcode` 门控（含原 ADR-0050/0051/0052/0053/0061） | Accepted（已执行） | 2026-07-22 |
-| 0065 | S_REPLAN 扩展激活重试与降级标记 | Accepted（已执行，回填） | 2026-07-23 |
-| 0066 | Gateway 治理合集（控制权移交 FSM + SQL 下沉 + Egress 收紧 + Channel 适配器重构 + ChatOrchestrator 拆分路线，含原 ADR-0039/0064/0067） | Accepted / Proposed | 2026-07-08 |
-| 0068 | 开放基准适配器架构（τ-bench/Terminal-Bench） | Accepted（已执行） | 2026-07-23 |
-| 0069 | OpenLLMetry 轨迹导出器架构 | Accepted（已执行） | 2026-07-23 |
-| 0071 | downloader 出站公网豁免（XR-06） | Accepted（已执行） | 2026-07-23 |
-| 0076 | 崩溃恢复回放驱动器 + Task Checkpoint + Outbox 幂等修复合集（含原 ADR-0057/0059） | Accepted（已执行） | 2026-07-22 |
-| 0077 | M5↔M10 桥接与实体/关系抽取统一（推翻原 ADR-0074 §3 结论，含原 ADR-0074） | Accepted（已执行） | 2026-07-23 |
-| 0081 | 架构文档结构治理（`make docs-refs` 门控 + M07/M13 拆分暂缓，含原 ADR-0044） | Accepted（门控部分已实施）/ Deferred（拆分） | 2026-07-28 |
-| 0082 | MemFS：扩展 core_memory_edit 实现显式可编程记忆块 | Accepted（已执行） | 2026-08-02 |
-| 0083 | 双时态知识图谱：关系边时态化 + AsOf 视图 | Accepted（已执行） | 2026-08-02 |
-| 0084 | MCP A2A：复用 transfer_to_agent 挂起机制补齐出站跨框架委派 | Accepted（已执行） | 2026-08-02 |
-| 0085 | 抽取 SessionOrchestrator 领域层收敛会话生命周期编排 | Accepted（已执行） | 2026-08-01 |
-| 0086 | Handoff 唤醒事件化 + 崩溃后无损续跑快照 | Accepted（已执行） | 2026-08-01 |
-| 0087 | 降级必须显式：cedarLeaks 时间窗 + PII LRU 分区回收 + 沙箱可信来源 opt-in | Accepted（已执行） | 2026-08-01 |
-| 0088 | Saga 补偿收敛单一 SSoT + 令牌 claim 兑现 + 工作区上下文信任模型 + HITL 自适应降级 + 跨 Agent Saga 协调 + 检索强化遗忘 | Accepted（已执行） | 2026-08-06 |
-| 0089 | lint 规则扫描根接回 internal/ + 裸 error 判定按来源收窄 + 失效路径门控扩展到 .go 注释 | Accepted（已执行） | 2026-08-08 |
-| 0090 | 注释里的设计名与代码名：不做符号门控，改为要求实现处锚定 | Accepted（已执行） | 2026-08-09 |
-| 0091 | 审计门控的覆盖面而非结果：test-race 改全仓、fuzz 并入 check-all、docs-refs 去 maxdepth | Accepted（已执行） | 2026-08-09 |
-| 0092 | docs/ 与提示词的读者定位：AI 优先，reformat（人类可读性）方向视为已驳回 | Accepted（已执行） | 2026-08-09 |
-| 0093 | M12 Eval Harness 评测隔离层设计（2026-08-09 由 0051 改号，原编号与已删除 ADR 撞号，见该文件顶部改号说明） | Accepted | 2026-07-28 |
-| 0094 | Fail-Closed 安全判定与生命周期锚定 Lint 门控 | Accepted | 2026-08-09 |
-| 0095 | 自动更新供应链信任模型（cosign 固定密钥签名）与 Schema 降级门控 | Accepted | 2026-08-10 |
-| 0096 | 桌面版/命令行版形态：守护进程 + 薄客户端，Tauri v2 外壳（含无证书分发、安装布局与本地令牌） | Proposed | 2026-09-21 |
-| 0097 | 项目（Project）模型：会话运行上下文容器，绑定工作目录，信任下沉，记忆项目隔离（规范，未实施） | Accepted | 2026-09-21 |
-| 0098 | Agent 回合输出通道分离（Effect Audience，零值 Internal）与 S_RESPOND 回复合成态；Perceive 结构化路由直答；对话历史进入内核 | Accepted | 2026-09-25 |
-| 0099 | Embedding 调度：High/Low 独立通道、Low 批上限、下游调用有界、Embedder 接口携带 ctx | Accepted | 2026-09-25 |
-| 0100 | DeepSeek Harness 设计评审：上下文溢出是请求侧故障（容量感知 failover、不计熔断、Agent 确定性修剪一次重试）；执行结果 spill 统一到 read_tool_ref 可取回通道、首尾保留截断 | Accepted | 2026-09-25 |
-| 0101 | Token 消耗治理：Curriculum 受开关门控、记忆蒸馏每回合一次、分阶段思考档位与后台关闭思考、系统提示词稳定层/易变层分消息、工具 schema 只下发一次、llm_calls 逐次记账、日常调用走便宜档模型 | Accepted | 2026-09-25 |
-| 0102 | Token 经济增量（基于 ADR-0101）：零 LLM 寒暄快路 + 短确认精简感知；规划便宜池先行、失败再升级（ThinkingMode 去污点输入，修订 ADR-0020 决策二）；缓存稳定前缀（Anthropic 多断点、SysEnv 去易变量）；回合调用数压缩（Proposed） | Accepted | 2026-09-25 |
-| 0103 | 扩展体系对齐 OpenAI / Anthropic 双标准：技能 / 连接器 / 插件三分类，删除独立 App 类型（Codex 应用 = 插件内连接器绑定）；插件清单三格式归一化（agent-plugins 1.0 / .claude-plugin / .codex-plugin）；hooks 统一 hooks.json 模型且安装≠信任；双市场格式；MCP 2026-07-28（修订 ADR-0016 决策二/三） | Accepted | 2026-09-26 |
-| 0104 | State-in-DB 补齐：启动期孤儿运行对账、工作流断点续跑入口、session_todos、预算以 llm_calls 为账本、hitl_requests、subagent_runs/planner_sessions 写入、session_trajectory 取代 KV 轨迹并派生学习状态、PII 快照独立表、统一 consumer_cursors | Accepted | 2026-09-29 |
-| 0105 | Token 经济第三批：缓存优先五层前缀账本（修复稳定层 map 乱序）、历史只追加分块跳窗、Provider 缓存接线、召回预算与回合内复用、Provider 调用用途/思考档位门控、确定性后台调用精确缓存、错峰调度、用量可见性 | Proposed | 2026-09-29 |
-| 0106 | 语音 STT/TTS 修复：外部资产坐标契约化（audio-nettest）、sherpa FFI ABI 版本钉死、默认 int8、消除静默兜底、TTS Provider 携带 MIME（Edge 改 MP3，追记 ADR-0031）、STT 资产状态机与退避重试 | Accepted | 2026-10-01 |
-| 0107 | 语音 v2：本地离线 STT（SenseVoice int8）+ 服务端 TTS（Kokoro fp32）、按需下载 + 懒加载/空闲卸载、最低配置门控（STT 2GB/2 核，TTS 4GB/4 核，RTF>0.7 不支持）、前端系统语音兜底；取代 ADR-0106 的 Edge/precision/启动期下载部分，取代 ADR-0031 | Accepted | 2026-10-02 |
-| 0108 | 语音 v3：后台串行预置、抗 CPU 争用基准门控与前端单一进度指示；取代 ADR-0107 决策 3 与反例守护第一条 | Accepted | 2026-10-02 |
-| 0109 | 本地推理默认关闭：向量化改用独立的进程内 ONNX 嵌入器（默认 EmbeddingGemma-300M，弱 CPU 降 bge-small-zh），llama-server/Ollama 仅显式配置启用；删除 Embedding 内存阶梯与本地对话 Provider 自动注册；取代 ADR-0062 Tier1 embedding 选型部分 | Proposed | 2026-10-02 |
-| 0110 | 语音 v4：MeloTTS 取代 Kokoro，语音按硬件三档开放（A 极低配全关；B <3600MB 只开 STT；C ≥3600MB STT+Melo），Melo 须 max_num_sentences=100 并服务端分句，基准指纹含模型名，过慢回系统语音；下载前 SenseVoice 代理测速（修订三）省去弱 CPU 的 167MB 白下，B 档原因码 tts_ram_tier；Matcha 因训练数据许可证链路不可核验被删除（2026-10-08 修订）；取代 ADR-0107 决策 1(TTS)/2(TTS 门槛)/6 | Accepted | 2026-10-08 |
-| 0111 | 跨节点委派：Polaris 之间走 MCP 门面（复用 ADR-0084 a2a_delegate 契约，新增 spawn_depth/chain），外部互通走 A2A 1.0 入站（a2a-go/v2）；对端令牌与 admin 分离，HITL 仅本地 | Accepted | 2026-10-12 |
+| 0025 | 全局架构审查与系统加固综合档案 | Accepted | 2026-06-14 |
+| 0033 | M05 记忆子系统架构决策合集（写路径、范围限制、核心记忆与 MemFS、时序检索、热路径压缩） | Accepted | 2026-06-13 |
+| 0046 | internal/execute 模块 + 编排模式演进（模式9 PatternDAG / 模式10 StateGraph / 模式11 Debate） | Implemented | 2026-07-13 |
+| 0048 | M9 自进化引擎生产接线合集 | Accepted（已执行） | 2026-07-14 |
+| 0062 | 死代码治理 — 判定方法论 + `make deadcode` 门控 | Accepted（已执行） | 2026-07-22 |
+| 0066 | Gateway 治理 | Accepted / Proposed | 2026-07-08 |
+| 0081 | 文档与注释治理：失效引用门控、设计名锚定、AI 优先读者、拆分暂缓 | Accepted（门控部分已实施）/ Deferred（拆分） | 2026-07-28 |
+| 0083 | 知识图谱：M5↔M10 桥接与抽取统一、关系边双时态化与 AsOf 视图 | Accepted（已执行） | 2026-08-02 |
+| 0087 | Fail-Closed 与禁止静默降级：通用规则、三个降级实例、八条判定规则与 Lint 门控 | Accepted（已执行） | 2026-08-01 |
+| 0088 | Saga 补偿单一 SSoT + 三项对标差距的处置边界 | Accepted（已执行） | 2026-08-06 |
+| 0091 | 质量门控治理：覆盖面优先、扫描根、负向自测 | Accepted（已执行） | 2026-08-09 |
+| 0093 | Eval 评测隔离、基准适配器与轨迹导出 | Accepted | 2026-07-28 |
+| 0095 | 自动更新供应链信任模型与 Schema 降级门控 | Accepted | 2026-08-10 |
+| 0096 | 桌面版/命令行版形态——守护进程 + 薄客户端，外壳用 Tauri v2 | Proposed | 2026-09-21 |
+| 0097 | 项目（Project）模型——会话的运行上下文容器，绑定工作目录，情景记忆项目隔离 | Accepted | 2026-09-21 |
+| 0098 | Agent 回合控制流：输出通道分离、S_RESPOND、重规划闭环与扩展激活降级 | Accepted | 2026-09-25 |
+| 0103 | 扩展体系：OpenAI / Anthropic 双标准（技能 / 连接器 / 插件）、统一信任模型、MCP 传输 | Accepted | 2026-09-26 |
+| 0104 | 崩溃恢复与 State-in-DB：回放、断点续跑、Outbox 幂等、Handoff 续跑快照、运行记录对账 | Accepted | 2026-09-29 |
+| 0105 | Token 经济：后台门控、分档思考与模型池、五层前缀账本、召回单一管线、调用门控与用量账本 | Accepted | 2026-09-25 |
+| 0109 | Embedding 与本地推理：进程内 ONNX 嵌入器默认、本地推理显式启用、调度有界 | Proposed | 2026-10-02 |
+| 0110 | 语音 STT/TTS：资产契约、按需预置与硬件三档 | Accepted | 2026-10-08 |
+| 0111 | 跨 Agent 与跨节点委派：出站 a2a_delegate、Polaris 间 MCP 门面、外部 A2A 1.0 | Accepted | 2026-10-12 |
 
 
-> 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 
@@ -125,10 +97,10 @@ ADR 被代码引用时，源文件头部加：
 | 0005 | purego（零 CGO）作为 Go→Rust FFI 桥接方式（原始设计决策） | ADR-0011 | 2026-07-28 |
 | 0010 | SurrealDB（Rust FFI 嵌入式）作为认知检索轴 | ADR-0003 | 2026-07-28 |
 | 0012 | state.yaml ↔ Go 代码一致性回归测试设计 | ADR-0006 | 2026-07-28 |
-| 0014 | 对抗审查 GitHub Action（执行带 3） | ADR-0013 | 2026-07-28 |
-| 0015 | Codex 特性集成 | ADR-0016 | 2026-07-28 |
-| 0018 | MCP Transport 用 TaintPreservingDecoder | ADR-0017 | 2026-07-28 |
-| 0019 | extension_instances 统一安装实例表 | ADR-0016 | 2026-07-28 |
+| 0014 | 对抗审查 GitHub Action（执行带 3） | ADR-0091（经 ADR-0013） | 2026-07-28（转手合并 2026-10-12） |
+| 0015 | Codex 特性集成 | ADR-0103（经 ADR-0016） | 2026-07-28（转手合并 2026-10-12） |
+| 0018 | MCP Transport 用 TaintPreservingDecoder | ADR-0103（经 ADR-0017） | 2026-07-28（转手合并 2026-10-12） |
+| 0019 | extension_instances 统一安装实例表 | ADR-0103（经 ADR-0016） | 2026-07-28（转手合并 2026-10-12） |
 | 0022 | ThinkingMode 三档路由取代 BestOfN/MCTS | ADR-0020 | 2026-07-28 |
 | 0023 | episodic 写路径双轨制 | ADR-0033 | 2026-07-28 |
 | 0024 | GovernanceAgent 代码安全三层防线 | ADR-0008 | 2026-07-28 |
@@ -145,7 +117,7 @@ ADR 被代码引用时，源文件头部加：
 | 0039 | Gateway 控制权移交 FSM（废除 MVP 直通模式） | ADR-0066 | 2026-07-28 |
 | 0040 | 受控循环图执行器（CyclicGraphExecutor，未落地草案） | ADR-0046 | 2026-07-22（转手合并 2026-07-28） |
 | 0041 | StateGraphExecutor（显式状态图编排，编排模式10） | ADR-0046 | 2026-07-28 |
-| 0043 | Generative UI SSE 集成（结构化组件渲染） | ADR-0042 | 2026-07-28 |
+| 0043 | Generative UI SSE 集成（结构化组件渲染） | ADR-0066（经 ADR-0042） | 2026-07-28（转手合并 2026-10-12） |
 | 0044 | M7 模块边界拆分（GD-13-002）暂缓 | ADR-0081 | 2026-07-28 |
 | 0045 | 保留五级污点传播（GD-13-004 否决 / GD-14-003 采纳） | ADR-0007 | 2026-07-28 |
 | 0047 | taint_sanitizer 二级降级接入 S_VALIDATE | ADR-0007 | 2026-07-28 |
@@ -158,22 +130,49 @@ ADR 被代码引用时，源文件头部加：
 | 0054 | DriftDetector 漂移响应编排器接线 | ADR-0048 | 2026-07-28 |
 | 0055 | `/steer` 激活引导命令面接线 | ADR-0048 | 2026-07-28 |
 | 0056 | QLoRA/PRM 训练样本采集 + 批次触发流水线 | ADR-0048 | 2026-07-28 |
-| 0057 | M04 §8 崩溃恢复回放驱动器 | ADR-0076 | 2026-07-28 |
+| 0057 | M04 §8 崩溃恢复回放驱动器 | ADR-0104（经 ADR-0076） | 2026-07-28（转手合并 2026-10-12） |
 | 0058 | SICCleaner LLM 检测器接线 | ADR-0048 | 2026-07-28 |
-| 0059 | Outbox 幂等键唯一性修复 | ADR-0076 | 2026-07-28 |
+| 0059 | Outbox 幂等键唯一性修复 | ADR-0104（经 ADR-0076） | 2026-07-28（转手合并 2026-10-12） |
 | 0060 | M4 ContextWindowManager 热路径压缩接入 | ADR-0033 | 2026-07-28 |
 | 0061 | 2026-07-22 deadcode 复核（47 项） | ADR-0062 | 2026-07-28 |
 | 0063 | llama_infer 控制面/计算面分离 | ADR-0011 | 2026-07-28 |
 | 0064 | Channel 适配器注册表重构 + 统一入站分发接线 | ADR-0066 | 2026-07-28 |
 | 0067 | Gateway God Class 拆分（ChatOrchestrator） | ADR-0066 | 2026-07-28 |
-| 0070 | MCP Agent-to-Agent (A2A) 协同架构 | ADR-0017 | 2026-07-28 |
+| 0070 | MCP Agent-to-Agent (A2A) 协同架构 | ADR-0103（经 ADR-0017） | 2026-07-28（转手合并 2026-10-12） |
 | 0072 | KillSwitch 恢复路径统一（内容与 ADR-0073 重复） | ADR-0009 | 2026-07-23（转手合并 2026-07-28） |
 | 0073 | KillSwitch 恢复路径统一（进程内活恢复模型） | ADR-0009 | 2026-07-28 |
-| 0074 | Semantic(M5) 与 GraphRAG(M10) 最小整合桥接 | ADR-0077 | 2026-07-28 |
-| 0075 | Extension Upgrade Versioning | ADR-0016 | 2026-07-28 |
+| 0074 | Semantic(M5) 与 GraphRAG(M10) 最小整合桥接 | ADR-0083（经 ADR-0077） | 2026-07-28（转手合并 2026-10-12） |
+| 0075 | Extension Upgrade Versioning | ADR-0103（经 ADR-0016） | 2026-07-28（转手合并 2026-10-12） |
 | 0078 | Sandbox-L4-Persistent 接线到位、后端诚实留空 | ADR-0008 | 2026-07-25（转手合并 2026-07-28） |
 | 0079 | Sandbox-L4-Persistent 改用长驻解释器进程池 | ADR-0008 | 2026-07-28 |
 | 0080 | 新增 Debate/Critic 编排模式（GD-6） | ADR-0046 | 2026-07-28 |
+| 0002 | skill 子包内本地接口/类型消除（R1.4 合规） | ADR-0103 | 2026-10-12 |
+| 0013 | CI 质量门禁合集（lint 机械化 Phase 1 + 对抗审查 GitHub Action，含原 ADR-0014） | ADR-0091 | 2026-10-12 |
+| 0016 | 扩展/插件系统治理合集（统一信任模型 + Codex 特性集成 + 安装/升级生命周期，含原 ADR-0015/0019/0075） | ADR-0103 | 2026-10-12 |
+| 0017 | MCP 传输层与协同架构合集（Streamable HTTP + TaintPreservingDecoder + A2A 战略方向，含原 ADR-0018/0 | ADR-0103 | 2026-10-12 |
+| 0031 | TTS 三路 Provider 架构（Edge / HTTP / Sherpa） | ADR-0110 | 2026-10-12 |
+| 0042 | Gateway 交互式提案合集：HITL AskUser 咨询闭环 + Generative UI SSE（含原 ADR-0043） | ADR-0066 | 2026-10-12 |
+| 0065 | S_REPLAN 扩展激活重试与降级标记 | ADR-0098 | 2026-10-12 |
+| 0068 | 开放基准适配器架构（τ-bench/Terminal-Bench） | ADR-0093 | 2026-10-12 |
+| 0069 | OpenLLMetry 轨迹导出器架构 | ADR-0093 | 2026-10-12 |
+| 0071 | downloader 出站公网豁免（XR-06） | ADR-0066 | 2026-10-12 |
+| 0076 | 崩溃恢复回放驱动器 + Task Checkpoint + Outbox 幂等修复合集（含原 ADR-0057/0059） | ADR-0104 | 2026-10-12 |
+| 0077 | M5↔M10 桥接与实体/关系抽取统一（推翻原 ADR-0074 §3 结论，含原 ADR-0074） | ADR-0083 | 2026-10-12 |
+| 0082 | MemFS：扩展 core_memory_edit 实现显式可编程记忆块 | ADR-0033 | 2026-10-12 |
+| 0084 | MCP A2A：复用 transfer_to_agent 挂起机制补齐出站跨框架委派 | ADR-0111 | 2026-10-12 |
+| 0085 | 抽取 SessionOrchestrator 领域层收敛会话生命周期编排 | ADR-0066 | 2026-10-12 |
+| 0086 | Handoff 唤醒事件化 + 崩溃后无损续跑快照 | ADR-0104 | 2026-10-12 |
+| 0089 | lint 规则扫描根接回 internal/ + 裸 error 判定按来源收窄 + 失效路径门控扩展到 .go 注释 | ADR-0091 | 2026-10-12 |
+| 0090 | 注释里的设计名与代码名：不做符号门控，改为要求实现处锚定 | ADR-0081 | 2026-10-12 |
+| 0092 | docs/ 与提示词的读者定位：AI 优先，reformat（人类可读性）方向视为已驳回 | ADR-0081 | 2026-10-12 |
+| 0094 | Fail-Closed 安全判定与生命周期锚定 Lint 门控 | ADR-0087 | 2026-10-12 |
+| 0099 | Embedding 调度：High/Low 独立通道、Low 批上限、下游调用有界、Embedder 接口携带 ctx | ADR-0109 | 2026-10-12 |
+| 0100 | DeepSeek Harness 设计评审：上下文溢出是请求侧故障（容量感知 failover、不计熔断、Agent 确定性修剪一次重试）；执行结果 spill | ADR-0020 | 2026-10-12 |
+| 0101 | Token 消耗治理：Curriculum 受开关门控、记忆蒸馏每回合一次、分阶段思考档位与后台关闭思考、系统提示词稳定层/易变层分消息、工具 schema 只 | ADR-0105 | 2026-10-12 |
+| 0102 | Token 经济增量（基于 ADR-0101）：零 LLM 寒暄快路 + 短确认精简感知；规划便宜池先行、失败再升级（ThinkingMode 去污点输入，修订 | ADR-0105 | 2026-10-12 |
+| 0106 | 语音 STT/TTS 修复：外部资产坐标契约化（audio-nettest）、sherpa FFI ABI 版本钉死、默认 int8、消除静默兜底、TTS Pr | ADR-0110 | 2026-10-12 |
+| 0107 | 语音 v2：本地离线 STT（SenseVoice int8）+ 服务端 TTS（Kokoro fp32）、按需下载 + 懒加载/空闲卸载、最低配置门控（STT | ADR-0110 | 2026-10-12 |
+| 0108 | 语音 v3：后台串行预置、抗 CPU 争用基准门控与前端单一进度指示；取代 ADR-0107 决策 3 与反例守护第一条 | ADR-0110 | 2026-10-12 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 

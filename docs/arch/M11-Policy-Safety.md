@@ -2,8 +2,7 @@
 
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
-> 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:233 Cedar / 4:301 KillSwitch / 5:379 隐私 / 6:452 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:479 Factuality / 7:505 审计 / 8:529 多Agent宪法 / 9:565 威胁监控 / 13:579 降级 / 14:611 跨模块契约 / 15:630 任意文件读 / 16:639 流式安全防护 -->
+<!-- §跳读: 0:9 职责 / 0-ter:42 不变量速查 / 1:55 三层宪法 / 2:76 Taint / 3:204 Cedar / 4:268 KillSwitch / 5:336 隐私 / 6:396 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:421 Factuality / 7:447 审计 / 8:471 多Agent宪法 / 9:503 威胁监控 / 13:517 579 降级 / 14:549 611 跨模块契约 / 15:565 630 任意文件读 / 16:573 639 流式安全防护 -->
 
 ---
 
@@ -13,17 +12,13 @@
 |-----------|-------------|
 | 策略评估引擎（allow/deny/redact） | 业务逻辑实现者 |
 | Capability Token 签发与撤销中心（短寿命 Ed25519） | 长期凭据持有者 |
-| 沙箱分级规则定义（Sbx-L1/L2/L3 判定依据: TrustTier + RiskLevel） | 沙箱执行器（那是 M7 wazero/gVisor），沙箱选型由 M7 ToolRegistry 指定 |
+| 沙箱分级规则定义（Sbx-L1/L2/L3 判定依据: TrustTier + RiskLevel） | 沙箱执行器（那是 M7 Wasmtime/bwrap/Seatbelt），沙箱选型由 M7 `AssignSandboxTier` 决定 |
 | 污点标签传播规则（Taint 5 级 + PropagateTaint） | 污点数据存储者（那是 M2 events/chunks 表 TaintLevel 列） |
 | 安全事件审计源（内存 HashChain 防篡改 + DB（Database，数据库） 永久化存档） | 通用业务日志（那是 M3） |
 | KillSwitch 阶段变迁的唯一触发者 | KillSwitch 响应执行（M4/M8/M13 各自响应） |
 | SafeDialer 统一网络出口（DNS + CIDR + TOCTOU） | 具体网络协议实现（那是 Go 标准库 net.Dialer） |
 
-M11 与 M3/M12 的分工:
-- **M3** 看到一切发生（原始事实）
-- **M12** 评判做得对不对（质量）
-- **M11** 决定能不能做（权限/安全）
-三者事件流互通（都写 EventLog，topic 不同），但互不替代。
+M11 与 M3/M12 的分工：M3 看到一切发生（原始事实）、M12 评判做得对不对（质量）、M11 决定能不能做（权限/安全）；三者事件流互通（都写 EventLog，topic 不同），互不替代。
 
 ### 五条防线（纵深防御）
 
@@ -32,8 +27,8 @@ M11 与 M3/M12 的分工:
 | # | 防线 | 机制 | 守护对象 | 物理锚点 |
 |---|------|------|---------|---------|
 | **D1** | 数据污点追踪 | Taint 5 级 + Slot 物理分离 | 输入 | `internal/security/` |
-| **D2** | 能力令牌 | 短寿命 Ed25519 + 最小权限 + 委托链 ≤3 | 权限 | `internal/security/token/capability_token.go` |
-| **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(Rust 脚本沙箱) / L3(平台原生 microVM: Linux Firecracker / macOS VZ / Windows WSL2，gVisor 仅作 Linux KVM 不可用 fallback) | 执行 | `internal/sandbox/sandbox_impl.go` |
+| **D2** | 能力令牌 | 短寿命 Ed25519 + 最小权限（任务派生深度 ≤3 由 M8 `MaxSpawnDepth` 强制；Token 委托链机制已移除，M7 §4.6） | 权限 | `internal/security/token/capability_token.go` |
+| **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(Rust 脚本沙箱) / L3(平台原生 microVM: Linux Firecracker / macOS VZ / Windows WSL2，gVisor 仅作 Linux KVM 不可用 fallback；现状 ContainerSandbox 经 Rust bwrap/Seatbelt，M7 §4.1) | 执行 | `internal/sandbox/sandbox_impl.go` |
 | **D4** | 宪法分层 | Layer 1(编译期常量) / 2(Cedar forbid) / 3(Cedar permit) / 4(多 Agent) | 决策 | `internal/security/` |
 | **D5** | Kill Switch + Audit | 三阶段 FSM（Finite State Machine，有限状态机） + hash chain 仅追加 | 系统 | `internal/security/` |
 | **D6** | [FactualityGuard] | 引用核验 + 数值一致性 + 抽样 LLM（Large Language Model，大语言模型）-as-Judge | **输出真实性** | `internal/security/` |
@@ -59,29 +54,22 @@ M11 与 M3/M12 的分工:
 
 ## 1. 三层宪法架构
 
-**Layer 1 不可侵犯条款 — 编译期常量**:
-- `AuditLogAlwaysOn = true`
-- `KillSwitchEndpoint = "/_admin/kill"`
-- `SelfModificationGuard = true`
-- **TestInviolableConstants 编译期验证**: 上述常量若移除或置 false → 编译/测试失败
+**Layer 1 不可侵犯条款 — 编译期常量**: `AuditLogAlwaysOn = true`、`KillSwitchEndpoint = "/_admin/kill"`、`SelfModificationGuard = true`。**TestInviolableConstants** 编译期验证：上述常量若移除或置 false → 编译/测试失败。
 
-**L4 运行时启动期保护**: 
-M11 进程启动后第一时间计算核心安全相关源码目录及文件（包括 M4 Agent Kernel 的 `internal/agent/`、`internal/security/`、`internal/sandbox/`、`internal/protocol/immutable_core.go`、`internal/protocol/schema/` 等）的当前 SHA-256 哈希集合，并与构建时通过 ldflags 注入（或 go:embed 静态绑定）在二进制文件内的权威 manifest 进行比对。若哈希值不一致（表明运行时源码已被篡改），则触发 fail-closed 拒绝启动并生成 CRITICAL 级别的审计日志。`internal/protocol/interfaces_*.go` 定义安全关键接口（SafeDialer/Cedar-Gate/TaintLevel/Blackboard），`schema/` 定义 EventLog DDL——两者是安全链的契约基础，篡改即整个安全模型失效。
+**L4 运行时启动期保护**: M11 进程启动后第一时间计算核心安全源码目录及文件（`internal/agent/`、`internal/security/`、`internal/sandbox/`、`internal/protocol/immutable_core.go`、`internal/protocol/schema/` 等）的当前 SHA-256 哈希集合，与构建时经 ldflags 注入（或 go:embed 绑定）的权威 manifest 比对；不一致（运行时源码被篡改）→ fail-closed 拒绝启动 + CRITICAL 审计。`internal/protocol/interfaces_*.go`（SafeDialer/Cedar-Gate/TaintLevel/Blackboard 安全接口）与 `schema/`（EventLog DDL）是安全链契约基础，篡改即整个安全模型失效。
 
-**额外防御**: 禁止 `internal/swarm/` 路径下使用 `unsafe` / `reflect.Value.UnsafePointer` / CGO（CI lint 强制）；进程启动期 `SetGCPercent` + `SetMemoryLimit` 锁定 runtime 参数，禁止运行时通过 reflect 修改。关键二进制可选 TPM/Secure Enclave 锚定（Tier 2+ 选配）。
+**额外防御**: 禁止 `internal/swarm/` 下使用 `unsafe` / `reflect.Value.UnsafePointer` / CGO（CI lint 强制）；启动期 `SetGCPercent` + `SetMemoryLimit` 锁定 runtime 参数，禁止运行时经 reflect 修改。关键二进制可选 TPM/Secure Enclave 锚定（Tier 2+ 选配）。
 
 **Layer 2 硬约束 — Cedar forbid (无条件优先 permit)**:
 - **forbid**: 不可逆操作未经审批 → `resource.tool_name in [deploy_to_production, delete_data, send_external_communication, financial_transaction] AND context.approval_status != "approved"`
 - **forbid**: LLM 生成代码执行特权操作 → `principal in Role::"Agent" AND resource.source == "llm_generated" AND resource.risk_level == "privileged"`
-- **forbid**: 预算硬上限 → `context.monthly_spend_usd > context.monthly_budget_usd` (所有 principal/action/resource 无条件)
-- **forbid**: Holdout Set 读取隔离 → `principal in Role::"Agent" AND action in [Action::"read_local", Action::"read_file"] AND resource.path.startsWith(context.polaris_eval_holdout_path)`
-  - *说明*: `context.polaris_eval_holdout_path` 由 Go 侧在策略加载时注入（展开后的绝对路径，等价于 `~/.polaris/eval/holdout/`）。`ci_gate` role 不受此 forbid 限制（CI/Canary 需要读取 Holdout Set）。此规则为防御纵深——物理隔离层（WASI 沙箱 + Openat2 `RESOLVE_IN_ROOT`）已阻止逃逸，Cedar 规则覆盖 Host Function 层可能的访问向量。
+- **forbid**: 预算硬上限 → `context.monthly_spend_usd > context.monthly_budget_usd`（所有 principal/action/resource 无条件）
+- **forbid**: Holdout Set 读取隔离 → `principal in Role::"Agent" AND action in [Action::"read_local", Action::"read_file"] AND resource.path.startsWith(context.polaris_eval_holdout_path)`。`context.polaris_eval_holdout_path` 由 Go 侧策略加载时注入（展开后的绝对路径，等价 `~/.polaris/eval/holdout/`）；`ci_gate` role 不受限（CI/Canary 需读 Holdout）。防御纵深——物理隔离层（WASI 沙箱 + Openat2 `RESOLVE_IN_ROOT`）已阻止逃逸，Cedar 覆盖 Host Function 层可能的访问向量。
 
-**Layer 3 软约束 — Cedar permit + conditions**:
+**Layer 3 软约束 — Cedar permit + conditions**（可热更新，无需重启）:
 - **permit**: 只读工具 → `trust_level >= 1`
 - **permit**: 本地写入 → `trust_level >= 2 AND resource.allowed_paths 包含 context.target_path`
-- **permit**: 网络操作 → `trust_level >= 3 AND context.approval_status == "approved" AND context.capability_token_valid`
-> 可热更新, 无需重启
+- **permit**: 网络操作 → `trust_level >= 3 AND context.approval_status == "approved" AND context.capability_token_valid`（`gate_builtin_rules.go` 三条件均检查）
 
 ---
 
@@ -91,16 +79,14 @@ M11 进程启动后第一时间计算核心安全相关源码目录及文件（�
 
 TaintLevel/TaintedString/SafeString/TaintSource/PropagateTaint 类型定义见 `internal/security/`。
 
-四重防护说明：
-
 | 防护层 | 机制 | 执行位置 |
 |-------|------|---------|
-| 第一重：编译期类型断裂 | `TaintedString` 与 `SafeString` 内容字段均不导出；`PromptBuilder.WriteInstruction` 仅接受 `SafeString`，`TaintedString` 无法直接进入 Instruction Slot | 编译期 Go 类型系统强制 |
-| 第二重：CI 静态分析 | `go-vet taint_enforcement` 扫描：taint 包外构造裸 `SafeString`、包外访问 `TaintedString.content`、`string` 直传 `WriteInstruction` 均报 ERROR | CI 门控，PR 拒绝 |
-| 第三重：持久化边界密码学验证 | SQL/JSON/Protobuf 序列化层附加 HMAC-SHA256（`persistent_key` OS（Operating System，操作系统） Keychain 派生），反序列化时重算验证；验证失败或字段缺失 → 强制 `TaintHigh` + CRITICAL 审计；启动顺序 `CredentialVault.Init() → StorageFabric.Open()`，超时 30s 进程退出 | 运行时序列化钩子 |
-| 第四重：泛型反序列化防剥离 | 禁止 `json.Unmarshal` 到 `map[string]interface{}` / `any` 等弱类型集合；外部 JSON 须反序列化到显式声明的带污点结构体 | CI go-vet lint 强制 |
+| 第一重：编译期类型断裂 | `TaintedString` 与 `SafeString` 内容字段均不导出；`PromptBuilder.WriteInstruction` 仅接受 `SafeString`，`TaintedString` 无法直接进入 Instruction Slot | 编译期 Go 类型系统 |
+| 第二重：CI 静态分析 | `go-vet taint_enforcement`：taint 包外构造裸 `SafeString`、包外访问 `TaintedString.content`、`string` 直传 `WriteInstruction` 均报 ERROR | CI 门控，PR 拒绝 |
+| 第三重：持久化边界密码学验证 | SQL/JSON/Protobuf 序列化层附加 HMAC-SHA256（`persistent_key` 由 OS Keychain 派生），反序列化重算验证；失败或字段缺失 → 强制 `TaintHigh` + CRITICAL 审计；启动顺序 `CredentialVault.Init() → StorageFabric.Open()`，超时 30s 进程退出 | 运行时序列化钩子 |
+| 第四重：泛型反序列化防剥离 | 禁止 `json.Unmarshal` 到 `map[string]interface{}` / `any` 等弱类型；外部 JSON 须反序列化到显式声明的带污点结构体 | CI go-vet lint |
 
-**ZoneExternalCatalog 信任分区**：`internal/prompt.PromptBuilder` 在 `ZoneImmutable`/`ZoneCoreMemory`/`ZoneMutableSkill`/`ZoneTaintedData`（详见 M05 §2.1）之外新增 `ZoneExternalCatalog` 分区，专门承载"来自外部但已知结构化程度较高"的内容（如 MCP Server/A2A 目录描述）。与 `ZoneImmutable`/`ZoneCoreMemory` 不同——这两者结构性禁止承载 `>= TaintMedium` 内容（`WriteInstruction` 编译期只接受 `taint.SafeString`）——`ZoneExternalCatalog` **允许**承载 `TaintMedium`/`TaintHigh` 内容，但 `WriteExternalCatalog` 对此类内容强制 M11 Spotlighting 包裹（`=== UNTRUSTED_DATA_{sha256}... ===`，见 M05 §2.1）。二者是同一份 Zone 维度隔离机制里的不同分区职责，不是 `internal/security/taint` 的 PromptSlot（LLM 请求维度槽位模型）——两套维度正交，不互相引用（防包循环，见 `taint_gate.go` 顶部注释）。
+**ZoneExternalCatalog 信任分区**: `internal/prompt.PromptBuilder` 在 `ZoneImmutable`/`ZoneCoreMemory`/`ZoneMutableSkill`/`ZoneTaintedData`（M05 §2.1）之外设 `ZoneExternalCatalog`，承载"外部但结构化程度较高"的内容（MCP Server/A2A 目录描述）。前两者结构性禁止承载 `>= TaintMedium`（`WriteInstruction` 只接受 `taint.SafeString`）；`ZoneExternalCatalog` **允许** `TaintMedium`/`TaintHigh`，但 `WriteExternalCatalog` 强制 M11 Spotlighting 包裹（`=== UNTRUSTED_DATA_{sha256}... ===`，M05 §2.1）。Zone 维度与 `internal/security/taint` 的 PromptSlot（LLM 请求维度）正交，不互相引用（防包循环，见 `taint_gate.go` 顶部注释）。
 
 ### 2.2 辅助防线 (OWASP LLM Top 10 2025 防护)
 
@@ -172,55 +158,40 @@ Taint 统计监控: [SurpriseIndex] gauge taint.high_ratio, 超阈值告警不�
 四种清洗方式:
 
 **SanitizeBySchema**:
-- 条件: 数据通过预定义 JSON Schema 校验
-- 结果: `data.Level = min(Level-1, TaintMedium)`
-- 字符串字段附加约束: 仅当字段定义了 format / pattern / enum / const 时允许降级；裸 `{"type":"string"}` 不降级。数值/布尔/受限枚举字段不受此限制。
-- 嵌套结构: 任一深层子节点为无约束裸 string → 整个父结构不可整体降级（`[Taint-Prop] max(inputs)`）。
-- 审计: 每次降级写 audit_log，标注依据（format_guard / pattern_guard / enum_guard / const_guard / type_only）。
+- 条件: 数据通过预定义 JSON Schema 校验；结果: `data.Level = min(Level-1, TaintMedium)`
+- 字符串字段附加约束: 仅当字段定义了 format / pattern / enum / const 时允许降级；裸 `{"type":"string"}` 不降级；数值/布尔/受限枚举字段不受此限
+- 嵌套结构: 任一深层子节点为无约束裸 string → 整个父结构不可整体降级（`[Taint-Prop] max(inputs)`）
+- 审计: 每次降级写 audit_log，标注依据（format_guard / pattern_guard / enum_guard / const_guard / type_only）
 
 **SanitizeBySummarization**:
-- 条件: LLM 对 tainted 数据做摘要
-- 结果: `data.Level = max(min(Level-1, TaintMedium), TaintMedium)`
-- 硬地板: TaintMedium, 摘要永不进入 instruction slot
-- M4 Layer A 豁免: 系统自生成摘要 (`source='compaction'/'persona_refinement'/'consolidation'/'skill_compilation'`) 标记 TaintMedium 但不参与 `ActiveContext.TaintLevel` 计算
+- 条件: LLM 对 tainted 数据做摘要；结果: `data.Level = max(min(Level-1, TaintMedium), TaintMedium)`
+- 硬地板 TaintMedium，摘要永不进入 instruction slot
+- M4 Layer A 豁免: 系统自生成摘要（`source='compaction'/'persona_refinement'/'consolidation'/'skill_compilation'`）标记 TaintMedium 但不参与 `ActiveContext.TaintLevel` 计算
 
 **SanitizeByUserReview**:
-- 条件: 用户 `/approve` 命令确认
-- 结果: `data.Level = TaintUserReviewed`, `ApprovedBy = "user"`
-
-  > 2026-09-25 追记：交互对话中由 S_VALIDATE L1_taint 拦截触发（`CheckpointTaintReview`），以对话内审批卡片代替 `/approve` 命令；凭证为按节点参数字节哈希铸造的 TaintExemptionToken（ExemptionVault，每 Agent 多枚）。TaintMedium write_network 拦截同样适用。见 ADR-0098 决策十。
+- 条件: 用户 `/approve` 命令确认；结果: `data.Level = TaintUserReviewed`, `ApprovedBy = "user"`
+- 交互对话中由 S_VALIDATE L1_taint 拦截触发（`CheckpointTaintReview`），以对话内审批卡片代替 `/approve`；凭证为按节点参数字节哈希铸造的 TaintExemptionToken（ExemptionVault，每 Agent 多枚）；TaintMedium write_network 拦截同样适用（ADR-0098 决策十）
 
 **SanitizeByDeterministicTransform**:
-- 条件: 数据经纯函数转换
-- 结果: `data.Level = min(Level-1, TaintMedium)`
+- 条件: 数据经纯函数转换；结果: `data.Level = min(Level-1, TaintMedium)`
 - 白名单: `base64.DecodeString`, `hex.DecodeString`, `strconv.*`, `url.Parse + QueryUnescape`, `gzip.NewReader`, crypto hash (`SHA-256/BLAKE3`)
 - 禁止: `strings.Join/+=`, `text/template`, `regexp.ReplaceAll`, `exec.Command`
-- `json.Unmarshal` 不降级: 所有 string 字段完全继承输入字节流的原始 TaintLevel
+- `json.Unmarshal` 不降级：所有 string 字段完全继承输入字节流的原始 TaintLevel
 
-**内容层注入检测（`ScanInjectionPatterns`）** — 与结构层 Taint 正交的第二道防线：
-  实现见: `internal/security/`
-  触发位置: `SanitizeToSafe` 内部，结构层（Level 检查）通过后，TaintLevel == TaintLow 时执行。
-  设计原则: 结构层（Taint Level）保证"来源可溯"，内容层（注入扫描）防止"受信源的恶意内容"绕过类型边界。
+**内容层注入检测（`ScanInjectionPatterns`）** — 与结构层 Taint 正交的第二道防线（`internal/security/taint/taint_sanitizer.go`）：结构层保证"来源可溯"，内容层防止"受信源的恶意内容"绕过类型边界。
 
-  `SanitizeToSafe` 执行两阶段防护：第一阶段（结构层）检查 TaintLevel，`TaintLevel > TaintLow` 且非 `TaintUserReviewed` 时直接拒绝；第二阶段（内容层）对 `TaintLevel == TaintLow` 的内容执行 `ScanInjectionPatterns`，命中任意高置信度注入模式则拒绝，未命中才构造 `SafeString{}`。
+`SanitizeToSafe` 两阶段：① 结构层——`TaintLevel > TaintLow` 且非 `TaintUserReviewed` 直接拒绝；② 内容层——对 `TaintLevel == TaintLow` 内容执行 `ScanInjectionPatterns`，命中任意高置信度模式则拒绝，未命中才构造 `SafeString{}`。`TaintNone`（进程内常量/模板）豁免扫描避免模板误报；`TaintUserReviewed`（人类已审查）绕过内容层直接构造 SafeString。（门控证据：`taint_sanitizer_test.go` TestSanitizeToSafe_ContentScanReachable；扫描收敛到 TaintLow 是因为只有 None/Low/UserReviewed 能进入第二阶段。）
 
-  `ScanInjectionPatterns` 规则集（16 条，OWASP LLM01 常见间接注入手法）：
-  - 角色覆盖: `ignore previous instructions` / `ignore all previous` / `disregard previous` / `forget your instructions`
-  - 人格劫持: `you are now` / `act as if you are` / `pretend you are`
-  - 系统角色注入: `system:` / `<system>` / `[system]`
-  - Markdown 指令注入: `### instruction` / `## new instruction` / `[inst]`
-  - Token 边界注入: `</s>` / `<|im_start|>` / `<|im_end|>`
+规则集（16 条，OWASP LLM01 常见间接注入手法，无正则、高置信度）:
+- 角色覆盖: `ignore previous instructions` / `ignore all previous` / `disregard previous` / `forget your instructions`
+- 人格劫持: `you are now` / `act as if you are` / `pretend you are`
+- 系统角色注入: `system:` / `<system>` / `[system]`
+- Markdown 指令注入: `### instruction` / `## new instruction` / `[inst]`
+- Token 边界注入: `</s>` / `<|im_start|>` / `<|im_end|>`
 
-  扫描在 Unicode 归一化的小写文本上执行（折叠空白 + toLower），防止大小写/空格变体绕过。
-  假阳性设计原则: 扫描只在 `TaintLevel == TaintLow` 启用（进程内常量/模板 TaintNone 不扫描），且均为高置信度模式（无正则），最大限度减少误报。
+扫描在 Unicode 归一化的小写文本（折叠空白 + toLower）上执行，防大小写/空格变体绕过。
 
-  > 2026-09-19 复核（GR-2.1-001）：原文写作"第二阶段对 `>= TaintMedium` 扫描、TaintNone/TaintLow 不扫描"，与第一阶段"`> TaintLow` 直接拒绝"互斥——能进入第二阶段的只有 None/Low/UserReviewed，扫描物理不可达，第二道防线形同虚设。按本节设计原则"防止受信源的恶意内容"，受信源即 TaintLow（`受信内部数据`），故扫描收敛到 TaintLow；TaintNone 仍豁免以避免系统模板误报。门控证据：`taint_sanitizer_test.go` TestSanitizeToSafe_ContentScanReachable。
-  `TaintUserReviewed` 来源绕过内容层扫描（人类已审查），直接构造 SafeString。
-
-  **与 Spotlighting 的分工**（§2.2）：
-  - Spotlighting: 运行时防护，将不可信数据用 `=== UNTRUSTED_DATA ===` 围栏包裹后注入 Prompt，防止 LLM 将其解析为指令。
-  - ScanInjectionPatterns: 边界防护，在数据转变为 SafeString 的最后一步阻断已知注入特征，确保含高置信度注入指令的内容不能以 SafeString 形态进入任何 Instruction Slot。
-  两者形成"注入到达 Prompt 前"（内容扫描）与"注入到达 Prompt 后"（Spotlighting）双重防线。
+**与 Spotlighting 的分工**（§2.2）：Spotlighting 是运行时防护（`=== UNTRUSTED_DATA ===` 围栏，防 LLM 将数据解析为指令，"注入到达 Prompt 后"）；ScanInjectionPatterns 是边界防护（数据转为 SafeString 的最后一步阻断已知注入特征，"到达 Prompt 前"）。两者构成双重防线。
 
 ### 2.6 Agent Identity
 
@@ -234,9 +205,8 @@ Taint 统计监控: [SurpriseIndex] gauge taint.high_ratio, 超阈值告警不�
 
 Cedar: Rust 核心, CGO-Free FFI (purego) (<70ns overhead), <1ms 评估延迟, deny-by-default + forbid-overrides-permit + 形式化验证 (Lean)。CI 包含 Cedar FFI fuzz 测试。
 
-> **已修复（Cedar FFI 降级可观测性）**：`gate.go` 第 434 行 FFI 失败时已输出 `slog.WarnContext(ctx, "cedar ffi failed, degrading to go rules", "error", err)`，降级路径可观测。`polaris_cedar_degraded_total` Counter 已实现：`internal/observability/metrics/metrics.go` 定义该 Counter，`internal/security/policy/gate.go` 超时路径与 FFI 报错路径均已埋点 `metrics.GlobalCedarDegradedTotal.Add(1)`。
-
-> **✅ 已修复（gate.go goroutine 泄漏）**：`IsAuthorized` 超时后新增 `cedarLeaks` 原子计数器追踪泄漏 goroutine；累计 ≥5 次时联动 KillSwitch Stage 1，使运营可感知并兜底；泄漏 goroutine 最终在 Cedar FFI 返回后自行退出（buffered channel 不阻塞）。Rust 侧 `cedar_evaluate` 已配套引入 timeout_ms 参数以从根本消除阻塞（✅ 已实现）。
+- **降级可观测性**: FFI 失败时 `gate.go` 输出 `slog.WarnContext("cedar ffi failed, degrading to go rules")`，并埋点 `polaris_cedar_degraded_total` Counter（`internal/observability/metrics/metrics.go`，`internal/security/policy/gate.go` 超时与 FFI 报错路径均计数）。
+- **goroutine 泄漏兜底**: `IsAuthorized` 超时后 `cedarLeaks` 原子计数追踪泄漏 goroutine，累计 ≥5 次联动 KillSwitch Stage 1；泄漏 goroutine 在 Cedar FFI 返回后自行退出（buffered channel 不阻塞）；Rust 侧 `cedar_evaluate` 配套 timeout_ms 参数从根本消除阻塞。
 
 **Cedar FFI Failure Mode 表**:
 | 失败场景 | 行为 | 审计 |
@@ -246,7 +216,7 @@ Cedar: Rust 核心, CGO-Free FFI (purego) (<70ns overhead), <1ms 评估延迟, d
 | Evaluate 超时 (>500ms) | deny + 增加 `polaris_cedar_timeout_total` Counter | WARN |
 | 连续 10 次 Evaluate 失败 | KillSwitch Stage 1 THROTTLE | CRITICAL |
 
-> Go 侧 Gate 默认配额超时为 `defaultEvalTimeout = 500ms`（`internal/security/policy/gate.go:41`）；10ms 仅为 FFI 内部传递超时值为空时的兜底保护下限（`gate.go:336`），不是常规运行超时。
+Go 侧 Gate 默认超时 `defaultEvalTimeout = 500ms`（`internal/security/policy/gate.go`）；10ms 仅为 FFI 内部传递超时值为空时的兜底下限，不是常规运行超时。
 
 ### 3.1 Cedar 策略结构
 
@@ -254,22 +224,19 @@ Cedar: Rust 核心, CGO-Free FFI (purego) (<70ns overhead), <1ms 评估延迟, d
 - **read_only**: `trust_level >= 1` → permit
 - **write_local**: `trust_level >= 2 AND allowed_paths` 含 `target_path` → permit
 - **write_network**: `trust_level >= 3 AND approval == "approved" AND cap_token_valid` → permit
-  - *附加 TaintLevel 约束*: `write_network` 工具调用参数中任一 `[TaintLevel] >= [Taint-Medium]` → forbid (需经 SanitizeByUserReview 降至 TaintLow 或 TaintUserReviewed 后方可放行)
-  - *附加配额约束 (OWASP LLM06 Excessive Agency 防护)*: Capability Token 必须包含 `MaxCallsPerTask` 维度（如单工具上限 50 次），杜绝无限制死循环代理。
+  - *TaintLevel 约束*: 工具调用参数中任一 `[TaintLevel] >= [Taint-Medium]` → forbid（需经 SanitizeByUserReview 降至 TaintLow 或 TaintUserReviewed 后方可放行）
+  - *配额约束 (OWASP LLM06 Excessive Agency)*: Capability Token 必须含 `MaxCallsPerTask` 维度（如单工具上限 50 次），杜绝无限制死循环代理
 
-**trust_level 数据来源**（插件/MCP 场景）:
-`skill_sources.trust_tier` / `mcp_servers.trust_tier` 在 Cedar 评估上下文注入为 `trust_level`；
-值由 `builtinCatalog` 白名单决定，安装时固化，请求方不可覆盖（ADR-0016（Architecture Decision Record，架构决策记录））。
-运行时的 `write_network` 等危险操作评估，由 `trust_level` 结合全局 `permission_mode` 共同决断：
-- `full_access` 模式：TrustTier ≥ 2 自动通过。
-- `auto_review` 模式：TrustTier ≥ 3 自动通过，TrustTier = 2 需 `approval=="approved"`（HITL 补签）。
-- `default` 模式：所有外部扩展的危险操作强制需 `approval=="approved"`（HITL 补签）。
-- TrustTier = 1 时，所有模式均 deny-by-default，强行阻断。
-详见 M13 §8.6 插件安装流程。（**注意**：所有第三方或用户生成的扩展安装必须统一途经 `Manager.InstallExtension`，以确保上述策略被强制下发并执行）。
+**trust_level 数据来源**（插件/MCP）: `skill_sources.trust_tier` / `mcp_servers.trust_tier` 在 Cedar 评估上下文注入为 `trust_level`；值由 `builtinCatalog` 白名单决定，安装时固化，请求方不可覆盖（[ADR-0103](./decisions/ADR-0103-extension-dual-vendor-standard.md)，原 ADR-0016）。`write_network` 等危险操作由 `trust_level` 结合全局 `permission_mode` 决断：
+- `full_access`：TrustTier ≥ 2 自动通过
+- `auto_review`：TrustTier ≥ 3 自动通过，TrustTier = 2 需 `approval=="approved"`（HITL 补签）
+- `default`：所有外部扩展的危险操作强制 `approval=="approved"`
+- TrustTier = 1：所有模式均 deny-by-default
+详见 M13 §8.6。所有第三方或用户生成的扩展安装必须统一途经 `Manager.InstallExtension`，确保上述策略被强制下发。
 
 **硬约束 (forbid 无条件优先)**:
 - `deploy/drop_db/delete_data/send_mass_email AND approval != "approved"` → forbid
-- `monthly_spend > monthly_budget` → forbid (所有 principal/action/resource)
+- `monthly_spend > monthly_budget` → forbid（所有 principal/action/resource）
 - `source == "llm_generated" AND capability == "write_network"` → forbid
 
 ### 3.2 形式化验证
@@ -336,21 +303,11 @@ executePause: 200ms timeout → toolRegistry.StopAllPending
 | [TokenBurnRate] > 10x baseline 30s | 滑动窗口背压熔断 | ~30s |
 | Global DoS Guard (LLM10) | 全局信号量饱和 / Session Bucket 耗尽 | 限流或 Stage 1 |
 
-- **TripleCtrlCGuard**: 3s 滑动窗口计数 SIGINT, `归零/>=3` → `executeFullStop`
-- **KILLSWITCHFileWatch**: fsnotify 监视 `~/.polaris/KILLSWITCH`, 存在 → `executeFullStop`, 删除后恢复
-- **AdminKillEndpoint**（2026-07-24 复核修正，此前文档误述为"仅 127.0.0.1/::1、无认证"，与
-  `internal/gateway/server/sysadmin/admin_killswitch.go` `HandleKill` 实际逻辑不符）：
-  鉴权规则由 `middleware_auth.go` 统一处理，与其余路由一致——未配置 `POLARIS_API_KEY` 时仅回环 IP
-  可匿名访问，配置后任意 IP 携带正确 Key 即可访问；`HandleKill` 本身只检查 `authCtx.UserID != ""`，
-  不区分 admin 与普通认证用户，也不做独立 IP 白名单。这是有意的不对称设计（fail-safe）：**触发停止
-  的门槛刻意放低**（任何已认证身份都能拉下紧急制动，倾向"宁可错停不可漏停"），**恢复的门槛刻意抬高**
-  （`/_admin/unseal` 要求 `UserID == "admin"`，见下一行），二者不应等同看待。POST → `executeFullStop`；
-  未认证 → 403。
-- **BurnRateFuse**: 订阅 M3 `polaris_token_burn_rate` Gauge (CANONICAL SOURCE) → 当 `EMA_30s > baseline.P95 × 10.0` 持续 30s `[Window-Burst-30s]` → `executeFullStop`。计算逻辑由 M3 单源持有，M11 不独立采样。M3 暴露专用 Counter `polaris_token_burn_stage3_triggered_total`，KillSwitch 从该 Counter 边沿驱动。
-- **Global DoS Guard** (OWASP LLM10 Model DoS 防护): 两层遏制——
-  1. 全局信号量: 全系统并发 LLM 调用上限（Tier 0=4）
-  2. Session Token Bucket: 单任务/会话请求频次约束
-  超限 → HTTP 429 / 局部排队；持续强刷 → 晋级 KillSwitch Stage 1 (THROTTLE)。
+- **TripleCtrlCGuard**: 3s 滑动窗口计数 SIGINT，`归零/>=3` → `executeFullStop`
+- **KILLSWITCHFileWatch**: fsnotify 监视 `~/.polaris/KILLSWITCH`，存在 → `executeFullStop`，删除后恢复
+- **AdminKillEndpoint**（`internal/gateway/server/sysadmin/admin_killswitch.go` `HandleKill`）：鉴权由 `middleware_auth.go` 统一处理——未配置 `POLARIS_API_KEY` 仅回环 IP 可匿名访问，配置后任意 IP 携带正确 Key 即可；`HandleKill` 只检查 `authCtx.UserID != ""`，不区分 admin 与普通认证用户，不做独立 IP 白名单；未认证 → 403。这是有意的不对称（fail-safe）：**触发停止的门槛刻意放低**（宁可错停不可漏停），**恢复的门槛刻意抬高**（`/_admin/unseal` 要求 `UserID == "admin"`）。
+- **BurnRateFuse**: 订阅 M3 `polaris_token_burn_rate` Gauge (CANONICAL SOURCE) → `EMA_30s > baseline.P95 × 10.0` 持续 30s `[Window-Burst-30s]` → `executeFullStop`。计算由 M3 单源持有，M11 不独立采样；M3 暴露 Counter `polaris_token_burn_stage3_triggered_total`，KillSwitch 从该 Counter 边沿驱动。
+- **Global DoS Guard** (OWASP LLM10): 两层遏制——① 全局信号量：全系统并发 LLM 调用上限（Tier 0=4）；② Session Token Bucket：单任务/会话请求频次约束。超限 → HTTP 429 / 局部排队；持续强刷 → 晋级 KillSwitch Stage 1 (THROTTLE)。
 
 ### 4.4 ESCALATE.md 协议 [ESCALATE]
 
@@ -380,72 +337,59 @@ approval:
 
 ### 5.1 PII 检测与红化 [PIIGuard]
 
-**PIIGuard**:
-- **组件**: PIIDetector (Go 原生正则 + 规则引擎 + 可选 Presidio sidecar) + PIIDesensitizer + PIITokenVault
-- **Tier 0**: Go 原生正则 (<1ms)，覆盖 P0 结构化模式（信用卡/SSN/API（Application Programming Interface，应用程序接口） Key/邮箱/手机/IP）。
-- **Tier 1+**: 显式启用 Presidio sidecar，高精度 NER。`FeatureGate.FeaturePresidioPII` 自动化（≥Tier1 且 ≥512MB free→启用），详见 M03 §5。
+- **组件**: PIIDetector（Go 原生正则 + 规则引擎 + 可选 Presidio sidecar）+ PIIDesensitizer + PIITokenVault
+- **Tier 0**: Go 原生正则 (<1ms)，覆盖 P0 结构化模式（信用卡/SSN/API Key/邮箱/手机/IP）
+- **Tier 1+**: 显式启用 Presidio sidecar（高精度 NER）；`FeatureGate.FeaturePresidioPII`（≥Tier1 且 ≥512MB free→启用），M03 §5
 
-**Tier 0 降级行为契约**: 仅保证结构化 PII 检测；非结构化 PII（姓名/地址/出生日期/雇主/医疗/生物特征/行为画像/家庭关系）不保护，会进 LLM prompt。
-首次进入 PII 场景（开启 Notion/Gmail Connector 等）主动告警："Tier 0 仅基础防护，建议升级 Tier 1+ 启用 Presidio"。
+**Tier 0 降级行为契约**: 仅保证结构化 PII 检测；非结构化 PII（姓名/地址/出生日期/雇主/医疗/生物特征/行为画像/家庭关系）不保护，会进 LLM prompt。首次进入 PII 场景（开启 Notion/Gmail Connector 等）主动告警："Tier 0 仅基础防护，建议升级 Tier 1+ 启用 Presidio"。
 
 **RedactMode**:
-- **RedactBlock**: ⚠️ 未实现（设计保留）。2026-09-20 追记（GR-12-006）：此处原写"含 PII → `ErrPIIDetected`, 阻止执行"，全仓无 `RedactBlock` 模式与 `ErrPIIDetected` 类型，当前 PII 处置仅有下方替换/令牌化与告警两类，调用方不得依赖"检测即阻断"语义
-- **RedactReplace/SessionTokenizer/OpaqueToken**: ✅ 已实现（PIIDesensitizer 格式保留假数据 + PIITokenVault 会话级可逆令牌，二者分工不同，互不替代。PIITokenVault 和崩溃恢复用途的 SessionPIIVault 各自独立）
-  - **PIIDesensitizer 映射回收**（ADR-0087，`internal/security/guard/pii_desensitizer.go`）：original→fake 映射按分区（通常=SessionID）LRU 有界，单分区 `pii_mapping_max_entries=10000` 条、分区数上限 `pii_partition_max_entries=256`（`state.yaml §m11_policy`），取代原无界增长设计（一致性仅在窗口内保证，被淘汰原值再次出现得到新假值）。无 SessionID 时落入 `piiGlobalPartition="global"` 兜底分区，仅受条目数约束，不能被精确回收。
-- **RedactWarn**: 含 PII → warn 日志继续（行为存在，但无同名枚举常量）
+- **RedactBlock**: ⚠️ 未实现（设计保留）——全仓无 `RedactBlock` 模式与 `ErrPIIDetected`，调用方不得依赖"检测即阻断"语义
+- **RedactReplace/SessionTokenizer/OpaqueToken**: ✅ 已实现（PIIDesensitizer 格式保留假数据 + PIITokenVault 会话级可逆令牌，分工不同、互不替代；PIITokenVault 与崩溃恢复用的 SessionPIIVault 各自独立）
+  - **PIIDesensitizer 映射回收**（ADR-0087，`internal/security/guard/pii_desensitizer.go`）：original→fake 映射按分区（通常=SessionID）LRU 有界，单分区 `pii_mapping_max_entries=10000`、分区数上限 `pii_partition_max_entries=256`（`state.yaml §m11_policy`）；一致性仅在窗口内保证，被淘汰原值再出现得新假值。无 SessionID 时落入 `piiGlobalPartition="global"` 兜底分区，仅受条目数约束。
+- **RedactWarn**: 含 PII → warn 日志继续（行为存在，无同名枚举常量）
 
-**PIIGuard 双向防护**: PIIGuard 同时在输入端（M4→M7 工具参数 SecureUnredact 之前）和输出端（M7 ToolResult→EventLog PostExecution Redact，M7 §4.3 Step 5）工作。输入端阻止 PII 进入 LLM Provider，输出端阻止 PII 进入不可变审计轨迹。Tier 0 仅保证结构化 PII 模式检测覆盖两端。
+**PIIGuard 双向防护**: 输入端（M4→M7 工具参数 SecureUnredact 之前）阻止 PII 进入 LLM Provider；输出端（M7 ToolResult→EventLog PostExecution Redact）阻止 PII 进入不可变审计轨迹。Tier 0 仅保证结构化模式两端覆盖。
 
-**SessionPIIVault**（实现：`internal/agent/context/pii_vault.go`）:
-- `Snapshot(ctx, taskID, fields map[string]string)` → 逐字段 AES-256-GCM 加密写入 `task_pii_vault` 表（046，PK=(task_id, field)，TTL=1h）
-- `Load(ctx, taskID)` → 解密返回未过期字段
-- `RestoreFromSnapshot(ctx, taskID)` → 仅校验快照仍在（缺失告警）；恢复后的任务意图取自 tasks 表，全仓无消费方读取快照明文，不再写全局 Scratch
+**SessionPIIVault**（`internal/agent/context/pii_vault.go`）:
+- `Snapshot(ctx, taskID, fields)` → 逐字段 AES-256-GCM 加密写入 `task_pii_vault` 表（046，PK=(task_id, field)，TTL=1h）；`Load` 解密返回未过期字段
+- `RestoreFromSnapshot` → 仅校验快照仍在（缺失告警）；恢复后任务意图取自 tasks 表，无消费方读快照明文，不写全局 Scratch
 - `SecureZero(ctx, taskID)` → `DELETE FROM task_pii_vault WHERE task_id = ?`
+- 边界：PII 字段存独立表 `task_pii_vault`（禁止进入 preferences/任何列表 API，ADR-0104 决策八），TTL 过期行读取时忽略；无 blob 存储需求，不预建 VFS BlobStore 抽象
 
-  当前边界：PII 字段存入独立表 `task_pii_vault`（禁止进入 preferences/任何列表 API，ADR-0104 决策八），TTL 1h 过期行读取时忽略。2026-09-29 订正：此前落 `preferences` 表（key=`pii_vault:{taskID}:{field}`），密文经 `/preferences` 系 API 外露，已迁移。
-  **文档纠正（原"VFS blob 路径存储已实现"为失实表述，已核实并移除死代码）**：此前本节声称 `internal/vfs/provider.go` 的 `BlobStore`（content-addressed `vfs://<hash>` blob 存储）"已作为通用基础设施完整实现"——经代码核实，该接口自始至终没有任何 producer 实现（`vfs.WorkspaceManager` 只有路径寻址的 `WriteFile`/`ReadFile`，没有 `WriteBlob`/`ReadBlob`），且全仓库零消费方，属于纯文档漂移（接口写了、代码从未做）。已删除 `protocol.BlobStore`/`COWProvider`/`VFSFacade`（`internal/protocol/interfaces_vfs.go`）与重复的 `memory.VFSProvider` 定义，不臆造实现（CLAUDE.md 禁止超前抽象）。MutationBus 落盘（`internal/protocol/schema/002_outbox.sql` + M2 §2.3 DatabaseWriter）核实属实、确已实现，与本条无关，PII 侧目前也未走这条路径。PII 字段当前用 AES-256-GCM 加密落 `task_pii_vault` 表（原为 `preferences` 表，ADR-0104 决策八已迁出）+ TTL 1h 过期，规模和生命周期均可控，暂无 blob 存储的现实需求；若未来出现真实需求（如需要存储大体积 PII 相关附件）再按需设计，不预先搭好用不到的接口。
+**OpaqueToken 与 SessionPIIVault 的语义边界**（强度不同，不可互相代替）:
+- **OpaqueToken**（PII 进入 LLM prompt 前替换为占位符，模型只见占位符，事后按需换回，原文全程不落盘）——✅ 已闭环：
+  - **令牌化（输入端）**：`internal/agent/agent_execute_effect.go` 的 `executeEffect` 入口经 `withTaskScopeCtx` 把 `a.sCtx.SessionID`（不是 `TaskID`——SessionID 贯穿会话不变，TaskID 随认领任务变化）注入 `ctx.Value(protocol.CtxTaskIDKey{})`；主路径与 PRM 候选路径组装 `types.Message` 之后、`provider.Infer` 之前，经 `tokenizeMessagesForLLM` 对每条消息 `Content` 做 PII 提取与令牌化；任何提取错误 fail-closed 阻断。
+  - **隔离与清理**：`guard.PIITokenVault` 为 `map[SessionID]map[token]真值` 二维结构，`TokenizeForTask`/`ResolveForTask`/`RestoreForTask` 严格按 SessionID 隔离，**不做跨命名空间回退**——错误 SessionID 还原 fail-closed 拒绝。`agent_lifecycle.go` `handleTerminalState`（回合终态，`Run()` 返回前）调用 `ReleaseTask(a.sCtx.SessionID)`：只保留并登记最近使用，闲置超 6 小时或命名空间总数超 1024 时按最久未用回收；不再每回合 `ClearTask`（否则同一 PII 每回合得新令牌，前缀缓存断开）。`ClearTask` 仍用于显式销毁。
+  - **确定性会话内令牌**（ADR-0105 决策十一）：同一 SessionID 内同一原文（按检测器输出原文精确匹配，不做大小写/空白规范化以免合并不同实体）始终复用同一令牌，由与正向映射同锁、同生命周期的反向映射 `original→token` 实现；跨会话令牌独立随机、不可关联。令牌生成带碰撞检测重试（4 字节熵）。令牌库仅驻内存、不落 `task_pii_vault`，进程重启后重新生成；令牌映射按会话存活。
+  - **还原（输出端）**：`internal/tool/tool.go` `InMemoryToolRegistry.ExecuteTool` 经 `ctx.Value(protocol.CtxTaskIDKey{})` 取同一 SessionID，`RestoreForTask` 精准还原真值，用后即焚。令牌化端与还原端须使用同一命名空间（与 `dag/executor.go` 沿用同一惯例）。
+  - **已知局限**：仅对 `Message.Content` 令牌化；`Message.Parts`（多态结构/多模态）强制文本替换风险高，暂不纳入。
+- **`SessionPIIVault.RestoreFromSnapshot`** 解决的是较弱隔离问题：`Snapshot` 把字段**原文**加密写入 `task_pii_vault`，唯一调用点是 `internal/agent/recovery.go` 的 Provider 熔断恢复（Suspended→Resume），本质是"同会话内原文加密落盘 + 按 taskID 解密"，不涉及占位符替换，也不阻止原文进入 LLM prompt。
 
-  **OpaqueToken 与 SessionPIIVault 的语义边界**：二者是强度不同的两套方案，不能互相等价代替：
-  - **OpaqueToken**（把 PII 在进入 LLM prompt 前替换为占位符 token、模型只见占位符、事后按需把占位符换回原文、原文全程不落盘）——✅ **已完全闭环实现**。
-    - **令牌化（输入端）**：`internal/agent/agent_execute_effect.go` 的 `executeEffect` 入口调用 `withTaskScopeCtx` 把 `a.sCtx.SessionID`（不是 `a.sCtx.TaskID`——二者是不同字段，SessionID 贯穿会话生命周期不变，TaskID 随认领的 Blackboard 任务变化）注入 `ctx.Value(protocol.CtxTaskIDKey{})`；主路径和 PRM 候选路径组装好 `types.Message` 之后、调用 `provider.Infer` 之前，通过 `tokenizeMessagesForLLM` 对每条消息 `Content` 做 PII 提取和令牌化。任何提取错误均按 fail-closed 策略阻断，防止敏感信息流出。
-    - **隔离与清理**：`guard.PIITokenVault` 内部为 `map[SessionID]map[token]真值` 二维结构，`TokenizeForTask`/`ResolveForTask`/`RestoreForTask` 均严格按 SessionID 命名空间隔离，**不做跨命名空间回退查找**——用错误的 SessionID 还原会 fail-closed 拒绝，而不是静默从其它会话的桶里读到值。`agent_lifecycle.go` 的 `handleTerminalState`（回合终态触发，`Run()` 即将返回前）调用 `ReleaseTask(a.sCtx.SessionID)`（2026-09-30 订正：此前调用 `ClearTask`，每回合清空映射，使同一会话下一回合的同一 PII 得到全新令牌、历史/画像/核心记忆前缀缓存断开）：只保留并登记最近使用，闲置超过 6 小时或命名空间总数超过 1024 时按最久未用回收，避免内存泄漏；不影响进程内其它并发会话。`ClearTask` 仍用于显式销毁。
-    - **确定性会话内令牌**（ADR-0105 决策十一）：同一 SessionID 内同一原文（按检测器输出的原文精确匹配，不做大小写/空白规范化以免合并不同实体）始终复用同一令牌，由与正向映射同锁、同生命周期的反向映射 `original→token` 实现（`ClearTask` 一并清除）；跨会话令牌仍独立随机、不可关联。令牌生成带碰撞检测重试（4 字节熵，同会话内存在生日碰撞可能，此前会静默覆盖他人映射）。令牌格式与 `ResolveForTask` fail-closed 语义不变。令牌库仅驻内存、不落 `task_pii_vault`，进程重启后重新生成（此时前缀缓存本就冷启动）；令牌映射按会话存活（跨回合复用），不随回合终态清除。
-    - **还原（输出端）**：在 `internal/tool/tool.go` 的 `InMemoryToolRegistry.ExecuteTool` 内，通过 `ctx.Value(protocol.CtxTaskIDKey{})` 提取同一 SessionID，并使用 `RestoreForTask` 安全精准还原真值，用后即焚。该 ctx 值与 `dag/executor.go` `DAGExecutor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)` 沿用同一仓库既有惯例，保证令牌化端与还原端使用同一 taskID 命名空间。
-    - **已知局限**：目前只会针对 `Message.Content` 进行令牌化保护；`Message.Parts` 中因可能夹杂极其复杂多态的结构与多模态数据，强制文本替换具有高风险性，因此暂不纳入自动令牌化保护层。
-  - **`SessionPIIVault.RestoreFromSnapshot`**（`internal/agent/context/pii_vault.go`）解决的是另一个更弱隔离级别的问题：`Snapshot` 把字段**原文**（非占位符）AES-256-GCM 加密写入 `task_pii_vault` 表，`Load` 按 taskID 解密返回；`RestoreFromSnapshot` 唯一调用点是 `internal/agent/recovery.go` 的 Provider 熔断恢复（Suspended→Resume），现仅校验快照存在（不再写 Scratch，恢复后无消费方），本质是"同会话内原文加密落盘 + 按 taskID 解密"，不涉及跨调用边界的占位符替换/换回，也不阻止原文进入 LLM prompt。
+### 5.2 Credential Vault [CredentialVault]（已实现）
 
-### 5.2 Credential Vault [CredentialVault] 【已实现】
+为兼容 Headless/Docker 等无 GUI 环境，不使用 OS Keychain 抽象，统一采用基于文件/环境变量主密钥的 AES-256-GCM 加密（`internal/security/credential/vault.go`）:
+- **透明加解密**：`SQLiteProviderRepository` 读写 `providers` 表（api_key 列）时经注入的 Vault 自动 `Encrypt`/`Decrypt`
+- **Ciphertext 识别**：密文统一 `v1:` 前缀，兼容旧版明文无缝迁移
+- **接口契约**：不暴露原生 Get/Set/Delete 密钥接口，只提供 `Encrypt(plaintext)` / `Decrypt(cryptoText)` 原语
 
-> 架构变更（2026-07-03）：为了彻底解决 Headless、Docker 等无 GUI 环境的兼容性问题，废除了原定的 OS Keychain 复杂抽象，统一采用基于文件/环境变量的主密钥 AES-256-GCM 加密方案。
+**persistent_key 轮换**: `polaris vault rotate-master-key` → 旧密钥初始化 OldVault、新密钥初始化 NewVault → 遍历 `providers` 表 `Decrypt(old) -> Encrypt(new)` 更新 → 原子替换 `vault.key`。
 
-实现机制 (`internal/security/credential/vault.go`):
-  - **透明加解密**：`SQLiteProviderRepository` 在读写 `providers` 表（api_key 列）时，通过依赖注入的 Vault 实例自动完成 `Encrypt`/`Decrypt`。
-  - **Ciphertext 识别**：密文统一附加 `v1:` 前缀，提供对旧版明文的后向兼容与无缝迁移能力。
-  - **接口契约**：不再对外暴露原生 Get/Set/Delete 密钥接口，而是提供 `Encrypt(plaintext)` 和 `Decrypt(cryptoText)` 原语。
-
-**persistent_key 轮换**:
-- 触发: `polaris vault rotate-master-key`
-- 流程: 读取旧密钥初始化 OldVault，生成新密钥初始化 NewVault；遍历 `providers` 表执行 `Decrypt(old) -> Encrypt(new)` 并更新；最后原子替换 `vault.key` 文件。
-
-**冷启动主密钥（Master Key）决策树**:
-  1. 优先读取 `POLARIS_VAULT_PASSPHRASE` 环境变量（SHA-256 派生 32 字节）。
-  2. 其次读取 `~/.polaris/vault.key`（0600 权限）。
-  3. 如果均不存在，自动生成高熵随机密钥并存入 `vault.key`。
+**冷启动主密钥决策树**: ① `POLARIS_VAULT_PASSPHRASE` 环境变量（SHA-256 派生 32 字节）；② `~/.polaris/vault.key`（0600）；③ 均无 → 自动生成高熵随机密钥存入 `vault.key`。
 
 ### 5.3 local_only 网络沙箱三层防御
 
 双层隔离:
-  - OS 级沙箱（`internal/security/`）: macOS sandbox-exec（已实现）/ Linux Landlock LSM（内核 >=5.13，不可用 fail-closed）/ Windows（`internal/security/network/local_only_windows.go` 已用 `netsh advfirewall` 添加出站阻断规则实现网络隔离层）。**注意区分**：D3 沙箱分级层（`internal/sandbox/native_os_sandbox.go`）的 Windows WSL2 支持仍未实现，此处特指 M11 network local_only 网络隔离层，两者是不同子系统。
-  - Go 层纵深: RoundTripper 替换 no-op transport + DefaultResolver 覆写 NXDOMAIN + Dialer.Control 拒非 loopback IP
+- OS 级沙箱（`internal/security/`）: macOS sandbox-exec / Linux Landlock LSM（内核 >=5.13，不可用 fail-closed）/ Windows（`internal/security/network/local_only_windows.go` 用 `netsh advfirewall` 添加出站阻断规则）。注意：D3 沙箱分级层（`internal/sandbox/native_os_sandbox.go`）的 Windows WSL2 支持未实现，此处特指 M11 network local_only 网络隔离层，是不同子系统。
+- Go 层纵深: RoundTripper 替换 no-op transport + DefaultResolver 覆写 NXDOMAIN + Dialer.Control 拒非 loopback IP
+
 启动期自检: DNS 解析公网域名 → 有响应 → 拒绝启动 (fail-closed)。
 
-Tier 3 本地模型守卫: M1 LocalProvider.Probe() 验证可加载模型且峰值 RSS + 已用内存 < 64GB (1GB 预留)，否则拒绝 local_only。
+Tier 3 本地模型守卫: `protocol.LocalProvider.Probe(ctx)`（`internal/protocol/interfaces_llm.go`，`LocalAdapter.Probe()` 于 `internal/llm/adapter/local.go`）只读校验当前有模型处于已加载可用状态且 `峰值 RSS（probe.ProcessPeakRSSBytes）+ 已用内存 < 64GB - 1GB 预留`，否则拒绝 local_only。`NetworkSandbox`（`internal/security/network/local_only.go`）经 `SetLocalProvider()` 注入（与 `SetSafeDialer()` 同构），`StartupCheck()` 在 60GB 物理内存门槛检查之后追加第 5 步 Probe（前者校验硬件容量，后者校验运行时实际预算，互补）。
 
-**当前实现状态：已实现（2026-07-03）。** `protocol.LocalProvider` 接口新增 `Probe(ctx) (LocalProbeResult, error)`（`internal/protocol/interfaces_llm.go`），只读校验当前是否有模型处于已加载可用状态，不触发加载；`LocalAdapter.Probe()`（`internal/llm/adapter/local.go`）实现该方法，复用已有的 `LocalStatus()` + 新增的 `probe.ProcessPeakRSSBytes()`（`internal/observability/probe/process_rss_{linux,darwin,windows}.go`，getrusage RUSAGE_SELF 读取 ru_maxrss）与 `probe.MemoryProbe()` 汇总系统已用内存。`NetworkSandbox`（`internal/security/network/local_only.go`）新增 `SetLocalProvider()` 注入点（与既有 `SetSafeDialer()` 同构），`StartupCheck()` 在原有 60GB 物理内存门槛检查之后追加第 5 步：调用 `LocalProvider.Probe()`，若模型未加载或 `峰值RSS+已用内存 >= 64GB-1GB` 则 fail-closed 拒绝进入 local_only。60GB 物理内存检查校验硬件容量，Probe() 校验运行时实际预算，两者互补（前者通过不代表后者一定通过——其它进程可能已占用大量内存）。单元测试见 `internal/llm/adapter/local_test.go`（`TestLocalAdapter_ProbeGraceful`）与 `internal/security/network/local_only_test.go`。
+**装配**（`cmd/polaris/boot_server.go` `bootServer()` 开头）: 读 `sb.Cfg.Security.LocalOnlyMode` 为真时依次 `network.NewNetworkSandbox(100)` → `SetSafeDialer()` → `SetLocalProvider()` → `Enable()` → `StartupCheck()`。`Enable()` **必须先于** `StartupCheck()`（否则 loopback-only 探测在防御生效前进行，启动 100% 失败）；任一步失败均 `apperr.Wrap` 返回错误阻止启动（fail-closed）。
 
-**当前实现状态：已接入（2026-07-06 前已完成，随并发稳定性修复一并确认）。** `NetworkSandbox` 构造 + `Enable()` + `StartupCheck()` 调用链已接入 `cmd/polaris/boot_server.go`（`bootServer()` 函数开头）：读取 `sb.Cfg.Security.LocalOnlyMode`（`internal/config/config.go` `local_only_mode`），为真时依次执行 `network.NewNetworkSandbox(100)` → `SetSafeDialer()` → `SetLocalProvider()`（2026-07-04 审计补齐，此前从未调用，导致 Tier3 本地模型内存预算守卫被静默跳过）→ `Enable()` → `StartupCheck()`；`Enable()` 必须先于 `StartupCheck()` 执行（若顺序颠倒，loopback-only 探测会在防御生效前进行，导致 `local_only_mode=true` 时启动 100% 失败，2026-07-04 审计已修正此顺序）。任一步失败均 `apperr.Wrap` 返回错误阻止启动（fail-closed）。至此 local_only 模式已端到端可用，不再是遗留缺口。
-
-白名单 `local_only_network_allowlist.toml` (用户 Ed25519 签名): 仅 M10 Connector 豁免，Tier 3 上限 5 条，变更需重启。Rust FFI 引擎 (SurrealDB-Core/Cedar) 无网络能力；Tier 0/1/2 彻底禁用 local_only，不进行加载。
+白名单 `local_only_network_allowlist.toml`（用户 Ed25519 签名）: 仅 M10 Connector 豁免，Tier 3 上限 5 条，变更需重启。Rust FFI 引擎（SurrealDB-Core/Cedar）无网络能力；Tier 0/1/2 彻底禁用 local_only，不进行加载。
 
 ---
 
@@ -453,26 +397,24 @@ Tier 3 本地模型守卫: M1 LocalProvider.Probe() 验证可加载模型且峰�
 
 blockedCIDRs（`init()` 预编译）：0.0.0.0/8 / 127.0.0.0/8 / 10.0.0.0/8 / 100.64.0.0/10（CGNAT）/ 172.16.0.0/12 / 192.168.0.0/16 / 169.254.0.0/16 / ::1/128 / fc00::/7 / fe80::/10。dnsCache TTL 见 `spec/state.yaml §m11_policy.safe_dialer_dns_cache_ttl_seconds`。
 
-**五阶段**: 
-- **Phase 0** — Capability 出口强制 (read_only 禁止写 HTTP / write_local 仅内网) 
-- **Phase 1**: DNS 解析 
-- **Phase 2**: blockedCIDRs 校验 
-- **Phase 3**: TOCTOU 延迟（`spec/state.yaml §m11_policy.safe_dialer_toctou_delay_ms`）后二次 DNS 解析 + blockedCIDRs 校验 
-- **Phase 3.5**: 响应 IP 超阈值（`spec/state.yaml §m11_policy.safe_dialer_max_ips_threshold`）→ 拒绝 
-- **Phase 4**: DNS TOCTOU 消除（验证通过后覆写 DialContext 锁定 IP，Request.Host 保留原始 hostname）。
+**五阶段**:
+- **Phase 0** — Capability 出口强制（read_only 禁止写 HTTP / write_local 仅内网）
+- **Phase 1**: DNS 解析
+- **Phase 2**: blockedCIDRs 校验
+- **Phase 3**: TOCTOU 延迟（`spec/state.yaml §m11_policy.safe_dialer_toctou_delay_ms`）后二次 DNS 解析 + blockedCIDRs 校验
+- **Phase 3.5**: 响应 IP 超阈值（`spec/state.yaml §m11_policy.safe_dialer_max_ips_threshold`）→ 拒绝
+- **Phase 4**: DNS TOCTOU 消除（验证通过后覆写 DialContext 锁定 IP，Request.Host 保留原始 hostname）
 
-与 M7 协作: M7 做 URL/IP 静态校验 + Capability 声明层收缩，M11 做出口强制执行 + DNS Rebinding 动态检测 + IP 锁定。两层纵深防御: 声明层(M7) → 网络出口层(M11 Phase 0)。
+与 M7 协作: M7 做 URL/IP 静态校验 + Capability 声明层收缩，M11 做出口强制执行 + DNS Rebinding 动态检测 + IP 锁定；两层纵深：声明层(M7) → 网络出口层(M11 Phase 0)。
 
-**统一安全 Dialer** (`internal/protocol/interfaces_net.go` SafeDialer):
-- M11 导出 `SafeDialer.DialContext`。四层注入覆盖全出站: `http.Transport.DialContext` / `grpc.WithContextDialer` / `websocket.Dialer.NetDialContext` / `net.DefaultDialer.Control`
-- DialContext 内执行五阶段 SSRF (Phase 0-4)。
-- **Taint 出口拦截**: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上级别（TaintMedium/TaintHigh）未经 SanitizeByUserReview → `ErrTaintBlockedEgress`。Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防止出口绕过。
-- **两层纵深**: M7 Policy Gate4（声明层预检）+ M11 SafeDialer.TaintEgressCheck（出口层终检，调用方职责）。
-- M7/M10/M13 所有出站必经此入口。CI `safe_dialer_lint` 扫描裸 `net.Dial` / `grpc.Dial` / `http.Get` → ERROR。
-- **认知存储不是出口，不走 TaintEgressCheck**（2026-08-10 订正）：写入 `[Storage-SurrealDB-Core]` 是**进程内本地落盘**，不产生任何出站连接，`SafeDialer.TaintEgressCheck` 的语义（拦 TaintMedium+ 数据外发）在此不适用；`SurrealDBCoreStore.Put/VecUpsert/FTSIndex` 签名里也不存在污点等级可供校验。认知存储侧的污点完整性由 **inv_M11_02 跨边界 HMAC** 承担：`taint.TaintBoundarySerializer`（密钥由 `Vault.DeriveKey` 派生，装配点 `cmd/polaris/boot_substrate.go`）在 `rag_chunks` 写入时 Seal 出 `taint_hmac`，检索侧 `internal/knowledge/retriever.go` Unseal 校验，HMAC 不匹配强制升到 TaintHigh。真正的出口拦截发生在数据离开进程时（HTTP/gRPC/WebSocket 出站，见上两条）。
-  > 本条原文为「**✅ 已修复（SurrealStore 出口缺失）**：Go 侧 SurrealStore wrapper 在调用 `surreal_store_insert` / `surreal_store_query` FFI 前补充 `SafeDialer.TaintEgressCheck`」。该描述与代码不符且不可能成立——全仓不存在 `surreal_store_insert` / `surreal_store_query` 这两个 FFI 符号（Rust 侧导出的是 `surreal_kv_put` / `surreal_vec_upsert` / `surreal_fts_index` 等），`internal/store/surreal_store.go` 也从无 `TaintEgressCheck` 调用。按 `CLAUDE.md §文档可修订性`，实现描述属描述性文档，与代码冲突以代码为准，故订正为上述实际防护路径。
+**统一安全 Dialer**（`internal/protocol/interfaces_net.go` SafeDialer）:
+- M11 导出 `SafeDialer.DialContext`，四层注入覆盖全出站：`http.Transport.DialContext` / `grpc.WithContextDialer` / `websocket.Dialer.NetDialContext` / `net.DefaultDialer.Control`；DialContext 内执行五阶段 SSRF (Phase 0-4)
+- **Taint 出口拦截**: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上（TaintMedium/TaintHigh）未经 SanitizeByUserReview → `ErrTaintBlockedEgress`；Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防出口绕过
+- **两层纵深**: M7 Policy Gate4（声明层预检）+ M11 SafeDialer.TaintEgressCheck（出口层终检，调用方职责）
+- M7/M10/M13 所有出站必经此入口；CI `safe_dialer_lint` 扫描裸 `net.Dial` / `grpc.Dial` / `http.Get` → ERROR
+- **认知存储不是出口，不走 TaintEgressCheck**：写入 `[Storage-SurrealDB-Core]` 是进程内本地落盘，不产生出站连接；`SurrealDBCoreStore.Put/VecUpsert/FTSIndex` 签名无污点等级可校验。认知存储侧污点完整性由 **inv_M11_02 跨边界 HMAC** 承担：`taint.TaintBoundarySerializer`（密钥由 `Vault.DeriveKey` 派生，装配点 `cmd/polaris/boot_substrate.go`）在 `rag_chunks` 写入时 Seal 出 `taint_hmac`，检索侧 `internal/knowledge/retriever.go` Unseal 校验，不匹配强制升到 TaintHigh。真正的出口拦截发生在数据离开进程时（HTTP/gRPC/WebSocket 出站）。
 
-**读写能力分级出口检查**（`internal/security/network/safe_dialer_capability.go`）：Phase 0 声明层检查之外，另有一层 HTTP 方法级的能力校验，与 Phase 0 的粗粒度 `read_only`/`write_local` 声明是两个层次——Phase 0 拦在 Capability Token 声明侧，本层拦在实际出站 `http.RoundTripper` 侧，纵深防御互不替代。三级：`CapNetworkRead`（仅放行 GET/HEAD/OPTIONS，其余方法 → `ErrCapabilityWriteBlocked`）/ `CapNetworkWriteLocal`（放行，内网 IP 校验由调用方在 DialContext 中执行）/ `CapNetworkWrite`（放行，交由 Phase 1-4 保护）。通过 `WrapCapability(inner, cap)` 包装现有 `http.RoundTripper` 接入（`CapabilityRoundTripper.RoundTrip` 在转发前调用 `CheckCapability`），消费方：`internal/tool/builtin/fetch_url/`、`internal/tool/builtin/web_search/`（2026-07-14 补齐，此前用裸 `http.Transport` 完全绕过该层校验，是纵深防御缺口）。
+**读写能力分级出口检查**（`internal/security/network/safe_dialer_capability.go`）：Phase 0 声明层之外，另有 HTTP 方法级校验——Phase 0 拦在 Capability Token 声明侧，本层拦在实际出站 `http.RoundTripper` 侧，纵深防御互不替代。三级：`CapNetworkRead`（仅放行 GET/HEAD/OPTIONS，其余 → `ErrCapabilityWriteBlocked`）/ `CapNetworkWriteLocal`（放行，内网 IP 校验由调用方在 DialContext 中执行）/ `CapNetworkWrite`（放行，交 Phase 1-4）。经 `WrapCapability(inner, cap)` 包装现有 `http.RoundTripper`（`CapabilityRoundTripper.RoundTrip` 转发前调 `CheckCapability`）；消费方：`internal/tool/builtin/fetch_url/`、`internal/tool/builtin/web_search/`（二者不得使用裸 `http.Transport`，否则绕过该层）。
 
 ---
 
@@ -528,18 +470,14 @@ Hash Chain 结构：`RecordHash = SHA-256(序列化后记录，不含 RecordHash
 
 ## 8. 多 Agent 宪法分层
 
-Layer 4: Agent 间交互规则 (在 §1 三层宪法之上):
-  - Agent 间信息传递边界
-  - 任务委托链深度上限
-  - 跨 Agent 权限组合约束
-  - 黑板消息最小权限路由
+Layer 4: Agent 间交互规则（在 §1 三层宪法之上）：Agent 间信息传递边界 / 任务委托链深度上限 / 跨 Agent 权限组合约束 / 黑板消息最小权限路由。
 
 **Cedar 策略扩展 (Layer 4)**:
 - `forbid send_message` → `BlackboardEvent: payload` 含 `cross_agent_prohibited_data AND principal.id != source_agent_id`
 - `forbid delegate_task`: `delegation_chain_depth >= 3`
 - `forbid call_tool`: `capability == "write_network" AND` 任一 collaborating_agent `trust_level < 3`
 
-**JIT Token 委托能力收缩**：协议层（`internal/security/`）负责能力取交集、TTL 减半衰减，携带父 Token 溯源链；业务层（`internal/action/`）负责深度≥3 拦截和有效能力计算；验证层（`internal/security/`）负责子集校验、过期约束、沙箱层级不降级三条守卫。能力取交为空分别向业务层和协议层返回不同错误码。
+**任务派生深度**: Token 委托链（能力取交集、TTL 衰减、溯源链）机制已移除（M7 §4.6）；深度上限由 M8 `orchestrator.MaxSpawnDepth=3`（`PostTask`/`PostBatch` 校验）强制。每个子任务重新走 S_PLAN→JIT 铸造单层 Token。
 
 黑板消息最小权限路由:
 
@@ -551,14 +489,14 @@ Layer 4: Agent 间交互规则 (在 §1 三层宪法之上):
 | 4 | + 安全事件, 审计日志 |
 | 5 | 全部 |
 
-**MCP A2A 跨框架委派安全约束（ADR-0084）**：外部 Agent 建模为特殊 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 挂起机制而非新建协议栈，受以下约束：
-1. **深度上限（A3）**：复用既有 `SpawnDepth`/`resolveMaxDepth`（`state.yaml §m8_multiagent.delegation_chain_max_depth=3`），不新增独立计数器。
-2. **强制高污点（A1）**：跨框架外部 Agent 产出经 `types.PropagateTaint(taintLevel, TaintHigh)`，only-up，不因发起方会话污点更低而降级。
-3. **PII 脱敏出境（A6）**：投递前对 `context_summary` 静态不可逆脱敏（`PIIDetector.Redact`，非可逆令牌化）。
-4. **超时（A4）**：`MCPManager.CallTool` 施加 `context.WithTimeout`（默认 600s，`state.yaml §m8_multiagent.mcp_a2a_handoff_timeout_seconds`）。
-5. **网络出口（A7）**：不新增网络客户端，复用 `MCPManager.CallTool` 既有 `SafeHTTP`（SafeDialer）出口。
-6. **可发现性（A2/A5）**：`MCPManager.ListA2AAgents` + 内置工具 `list_agents`（2026-09-26 由 `list_a2a_agents` 并入，ADR-0103 决策三补充）向 LLM 暴露合法 `mcp:` 目标。
-7. **执行前二次校验**：`MCPA2AWorker` 认领任务后、发起外部调用前重新比对深度上限（入口 + 执行前两道闸，防配置热更后已入库任务在极端场景越界执行）。
+**MCP A2A 跨框架委派安全约束**（[ADR-0111](./decisions/ADR-0111-cross-node-delegation-mcp-facade-and-a2a-1-0.md)，原 ADR-0084）：外部 Agent 建模为特殊 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 挂起机制而非新建协议栈：
+1. **深度上限（A3）**：复用 `SpawnDepth`/`resolveMaxDepth`（`state.yaml §m8_multiagent.delegation_chain_max_depth=3`），不新增计数器
+2. **强制高污点（A1）**：外部 Agent 产出经 `types.PropagateTaint(taintLevel, TaintHigh)`，only-up，不因发起方会话污点更低而降级
+3. **PII 脱敏出境（A6）**：投递前对 `context_summary` 静态不可逆脱敏（`PIIDetector.Redact`，非可逆令牌化）
+4. **超时（A4）**：`MCPManager.CallTool` 施加 `context.WithTimeout`（默认 600s，`state.yaml §m8_multiagent.mcp_a2a_handoff_timeout_seconds`）
+5. **网络出口（A7）**：复用 `MCPManager.CallTool` 既有 SafeDialer 出口，不新增网络客户端
+6. **可发现性（A2/A5）**：`MCPManager.ListA2AAgents` + 内置工具 `list_agents` 向 LLM 暴露合法 `mcp:` 目标
+7. **执行前二次校验**：`MCPA2AWorker` 认领任务后、发起外部调用前重新比对深度上限（入口 + 执行前两道闸）
 
 ---
 
@@ -617,24 +555,20 @@ M11 故障默认 fail-closed (拒绝执行)，保障安全。与 OSMemoryGuard �
 | M4 Agent Kernel | TaintGate Layer A/A.1/B、CheckBurnStatus 仅响应不触发 | M4 §3, §7 |
 | M7 Tool & Action | Capability Token JIT Minting、SafetyMonitor 事件来源 | M7 §6, §4 |
 | M8 Orchestrator | KillSwitch FullStop → orchestrator.StopAll | M8 §1.7 |
-| M10 Knowledge RAG（Retrieval-Augmented Generation，检索增强生成） | Connector Taint 初始等级查找表 | M10 §0-bis, M11 §2.4 |
+| M10 Knowledge RAG | Connector Taint 初始等级查找表 | M10 §0-bis, M11 §2.4 |
 | 全局字典 | TaintLevel/Taint-Prop/Taint-Sanitizer/KillSwitch 完整定义 | 00-Global-Dictionary §4, §5, §8 |
 | DDL | 001_events（审计轨迹 source）、006_decision_log（决策日志） | internal/protocol/schema/ |
 | 时序图 | KillSwitch 触发与响应链全流程 | DIAGRAMS.md#killswitch |
 
-> `TaintUserReviewed`（值=4）是**旁路标记**而非污点强度序列的一员；一切 `>= TaintMedium` 的拦截判定必须显式排除它。枚举值 4 仅为编码占位，不表示"比 TaintHigh 更脏"。
-> 2026-08-12 追记：GR-2-004 取证确认此为 bug，修复见 safe_dialer_capability.go TaintEgressCheck。
+> `TaintUserReviewed`（值=4）是**旁路标记**而非污点强度序列的一员；一切 `>= TaintMedium` 的拦截判定必须显式排除它。枚举值 4 仅为编码占位，不表示"比 TaintHigh 更脏"（修复见 `safe_dialer_capability.go` TaintEgressCheck）。
 
-2026-08-12 追记：经核对 gate_builtin_rules.go，“网络操作”对应的 permit 规则确实同时检查了 trust_level >= 3、approval_status == approved、capability_token_valid 三个条件。
+## 15. ContextRefExpander 任意文件读防护
 
-## 15. ContextRefExpander 任意文件读漏洞（GR-9-002）修复
-
-- **漏洞点**：`contextref.go` 引用展开功能未校验工作目录边界，允许 `@file:///etc/passwd` 等绝对路径及 `../../` 路径穿越读取任意文件。
-- **修复**：
-  1. `e.workDir == ""` 时 fail-closed 返回 `CodeForbidden`。
-  2. `filepath.Abs(filepath.Clean(e.workDir))` 与 `filepath.EvalSymlinks` 联合使用，确保物理路径解析一致性，防止符号链接穿越。
-  3. `strings.HasPrefix(abs, root+string(filepath.Separator))` 校验，断言目标路径必须在工作区根目录下。
-  4. 对命中 `isSensitivePath` 的情况，拒绝错误码从 `CodeInternal` 修正为更准确的 `CodeForbidden`。
+`contextref.go` 的引用展开（`@file://...`）必须校验工作目录边界，防绝对路径与 `../../` 穿越：
+1. `e.workDir == ""` → fail-closed 返回 `CodeForbidden`
+2. `filepath.Abs(filepath.Clean(e.workDir))` 与 `filepath.EvalSymlinks` 联合使用，保证物理路径一致，防符号链接穿越
+3. `strings.HasPrefix(abs, root+string(filepath.Separator))` 断言目标在工作区根目录下
+4. 命中 `isSensitivePath` → 拒绝错误码为 `CodeForbidden`（非 `CodeInternal`）
 
 ## 16. 流式安全防护
 - 流式泄漏扫描按滑动窗口执行，窗口容量为配置阈值（`SessionThresholds.LeakScanWindowBytes`）。跨 turn 自动重置，避免跨会话污染。

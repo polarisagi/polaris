@@ -20,7 +20,7 @@
 | Task Priority | `Priority-` | 0..3 | 用户交互 / 前台辅助 / 后台优化 / 最低 |
 | Model Pool | 具名 | — | `general` / `default` / `reasoning`（代码实际值；详见 M1 §4.2） |
 
-子文档首次出现时使用全名（如 `Mem-L1 Episodic`），后续上下文清晰时可缩略。代码中标识符按语言惯例（如 `MemoryLayerEpisodic`），不使用前缀。
+子文档首次出现用全名（如 `Mem-L1 Episodic`），上下文清晰时可缩略；代码标识符按语言惯例，不使用前缀。
 
 ---
 
@@ -64,30 +64,7 @@ Fork 源码、参与贡献的技术用户。可直接修改 Go/Rust 代码。扩
 **安全不变量**：命令经 Rust 沙箱封装 argv 执行（封装失败拒绝裸执行）；输入序列化前 PII 脱敏；输出强制 TaintHigh，不进系统提示词不可变区；PreToolUse / PermissionRequest 为 veto-only（hook 的 allow 不绕过 PolicyGate 与人工审批）；PreToolUse 改写入参后重新过 PolicyGate；hook 自身发起的调用不再触发 hook。
 
 ### [ShellHooks] — 已被 [Hooks] 取代
-> 2026-09-26 复核：由 ADR-0103 决策六取代。推翻理由：私有事件名（`message.before` 等）与脚本目录模型不被任何一家标准识别，且与工具事件引擎形成两套配置源；执行路径为裸 `exec` 无沙箱。事件映射：`session.new`→SessionStart、`message.before`→UserPromptSubmit、`message.after`/`turn.stop`→Stop、`session.compact.*`→Pre/PostCompact；`gateway.startup` 无标准对应，删除。原定义保留如下以便追溯：
-
-Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模型，零依赖，脚本可用任意语言编写。
-
-**目录**：`~/.polaris/hooks/`（或 `POLARIS_HOOKS_DIR` 环境变量覆盖）
-
-**事件点**：
-
-| 文件名 | 触发时机 | 环境变量 |
-|--------|----------|----------|
-| `gateway.startup` | 服务完全启动后 | `POLARIS_VERSION`, `POLARIS_WORKSPACE` |
-| `session.new` | 用户执行 `/new` 或 `/reset` 后 | `POLARIS_SESSION_ID`, `POLARIS_PREV_SESSION_ID` |
-| `message.before` | 处理用户消息前（非零退出 = 拦截） | `POLARIS_MESSAGE`, `POLARIS_SESSION_ID`, `POLARIS_CHANNEL` |
-| `message.after` | AI 回复发出后 | `POLARIS_REPLY`, `POLARIS_SESSION_ID`, `POLARIS_CHANNEL`, `POLARIS_USER_ID` |
-| `turn.stop` | Agent 完成本轮回复（对应 ADR-0016 §2.2 Codex Stop 语义），与 message.after 同点触发但语义独立，供未来分化 | `POLARIS_SESSION_ID`, `POLARIS_CHANNEL`, `POLARIS_USER_ID` |
-| `session.compact.before` | 上下文压缩开始前 | `POLARIS_SESSION_ID`, `POLARIS_TOKEN_COUNT` |
-| `session.compact.after` | 上下文压缩完成后 | `POLARIS_SESSION_ID`, `POLARIS_TOKEN_BEFORE`, `POLARIS_TOKEN_AFTER` |
-
-**实现约束**：
-- 脚本不存在 → 静默跳过，不报错
-- 超时：非 `before` 类 5s，`before` 类 2s（阻塞主流程）
-- `before` 类：非零退出 = 拦截并返回错误给用户；脚本 stdout 作为拦截原因
-- 非 `before` 类：fire-and-forget，失败只记日志不影响主流程
-- 安全：脚本在用户进程权限下运行，不注入 capability token
+> 由 ADR-0103 决策六取代：私有事件名与脚本目录模型不被任何一家标准识别，且执行路径为裸 `exec` 无沙箱。事件映射：`session.new`→SessionStart、`message.before`→UserPromptSubmit、`message.after`/`turn.stop`→Stop、`session.compact.*`→Pre/PostCompact；`gateway.startup` 无标准对应，已删除。
 
 ---
 
@@ -107,7 +84,7 @@ Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模�
 | 3 | Failed | 负向终态 —— 失败/熔断/拒绝，不可恢复 |
 | 4 | Suspended | 挂起态 —— 高惊奇度寻觅，脱离主流程等待人工介入 |
 
-适用举例：M8 TaskStatus（pending/claimed/executing/compensating→done/failed/suspended，7 态，见 `state.yaml`§task_status；本表 Pending/Processing/.../Completed 为跨模块抽象命名公理，非 M8 字面枚举拼写），M4 TaskStatus, M2 OutboxStatus。
+适用举例：M8 TaskStatus（pending/claimed/executing/compensating→done/failed/suspended，7 态，见 `state.yaml`§task_status；本表为跨模块抽象命名，非 M8 字面枚举），M4 TaskStatus，M2 OutboxStatus。
 
 ### 公理二: 污点与风险阶梯 (Taint & Risk Escalation)
 
@@ -132,13 +109,13 @@ Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模�
 | XR-03 | TaintLevel 只升不降（output = max(inputs)）。受控降级仅通过四种 Sanitizer（见 §4 [Taint-Sanitizer]）。SanitizeBySchema 对字符串字段要求 format/pattern/enum/const 内容约束，裸 {"type":"string"} 不降级。 | M11→M4,M7,M10 |
 | XR-04 | **DB 写路径三层规范**。见下方 [XR-04 补充](#xr-04-补充) | M2 全模块 |
 | XR-05 | 自进化输出（M9 PromptOptimizer、M6 Logic Collapse）在合并到系统前必须通过独立 LLM-as-Judge 安全审查。审查使用与生成不同的 Provider 模型。 | M9→M11→M5, M6→M11→M5 |
-| XR-06 | 所有出站网络连接强制通过 M11 SafeDialer.DialContext。禁止裸 net.Dial / grpc.Dial / http.Get。CI safe_dialer_lint 扫描违规 → ERROR。窄豁免：`internal/downloader/proxy.go` GitHub 代理探测（ADR-0071），由 `internal/lint` 白名单文件按路径登记，每条豁免须有对应 ADR。 | M11→M1,M7,M10,M13 |
+| XR-06 | 所有出站网络连接强制通过 M11 SafeDialer.DialContext。禁止裸 net.Dial / grpc.Dial / http.Get。CI safe_dialer_lint 扫描违规 → ERROR。窄豁免：`internal/downloader/proxy.go` GitHub 代理探测（ADR-0066，原 0071），由 `internal/lint` 白名单文件按路径登记，每条豁免须有对应 ADR。 | M11→M1,M7,M10,M13 |
 | XR-07 | Tier 0 内存硬上限 8GB。OSMemoryGuard (M3) 与 ResourceGovernor (M13) 共享三级降级阈值（L1: 1.5GB, L2: 1.0GB, L3: 512MB）。任一组件触发降级即执行。 | M3,M13→全模块 |
 | XR-08 | **日志规范**。见下方 [XR-08 补充](#xr-08-补充) | 全模块 |
 | XR-09 | **LLM 调用规范**。见下方 [XR-09 补充](#xr-09-补充) | M1→M4,M9,M10 |
 | XR-10 | **工具/技能/插件执行规范**。见下方 [XR-10 补充](#xr-10-补充) | M7→M4,M6,M13 |
 | XR-11 | **文件系统操作分层规范**。见下方 [XR-11 补充](#xr-11-补充) | M7→全模块 |
-| XR-12 | **模块 import 层级约束**。业务模块（Arch-L2~L4）禁止跨层直接 import 具体实现；接口定义权属于消费方；bootstrap 是唯一允许跨层引用的 DI 容器。`internal/bootstrap`（`Bootable` 接口 + `DependencyMap` Kahn 拓扑排序）负责启动期依赖排序装配，与优雅关停（Phase 1 Ingress→Phase 2 Engine→Phase 3 Substrate→Phase 4 Storage 四阶清扫）共用同一拓扑图的逆序。完整规则见 `docs/arch/Module-Dependency-Axioms.md`。 | 全模块 |
+| XR-12 | **模块 import 层级约束**。业务模块（Arch-L2~L4）禁止跨层直接 import 具体实现；接口定义权属于消费方；装配层是唯一允许跨层引用的位置（物理落点 `cmd/polaris/boot_*.go`；`internal/bootstrap` 的自动编排契约未接线，见 ARCHITECTURE §8）。完整规则见 `docs/arch/Module-Dependency-Axioms.md`。 | 全模块 |
 | XR-13 | **pkg/ 净化约束**。`pkg/` 目录仅允许 POD 数据结构（struct/enum/const/纯内存方法），绝对禁止定义任何 `interface`，禁止 import 任何 `internal/` 包。interface 必须定义在消费方模块内部。 | pkg/→internal/ |
 
 #### XR-04 补充
@@ -148,7 +125,7 @@ Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模�
 2. **中频同步**（M5/M13/M12）：→ `Store.Put` / `Store.Txn`（KV 接口 + 同步确认）
 3. **CAS+配置管理**（Blackboard 任务状态 / interface / server CRUD）：→ `store.DB()` 直写（CAS 需同步 RowsAffected / 配置类 SQL 无法走 KV 接口）
 
-> **约束**：events 表写入统一经 `SQLiteEventLog` → MutationBus，不持有独立写路径（原设计的 EventWriteBuffer 批量缓冲层已确认零接线并删除，见 M02-Storage-Fabric.md §2.2）。**禁止：同一数据跨层混写**（如高频数据走裸 `db.ExecContext`；配置数据走 MutationBus）。
+> **约束**：events 表写入统一经 `SQLiteEventLog` → MutationBus，不持有独立写路径（M02 §2.2）。**禁止：同一数据跨层混写**（如高频数据走裸 `db.ExecContext`；配置数据走 MutationBus）。
 
 #### XR-08 补充
 
@@ -189,13 +166,12 @@ Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模�
 
 完整约束见 `docs/arch/Module-Dependency-Axioms.md`。核心：
 - Arch-L2 模块间禁止跨包直接 import 具体实现（使用 provider.go consumer-side interface）
-- `internal/bootstrap/` 是全仓库唯一允许跨层引用的 DI 容器
-- **`internal/protocol/` 叶子契约层准则**：`internal/protocol/` 是全系统被引用最广的 L0 包，理论上任何 L0 同层包（`internal/observability/`、`internal/security/`、`internal/llm/`、`internal/store/`）都可能在未来演化中反向需要引用 `protocol` 的类型。为保证 `protocol` 永远是无环图的安全叶子节点，`protocol` 包**应避免**引入其他 `internal/` 兄弟包的具体类型（即使当前未构成循环依赖），优先在 `protocol` 内部重新声明最小必要类型/接口（如 `TaintLevel` 已遵循此原则，权威定义即在 `internal/protocol/types.go`）。已存在的少量例外（如 `interfaces_memory.go` 引用 `observability/budget`、`prompt_builder.go` 引用 `security/taint.TaintedString`）当前未构成循环依赖，允许保留，但新增代码禁止再扩大此类跨包引用面，长期应收敛迁移。
+- 装配层（`cmd/polaris/boot_*.go`）是全仓库唯一允许跨层引用的位置
+- **`internal/protocol/` 叶子契约层准则**：`internal/protocol/` 是全系统被引用最广的包。为保证它永远是无环图的安全叶子节点，`protocol` **应避免**引入其他 `internal/` 兄弟包的具体类型（即使当前未构成循环），优先在 `protocol` 内重新声明最小必要类型/接口（如 `TaintLevel`，权威定义在 `internal/protocol/types.go`）。少量既有例外（`interfaces_memory.go` 引用 `observability/budget`、`prompt_builder.go` 引用 `security/taint.TaintedString`）允许保留，新增代码禁止再扩大此类引用面，长期应收敛迁移。
 
 #### XR-13 补充
 
-`pkg/types/doc.go` 的注释约束是代码层声明；本规则（XR-13）是架构层约束。
-两者配合：代码注释让编写者读到禁令，架构规则让 CI lint 可检查违规。
+`pkg/types/doc.go` 的注释是代码层声明，本规则是架构层约束；前者让编写者读到禁令，后者让 CI lint 可检查违规。
 
 ### [HE-Rule-1] 可观测优先
 从第 0 行代码起全链路可追溯。Token_Burn_Rate + Surprise_Index 一等公民指标。
@@ -251,7 +227,7 @@ Go 确定性状态机持有控制流，LLM 仅做概率性填空。禁止 `while
 - `toolSequenceDivergence` 的计算方式按不同 Phase 升级（Phase 1 是 Tier 0 默认基线）：
   - **Phase 1**：使用工具序列编辑距离（Levenshtein, <1ms）
   - **Phase 2**：（≥500 成功轨迹）升级为马尔可夫转移矩阵条件概率（1 - conditional_probability, O(1) 查表）
-  - **Phase 3**：（API 暴露 logprob 后）升级为 per-token logprob 典型度——标注“长期愿景，依赖上游 Provider 暴露 logprob，可能 2027+，主线设计假设永久停留在 Phase 2”。
+  - **Phase 3**：（API 暴露 logprob 后）升级为 per-token logprob 典型度——长期愿景，依赖上游 Provider，主线设计假设永久停留在 Phase 2。
 
 **路由阈值**：
 - `< 0.3` → System 1
@@ -317,7 +293,7 @@ Phase 1 THROTTLE → Phase 2 PAUSE → Phase 3 FULLSTOP
 - **Phase 3.5**：响应 IP 超阈值拒绝
 - **Phase 4**：IP 锁定（覆写 DialContext，锁定已验证 IP）
 
-阶段总数为六（含 Phase 0），与 M11 §6 SafeDialer 五阶段标注（不含 Phase 0 独立标注）等价——Phase 0 在 M11 正文中描述为 Capability 出口强制，本字典为了完整性显式列出。
+阶段总数为六（含 Phase 0）；M11 §6 SafeDialer 的五阶段标注不单列 Phase 0（Capability 出口强制），二者等价。
 
 ---
 
@@ -350,7 +326,6 @@ WAL 模式，真相源 + EventLog session_events 表。含 FTS5 全文检索。
 ### [Storage-SurrealDB-Core]
 统一的多模态认知存储侧车（Rust FFI via purego，ABI 1.1）。内置 KV 存储、HNSW 向量检索、BM25 全文检索及图计算引擎。
 
-
 ### [Storage-Router]
 统一接口路由（02-Storage-Fabric, §1.2）。Store 接口：Get/Put/Delete/Scan/BatchWrite/Txn/Capabilities/Close。路由规则匹配最优引擎，SQLite 兜底。
 
@@ -374,13 +349,11 @@ internal/tool/, internal/action/, internal/sandbox/→ M7
 internal/extension/→ M13-bis, M06, M07
 internal/swarm/, internal/learning/, internal/knowledge/→ M8, M9, M10
 internal/eval/→ M12
-internal/gateway/, internal/channel/, internal/cli/→ M13
-internal/       → protocol, config, errors
+internal/gateway/, internal/channel/, internal/sysmgr/→ M13
+internal/       → protocol, config, ffi, runtimeinfo, execute（执行引擎，ADR-0046）
 rust/substrate/ → Rust FFI 性能路径
 ```
-M7 物理归属 `internal/action/`（执行层：工具注册、沙箱）和 `internal/extension/`（技能、市场、MCP 双向、原生扩展）。
-
-> **设计决策**：M7 的核心接口（Tool 类型、CapabilityLevel、ToolRegistry 接口）由 `internal/agent/` 中的 M4 通过 Go interface 消费。此为单向依赖 `cognition → action/extensions`，不构成循环引用。
+M7 物理归属 `internal/action/`（执行层）和 `internal/extension/`（技能、市场、MCP 双向、原生扩展）。M7 核心接口（Tool、CapabilityLevel、ToolRegistry）由 M4 经 Go interface 消费，单向依赖 `cognition → action/extensions`，不构成循环。
 
 ---
 
@@ -409,12 +382,7 @@ Python 脚本沙箱（ContainerSandbox L3，ADR-0008）。Logic Collapse 蒸馏�
 ### [CredentialVault]
 凭证安全存储（11-Policy-Safety, §5.2）。OS 密钥链适配：macOS Keychain / Linux SecretService / Windows Credential Manager。API Key SHA-256 加密封箱。
 
-**persistent_key 轮换协议**：
-1. 用户主动触发 `polaris vault rotate-master-key`
-2. 后台分批解密旧 HMAC/Workspace
-3. 新 key 重加密
-4. 双 key 共存窗口（新写新 key，读时尝试新 → 旧 fallback）
-5. 完成后旧 key 销毁
+**persistent_key 轮换协议**：用户触发 `polaris vault rotate-master-key` → 后台分批解密旧 HMAC/Workspace → 新 key 重加密 → 双 key 共存窗口（新写新 key，读时先新后旧）→ 完成后销毁旧 key。
 
 **冷启动决策树**：
 - **GUI 桌面**：OS Keychain
@@ -426,14 +394,12 @@ PII 检测与红化（见 11-Policy-Safety, §5.1）。
 - **Tier 0 防护**：使用 Go 原生正则检测（零外部依赖，< 1ms）。仅覆盖结构化 PII 模式（信用卡号/SSN/API Key/邮箱/手机号/IP 地址），非结构化 PII（姓名/地址/雇主/医疗/生物特征等）不在 Tier 0 保护范围。
 - **高阶防护（可选）**：可选 Presidio sidecar 仅在 Tier 1+ 显式启用时，用于高精度 NER 检测。
 - **存储与解密**：SessionPIIVault 加密存储原文，SecureUnredact 仅在审计回放时解密。
-- **用户提示**：用户首次进入处理 PII 数据的场景（如开启 Notion/Gmail Connector）时，系统主动告警 Tier 0 PII 防护范围。
+- **用户提示**：首次进入处理 PII 数据的场景（如开启 Notion/Gmail Connector）时，主动告警 Tier 0 PII 防护范围。
 
 ### [Codex-Plugin] (Plugin / Skill / Connector 统一范式)
 参考 OpenAI Codex、Anthropic Claude 插件规范与 agent-plugins.org 1.0 可移植标准（ADR-0103）。
 
-在 Polaris 中，“插件（Plugin）”并非指编译进核心二进制的代码，而是**聚合了 Skill（可复用的认知与 Prompt 工作流）、Connector（MCP 外部系统连接）、hooks、agents 以及 Codex 应用绑定** 的标准能力分发载体（Bundle）。清单格式只接受两家标准与 agent-plugins 1.0，不存在 Polaris 私有格式。
-
-Plugin 机制负责统一定义生命周期、依赖和权限声明，而底层具体执行则完全委托给 M7 (MCP Manager) 和 M6 (Skill Registry) 进行物理隔离。
+“插件（Plugin）”不是编译进核心二进制的代码，而是**聚合 Skill、Connector（MCP 外部系统连接）、hooks、agents 与 Codex 应用绑定**的标准能力分发载体（Bundle）。清单格式只接受两家标准与 agent-plugins 1.0，无 Polaris 私有格式。Plugin 机制统一定义生命周期、依赖和权限声明，具体执行委托 M7 (MCP Manager) 与 M6 (Skill Registry) 物理隔离。
 
 ### [Connector] (连接器)
 Claude 称 Connector、ChatGPT/Codex 称 App：一条到外部产品的 MCP 连接（stdio / Streamable HTTP，含 OAuth 与权限）。底层 `ext_type` 为 `mcp`，UI 称「连接器」。富交互 UI 属于连接器能力（MCP Apps 扩展，`ui://` 资源），不是独立扩展类型。
@@ -442,18 +408,12 @@ Claude 称 Connector、ChatGPT/Codex 称 App：一条到外部产品的 MCP 连�
 Codex 插件 `.app.json` 中的 `apps.<alias>.id`：插件对“平台上已注册连接器”的**引用**，不是连接定义。Polaris 在本地连接器目录中解析该 id，解析不到则为 `unbound` 待用户绑定（ADR-0103 决策四）。不得转换为 `ext_type=mcp` 条目。
 
 ### [App] (富交互前端扩展) — 已撤销
-> 2026-09-26 复核：本概念由 ADR-0103 撤销。推翻理由：2026-07 ChatGPT 以 Plugin Directory 取代 App Directory，App 降为插件子组件（连接器）；Claude 无 App 概念；富 UI 已标准化为 MCP Apps 扩展。Polaris 的 `apps` 表仅存 URL、全仓无 Widget 渲染，属空壳。现由 [Connector] 与 [Codex-App-Binding] 承接。原定义保留如下以便追溯：
-
-参考 OpenAI Codex App 与 ChatGPT Apps SDK 概念。
-
-在 Polaris 架构中，App 代表了**独立于单纯后端工具（MCP）和文本技能（Skill）的富交互层**。它为大模型或用户提供独立的 UI Widget（前端组件）、工作流视图或独立的 Web Endpoint。
-
-与 MCP（纯后端无头服务）不同，App 拥有前端路由与用户状态交互能力，允许深度集成（如工作树、本地环境、自动化任务管理等），能够下发自定义的交互式卡片到聊天流中，甚至包含认证和状态流。App 在架构中有专属的运行时表（`apps`）以管理其独立的权限与路由端点。
+> 由 ADR-0103 撤销：ChatGPT 已以 Plugin Directory 取代 App Directory，App 降为插件子组件（连接器）；Claude 无 App 概念；富 UI 已标准化为 MCP Apps 扩展。`apps` 表仅存 URL、无 Widget 渲染，属空壳。现由 [Connector] 与 [Codex-App-Binding] 承接。
 
 ### [Marketplace] (插件与技能应用市场)
 参考 MCP Registry (registry.modelcontextprotocol.io) 与第三方市场生态（如 mcp.so）。Marketplace 是系统发现、安装和分发外部 Plugin、Skill 和 Connector 的中心枢纽（市场格式：`.claude-plugin/marketplace.json` 与 `.agents/plugins/marketplace.json`，ADR-0103 决策七）。
 
-Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而是内置对接开源市场协议。它支持大模型在会话中根据用户意图直接向 Marketplace 检索可用扩展，获取安装与配置指令（如 `npx` 执行参数或下载链接），然后全自动完成配置并注册生效。
+大模型可在会话中按用户意图向 Marketplace 检索扩展、获取安装与配置指令（如 `npx` 参数或下载链接），并自动完成配置与注册。
 
 ### [Marketplace-Builtin] (内置市场源)
 配置中的 `is_builtin=1` 仅代表该市场是“系统出厂预置”的**同步源**（如官方精选库），它控制系统启动时是否自动拉取其目录索引并填充 `extension_catalog` 缓存表。
@@ -469,47 +429,20 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
 
 > **约束**：卸载操作必须由底层管理接口统一执行，严禁在 HTTP Handler 业务层直接写裸 `os.RemoveAll`。
 
-> **异步化（D2，2026-07-25）**：`DELETE /v1/plugins/{catalogID}` 现为异步流程——
-> 网关仅将 `extension_instances.status` 标记为 `uninstalling` 并写入 M2 Outbox
-> 事件（`extension_uninstall`），立即返回 202 + `{"status":"uninstalling"}`。
-> 后台 `internal/sandbox.ExtensionUninstallHandler` 消费该事件，经
-> `SandboxRouter` 按 `trust_tier` 路由到对应隔离级别（复用工具执行同一套
-> Taint/SafeDialer 边界）执行卸载 Hook，超时（`state.yaml` M7Tool
-> `ext_uninstall.hook_timeout_seconds`，默认 180s）则保留隔离目录供人工排查、
-> 标记 `error`；成功才执行本节所述的物理文件清除 + DB 级联清除。调用方通过既有
-> `GET /v1/plugins`（复用 `extension_instances.status` 字段）轮询最终状态。
+> **异步化（D2）**：`DELETE /v1/plugins/{catalogID}` 仅将 `extension_instances.status` 标为 `uninstalling` 并写 M2 Outbox 事件（`extension_uninstall`），立即返回 202；后台 `internal/sandbox.ExtensionUninstallHandler` 经 `SandboxRouter` 按 `trust_tier` 路由到对应隔离级别执行卸载 Hook，超时（`state.yaml` M7Tool `ext_uninstall.hook_timeout_seconds`）则保留隔离目录并标 `error`；成功才执行上述物理文件 + DB 级联清除。调用方轮询 `GET /v1/plugins`。
 
 ### [Agent-Handoff] (工具化 Multi-Agent 委派)
-LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内置工具
-`transfer_to_agent(target_agent_role, context_summary, taint_level)` 完成委派，
-无需自行编排完整 StateGraph 或订阅 Blackboard 事件（D5/GD-14-004）。
+LLM 判断需交由另一角色 Agent 处理时，调用内置工具 `transfer_to_agent(target_agent_role, context_summary, taint_level)`，无需自行编排 StateGraph 或订阅 Blackboard（D5/GD-14-004）。
 
-实现（`internal/agent/agent_handoff.go`）：以当前任务的 `NamespaceID`
-（`[GD-14-001]` 共享记忆命名空间，为空则退化为 `SessionID`）为目标角色创建一条
-新 Blackboard Task（`Type` 编码为 `agent_handoff:<role>`），由目标角色 Worker
-按既有 CAS 自认领流程拾取（不引入中心化调度，兼容 ADR-0062）。当前实现为
-**同步阻塞**：发起委派的工具调用内部轮询等待子任务终态（复用
-`csv_fanout.go` 的 `waitForTask` 轮询模式），完成后将结果包装为 `ToolResult`
-返回；委派失败/超时不作为节点执行错误处理（不触发 Saga 补偿），而是通过
-`ToolResult.Success=false` 交由 LLM 决定重试或改变计划。
-
-> **已知后续方向**：若需要非阻塞挂起（发起方 Agent 在等待期间可处理其他任务），
-> 需要在 `internal/agent/fsm` 新增专用状态与恢复触发器，属独立于当前实现的
-> 后续设计，不应与 `[S_SUSPENDED]`（空闲挂起）或 HITL 的
-> `suspended`/`resume_from_suspended`（M8 task_status，语义为人工审批等待）
-> 混用。
+实现（`internal/agent/agent_handoff.go`）：以当前任务 `NamespaceID`（`[GD-14-001]`，为空退化为 `SessionID`）为目标角色创建新 Blackboard Task（`Type` 编码 `agent_handoff:<role>`），由目标 Worker 按既有 CAS 自认领拾取（不引入中心化调度，兼容 ADR-0062）。委派走**异步挂起**：父任务进入 S_AWAIT_AGENT，子任务终态经 Blackboard 事件唤醒，续跑上下文持久化（ADR-0104）；`target_agent_role=mcp:<server>/<agent>` 时委派给外部/对端 Agent（ADR-0111）。委派失败/超时不触发 Saga 补偿，经 `ToolResult.Success=false` 交 LLM 决定重试或改计划。S_AWAIT_AGENT 与 `[S_SUSPENDED]`（空闲挂起）、HITL 的 `suspended`/`resume_from_suspended`（人工审批等待）语义不同，不得混用。
 
 ### [Codex-Automation] (后台自动化与定时任务)
-参考 OpenAI Codex Automations。用于调度周期性循环任务、后台静默执行的检查流，并将结果推送到用户的“Triage (收件箱)”进行审批或通知。
-
-在 Polaris 架构中，此概念由 **M8 (Multi-Agent Orchestrator)** 结合定时调度器实现。
+参考 OpenAI Codex Automations：周期性循环任务与后台静默检查流，结果推送到用户 Triage（收件箱）审批或通知。由 **M8** 结合定时调度器实现。
 
 > **约束**：后台执行必须遵循默认的安全沙箱级别。
 
 ### [Codex-Skill] (认知与提示词能力)
-参考 OpenAI Codex Skills。Skill 是可复用的 Prompt 工作流及元认知指令，包含 `SKILL.md` (完整文档) 以及元数据（如触发条件、描述）。
-
-为了节省 Token 预算，系统采用 **“初始仅加载元数据 (Meta)，按需懒加载全文 (Lazy Load)”** 的策略。在 Polaris 中，这对应 **M6 (Skill Registry)**，支持动态发现、热重载以及 Wasm 化的高阶技能。
+参考 OpenAI Codex Skills：可复用的 Prompt 工作流及元认知指令，含 `SKILL.md` 与元数据（触发条件、描述）。为省 Token 预算，**初始仅加载元数据，按需懒加载全文**。对应 **M6 (Skill Registry)**，支持动态发现、热重载与 Wasm 化高阶技能。
 
 ---
 
@@ -545,12 +478,12 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 - `[HeuristicsMemory]`: 成功启发式库。`task_type → []Heuristic`，检索时注入 prompt 引导。定义见 M9 §2.1。
 - `[HybridRetriever]`: BM25 + Dense Vector + 图遍历三路并行召回 → RRF(k=60) 融合 → Cross-encoder 重排。M5 和 M10 共享 `internal/store/` 底层引擎，检索范围和配置参数各自独立。
 - `[RRF]`: 倒数排名融合 (Reciprocal Rank Fusion)。公式: `weight / (k + rank + 1)`, k=60。多路检索结果归一化融合算法。
-- `[ProgressiveRollout]`: 渐进式发布。Gate 1 Shadow 阶段以 1% 流量观测（不面用户）；Gate 3 Canary 阶梯为 5%→25%→50%→100%，每步驻留 24h。M9 决策阶段推进，M13 TrafficSplitter 执行分发，M12 ShadowExecutor 对比评估（✅ 2026-07-10 恢复接入，见 M12 §4/§8：ShadowExecutor 周期回放 + ConfirmShadow 推进 Gate，Gate 1 对比能力已可用）。权威定义见 M09 §2.3。
+- `[ProgressiveRollout]`: 渐进式发布。Gate 1 Shadow 阶段以 1% 流量观测（不面用户）；Gate 3 Canary 阶梯为 5%→25%→50%→100%，每步驻留 24h。M9 决策阶段推进，M13 TrafficSplitter 执行分发，M12 ShadowExecutor 对比评估（周期回放 + ConfirmShadow 推进 Gate，见 M12 §4/§8）。权威定义见 M09 §2.3。
 - `[GEPA]`: 遗传-Pareto 反射式进化 (Genetic-Pareto-Evolutionary-Algorithm)。PromptOptimizer 三融合算法之一，种群 8 × 5 代 Pareto 前沿搜索。定义见 M9 §1.1。
 - `[MemAPO]`: 双记忆跨任务复用 Prompt 优化。PromptOptimizer 三融合算法之二。
 - `[ContraPrompt]`: 对比轨迹 Prompt 优化。PromptOptimizer 三融合算法之三。
 - `[BFS-Traverse]`: 有界广度优先图遍历 (depth=2, maxNeighborsPerHop=20, maxTotalNodes=200)。关联发现模式使用 [Spreading-Activation]。
-- `[CascadeInvalidator]`: 级联失效器。区别于 [BFS-Traverse]（检索时的关联发现，跨 M5/M10 走 SurrealDB-Core 图引擎）——CascadeInvalidator 是 Entity 被 `superseded` 后触发的**写路径**级联：`ExclusiveWriter` 闭合旧事实后，必须与其状态标记保持同一事务边界，故有意选择沿 `semantic_relations`（含 `derived_from` 派生血缘关系）用单条 SQLite `WITH RECURSIVE` CTE 扩散 2 跳（`maxCascadeHops`），而非跨 FFI 边界调用 SurrealDB-Core（会引入双写同步与跨引擎原子性缺口）。命中实体标记 `pending_review` 而非直接改写，交由后续复核。此为写路径（事务原子性优先）与读路径（图引擎统一）的职责分离设计，非选型遗留问题，详见 local_playground/upgrade/01-架构设计变更规范.md GD-4。定义见 M5 §9。
+- `[CascadeInvalidator]`: 级联失效器。区别于 [BFS-Traverse]（检索时的关联发现，跨 M5/M10 走 SurrealDB-Core 图引擎）——CascadeInvalidator 是 Entity 被 `superseded` 后触发的**写路径**级联：`ExclusiveWriter` 闭合旧事实后，必须与其状态标记保持同一事务边界，故有意选择沿 `semantic_relations`（含 `derived_from` 派生血缘关系）用单条 SQLite `WITH RECURSIVE` CTE 扩散 2 跳（`maxCascadeHops`），而非跨 FFI 边界调用 SurrealDB-Core（会引入双写同步与跨引擎原子性缺口）。命中实体标记 `pending_review` 而非直接改写，交由后续复核。此为写路径（事务原子性优先）与读路径（图引擎统一）的职责分离设计，非选型遗留问题（GD-4）。定义见 M5 §9。
 - `[Spreading-Activation]`: 扩散激活图遍历。
   - 种子实体 energy=1.0
   - 每轮 ×edge.weight 传播
@@ -558,25 +491,21 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
   - ≤0.05 停止（dormancyThreshold=0.1）
   - 最多 5 轮（depth=2，fanOutLimit=5）
 - `[Connector-Taint-Table]`: Connector 源 TaintLevel 初始等级映射表（见 M11 §2.4）。ConnectorScheduler 在 Ingest 前按此表为每个外部数据源打标。
-- `[Context-Engineering]`: 上下文工程 —— 上下文窗口是有限预算，"放什么"比"怎么写"更重要。
-  - **物理载体**：`kernel.PromptBuilder` 三 Zone（ZoneImmutable / ZoneMutableSkill / ZoneTaintedData）+ ImmutableCore + Spotlighting（TaintedData 写入前强制包裹）。
-  - **区别于 Prompt Engineering**（仅关注单次提示措辞），Context Engineering 关注跨轮次/跨任务的上下文构造、压缩、分区、来源标注。
+- `[Context-Engineering]`: 上下文工程 —— 上下文窗口是有限预算，"放什么"比"怎么写"更重要；关注跨轮次/跨任务的上下文构造、压缩、分区、来源标注（区别于仅关注单次提示措辞的 Prompt Engineering）。物理载体：`kernel.PromptBuilder` 三 Zone（ZoneImmutable / ZoneMutableSkill / ZoneTaintedData）+ ImmutableCore + Spotlighting（TaintedData 写入前强制包裹）。
 - `[Compaction]`: 上下文压缩 — 长程任务必须显式压缩中间状态，否则推理质量随上下文长度衰减（lost-in-the-middle）。M5 触发条件: topic shift / eventCount≥50 / sessionClosed。压缩后保留 EventLog 原始事件不变，仅压缩派生 Episodic Memory 投影。
 - `[Sub-agent-Isolation]`: 子 Agent context 隔离 — 多 Agent 系统中每个 Agent 持有独立 `kernel.PromptBuilder` 实例与 context window，禁止共享父 Agent 完整上下文。Agent 间仅通过 M8 黑板的结构化 result entry 交换（schema 强制），避免上下文污染与 token 膨胀。
-- `[Workflow-Agent-Ladder]`: 工作流-Agent 升级阶梯 —— 简单任务直接 LLM 调用 → 可预测流程用确定性 workflow → 动态长程才用 Agent。
-  - **Polaris 物理映射**：Skill Library System 1（零 LLM）→ System 1.5（单次 LLM）→ System 2（多步 Agent）。
-  - **设计原则**：按必要性升级，避免简单任务过度构建 Agent 系统。
+- `[Workflow-Agent-Ladder]`: 工作流-Agent 升级阶梯 —— 简单任务直接 LLM 调用 → 可预测流程用确定性 workflow → 动态长程才用 Agent；按必要性升级。Polaris 映射：System 1（零 LLM）→ System 1.5（单次 LLM）→ System 2（多步 Agent）。
 - `[Staging-Pipeline]`: 自进化候选 staging 流水线。权威定义见 [ARCHITECTURE §3](./ARCHITECTURE.md)。任一阶段失败 → rejected / rolled_back / dead_letter。safety case 一票否决: newly_failing safety = regress。
 
 ## §9-ter 推理时计算（Test-Time Compute）
 
 > 与 [System-1/1.5/2]（任务难度维度）正交，独立的"推理深度"维度。本节即权威定义。
 
-- `[ThinkingMode]`: Polaris 内部推理深度决策枚举，`ThinkingDisabled` / `ThinkingLow` / `ThinkingHigh` / `ThinkingMax` 四档。非规划阶段由 `m4_kernel.thinking.*` 配置（ADR-0101 决策三）；规划阶段由 `internal/observability/metrics/metrics_handler.go` 的 `SelectPlanTier(escalation, complexity, surpriseIndex)` 与规划模型池一并计算（ADR-0102 决策六：LLM 判难度、程序持策略，只有能力类失败升级；污点不参与），M4 `transitions.go` / `transitions_respond.go` 在 LLM 调用前经 `protocol.WithThinkingMode` 注入 InferOption。**与 [ReasoningEffort] 是「决策层 → 抽象层」的映射关系，不是同义词**：ThinkingMode 是 Polaris 自己算出的"该想多深"，ReasoningEffort 是把它翻译成 Provider 能理解的字段。映射表见 M1 §5.2-bis。
+- `[ThinkingMode]`: Polaris 内部推理深度决策枚举，`ThinkingDisabled` / `ThinkingLow` / `ThinkingHigh` / `ThinkingMax` 四档。非规划阶段由 `m4_kernel.thinking.*` 配置（ADR-0105，原 0101 决策三）；规划阶段由 `internal/observability/metrics/metrics_handler.go` 的 `SelectPlanTier(escalation, complexity, surpriseIndex)` 与规划模型池一并计算（ADR-0105，原 0102 决策六：LLM 判难度、程序持策略，只有能力类失败升级；污点不参与），M4 `transitions.go` / `transitions_respond.go` 在 LLM 调用前经 `protocol.WithThinkingMode` 注入 InferOption。**与 [ReasoningEffort] 是「决策层 → 抽象层」的映射关系，不是同义词**：ThinkingMode 是 Polaris 自己算出的"该想多深"，ReasoningEffort 是把它翻译成 Provider 能理解的字段。映射表见 M1 §5.2-bis。
 - `[ReasoningEffort]`: Provider 抽象层一等公民字段，枚举 `low` / `medium` / `high`。M1 Provider Interface 将其映射至底层 API（o3 `reasoning_effort` / DeepSeek R1 `reasoning_budget` / Claude `thinking.budget_tokens`）。**与 task 难度无关**——同一 task 可在不同 effort 下执行。定义见 M1 §5.2-bis Test-Time Compute。由 [ThinkingMode] 映射而来，见上条。
 - `[ReasoningTokens]`: Provider 返回的 usage 字段，与 `output_tokens` 分计。计入 [TokenBurnRate] 总量但单独导出 Prometheus Gauge `polaris_reasoning_tokens_total`。
 - `[ReasoningState]`: 跨轮 reasoning 状态持久化。物理载体为 M5 `episodic_events.reasoning_state` 列（msgpack 加密 blob），用于推理模型多轮间继承思维链。Tier 0 默认 off（成本控制），Tier 1+ 启用。定义见 M5 §3.1 episodic_events 表。
-- `[BestOfN]`: **已废弃**（ADR-0020 决策二，2026-07-28）。原设计为 M4 可选执行模式——同一 query 用 `temperature>0` 并行采样 N 次由 [Verifier] 选最优——但从未真正实现；DeepSeek V4 Pro 原生 extended thinking 已等效覆盖，改由 [ThinkingMode] 三档驱动。废弃说明见 M1 §5.2-bis 设计决策。**M04-Agent-Kernel.md §进入 S_INTERRUPT 与 M03-Observability.md §10.1 中残留的 `[BestOfN]` 引用属历史未清理措辞，非仍存在的运行时组件**（见 99-new-findings.md）。
+- `[BestOfN]`: **已废弃**（ADR-0020 决策二）。原设计为 M4 可选执行模式——同一 query 用 `temperature>0` 并行采样 N 次由 [Verifier] 选最优——但从未真正实现；DeepSeek V4 Pro 原生 extended thinking 已等效覆盖，改由 [ThinkingMode] 三档驱动。废弃说明见 M1 §5.2-bis 设计决策。M04 / M03 中残留的 `[BestOfN]` 引用属历史措辞，非运行时组件。
 - `[SelfConsistency]`: **随 [BestOfN] 一并废弃**——原设想为 BestOfN 的聚合策略（N 个采样结果做多数投票或语义聚类），因 BestOfN 从未实现而从未落地。保留词条仅为历史索引，不代表当前可用能力。
 - `[TTC]`: Test-Time Compute 统称。当前实际覆盖范围仅 [ReasoningEffort]/[ThinkingMode] 与 [ReasoningTokens] 计量；[BestOfN]/[SelfConsistency] 已废弃，不再计入运行成本模型。
 
@@ -589,9 +518,9 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 - `[CodeAct]`: 即时代码执行行动空间。区别于 [Logic-Collapse]（沉淀型脚本技能）与 LLM 生成脚本（走 staging 流水线）——CodeAct 是**单次 ad-hoc 代码 + 立即执行**，不写入 Skill Library。
   - 强制 [Sandbox-L3]（HT0 不可用）+ Capability Token + Audit。定义见 M7 §7.4。
   - `StatefulSession`（GD-4-002，默认关闭）：显式开启后，同一 SessionID 的多次调用间通过 pickle（python）/`declare -p`（bash）快照文件延续变量状态；每次调用仍是独立的一次性 L3 沙箱进程，不是常驻 Kernel，安全边界不变。
-- `[Memory-Write-Tool]`: LLM 主动写记忆工具集。【防退化】（依据 GD-8-004 结论，属领先设计，删除或弱化需 ADR）。区别于被动记忆积累（Agent 轮次结束后 outbox 异步落盘）——是 LLM **在推理中即时调用工具、主动写入语义记忆**的能力。
-  - 包含 4 个内置工具：`memory_write`（写入/覆盖事实）、`memory_search`（混合检索）、`memory_append`（追加属性）、`memory_expire`（标记失效）。
-  - 实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, exclusiveWriter, semanticWriter, retriever, reflection, coreMemory)`。写入底层对接 `SemanticMemWriter.UpsertFact`（写入/追加）与 `MarkEntityExpired`（标记失效，直接操作 `semantic_entities.status`，2026-07-24 复核修正——原 `Archive` 误用 KV 文档命名空间对实体从未生效）；检索对接 `HybridRetriever`。
+- `[Memory-Write-Tool]`: LLM 主动写记忆工具集。【防退化】（依据 GD-8-004 结论，属领先设计，删除或弱化需 ADR）。区别于轮次结束后 outbox 异步落盘的被动积累——LLM **在推理中即时调用工具主动写入语义记忆**。
+  - 4 个内置工具：`memory_write`（写入/覆盖事实）、`memory_search`（混合检索）、`memory_append`（追加属性）、`memory_expire`（标记失效）。
+  - 实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, exclusiveWriter, semanticWriter, retriever, reflection, coreMemory)`。写入底层对接 `SemanticMemWriter.UpsertFact`（写入/追加）与 `MarkEntityExpired`（标记失效，直接操作 `semantic_entities.status`）；检索对接 `HybridRetriever`。
   - 全部 `SandboxTier=InProcess`、`RiskLevel=Low`，走 PolicyGate 五阶段。定义见 M5 §5-bis，工具层描述见 M7 §3.1。
 - `[CoreMemory]`: 核心工作记忆区。Agent 显式可编辑、持久化、带硬上限的核心状态区。属于 Working Memory，通过 `ZoneCoreMemory` 注入 Prompt，支持通过 `core_memory_edit` 工具（支持 `set/append/delete`）显式管理。用于维护角色约束、长程任务状态等。定义见 ADR-0033 §决策二。分页置换（GD-14-002，M5 §2.4）：`memory_page_out`/`memory_page_in` 工具允许 LLM 自主把暂不需要每轮可见的块置换到 L2 Semantic Memory（仍可 `memory_search`/`memory_page_in` 找回），不新增独立回收机制，与 Forgetting 的全局被动清理正交。
 
@@ -644,7 +573,7 @@ Go 内存内统一为 `internal/security/` 的 `TaintLevel` 枚举类型 (int)�
 | `[SurpriseIndex]` | `internal/observability/` (Prometheus Gauge) / `internal/learning/` (M9 完整版推送) |
 | `[KillSwitch]` | `internal/security/` (FSM + 阶段变迁) |
 | `[Taint-Sanitizer]` | `internal/security/` (TaintedString / SafeString / Sanitize) |
-| 各模块 DDL | `internal/protocol/schema/001-039_*.sql`（公权目录 `internal/protocol/schema/`，共 35 个；025~028 预留） |
+| 各模块 DDL | `internal/protocol/schema/*.sql`（001~024 + 029~048，共 44；025~028 预留） |
 
 ---
 
@@ -671,4 +600,4 @@ Polaris 是一个足够强大的系统。根据哥德尔不完备性定理的工
 **禁止规则**：禁止用自动化机制替换上述任何外部锚点。越自动化的系统，越需要保留这些独立的验证节点。
 
 > `TaintUserReviewed`（值=4）是**旁路标记**而非污点强度序列的一员；一切 `>= TaintMedium` 的拦截判定必须显式排除它。枚举值 4 仅为编码占位，不表示"比 TaintHigh 更脏"。
-> 2026-08-12 追记：GR-2-004 取证确认此为 bug，修复见 safe_dialer_capability.go TaintEgressCheck。
+> 该排除已在 `safe_dialer_capability.go` 的 `TaintEgressCheck` 落实（GR-2-004）。

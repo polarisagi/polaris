@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Constitutional Review — PR 触发的独立 AI 宪法审查
-# 设计依据: docs/arch/decisions/ADR-0013-lint-machinery-phase1.md（决策二，含原 ADR-0014）
+# 设计依据: docs/arch/decisions/ADR-0091-gate-coverage-over-gate-results.md（原 ADR-0013 决策二）
 #
 # 必备环境变量:
 #   REVIEWER_API_KEY   - OpenAI-compatible API 密钥（DeepSeek / OpenRouter / OpenAI 等）

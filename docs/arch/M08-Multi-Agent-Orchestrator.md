@@ -1,22 +1,20 @@
 # 模块 8: Multi-Agent Orchestrator
 
-> 2026-07-12：Blackboard/多模式编排的物理实现已从 `internal/swarm/orchestrator`
-> 迁出至 `internal/execute/orchestrator`（详见 ADR-0046、`internal/execute/CLAUDE.md`）。
-> M8 描述的编排语义/不变量不变，仅物理归属调整；`internal/swarm` 现在是消费方而非实现方。
+> 物理实现在 `internal/execute/orchestrator`（ADR-0046、`internal/execute/CLAUDE.md`）；`internal/swarm` 只含 supervisor / planner / agents / startup，是消费方。
 
-> 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:124 Supervisor / 2-bis:143 常驻角色Agent / 3:160 编排模式 / 3-bis:193 (已删除,见ADR-0062) / 3-ter:201 PipelineOrchestrator / 3-quater:242 PatternDAGExecutor / 3-quinquies:256 StateGraphExecutor / 4:296 AgentCard / 5:308 Task分解 / 8:326 拓扑自演化(已删除,见ADR-0062) / 10:334 (SOFT)降级 / 11:353 跨模块契约 / 11.2:379 已知实现缺口 / 12:393 Custom Agent / 13:409 CSV Fan-out / §3-sexies:442 PatternDebate -->
+> 单机黑板 + CAS（Compare-And-Swap）原子认领 + Supervisor Tree | Go goroutine + SQLite | [HE-Rule-5] [HE-Rule-6]
+<!-- §跳读: 0-bis:7 职责 / 0-ter:21 不变量速查 / 1:34 黑板+CAS(核心) / 2:91 Supervisor / 2-bis:107 常驻角色Agent / 3:121 编排模式 / 3-bis:145 (已删除,见ADR-0062) / 3-ter:151 PipelineOrchestrator / 3-quater:170 PatternDAGExecutor / 3-quinquies:181 StateGraphExecutor / 4:214 AgentCard / 5:223 Task分解 / 8:240 拓扑自演化(已删除,见ADR-0062) / 10:248 (SOFT)降级 / 11:264 353 跨模块契约 / 11.2:289 379 已知实现缺口 / 12:304 393 Custom Agent / 13:320 409 CSV Fan-out / §3-sexies:337 442 PatternDebate -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
 |-----------|-------------|
-| 多 Agent 协调黑板（PostTask + CAS Claim + Lease） | 单 Agent 内部状态机（那是 M4） |
-| Supervisor Tree 故障恢复（OneForOne + 指数退避） | 工具沙箱执行（那是 M7） |
-| 7 种编排模式执行（Supervisor/Hierarchy/Sequential/Parallel/MapReduce/Reflection/Swarm） | 编排模式的选择决策（由任务复杂度自适应） |
-| Agent Card 注册与能力发现（AgentRegistry.Register/Get，供 SpawnDepth 校验） | Agent 自身的能力实现（各 Agent 自行声明） |
-| Task DAG（Directed Acyclic Graph，有向无环图） 分解（跨 Agent 边界的子任务） | 子任务内部的工具调用 DAG（那是 M4 Micro-DAG） |
-| 单进程内多 Agent 消息/任务流转（Blackboard CAS 认领 + Handoff） | Provider 路由（那是 M1） |
-| — | **A2A 跨机互操作（gRPC/HTTP）**：ADR-0017 状态 Proposed 未落码，且 `ROADMAP.md §3.4`「跨节点 Agent 永远不在计划」+ `ARCHITECTURE.md §1` 单进程主体硬约束明确禁止。M8 不承担跨机职责（2026-10-12 追记：独立节点间的任务委派已由 ADR-0111 在 M13 网关层实现——入站 `internal/gateway/mesh` 把对端任务投成黑板 `peer_delegation` 任务，由 `DefaultTaskWorker` 以只读 peer 角色执行；出站仍是 ADR-0084 的 `MCPA2AWorker`，增补 `spawn_depth`/`chain`。M8 本身仍不做跨机调度） |
+| 多 Agent 协调黑板（PostTask + CAS Claim + Lease） | 单 Agent 内部状态机（M4） |
+| Supervisor Tree 故障恢复（OneForOne + 指数退避） | 工具沙箱执行（M7） |
+| 11 种编排模式执行（§3） | 编排模式的选择决策 |
+| Agent Card 注册（AgentRegistry.Register/Get，供 SpawnDepth 校验） | Agent 自身能力实现 |
+| Task DAG 分解（跨 Agent 边界子任务） | 子任务内部工具调用 DAG（M4 Micro-DAG） |
+| 单进程多 Agent 任务流转（CAS 认领 + Handoff） | Provider 路由（M1） |
+| — | **跨机调度**：M8 不做。跨节点委派在 M13 网关层（ADR-0111）：入站 `internal/gateway/mesh` 把对端任务投成黑板 `peer_delegation` 任务，由 `DefaultTaskWorker` 以只读 peer 角色执行；出站为 `MCPA2AWorker`（`a2a_delegate`，带 `spawn_depth`/`chain`）。HTTP 门面在 `internal/gateway/server/meshapi/`（`/mcp`、`/a2a/v1`、Agent Card）。`ROADMAP.md §3.4` 的"跨节点 Agent 不在计划"指共享黑板式跨机调度，不含此委派 |
 
 ---
 
@@ -27,9 +25,9 @@
 | inv_M8_01 | 禁止自由 NL 多 Agent 对话——所有协调经 schema 原语（Intent/Request/Claim/Result/Fail） | BlackboardEvent schema 强制 | ✅ 已实现 |
 | inv_M8_02 | Blackboard 写入与 EventLog 同事务双写——EventLog 是真相源 | M2 CompositeMutationIntent | ✅ 已实现 |
 | inv_M8_03 | Task 状态单调推进 Pending→Claimed→Executing→Done/Failed，禁止回退 | CAS Version++ 乐观锁 | ✅ 已实现 |
-| inv_M8_04 | Agent Lease TTL（Time To Live，存活时间） 60s + 心跳 15s ±5s jitter + Reaper 1s 扫描——Lease 过期任务自动回收 | M8 §1.7 Reaper | ✅ 已实现（注：Reaper toxicity 计数机制为代码扩展，文档未含） |
+| inv_M8_04 | Agent Lease TTL 60s + 心跳 15s ±5s jitter + Reaper 1s 扫描——Lease 过期任务自动回收 | M8 §1.7 Reaper | ✅ 已实现（Reaper toxicity 计数为代码扩展） |
 | inv_M8_05 | Taint 经 Blackboard 传播——input_data 携带原始 TaintLevel，协调期间不降级 | M8 §4 blackboard_entries taint_level CHECK | ✅ 已实现 |
-| inv_M8_06 | 委托链深度 ≤3——跨 Agent 委托禁止超过 3 层 | M11 §8 Layer 4 多 Agent 宪法 | ✅ 已实现（`sqlite_blackboard.go` `PostTask`/`PostBatch` 校验；内存版 `blackboard.go` 已随 ADR-0062 删除，SQLiteBlackboard 是唯一生产实现） |
+| inv_M8_06 | 委托链深度 ≤3——跨 Agent 委托禁止超过 3 层 | M11 §8 Layer 4 多 Agent 宪法 | ✅ 已实现（`orchestrator.MaxSpawnDepth=3`，`SQLiteBlackboard.PostTask`/`PostBatch` 校验；跨节点委派共用同值） |
 
 ---
 
@@ -37,96 +35,62 @@
 
 ### 1.1 核心结构
 
-Blackboard/TaskEntry/TaskStatus/BlackboardEvent 类型及 CAS Claim/RenewLease/SideEffectPreCheck 实现见 `internal/execute/orchestrator/`。核心文件：`sqlite_blackboard*.go`（SQLiteBlackboard，唯一生产 Blackboard 实现，CAS+TOCTOU 幂等锁+PostTask）、`default_worker.go`/`workflow_step_worker.go`（自订阅 Blackboard + CAS 认领的任务消费者）、`pipeline.go`（PipelineOrchestrator）、`pattern_*.go`（各编排模式）、`reaper.go`（Reaper 泄漏回收）、`csv_fanout.go`（CSV 扇出）、`tree.go`（Supervisor Tree，因依赖在同包内但逻辑独立）。
-> 2026-07-14（ADR-0062）：中心化 `Orchestrator`（`orchestrator.go`，RegisterWorker/dispatchPendingTasks）、`Worker`（`worker.go`）与内存版 `Blackboard`（`blackboard.go`/`blackboard_lifecycle.go`）已删除——三者在生产环境从未被真正驱动（`orch.ListenLoop` 未注册为 Supervisor Worker、`RegisterWorker`/`NewWorker` 全仓库零调用、内存 Blackboard 违反 HE-6 State-in-DB），任务派发实际由 `default_worker.go`/`workflow_step_worker.go` 独立收敛出的"自订阅 Blackboard + CAS 认领"模式承接。
+`SQLiteBlackboard` 是唯一生产 Blackboard 实现（`internal/execute/orchestrator/sqlite_blackboard*.go`：CAS + TOCTOU 幂等锁 + PostTask）。任务消费者是"自订阅 Blackboard + CAS 认领"模式：`default_worker.go`、`workflow_step_worker.go`（`internal/gateway/server/sysadmin/workflowadmin/`）、`debate_worker.go`、`mcp_a2a_worker.go`。其余：`pipeline*.go`、`pattern_*.go`、`reaper.go`、`csv_fanout.go`、`subagent_runner.go`。类型契约见 `internal/protocol/interfaces_swarm.go`。
 
-### 1.2 初始化
+已删除（ADR-0062，2026-07-14）：中心化 `Orchestrator`（RegisterWorker/dispatchPendingTasks/ListenLoop）、`Worker`、内存版 Blackboard、`SupervisorEpoch`、`FindBestAgent`——生产从未被驱动，且内存黑板违反 HE-6。
 
-初始化时从 EventLog 全量回放重建内存黑板（仅回放活跃状态任务，Done/Failed + 5min 超时的终态跳过，重建窗口 24h）。启动后台 Reaper（1s 扫描）和 monitorBackpressure（500ms）。
+### 1.2 初始化与背压
 
-背压控制：events chan 占用 >80% 时拒绝 PostTask，<50% 恢复。Heartbeat/RenewLease 直接在 Lock 内更新 ExpiresAt，禁止走 events chan（控制/数据平面严格分离）。崩溃重建时执行 BatchRebuild，chan 排空后切回常规流。PostTask 经 schemaValidator 强类型校验，身份经 Ed25519 签名校验。
+状态全部在 SQLite `tasks` 表（HE-6），重启后不再"回放重建内存黑板"。`PostTask` 做强类型校验与 SpawnDepth 校验；Heartbeat/RenewLease 直接更新 `ExpiresAt`，不走事件订阅（控制/数据平面分离）。
 
-SupervisorEpoch 在启动时写入 SQLite sys_config 原子递增，Worker 在 SideEffectPreCheck 时读取校验（不一致触发 GracefulTermination + 重注册）。
-
-> ✅ `SupervisorEpoch.Increment()` 已改为 `atomic.AddInt64`，并发安全。
+2026-10 核：旧文所述 chan 占用 80%/50% 背压、`BatchRebuild`、`schemaValidator`、`SupervisorEpoch` 在代码中均无对应实现，已从本节移除；`state.yaml §m8_multiagent.max_blackboard_pending` 目前无代码读取（待决：接线或删键）。
 
 全部常量权威源：`spec/state.yaml §m8_multiagent`。
 
 ### 1.3 Claim CAS
 
-- **Claim (认领)**: 验证状态为 `Pending` 且未被其他 Agent 认领，原子化地将状态置为 `Claimed`，并设置 `ClaimedAt` 和过期时间 `ExpiresAt`（默认为 60s），同时递增版本号 `Version++` 防 ABA。
-- **BeginExecution (执行)**: 验证当前认领者身份并确保状态仍为 `Claimed`，将其流转为 `Executing` 并递增版本号。这是 M4 Agent Kernel 首次 ExecuteTool 前必须流经的检查点。
-
-
-
-状态: Pending→Claimed→Executing→Done|Failed, 禁止回退。
+- **Claim**：校验 `Pending` 且未被认领 → 原子置 `Claimed`，写 `ClaimedAt`/`ExpiresAt`（lease_ttl_seconds），`Version++` 防 ABA。
+- **BeginExecution**：校验认领者身份且仍为 `Claimed` → `Executing`，`Version++`。M4 首次 ExecuteTool 前必经检查点。
+- 状态：Pending→Claimed→Executing→Done|Failed，禁止回退。
 
 ### 1.4 RenewLease (控制平面带外)
 
-- **RenewLease (续约)**: 在任务执行过程中，控制平面周期性（心跳时间）原地更新过期时间 `ExpiresAt`，避免被 Reaper 错误回收，续约计数器递增。该操作直接使用锁更新内存或数据库，不产生黑板订阅事件。
+执行期间按心跳周期原地更新 `ExpiresAt` 并递增续约计数，不产生黑板订阅事件。
 
-### 1.5 HITL（Human-in-the-loop，人机协同） 挂起/恢复
+### 1.5 HITL 挂起/恢复
 
-- **SuspendForHITL**: 将处于 `Executing` 的任务原子性地转为 `Suspended`，使用长期 HITL 超时时间覆盖短期租约。
-- **ResumeFromHITL**: 将任务从 `Suspended` 状态中恢复。若人类审批通过则切回 `Executing` 并恢复常规租约 TTL；否则直接将其置为 `Failed` 状态。
-- **BeginCompensation**: 当 M4 发起回滚或 Saga 补偿流程时，状态变更为 `Compensating`，并自动提供最高 5min 的长生命周期预算。
-- **EndCompensation**: 补偿工作完成后，将任务状态标为 `Failed`，等待常规垃圾回收。
+- **SuspendForHITL**：`Executing`→`Suspended`，以长 HITL 超时覆盖短租约。
+- **ResumeFromHITL**：审批通过→`Executing` 并恢复常规 TTL；否则→`Failed`。
+- **BeginCompensation / EndCompensation**：M4 回滚或 Saga 补偿期间状态为 `Compensating`（预算上限见 `compensation_timeout_seconds`），结束后置 `Failed` 待 GC。
+- 跨节点任务的 HITL 只在执行节点本地完成（ADR-0111 决策五）。
 
 ### 1.6 SideEffectPreCheck (每 M7 ExecuteTool 前强制执行)
 
-每次 ExecuteTool 前，持有 RLock 检查四项：Status==Executing、ClaimedBy==self、ExpiresAt>now、Version==self.claimedVersion，任一失败返回 ErrStaleLease，Agent 进入 S_ROLLBACK。全通过后快照到栈，释放 RLock，执行 tool call，写回时重新 Lock + CAS 校验 Version。
+持 RLock 检查四项：Status==Executing、ClaimedBy==self、ExpiresAt>now、Version==claimedVersion；任一失败返回 `ErrStaleLease`，Agent 进入 S_ROLLBACK。通过后快照到栈并释放锁，执行 tool call，写回时重新 Lock + CAS 校验 Version。
 
-> ✅ `SideEffectPreCheck` Version 校验已在内存黑板中补齐，ABA 防护有效。
-
-不可逆操作（write_network/privileged）附加 TOCTOU 防护：L1 基于 `SHA-256(taskID+operation_seq+toolName)` 幂等锁（SurrealDB-Core KV（Key-Value，键值），TTL=15s 心跳续期）；L2 外部 API（Application Programming Interface，应用程序接口） 原生幂等键注入（辅助）。
+不可逆操作（write_network/privileged）附加 TOCTOU 防护：L1 `SHA-256(taskID+operation_seq+toolName)` 幂等锁（SurrealDB-Core KV，TTL=15s 心跳续期）；L2 外部 API 原生幂等键注入（辅助）。
 
 ### 1.7 Reaper
 
-**阶段 1（1s 扫描）**：Lock 扫描，跳过 Suspended/Compensating；对 Claimed/Executing + ExpiresAt 过期的任务：取消 Agent context → 等待 5s 宽限期（供工具 ctx.Done() 感知，防止孤儿副作用）→ Version++ + 重置为 Pending → 发射 EventTaskReaped。5s 宽限期内若工具已完成进入 PostCheck，PostCheck 发现 Version 不匹配 → 写 decision_log（M7 §4.6）。
+**阶段 1（reaper_scan_interval_seconds）**：跳过 Suspended/Compensating；对 Claimed/Executing 且 `ExpiresAt` 过期的任务：取消 Agent context → 5s 宽限期（供工具 `ctx.Done()` 感知，防孤儿副作用）→ `Version++` 重置 Pending。宽限期内工具若已完成进入 PostCheck，PostCheck 发现 Version 不匹配 → 写 decision_log（M7 §4.6）。崩溃恢复时并发 cancel 全部过期任务（errgroup），统一 5s 宽限；常态为单 goroutine 串行扫描。含 `retry_count` 与 `provider_suspended_count` 逻辑。
 
-**崩溃恢复时**并发 cancel 所有过期任务（errgroup），统一 max(5s) 宽限期，O(max(5s)) 而非 O(N×5s)。正常运行期间始终为单一 goroutine 串行扫描。
+**阶段 2（`reaperPhase2`，与阶段 1 同步触发）**：`running` 超 30 分钟的僵尸任务先 cancel goroutine 再标 failed；`pending` 超 60 分钟的饥饿任务标 failed（`reaper_phase2_pending_timeout`）。两个超时现为 `internal/execute/orchestrator/sqlite_blackboard_reaper.go` 的 SQL 字面量，未入 `state.yaml`——需运行期可调时先补 `m8_multiagent` 阈值键。
 
-> ✅ Reaper 已回退至规范的 `retry_count` 及 `provider_suspended_count` 逻辑；CompleteTask 竞态已修复。
+### 1.8 任务优先级
 
-**阶段 2（Phase 2 GC，✅ 已实现）**：`reaperPhase2` 每秒随 Phase 1 一同触发；`running` 状态超 **30 分钟**的僵尸任务先 cancel goroutine 再标 failed，`pending` 状态超 **60 分钟**的饥饿任务直接标 failed（错误码 `reaper_phase2_pending_timeout`），防止 SQLite 黑板体积失控。两个超时目前直接内联在 `internal/execute/orchestrator/sqlite_blackboard_reaper.go` 的 SQL 字面量（`datetime('now','-30 minute')` / `'-60 minute'`）中，尚未提取为命名常量或 `state.yaml` 阈值——如需运行期可调，须先补 `m8_multiagent` 阈值键再改代码。
+`TaskEntry.Priority` 与 M13 ResourceGovernor 统一：0 用户交互（始终放行）/ 1 前台辅助（工具链子任务）/ 2 后台优化（Consolidation/Reflection/PromptOptimizer）/ 3 最低（Auto-Curriculum、索引重建）。
 
-### 1.8 Agent 看板监听
-
-TaskEntry 包含 Priority 字段，与 M13 ResourceGovernor 统一优先级体系:
-- Priority=0: 用户交互（CLI/WebUI 直接请求）—— 始终放行
-- Priority=1: 前台辅助（Agent 工具调用链中的子任务）
-- Priority=2: 后台优化（Consolidation/Reflection/PromptOptimizer）
-- Priority=3: 最低（Auto-Curriculum 课程任务、索引重建等）
-
-- **ListenLoop**: 后台长轮询监听新发布任务。对队列中满足优先级的任务尝试 CAS 竞争（由于无中央调度）。
-- **动态提权防饥饿**（✅ **已实现**）：`dispatchPendingTasks` SQL 计算 `eff_priority = priority - age_bonus`：Priority=2 等待 >5min 升至 1，Priority=3 等待 >15min 强制升至 1（阈值常量 `escalateP2AfterMinutes` / `escalateP3AfterMinutes`，来源 M08 §1.8）；提权时记录 `slog.Info("orchestrator: task priority escalated")`。
-
-无中央调度，优先级排序 + CAS 隐式竞争。
+认领按 `ORDER BY priority DESC, created_at ASC`（`sqlite_blackboard_ops.go`）。**动态提权防饥饿（`eff_priority`、`escalateP2AfterMinutes`）与 `ListenLoop` 随 ADR-0062 删除，代码无对应实现**（2026-10 核）；防饥饿现仅靠阶段 2 的 60 分钟 pending 超时兜底。
 
 ### 1.9 Phased Startup
 
-⚠️ **已定义未接线**（2026-08-15 核查）：`internal/swarm/startup.go` 定义了分阶段启动契约
-（`PhasedStartup`/`Pinger`/`PhaseEntry`）——按 P0→P4 顺序启动，每阶段 30s 健康检查门控（并行 Ping），
-P0 失败 panic（策略真空不可接受），P1-P4 失败返回 error。
-
-但**生产路径从未调用**：全仓零处引用 `NewPhasedStartup`，也没有任何子系统被注册进
-`PhaseEntry`（原文所称"SQLiteBlackboard 接入 P0 健康检查"在代码中不存在对应注册点）。
-生产启动实际走 `cmd/polaris/boot_*.go` 的手工装配链。
-
-与 `internal/bootstrap` 的关系：这是仓库里**第二套**未接线的启动编排契约。
-`ARCHITECTURE.md §8.2` + `ADR-0088 §决策七` 已就 bootstrap 裁决"维持不接线"，
-理由是它被 `ARCHITECTURE.md` 与 `Module-Dependency-Axioms.md §4` 共同指为目标契约；
-本节此前的"✅ 已实现"是唯一指向 `swarm/startup.go` 的陈述，且与代码相反。
-若将来要收敛启动编排，两套须一并裁决，不宜单独处置其一。
+⚠️ **已定义未接线**（2026-10 复核仍成立）：`internal/swarm/startup.go` 定义 P0→P4 分阶段启动契约（`PhasedStartup`/`Pinger`/`PhaseEntry`，每阶段 30s 健康检查，P0 失败 panic）；全仓零处调用 `NewPhasedStartup`，生产启动走 `cmd/polaris/boot_*.go` 手工装配。它与 `internal/bootstrap` 是仓库里两套未接线的启动编排契约，`ARCHITECTURE.md §8.2` + ADR-0088 决策七已裁决 bootstrap"维持不接线"；收敛时两套须一并裁决。
 
 ---
 
 ## 2. Supervisor Tree
 
-**独立子包**：`internal/swarm/supervisor/`（`tree.go`），OTP 风格独立模块，**与 M8 Blackboard/Worker 解耦**，直接从 `cmd/polaris/main.go` 启动（`supervisor.NewSupervisor(5, 5*time.Minute)`）。
-
-Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory-agent 等，Supervisor, OneForOne)，各 Worker 直接挂载为 Root 的平级子节点（2026-07-14 起无中心化 Orchestrator 中间层，见 §1.1 ADR-0062 说明）。重启窗口策略权威源 `spec/state.yaml §m8_multiagent.agent_restart_max_in_window` / `agent_restart_window_seconds`。
-退避指数从 `spec/state.yaml §m8_multiagent.supervisor_backoff_initial_ms` 倍增至 `supervisor_backoff_max_seconds` 封顶。
+**独立子包** `internal/swarm/supervisor/`（`tree.go`），与 Blackboard/Worker 解耦，由 `cmd/polaris/boot_agent.go` 以 `supervisor.NewSupervisor(ctx, 5, 5*time.Minute)` 启动。Root(OneForOne) 下各常驻 Worker 为平级子节点（default-task-worker 等，无中心化 Orchestrator 中间层）。重启窗口权威源 `spec/state.yaml §m8_multiagent.agent_restart_max_in_window` / `agent_restart_window_seconds`；退避自 `supervisor_backoff_initial_ms` 倍增至 `supervisor_backoff_max_seconds`。
 
 | 策略 | 行为 | 适用 |
 |------|------|------|
@@ -136,24 +100,21 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 | Stop | 不重启 | 一次性任务 |
 | Escalate | 耗尽→上报父级 | 关键 Agent |
 
-实现选型：主选 thejerf/suture v4（成熟开源 Erlang 风格 supervisor）；备选自建（仅当 suture 引入额外依赖冲突时启用）。
+⚠️ 冲突待裁：`boot_agent.go` 的 `5 次 / 5 分钟` 与 state.yaml 的 `3 次 / 60 秒` 不一致（代码以字面量传参，未读 state.yaml）。
 
 ---
 
-## 2-bis. 常驻角色 Agent（Resident Role Agents）**[本节为补录，此前文档未覆盖]**
+## 2-bis. 常驻角色 Agent（Resident Role Agents）
 
-**独立子包**：`internal/swarm/agents/`，与本节 §2 Supervisor Tree、§3 编排模式均**正交**——包内 Agent 均为常驻 goroutine，通过 channel 与主脑通信，**不经过 SQLiteBlackboard 的 tasks 表**，Tier-0 约束下两 Agent 静止时内存开销 < 5MB。
+`internal/swarm/agents/`，与 §2、§3 正交：常驻 goroutine，经 channel 与主脑通信，**不经过 tasks 表**；Tier-0 下静止内存 < 5MB。
 
-当前已实现角色：
-- **MemoryAgent（记忆管家）**：L1→L2 蒸馏 + 耳语推送 + Extension Librarian 调度 + **个人知识库连接器调度（2026-07-03 决策新增职责范围，见下）**。
-- **GovernanceAgent（治理守门人）**：PolicyGate 包装 + 幂等网关 + 内存压力监控。
-- 另有 `security_audit_agent.go`（SecurityAuditAgent）、`code_validator.go`（CodeValidator）两个辅助角色文件。
+- **MemoryAgent**：L1→L2 蒸馏 + 耳语推送 + Extension Librarian 调度 + 个人知识库连接器调度。
+- **GovernanceAgent**：PolicyGate 包装 + 幂等网关 + 内存压力监控。
+- 辅助：`security_audit_agent.go`（SecurityAuditAgent）、`code_validator.go`（CodeValidator）。
 
-**关于"Librarian"提法的澄清与决策**：代码中唯一带 Librarian 字样的类型是 `internal/knowledge/connector/extension_librarian_handler.go` 的 `ExtensionLibrarianHandler`——它在扩展安装后把该扩展的能力索引进 SurrealDB 知识图谱，供 Planner 语义检索"该用哪个工具"，由 MemoryAgent 调度触发，服务对象是"扩展能力"而非"用户知识"。
+决策（2026-07-03）：产品侧"Librarian"（对接 Obsidian/Notion 等用户知识库）**不新建独立 swarm 角色**，收编进 MemoryAgent 调度——与它已有的 Extension Librarian 调度（`internal/knowledge/connector/extension_librarian_handler.go`，扩展安装后把能力索引进知识图谱）同属"周期性摄入外部信息"，无独立扩缩容/故障隔离必要。若同步复杂度超出 MemoryAgent 承载再拆。
 
-产品侧设想的 Librarian（对接用户本地知识库如 Obsidian/Notion，整理内容、辅助 AI 理解用户/办公）**不新建独立 swarm 角色**——2026-07-03 系统级决策：这类"周期性把外部信息摄入进 Agent 可用知识"的职能与 MemoryAgent 已经承担的 Extension Librarian 调度是同一性质的工作，收编进 **MemoryAgent** 的调度范围，不单独起一个常驻 goroutine（避免 Tier-0 内存预算和 Supervisor 挂载点的边际浪费，两者也没有独立扩缩容/故障隔离的必要性）。
-
-**代码现状**：`internal/knowledge/connector/` 下 `obsidian_connector.go` 与 `notion_connector.go` 均已完整实现（List/Fetch/Watch/SyncConfig 等方法齐全），但两者目前都还未被 MemoryAgent 所在的 `internal/swarm/` 引用调度——即"收编进 MemoryAgent 调度"这一决策的连接器代码本体已就绪，调度接入这一步尚未完成，Obsidian 与 Notion 处于同一未接线状态，并非"Obsidian 已接入、Notion 待实现"的差异化状态。若未来知识库同步的复杂度/调用量确实超出 MemoryAgent 承载范围，再考虑拆分独立角色。
+接线状态：✅ 已接入。`cmd/polaris/boot_agent.go` 构造 Obsidian / Notion / MCP 知识源连接器，各包 `connector.NewSyncScheduler` 后经 `memoryAgent.RegisterSyncScheduler` 注册，`MemoryAgent.Run()` 并发拉起。
 
 ---
 
@@ -163,171 +124,124 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 |---|------|------|------|
 | 1 | Supervisor(默认) | Planner→Worker→汇总 | [Blackboard] |
 | 2 | Hierarchy | 递归分解 | ROMA |
-| 3 | Sequential | A输出→B输入 | task.DependsOn |
-| 4 | Parallel | 独立子任务并发 | errgroup+BFS |
+| 3 | Sequential | A输出→B输入 | task.DependsOn（`pattern_sequential.go`） |
+| 4 | Parallel | 独立子任务并发 | errgroup+BFS（`pattern_parallel.go`） |
 | 5 | MapReduce | 分片归并 | MapReduceExecutor |
 | 6 | Reflection | 执行→审查→改进 | +M4 S_REFLECT |
 | 7 | Swarm | 去中心化handoff | SwarmCoordinator |
-| 8 | Pipeline | 专家流水线(含验证) | PipelineOrchestrator |
-| 9 | PatternDAG | 强类型 DAG(防环/补偿) | PatternDAGExecutor |
-| 10 | StateGraph | 条件路由+有界循环(GD-8-001) | StateGraphExecutor |
-| 11 | PatternDebate | 对抗性辩论(多角色互驳收敛，ADR-0046) | DebateExecutor（详见 §3-sexies） |
+| 8 | Pipeline | 专家流水线(含验证) | PipelineOrchestrator（§3-ter） |
+| 9 | PatternDAG | 强类型 DAG(防环/补偿) | PatternDAGExecutor（§3-quater） |
+| 10 | StateGraph | 条件路由+有界循环(GD-8-001) | StateGraphExecutor（§3-quinquies） |
+| 11 | PatternDebate | 对抗性辩论(ADR-0046 决策四) | DebateExecutor（§3-sexies） |
 
-**MapReduceExecutor**: 
-1. **Map**: Planner拆N个同构子任务, 不同 scope, PostTask
-2. **并发**: errgroup CAS 认领, 任一失败不影响其余
-3. **Reduce**: 收集 Result, 去重 artifact hash, 冲突标记人工裁决
-4. **聚合**: 写回父任务 Done
-> 子任务完全同构, 异构走 Supervisor/Hierarchy。
+**MapReduceExecutor**：Planner 拆 N 个同构子任务（不同 scope）PostTask → errgroup CAS 认领，任一失败不影响其余 → Reduce 去重 artifact hash、冲突标记人工裁决 → 写回父任务 Done。异构任务走 Supervisor/Hierarchy。
 
-**SwarmCoordinator**: 
-1. **初始认领**: 初始 CAS 认领
-2. **Handoff**: 持有者不自适 → handoff（`SwarmCoordinator.Handoff` 调 `FailTask`，payload 写入带 `[HANDOFF_NOTE]:` 前缀的移交说明；`Status` 回落 `Pending` 供其余 Agent 重认领。无独立 `EventTaskHandoff` 事件类型）
-3. **重匹配与认领**: 其余 Agent 按 `handoff_note` 重匹配 ActivationRule → 重认领
-4. **升级**: `max_handoff_depth(3)` 后升级 Supervisor。
+**SwarmCoordinator**：初始 CAS 认领 → 持有者不适配则 `Handoff`（调 `FailTask`，payload 带 `[HANDOFF_NOTE]:` 前缀，状态回落 `Pending`，无独立 handoff 事件类型）→ 其余 Agent 按 `handoff_note` 重匹配 ActivationRule 重认领 → `max_handoff_depth`（3）后升级 Supervisor。
 
-> 2026-07-13：上述四大执行模式（MapReduce, Parallel, Sequential, Swarm）已全面接入 `sysadmin` REST API（位于 `/v1/admin/tasks/pattern-*`）。这些端点在 `boot_server.go` 和 `server_routes.go` 中注册，支持外部通过 HTTP 发送结构化执行图直接驱动相应执行器工作。
+模式 3/4/5/7/9 经 `sysadmin` REST（`POST /v1/admin/tasks/pattern-{dag,mapreduce,parallel,sequential,swarm}` 与 `csv-fanout`，`server_routes.go`）直接驱动。模式 10 的生产消费方是工作流（§3-quinquies-c）；Debate 无 REST 入口，由 `boot_agent.go` 装配与恢复循环驱动。
 
 ---
 
 ## 3-bis.（已删除）SwarmRouter + CapabilityRegistry
 
-`internal/swarm/topology/`（`swarm.go`/`swarm_router.go`/`evolver_service.go`）已于 2026-07-14 整包删除（ADR-0062）。`NewSwarmRouter`/`NewTopologyEvolverService`/`NewCapabilityRegistry` 全仓库零生产调用点（仅测试文件构造过），本节曾描述的"Agent 数 ≥10 自动升级 Mesh 拓扑"路由决策层从未在生产环境运行过一次。
-
-真实生产的多 Agent 编排走 §3 十种模式（PatternDAG/StateGraph/MapReduce/Parallel/Sequential/Swarm 等，均已接入 `sysadmin` REST API）+ `internal/swarm/agents/` 三个硬编码常驻角色（§2-bis）；两者均是**结构显式声明**（DAG 边/StateGraph 转移表/固定角色），不存在"运行时按 Agent 数量动态切换拓扑"的真实需求——当前架构里没有"同一角色多实例竞争"的场景，`CapabilityRegistry` 解决的"多候选 Agent 择优路由"问题在生产中不存在。若未来出现真实的多实例同构 Agent 池场景，应基于已验证生产可用的"自订阅 Blackboard + CAS 认领"模式（`default_worker.go`/`workflow_step_worker.go`）扩展按能力过滤，而非复活本节描述的独立路由决策层。详见 ADR-0062《被驳回的方案》一节。
+`internal/swarm/topology/` 于 2026-07-14 整包删除（ADR-0062）：`NewSwarmRouter`/`NewTopologyEvolverService`/`NewCapabilityRegistry` 零生产调用。生产编排均为结构显式声明（DAG 边 / StateGraph 转移表 / 固定常驻角色），无"运行时按 Agent 数量切换拓扑"需求。若出现同构 Agent 池场景，在"自订阅 + CAS 认领"模式上扩展按能力过滤，不复活独立路由层。详见 ADR-0062《被驳回的方案》。
 
 ---
 
 ## 3-ter. PipelineOrchestrator（编排模式 8）
 
-> 实现: `internal/execute/orchestrator/`（PipelineOrchestrator）
-> 类型定义: `internal/protocol/types.go`（`PipelineDescriptor` / `PipelineStageSpec` / `VerificationPolicy` / `VerificationResult`）
+> 实现：`internal/execute/orchestrator/pipeline.go`、`pipeline_compensation.go`；类型：`internal/protocol/types.go`（`PipelineDescriptor` / `PipelineStageSpec` / `VerificationPolicy` / `VerificationResult`）。`cmd/polaris/boot_agent.go` 装配，并注入 Parallel/MapReduce 执行器。
 
-### 设计动机
+why-do：专家流水线（Researcher→Planner→Executor→Verifier）需要结构化上下文传递（防 Token 膨胀与跨阶段污染）、独立对抗性验证（"目标未达成"假设，区别于 M4 S_REFLECT 自省）、流水线级重试（不重复计费已成功阶段）。
 
-§3 的 Sequential 模式（编排模式 3）通过 `task.DependsOn` 在 Blackboard 层实现串行依赖。但对于**专家流水线**（Researcher→Planner→Executor→Verifier 四阶段）场景，需要：
-1. **结构化上下文传递**：前序阶段的结构化产出（JSON）精确注入下游阶段，而非共享全量上下文（防止 Token 膨胀与跨阶段污染）。
-2. **对抗性验证**：末尾专设独立验证 Agent，从"目标未达成"假设出发（不是 M4 内部的 S_REFLECT 自省）。
-3. **流水线级重试**：单阶段失败时在流水线层而非 Agent 层重试，避免重复计费已成功的前序阶段。
-
-### ContextPayload 传递协议
-
-`Stage[N].Result` 作为 `Stage[N+1].ContextPayload` 注入下一阶段，`TaskEntry.PipelineID`/`PipelineStage` 标识归属。
-
-- `TaskEntry.ContextPayload`（`[]byte`，JSON）由 `PipelineOrchestrator.runStage` 在 `PostTask` 时填充。
-- `TaskEntry.PipelineID` / `TaskEntry.PipelineStage` 标识流水线归属，供审计与 Eval Harness 消费。
-- DDL（Data Definition Language，数据定义语言） 见 `internal/protocol/schema/007_tasks.sql`（含 `idx_tasks_pipeline` 索引）。
-- Agent Kernel 从 `ContextPayload` 读取上游产出，自行决定如何拼装至 Prompt——PipelineOrchestrator 不参与 Prompt 组装（Thin Orchestrator 原则）。
-
-### 执行流程
-
-`PipelineOrchestrator.Run` 逐阶段顺序执行，每阶段通过 Blackboard.PostTask 分发并轮询完成，Result 注入下一阶段 ContextPayload。若配置 VerificationPolicy，最终执行对抗性验证阶段（Adversarial=true 时注入 [ADVERSARIAL_STANCE] 指令，返回 VerdictPass/Warning/Blocker）。
-
-### VerificationVerdict 语义
+- `Stage[N].Result` 作为 `Stage[N+1].ContextPayload`（JSON）由 `runStage` 在 `PostTask` 时填充；`TaskEntry.PipelineID`/`PipelineStage` 供审计与 Eval 消费（DDL `internal/protocol/schema/007_tasks.sql`，`idx_tasks_pipeline`）。Agent Kernel 自行决定如何拼入 Prompt（Thin Orchestrator）。
+- `Run` 逐阶段 PostTask 并轮询完成；配置 VerificationPolicy 时最后执行验证阶段（`Adversarial=true` 注入 `[ADVERSARIAL_STANCE]`，返回 Verdict）。
+- 验证 Agent 持独立 PromptBuilder，不继承执行阶段上下文（[Sub-agent-Isolation]）。
+- 阶段数上限与 `MaxRetries` 由 `PipelineDescriptor` 约束；全阶段失败则流水线终止，不触发全局 Saga（各 Kernel 内部已持有）。
 
 | Verdict | 值 | 语义 |
 |---------|---|------|
-| `VerdictPass` | 0 | 目标已达成，可继续 |
-| `VerdictWarning` | 1 | 存在问题但不阻塞，需记录 |
+| `VerdictPass` | 0 | 目标已达成 |
+| `VerdictWarning` | 1 | 有问题但不阻塞，需记录 |
 | `VerdictBlocker` | 2 | 关键缺失，`BlockOnFail=true` 时触发 ESCALATE |
-
-### 约束
-
-- 流水线阶段数上限 `AgentLimits.Pipeline = 5`（§3-bis），对齐前沿研究最优区间。
-- `Adversarial=true` 验证 Agent 拥有完全独立的 PromptBuilder 实例（[Sub-agent-Isolation]），不继承任何执行阶段上下文。
-- 单阶段重试不超过 `PipelineDescriptor.MaxRetries`；全阶段失败则流水线终止，不触发全局 Saga 补偿（各 Agent Kernel 内部已持有 Saga 逻辑）。
 
 ---
 
 ## 3-quater. PatternDAGExecutor（编排模式 9）
 
-> 实现: `internal/execute/orchestrator/pattern_dag.go`
-> 架构记录: `docs/arch/decisions/ADR-0046-execute-module.md`（决策二，含原 ADR-0037）
+> 实现：`internal/execute/orchestrator/pattern_dag.go`；决策：ADR-0046 决策二。
 
-在跨 Agent 边界（Macro-DAG）的场景下，除了简单的串行与分片归并，常常需要复杂的有向无环图调度（如 A 输出给 B/C，B/C 完成后 D 归并）。
-
-**核心能力**:
-1. **强类型拓扑验证**：执行前通过 `pkg/graph.ValidateTopology` 进行成环检测（Cycle Detection）和深度熔断（Max Depth）。
-2. **事件驱动推进**：基于 Kahn 拓扑排序算法变形，使用 `BlackboardEvent` 驱动无级联阻塞并发。
-3. **Fail-Fast 与 逆序补偿**：当图中的任意节点抛出不可恢复的错误，`PatternDAGExecutor` 会立即标记 DAG 失败（不阻断已就绪未开始的节点投递），并针对已完成且持有 `CompensationAction` 的节点，按**逆拓扑序**并发投递补偿任务。复用 `PipelineOrchestrator.monitorCompensationTask` 的最佳努力补偿（Best-Effort）机制监控补偿结果。
+跨 Agent 边界（Macro-DAG）复杂调度（A→B/C→D 归并）：
+1. 执行前 `pkg/graph.ValidateTopology` 做成环检测与深度熔断。
+2. Kahn 变形，`BlackboardEvent` 驱动无级联阻塞并发。
+3. Fail-Fast：任一节点不可恢复错误 → 标记 DAG 失败（不阻断已就绪节点投递），对已完成且持有 `CompensationAction` 的节点按**逆拓扑序**并发投补偿任务，复用 `PipelineOrchestrator.monitorCompensationTask` 最佳努力机制。
 
 ---
 
 ## 3-quinquies. StateGraphExecutor（编排模式10，GD-8-001）
 
-> 实现: `internal/execute/orchestrator/pattern_state_graph.go`（`StateGraphExecutor`）+ `pkg/graph/state_graph.go`（`ValidateStateGraphTopology`）
-> 决策记录: `docs/arch/decisions/ADR-0046-execute-module.md`（决策三，含原 ADR-0041，取代未落地的原 ADR-0040 草案）
+> 实现：`internal/execute/orchestrator/pattern_state_graph.go` + `state_graph_saga.go` + `pkg/graph/state_graph.go`（`ValidateStateGraphTopology`）；决策：ADR-0046 决策三（含原 ADR-0041），防退化条款：不得被 Chain/Pipeline 替代。
 
-在 `PatternDAGExecutor`（编排模式9，严格无环）之上泛化支持 LangGraph 式"条件路由 + 有界循环"，与 `WorkflowGraphSpec` 共用协议类型（`PatternDAGExecutor` 忽略新增字段，向后兼容）：
+在 PatternDAG 之上支持"条件路由 + 有界循环"，与 `WorkflowGraphSpec` 共用协议类型（PatternDAG 忽略新增字段）：
 
-- **条件边**：`WorkflowEdgeSpec.Condition`（`EdgeCondition{Field,Op,Value}`，可选 `And`/`Or` 结构化复合）对上游节点输出 JSON 做声明式字段比较，决定该边是否触发。HE-Rule-2 约束：不支持脚本/表达式引擎求值。
-  - 算子集合（GD-8-001 初版 `eq`/`ne` + GD-14-002 复核扩展 `gt`/`lt`/`ge`/`le`/`contains`/`exists`）：数值算子对两侧做 `float64` 解析比较，任一侧非数字 fail-closed；`contains` 做字符串子串匹配；`exists` 仅判定字段是否出现，忽略 `Value`。
-  - `And`/`Or`：`[]*EdgeCondition` 递归嵌套表达布尔组合，与顶层 `Field/Op/Value` 互斥（非空时优先生效，`And` 优先于 `Or`）。仍是预定义、可枚举、可静态分析的声明式结构，不引入变量绑定/函数调用/自由语法，不改变 HE-Rule-2 合规边界（GD-14-002 原始 finding 建议接入 CEL 表达式引擎，经复核确认与 ADR-0046 已落盘的否决理由直接冲突，故未采纳；改为在现有声明式模型上扩展算子集合与结构化复合，覆盖同等实际表达力缺口）。
-- **有界循环**：`WorkflowNodeSpec.MaxVisits` 声明节点允许被重复触发的次数上限；`WorkflowNodeSpec.IsEntry` 显式标记入口节点（参与循环反馈的节点入度恒 > 0，纯入度分析无法识别）。
-- **拓扑校验**：`ValidateStateGraphTopology` 允许环，但要求引用完整性 + 至少一个合法入口 + 全部节点 `effectiveMaxVisits` 之和不超过 `StateGraphMaxTotalVisitBudget`（=200，熔断常量）。
-- **终止性**：不依赖拓扑分析猜测是否可能死循环（概率性判断），而是运行时硬计数器（节点级 + 全局）物理保证终止，超预算触发直接丢弃（非错误——语义上是该分支循环/路由的自然终止）。
-- **不替代 Blackboard**：仍复用 `bb.PostTask`/`bb.Subscribe` 作为持久化任务队列/事件总线，CAS 认领、Lease/Reaper、`inv_M8_02` 双写等既有机制不变——ADR-0046 评估后判断"完全替换 Blackboard"代价远超"条件路由+有界循环"这一实际能力缺口，故不采用。
-- **已知限制**：与 `Compensation`（Saga 补偿）冲突（`MaxVisits>1` 且非 nil `Compensation` 校验阶段拒绝，补偿逆序语义未定义）；条件求值仅支持顶层字段比较（不支持嵌套路径/数组遍历）。
+- **条件边**：`WorkflowEdgeSpec.Condition`（`Field/Op/Value`，可选 `And`/`Or` 递归复合，复合优先于顶层字段，`And` 优先于 `Or`）对上游输出 JSON 做声明式比较（HE-Rule-2：禁脚本/表达式引擎，CEL 提案已驳回，见 ADR-0046 反例守护）。算子 `eq/ne/gt/lt/ge/le/contains/exists`：数值算子双侧 `float64` 解析，任一侧非数字 fail-closed；`exists` 忽略 `Value`。
+- **有界循环**：`WorkflowNodeSpec.MaxVisits` 限制节点重复触发次数；`IsEntry` 显式标记入口（循环节点入度恒 >0）。
+- **拓扑校验**：允许环，要求引用完整 + 至少一个合法入口 + 各节点 `effectiveMaxVisits` 之和 ≤ `StateGraphMaxTotalVisitBudget`（200）。
+- **终止性**：运行时硬计数器（节点级 + 全局）物理保证，超预算分支直接丢弃（自然终止，非错误）。
+- **不替代 Blackboard**：复用 `PostTask`/`Subscribe`，CAS/Lease/Reaper/`inv_M8_02` 不变。
+- **限制**：`MaxVisits>1` 与非 nil `Compensation` 互斥（校验期拒绝）；条件仅支持顶层字段（无嵌套路径/数组遍历）。
 
-### 3-quinquies-a. 扇入 AND-Join（2026-07-12）
+### 3-quinquies-a. 扇入 AND-Join
 
-`handleEvent` 原实现对无条件边采用"任一前驱完成即触发"的 OR 语义——单前驱链路（既有测试全部覆盖的场景）下与预期一致，但多前驱扇入（节点依赖多个前驱）会在只有一个前驱完成时就误触发下游节点，不满足真实 DAG 的"等待全部依赖完成"语义。这是在把 `StateGraphExecutor` 接入 workflow DAG 并行执行（见下）时发现的功能缺口，而非本次改动引入的回归。
+仅对无条件（`Condition==nil`）且非自环（`From!=To`）边计入硬依赖（`requiredPreds`/`arrivedPreds`），`arriveJoin` 集齐全部前驱才触发一次；条件边（路由分支）与自环边（失败重试）保持"任一满足即触发"。三者语义不同：路由选择 / 同节点重试 / 依赖。测试 `TestStateGraphExecutor_ANDJoinWaitsForAllParents`。
 
-修复：`stateGraphRun` 新增 `requiredPreds`/`arrivedPreds` 记账，仅对**无条件边**（`Condition==nil`）且**非自环**（`From!=To`）的边计入"硬依赖"集合；`arriveJoin` 记录到达并在集齐全部声明前驱时才触发一次。条件边（路由分支）与自环边（失败重试循环）保持原有"任一满足立即触发"OR 语义不变，二者语义不同不应混同：条件边表达"路由选择"，自环表达"同节点重试"，只有无条件多前驱边表达"依赖"。测试见 `TestStateGraphExecutor_ANDJoinWaitsForAllParents`。
+### 3-quinquies-b. Blackboard Intent 持久化
 
-### 3-quinquies-b. Blackboard Intent 持久化缺陷修复（2026-07-12）
+`tasks` 表含 `intent BLOB`；`PostTask`/`PostBatch` 写入；`TaskSnapshot` 携带 `Intent`/`Type`，`PeekTask` 读回——使自订阅 Worker 能在 `ClaimTask` 前按 `Type` 判断是否属于自己的能力类型，避免误认领。
 
-`SQLiteBlackboard.PostTask`/`PostBatch` 此前的 INSERT 语句只写入 `task_id/session_id/status/priority/version/namespace`，从未持久化 `TaskEntry.Intent`——`tasks` 表（`007_tasks.sql`）此前无 `intent` 列，`task_posted` 事件也不携带 payload。这意味着任何真实 Worker 认领任务后都无法读回该任务的实际意图内容（如 `StateGraphExecutor.tryPostNode` 编码的 `state_graph_node_id`/`template`）——此前未暴露是因为全仓库范围内没有真实生产 Worker 消费本模块任一 `Pattern*Executor` 投递的任务（`orchestrator.NewWorker` 全仓库零调用，`Orchestrator.RegisterWorker` 同样从未被调用——`Orchestrator`/`Worker` 二者已于 2026-07-14 随 ADR-0062 删除）。
+### 3-quinquies-c. Workflow DAG 并行 + 失败重试
 
-修复：`tasks` 表新增 `intent BLOB` 列；`PostTask`/`PostBatch` 写入该字段；`types.TaskSnapshot` 新增 `Intent`/`Type` 两个字段，`PeekTask` 一并读回——`Type` 字段使自订阅式 Worker（见下）能在 `ClaimTask` 之前判断任务是否属于自己的能力类型，避免误认领。
+WebUI「工作流」（`internal/gateway/server/sysadmin/workflowadmin`）是 StateGraphExecutor 的第一个生产消费方：
 
-### 3-quinquies-c. Workflow DAG 并行 + 失败重试接入（2026-07-12）
-
-WebUI「工作流」自动化功能（`internal/gateway/server/sysadmin/workflowadmin`）此前是一个不经过 Blackboard 的朴素顺序 `for` 循环，无并行、无重试、无条件路由。现改造为 `StateGraphExecutor` 的第一个真实生产消费方：
-
-- **图构造**（`workflow_graph.go` `buildGraphSpec`）：`workflows.type='chain'`（默认）时完全忽略 `depends_on`，按 `seq` 合成顺序链，与旧实现行为逐字节等价；`type='dag'` 时如实按 `depends_on` 构造无条件依赖边，多依赖由上述 AND-Join 保证等待全部完成。`depends_on` 的 JSON 数组元素是 **0-based seq 索引的字符串**而非步骤 DB id——因为 `CreateWorkflowWithSteps`/`UpdateWorkflowWithSteps` 每次保存都对整张 `workflow_steps` 表先删后插、为全部步骤重新生成 id，id 在两次保存之间不稳定，seq 索引才是前端可持久引用的锚点。`max_retries>0` 的步骤额外附加自环条件边（`status=="error"` 时重试），`MaxVisits=1+max_retries`；与 `compensation_tool`（Saga 补偿）互斥，HTTP 层提前校验拒绝（`validateStepRetryCompensation`）。
-- **执行下沉**（`workflow_step_worker.go` `WorkflowAdmin.RunStepWorkerLoop`）：不依赖中心化推送机制，采用"自订阅 Blackboard + CAS 认领"模式（与 `default_worker.go` 同构，二者独立收敛出同一模式——已废弃的中心化 `Orchestrator`/`Worker`，见 §1.1 ADR-0062 说明）——订阅 `task_posted`，按 `PeekTask` 返回的 `Type` 过滤仅认领 `workflow_step` 能力类型的任务，实际执行复用既有 `runWorkflowStep`（AgentPool headless 推理）。业务失败（工具/LLM 报错）一律走 `CompleteTask` 写回 `{"status":"error",...}` 而非 `FailTask`——把重试判定完全交给声明式自环条件边；只有基础设施级故障（intent 解析失败、步骤配置缺失）才走 `FailTask` 触发 Fail-Fast 中止。
-- **执行历史**：`workflow_runs.step_outputs`/`current_step` 由该 Worker 以原子 SQL（`json_insert` 追加 / `current_step+1` 自增）增量写入，兼容 DAG 并行下多步骤并发完成，避免"读-改-写"竞态丢失更新。
-- **中断与续跑**：启动期孤儿对账把遗留 `running` 的 run 置 `interrupted`；`POST /v1/workflows/runs/{id}/resume` 仅允许 `interrupted|error`，以同一 runID 重入 StateGraphExecutor，`task_checkpoints` 中 `done` 节点复用，不自动续跑（ADR-0104 决策一/二）。
-- **生命周期**：`RunStepWorkerLoop` 在 `server.Start()` 以 `concurrent.SafeGo` 启动为长驻 goroutine，`Shutdown()` 时随专属 `context.CancelFunc` 一并停止。
+- **图构造**（`workflow_graph.go buildGraphSpec`）：`type='chain'`（默认）忽略 `depends_on`，按 `seq` 合成顺序链；`type='dag'` 按 `depends_on`（**0-based seq 索引字符串**，非步骤 DB id——保存时 `workflow_steps` 全表删后插，id 不稳定）构造无条件依赖边，多依赖由 AND-Join 保证。`max_retries>0` 附加自环条件边（`status=="error"` 重试），`MaxVisits=1+max_retries`；与 `compensation_tool` 互斥，HTTP 层 `validateStepRetryCompensation` 提前拒绝。
+- **执行**（`workflow_step_worker.go RunStepWorkerLoop`）：订阅 `task_posted`，按 `PeekTask.Type` 仅认领 `workflow_step`，复用 `runWorkflowStep`（AgentPool headless 推理）。业务失败一律 `CompleteTask` 写 `{"status":"error"}`，由自环条件边判重试；仅基础设施故障（intent 解析失败、步骤配置缺失）走 `FailTask` 触发 Fail-Fast。
+- **历史**：`workflow_runs.step_outputs`/`current_step` 以原子 SQL（`json_insert` / `current_step+1`）增量写，避免 DAG 并行下读-改-写丢更新。
+- **中断续跑**：启动期孤儿对账把遗留 `running` 置 `interrupted`；`POST /v1/workflows/runs/{id}/resume` 仅允许 `interrupted|error`，同 runID 重入，`task_checkpoints` 中 `done` 节点复用，不自动续跑（ADR-0104 决策一/二）。
+- **生命周期**：`RunStepWorkerLoop` 在 `server.Start()` 以 `concurrent.SafeGo` 启动，`Shutdown()` 时随专属 cancel 停止。
 
 ---
 
 ## 4. Agent Card 与能力发现
 
-AgentCard 声明 Agent 能力集（Skills/Tools/Models）、激活条件（TaskTypes/MaxLoad/RequiresTools）、信任级别与沙箱层级；AgentRegistry 以 RWMutex 保护 agentID→Handle 映射，支持本地 chan 与远程 A2A gRPC 两种 Handle 类型。
+AgentCard 声明能力集（Skills/Tools/Models）、激活条件（TaskTypes/MaxLoad/RequiresTools）、信任级别与沙箱层级；AgentRegistry 以 RWMutex 保护 agentID→Handle 映射。`AgentRegistry` 仅保留 Register/Get/Deregister/MarkUnreachable，供 `SQLiteBlackboard.SetRegistry` 做 SpawnDepth 校验（MarkUnreachable 当前无生产调用方）。任务分配是"自订阅 + CAS 认领"（先到先得，无择优评分；`FindBestAgent` 已随 ADR-0062 删除）。跨节点对端不进 AgentRegistry，走 `[[mesh.peers]]` + `[[mcp.servers]]`（ADR-0111 决策六）。
 
-> 2026-07-14（ADR-0062）：`FindBestAgent`（Phase1 能力硬过滤 + Phase2 Laplace 成功率/负载加权评分选主）与其依赖的实时负载查询（原"Orchestrator 在每次调度前查询数据库获取各 Agent 当前 claimed+running 任务数"）已随中心化 `Orchestrator` 一并删除——该评分逻辑仅服务于 `dispatchPendingTasks` 的"择优下推"，而 `dispatchPendingTasks` 本身从未在生产环境运行过。当前生产的任务分配是"自订阅 Blackboard + CAS 认领"（先到先得，见 §1.1），不做择优评分；`AgentRegistry` 仅保留 Register/Get/Deregister/MarkUnreachable，供 `SQLiteBlackboard.SetRegistry` 做 SpawnDepth 校验（心跳超时标记 unreachable 的调用方同样不存在，标记逻辑保留但当前无生产触发点）。
-
-**SQLiteBlackboard.StartExecution**：`ClaimTask`（claimed）之后，Agent 开始实际执行前调用此方法将状态推进到 running，广播 task_running 事件，提供更细粒度的任务状态追踪。幂等，重复调用 already-running 不报错。
-
-**编排模式可配置超时**：`SequentialExecutor` 和 `MapReduceExecutor` 构造器接受超时参数（`perTaskTimeout` / `totalTimeout`），0 值使用默认值（5min / 10min），调用方可按任务复杂度定制，不再依赖固定兜底时间。实现见 `internal/execute/orchestrator/`。
+- `SQLiteBlackboard.StartExecution`：`ClaimTask` 后将状态推进到 running，广播 `task_running`，幂等。
+- Sequential/MapReduce 构造器接受 `perTaskTimeout` / `totalTimeout`，0 取默认（5min / 10min）。
 
 ---
 
 ## 5. Task 分解与依赖管理
 
-Macro-DAG(本模块): 节点=子任务跨Agent边界, [Blackboard] 发布, 边=data|approval|sequential
-Micro-DAG(M4): 子任务内部工具调用, M4 Agent Kernel 管理
+Macro-DAG（本模块）：节点=跨 Agent 子任务，经 [Blackboard] 发布，边=data|approval|sequential。Micro-DAG（M4）：子任务内部工具调用。
 
 ### 5.1 分解实现组件（`internal/swarm/planner/`）
 
 | 组件 | 文件 | 职责 |
 |---|---|---|
-| `TaskDecomposer` | `decomposer.go` | 用 LLM 结构化输出把一个大目标拆成 Macro-DAG 子任务列表（每节点含 `id`/`name`/`description`/`tool_name`/`args`/`depends_on`）。生成的 `tool_name` 必须过 `ToolLookup` 白名单校验（消费方定义接口，由 `dispatch.Dispatcher` 满足，符合 R1.4）；模板约定的哨兵值 `agent:run` 表示"递归交子 Agent 处理"，不查注册表直接放行 |
-| `PlannerPool` | `pool.go` | 管理多条并发思考流，各流独立跑分解/规划，结果经 `whisperChan`（`protocol.MemoryWhisper` 耳语通道，M09 §异步耳语）异步回传主脑，而非同步返回 |
+| `TaskDecomposer` | `decomposer.go` | LLM 结构化输出拆 Macro-DAG 子任务（`id/name/description/tool_name/args/depends_on`）；`tool_name` 须过 `ToolLookup` 白名单（消费方接口，R1.4）；哨兵 `agent:run` 表示递归交子 Agent，直接放行 |
+| `PlannerPool` | `pool.go` | 管理多条并发思考流，结果经 `whisperChan`（`protocol.MemoryWhisper`，M09 §异步耳语）异步回传主脑 |
 
-> 命名注意：本包的池类型是 `PlannerPool`（规划流池）；与之同名易混的 `AgentPool` 在 `internal/agent/pool.go`，是 M04 的 per-session Agent 实例池（见 ADR-0025 §E），两者无关。
+命名注意：`AgentPool` 在 `internal/agent/pool.go`（M04 per-session 实例池，ADR-0025 §E），与 `PlannerPool` 无关。
 
-Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential；ExecuteDAG 按拓扑分层并发（errgroup），任一层失败即终止并触发 Saga Rollback；Planner 5min 超时 → DAG Rollback，崩溃后由 Supervisor 通过 [EventLog] 恢复。**✅ 已实现（Saga rollbackSaga）**：`rollbackSaga` 从存根升级为真实补偿：`StateContext.SagaLog` 记录每步已执行节点，失败时逆序调用各节点注册的 `UndoFn`（无 UndoFn 的工具跳过并 WARN，最大努力补偿）。
+ExecuteDAG 按拓扑分层并发（errgroup），任一层失败即终止并触发 Saga Rollback；Planner 超时（5min）→ DAG Rollback，崩溃后由 Supervisor 经 [EventLog] 恢复。`rollbackSaga`：`StateContext.SagaLog` 记已执行节点，失败时逆序调各节点 `UndoFn`（无 UndoFn 者跳过并 WARN，最大努力）。
 
 ---
 
 ## 8.（已删除）编排拓扑自演化
 
-本节曾描述的 Shadow→A/B→Gradual→Commit 拓扑灰度演化状态机（`TopologyEvolverService`，`internal/swarm/topology/`）已于 2026-07-14 随 §3-bis 一并删除（ADR-0062）：`SetTopologyEvolverService`/`NewTopologyEvolverService` 全仓库零生产调用点，此前文档"✅ 已接入"的断言与代码不符——`Orchestrator.evolverSvc` 字段在生产环境永远为 nil（未曾被注入过），演化状态机、Pareto 双维评估、Shadow/A-B/Gradual/Commit 四阶段回滚逻辑均只在单元测试中运行过。若未来需要拓扑级 A/B 实验，应先确认存在真实的"多套可比拓扑同时候选"场景（当前架构无此场景，见 §3-bis 说明），而非复活本节描述的独立状态机。
+`TopologyEvolverService`（Shadow→A/B→Gradual→Commit）与 `internal/swarm/topology/` 随 §3-bis 于 2026-07-14 删除（ADR-0062）：零生产调用，旧文"已接入"与代码不符。需拓扑级 A/B 前，先确认存在真实的多套可比拓扑候选场景。
 
-启用: 全 Tier 已支持 10 种编排模式，按职责分层存放：执行模式（`internal/execute/orchestrator/pattern_*.go`：Sequential/Parallel/MapReduce/Swarm/PatternDAG/StateGraph）、容错基础设施（`internal/swarm/supervisor/`：Supervisor OneForOne 重启树）、认知循环（`reflexion.go`：Reflection，深度耦合 M4 S_REFLECT/M9）。
+编排模式分层存放：执行模式 `internal/execute/orchestrator/pattern_*.go`；容错 `internal/swarm/supervisor/`；认知循环（Reflection）耦合 M4 S_REFLECT/M9。
 
 ---
 
@@ -335,112 +249,91 @@ Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential�
 
 | 故障场景 | 降级路径 | 恢复策略 |
 |---------|---------|---------|
-| 黑板 chan 满（>80%） | 拒绝 PostTask + backpressure 信号 | <50% 解除 |
-| Agent 心跳超时 (>45s 无响应) | Reaper 回收任务 (重置 Pending) | Agent 重注册后参与认领 |
-| Supervisor Tree Agent 崩溃 | OneForOne 自动重启 (100ms→30s 退避，5 次上限) | 超过上限 Escalate → Root Supervisor |
+| Agent 心跳超时 | Reaper 回收任务（重置 Pending） | Agent 重认领 |
+| Supervisor Tree Agent 崩溃 | OneForOne 重启（退避参数见 §2），超限 Escalate → Root | 同左 |
 | Planner DAG 生成超时 (>5min) | DAG Rollback + ErrPlanningTimeout | — |
-| 黑板 entries 丢失 (崩溃前未写 EventLog) | 从 EventLog 回放重建 | — |
-| ~~A2A 远程 Agent 不可达~~ | 不适用：无跨机 Agent（见 §0-bis） | — |
-| ~~拓扑自演化 A/B 退化~~ | 不适用：`TopologyEvolverService` 已于 2026-07-14 删除（ADR-0062，见 §8） | — |
+| 进程崩溃 | `tasks` 表即真相（HE-6），Reaper 回收过期租约；工作流/Handoff 续跑见 ADR-0104 | 启动期孤儿对账 |
+| 跨节点对端不可达 | `a2a_delegate` 超时（`mcp_a2a_handoff_timeout_seconds`）→ 任务失败回传委派方 | 人工/重试 |
 
-与 OSMemoryGuard 协同: L2 紧急 → 限制 Agent 并发 ≤2 / L3 临界 → StopAll（所有 Executing→Suspended），恢复后从 [EventLog] 回放重建黑板。local_only 模式下若 M13 ResourceGovernor 检测到 LLM（Large Language Model，大语言模型） 卸载死锁（M13 §2.0），M8 接收强制 Rollback 指令：Priority >= 2 的非核心任务直接 Rollback，Priority=1 的前台辅助任务 Suspended + 写入 Cold Archive，释放内存供 LLM 重载。
-
+与 OSMemoryGuard 协同：L2 紧急 → Agent 并发 ≤2；L3 临界 → StopAll（Executing→Suspended）。local_only 下 M13 ResourceGovernor 检测到 LLM 卸载死锁（M13 §2.0）时，M8 接收强制 Rollback：Priority >= 2 的非核心任务直接 Rollback，Priority=1 的前台辅助任务 Suspended + 写 Cold Archive，释放内存供 LLM 重载。
 
 ## 默认参数
 
-完整阈值与重评触发条件: `spec/state.yaml §thresholds.m8_multiagent`。
+完整阈值与重评触发条件：`spec/state.yaml §thresholds.m8_multiagent`。
 
 ## 11. 跨模块契约
 
-> 接口签名权威源在 `internal/protocol/interfaces_swarm.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
+> 接口签名权威源 `internal/protocol/interfaces_swarm.go` + `types.go`。
 
 | 方向 | 接口/契约 | 用途 / 锚点 |
 |------|----------|-------------|
 | M8→M4 | Blackboard.CAS Claim / LeaseHeartbeat | 触发 S_EXECUTE；续期；S_ROLLBACK 入口。M4 §4, §7 |
-| M8→M2 | EventLog 初始化回放 + MutationBus Reaper 归档 | 全量重建 tasks + agents；终态驱逐。M2 §2.1, §2.3 |
+| M8→M2 | EventLog 双写 + MutationBus Reaper 归档 | 终态驱逐。M2 §2.1, §2.3 |
 | M8→M7 | SideEffectPreCheck + ExecuteTool | 每 ExecuteTool 前强制执行。M7 §4 |
 | M8→M11 | KillSwitch / ESCALATE / Cedar-Gate / CredentialVault | FullStop→StopAll；HITL 审批；deny-by-default；JIT Token Minting。M11 §4 |
 | M8→M3 | SurpriseIndex 消费 | 编排决策反馈。M3 §4 |
-| M9→M8 | Auto-Curriculum PostTask | priority=3 → 拓扑自演化候选。M9 §2.2 |
+| M9→M8 | Auto-Curriculum PostTask | priority=3 课程任务。M9 §2.2（原"拓扑自演化候选"已随 §8 删除） |
 | M13→M8 | HITL Suspend/Resume | SuspendForHITL / ResumeFromHITL。M13 §2.4 |
+| M13→M8 | 跨节点委派入站（`internal/gateway/mesh`） | `peer_delegation` PostTask，SpawnDepth/chain 校验，TaintHigh。ADR-0111 |
 | Schema | Blackboard / TaskEntry / AgentCard / AgentHandle | `internal/protocol/interfaces_swarm.go`, `types.go` |
-| 全局字典 | Blackboard 定义、HE-Rule-5 状态机持有控制流 | 00-Global-Dictionary §8, §1-bis |
+| 全局字典 | Blackboard、HE-Rule-5 | 00-Global-Dictionary §8, §1-bis |
 
 ### 11.1 多 Agent 共享记忆说明
 
-**结论：不需要 SharedMemoryBus。**
+**不需要 SharedMemoryBus。** inv_M8_02 确立 EventLog 为真相源（单机单 SQLite），同进程子 Agent 共享同一数据库，`episodic_events`/`semantic_memory`/`reflection_memory` 天然跨 Agent 可见；知识传递走 Blackboard `Result` payload。独立总线会与 MutationBus 写路径重叠，违反单写者原则（HE-Rule-6）。
 
-inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所有子 Agent 共享同一 SQLite 数据库，`episodic_events`/`semantic_memory`/`reflection_memory` 等表天然跨 Agent 可见。Agent 间知识传递通过 Blackboard `Result` payload + 各 Agent 读取 EventLog 实现。引入独立的 SharedMemoryBus 会引入额外同步开销并与 MutationBus 产生写路径重叠，违反单写者原则（HE-Rule-6）。
-
-**GD-14-001 补充（多 Agent 协同任务共享记忆命名空间，最小实现）**：以上结论不变——新增的 Namespace 机制不是新总线，而是在既有 EpisodicMem 分区键（`ev.TaskID != q.SessionID`）上做的一层"可选联合"。`TaskEntry.Namespace`（DDL `007_tasks.sql` 新增 `namespace` 列）由任务发布方指定（CSV Fan-out 为同批任务统一赋值 `jobID`）；`SQLiteBlackboard.PeekTask` 与内存版 `Blackboard.PeekTask` 在返回的 `TaskSnapshot` 中携带该字段；`Worker.tryClaimAndExecute` 认领任务后调用新增的 `AgentKernel.SetMemoryNamespace(ns)` 注入子 Agent；子 Agent 写 Episodic 事件时以 NamespaceID 替代 SessionID 作为分区键（`Agent.memoryPartitionKey()`），使同一批协同子任务的 4 类核心写入（感知/计划/反思/执行完成）互相可见。2PC 幂等检查与 FastPath 缓存不参与替换，仍用 SessionID，保持崩溃恢复语义不变。详见 M5 §3.1。
+**命名空间（GD-14-001）**：不是新总线，而是 EpisodicMem 分区键的"可选联合"。`TaskEntry.Namespace`（`007_tasks.sql`）由发布方指定（CSV Fan-out 同批统一赋 `jobID`；委派子任务以发起方根会话 ID 为命名空间，ADR-0097 决策三补）；`PeekTask` 带出该字段，Worker 认领后调 `AgentKernel.SetMemoryNamespace(ns)`，子 Agent 写 Episodic 时以 NamespaceID 替代 SessionID（`Agent.memoryPartitionKey()`），同批协同子任务的 4 类核心写入互相可见。2PC 幂等检查与 FastPath 缓存仍用 SessionID，保持崩溃恢复语义。跨节点对端任务命名空间一律加 `peer:<节点>/` 前缀，不得写入本地用户命名空间（ADR-0111 决策一）。详见 M5 §3.1。
 
 ---
 
 ## 11.2 已知实现缺口
 
-| 缺口 | 严重度 | 说明 |
-|------|--------|------|
-| 委托链深度 ≤3 校验（inv_M8_06） | ✅ 已实现 | `MaxSpawnDepth=3`，PostTask/PostBatch 前置 `SpawnDepth > 3 → CodeForbidden` |
-| inv_M8_02：Blackboard → EventLog 双写 | ✅ 已修复 | 各状态转换方法改为显式事务，同步写 events 表 |
-| 内存版 SideEffectPreCheck Version 校验 | ✅ 已修复 | SQLiteBlackboard 版本已在内存黑板中正确实现 |
-| SupervisorEpoch 原子性 | ✅ 已修复 | 改为 `atomic.AddInt64` |
-| 崩溃恢复并发 cancel（§1.7） | ✅ 已修复 | 改为 `errgroup.Group` 并发取消 |
-| CompleteTask 阻塞写 channel | ✅ 已修复 | 通道写增加 `default` 分支防死锁 |
-| 个人知识库连接器调度 | ✅ 已接入 | 决策为收编进 MemoryAgent（非新建角色）。`MemoryAgent`（`internal/swarm/agents/memory_agent.go`）提供 `RegisterSyncScheduler` 依赖注入点；`cmd/polaris/boot_agent.go`（§启动装配）已依次构造 `connector.NewObsidianConnector` / `connector.NewNotionConnector` / `tb.KnowledgeConnRegistry` 中的 MCP 知识源连接器，各自包一层 `connector.NewSyncScheduler` 后调用 `memoryAgent.RegisterSyncScheduler` 注册，`MemoryAgent.Run()` 启动时会并发拉起所有已注册 scheduler。Obsidian/Notion/MCP 三类知识源已端到端接入，调度接线不再是缺口。 |
+| 缺口 | 状态 |
+|------|------|
+| inv_M8_06 委托链深度 ≤3 | ✅ `MaxSpawnDepth=3`，PostTask/PostBatch 前置 `SpawnDepth > 3 → CodeForbidden` |
+| inv_M8_02 Blackboard→EventLog 双写 | ✅ 各状态转换方法显式事务同步写 events |
+| 个人知识库连接器调度 | ✅ 见 §2-bis |
+| 背压与 `max_blackboard_pending` | ❌ 无代码（§1.2） |
+| 动态优先级提权 | ❌ 已随 ADR-0062 删除（§1.8） |
+| `swarm/startup.go` PhasedStartup | ❌ 未接线（§1.9） |
+| Supervisor 重启参数与 state.yaml 不一致 | ⚠️ 见 §2 |
+| Reaper 阶段 2 超时字面量 | ⚠️ 见 §1.7 |
 
 ---
 
-## 12. 子 Agent 定义（ADR-0103 决策三补充；原 ADR-0016 §2.4 YAML Profile 已删除）
+## 12. 子 Agent 定义（ADR-0103 决策三补充）
 
-> 2026-09-26 订正：原 `.polaris/agents/*.yaml` + `orchestrator.AgentProfile` 仅被 `GET /v1/admin/profiles` 列出、从未参与执行，且 `agent_handoff:<role>` 的 role 被 `DefaultTaskWorker` 丢弃。现改为两家标准格式并真正按角色执行。
+Polaris 私有 `.polaris/agents/*.yaml` + `AgentProfile` 已删除；改为 Claude / Codex 两家标准格式并按角色真实执行。
 
-**来源**（`lifecycle.AgentDefinitionProvider`，解析唯一实现 `pluginspec`）:
-- 项目 `<project_root>/.polaris/agents/` > 用户 `<data>/agents/`：Claude `*.md`（frontmatter + 正文）/ Codex `*.toml`（`developer_instructions`）
-- 已启用插件 `agents/*.md` → `<plugin>:<agent>`
+**来源**（`lifecycle.AgentDefinitionProvider`，`internal/extension/lifecycle/agent_definitions.go`；解析唯一实现 `pluginspec`）：项目 `<project_root>/.polaris/agents/` > 用户 `<data>/agents/`（Claude `*.md` / Codex `*.toml`）；已启用插件 `agents/*.md` → `<plugin>:<agent>`。
 
-**执行链**: `transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker` → `SubagentRunner.Run`（角色解析 → SubagentStart hook → `AcquireHeadless(WithAgentProfile)` → SubagentStop hook，续跑 ≤3）→ `Agent.SetAgentProfile`。每次运行写 `subagent_runs`（042；`entry` = delegation/fork_skill/hook，子会话 ID 固定 `sub-{agent_id}`，写失败仅告警；ADR-0104 决策六）。`SubagentRunner` 同时服务用户调用的 `context: fork` 技能（`SlashCommandRouter`）与 `agent` 类型 hook；模型调用的 fork 技能由内核 `tryForkSkill` 转为 `transfer_to_agent`。内置类型 `Explore`/`Plan`/`default`/`worker`/`explorer`（`lifecycle/agent_builtin.go`）。`list_agents` 向模型列出目标；`general-purpose` = 无角色；未知名称任务失败并把原因回传委派方。`mcp:` 目标仍由 `MCPA2AWorker` 认领（ADR-0084）。
+**执行链**：`transfer_to_agent`（内置工具，内核特判异步挂起）→ Blackboard `agent_handoff:<name>` → `DefaultTaskWorker` → `SubagentRunner.Run`（`internal/execute/orchestrator/subagent_runner.go`；角色解析 → SubagentStart hook → `AcquireHeadless(WithAgentProfile)` → SubagentStop hook，续跑 ≤3）→ `Agent.SetAgentProfile`。每次运行写 `subagent_runs`（042；`entry`=delegation/fork_skill/hook，子会话 ID `sub-{agent_id}`，写失败仅告警；ADR-0104 决策六）。同一 Runner 服务 `context: fork` 技能（`SlashCommandRouter`）与 `agent` 类型 hook；模型调用的 fork 技能由内核 `tryForkSkill` 转为 `transfer_to_agent`。内置类型 `Explore`/`Plan`/`default`/`worker`/`explorer`（`internal/extension/lifecycle/agent_builtin.go`）。`list_agents`（`internal/tool/builtin/list_agents.go`）列出目标；`general-purpose`=无角色；未知名称任务失败并回传原因。`mcp:` 目标由 `MCPA2AWorker` 认领（ADR-0111 决策一）。
 
-**角色边界**（执行入口硬拦截 `Agent.checkProfileTool`）: 工具白/黑名单（Claude 工具名映射）、只读（Codex `read-only` / Claude `plan`）、`maxTurns`→`MaxStepsLimit`、默认禁再委派；指令进 `ZoneMutableSkill`。字段级映射与「解析但不生效」清单见 ADR-0103。
+**项目继承**：子 Agent 会话 ID 为一次性 `headless-…`，项目经命名空间（=根会话 ID）解析，继承项目指令、工作目录访问根与记忆项目（ADR-0097 决策三补）；`curriculum_*`、CSV job ID 等非会话命名空间按默认项目处理。
 
-**max_depth 防递归**（不变）: `TaskEntry.SpawnDepth` + `sqlite_blackboard.go resolveMaxDepth`，超深度 `CodeForbidden`。
+**角色边界**（执行入口硬拦截 `Agent.checkProfileTool`）：工具白/黑名单（Claude 工具名映射）、只读（Codex `read-only` / Claude `plan`）、`maxTurns`→`MaxStepsLimit`、默认禁再委派；指令进 `ZoneMutableSkill`。字段映射与"解析但不生效"清单见 ADR-0103。
+
+**防递归**：`TaskEntry.SpawnDepth` + `sqlite_blackboard.go resolveMaxDepth`，超深度 `CodeForbidden`。
 
 ---
 
-## 13. CSV Batch Fan-out（ADR-0016 §2.5）
+## 13. CSV Batch Fan-out（工具型扇出，非编号编排模式）
 
-> 编排模式 8：CSV 输入 → 每行一个 SubAgent Task → 并发 Blackboard 认领执行 → 结果聚合 CSV。
-> 适合大规模并行审计（PR 逐文件 review / 批量数据处理 / 多目标扫描）。
+CSV 输入 → 每行一个 SubAgent Task → 并发 Blackboard 认领 → 结果聚合 CSV（大规模并行审计 / 批量处理）。入口 `RunCSVFanout`（`internal/execute/orchestrator/csv_fanout.go`），REST `POST /v1/admin/tasks/csv-fanout`。按行展开为 TaskEntry 批量 PostTask 并 PeekTask 轮询，全部 Done/Failed 后写结果 CSV。
 
-**触发方式**（用户 prompt）:
-```
-请读取 /tmp/components.csv（列：path,owner），为每行并发启动子 Agent 做安全审计，
-汇总结果写入 /tmp/audit-results.csv，最多 6 个并发。
-```
+**状态持久化**（HE-Rule-6）：行状态经 `TaskEntry.Status` 写 Blackboard → EventLog 双写（inv_M8_02），不引入独立 SQLite；`event_type=csv_job_row_*` 供 Eval Harness 消费（HE-Rule-4）。同批任务 `Namespace=jobID`（§11.1）。
 
-**执行流程**:
-`RunCSVFanout`（`internal/execute/orchestrator/csv_fanout.go` 对外主入口，内部批读函数为 `readCSVBatch`）解析后按行展开为 TaskEntry 批量 PostTask，并发 PeekTask 轮询；所有行 Done/Failed 后写入结果 CSV。每行状态经 EventLog 双写（inv_M8_02，已实现）。
-
-**状态持久化**（HE-Rule-6 State-in-DB（Database，数据库））:
-- 每行 Task 的状态变更经 `TaskEntry.Status` 写入 Blackboard → EventLog 双写（inv_M8_02）
-- 不引入独立 SQLite（禁止，[ADR-0016] §2.5）
-- `event_type=csv_job_row_*` 事件可供 Eval Harness 消费（HE-Rule-4）
-
-**配置参数**（CSVFanoutJob）:
-| 字段 | 类型 | 说明 |
+| `CSVFanoutJob` 字段 | 类型 | 说明 |
 |------|------|------|
-| `CSVPath` | string | 输入 CSV（第一行 header） |
+| `CSVPath` | string | 输入 CSV（首行 header） |
 | `IDColumn` | string | 行标识列（空则用行号） |
 | `Instruction` | string | Worker 指令模板，支持 `{column_name}` |
-| `OutputCSVPath` | string | 结果输出路径（空则不写） |
+| `OutputCSVPath` | string | 结果路径（空则不写） |
 | `MaxConcurrency` | int | 并发上限（0=6） |
 | `MaxRuntimeSec` | int | 每行超时秒数（0=1800） |
-
-实现见 `internal/execute/orchestrator/`（csv_fanout + Blackboard.PeekTask）。
 
 ---
 
 ## §3-sexies PatternDebate 编排模式（编排模式 11）
 
-根据 GD-6 与 ADR-0046，系统引入了对抗性辩论（Debate）原语。
-该模式执行流：Judge 初始议题 -> Proponent/Opponent 轮番辩论 -> Judge 结案陈词。
-不使用阻塞轮询（`bb.Subscribe`），而是由 `DebateExecutor` 将状态落盘至 Checkpoint 并返回 `apperr.ErrSuspend` 进行异步挂起，复用 GD-1 引入的 Handoff/Watcher 机制跨 Agent 唤醒。
+实现：`internal/execute/orchestrator/pattern_debate.go` + `debate_worker.go`；决策：ADR-0046 决策四（GD-6）。流程：Judge 初始议题 → Proponent/Opponent 轮番辩论 → Judge 结案陈词。不用阻塞轮询（`bb.Subscribe`）：`DebateExecutor` 将状态落 Checkpoint 并返回 `apperr.ErrSuspend` 异步挂起，复用 Handoff/Watcher 机制跨 Agent 唤醒；`boot_agent.go` 装配恢复循环做断点续跑。

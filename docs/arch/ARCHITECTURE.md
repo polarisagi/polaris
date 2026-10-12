@@ -1,82 +1,69 @@
 # Polaris — 架构总览
 
-> **一句话定位**：主入口 + SSoT（Single Source of Truth，唯一权威源） 锚点。详细模块设计见 `M01..M13.md`，概念定义见 [00-Global-Dictionary](./00-Global-Dictionary.md)，文档导航见 [INDEX.md](./INDEX.md)。
+> **一句话定位**：主入口 + SSoT 锚点。详细模块设计见 `M01..M13.md`，概念定义见 [00-Global-Dictionary](./00-Global-Dictionary.md)，文档导航见 [INDEX.md](./INDEX.md)。
 >
 > **代码位置**：根目录
 >
-<!-- §跳读: 0-bis:11 哲学 / 0:24 SSoT / 1:32 定位约束 / 2:83 (SOFT)部署 / 3:96 Staging / 4:124 HT0预算 / 5:155 变更控制 / 6:172 配置层 / 8:195 启动与关停协议 / 7:244 当前实现状态 -->
+<!-- §跳读: 0-bis:11 哲学 / 0:19 SSoT / 1:25 定位约束 / 2:70 (SOFT)部署 / 3:83 Staging / 4:109 HT0预算 / 5:138 变更控制 / 6:152 配置层 / 8:167 启动与关停协议 / 7:208 244 当前实现状态 -->
 
 ---
 
 ## 0-bis. 设计哲学（三句话）
 
-1. **大模型是协处理器，不是指挥官**
-   Go 确定性状态机持有控制流，LLM 做概率性填空，不做自由编排。三角色 Swarm（Supervisor / Librarian / Governance）物理隔离，通过异步黑板协调。
-
-2. **物理安全边界优先**
-   五级 Taint 只升不降 + Cedar deny-by-default + 三级沙箱。概率过滤不是安全边界（[HE-Rule-2]）。
-
-3. **Eval 门控进化**
-   Prompt、Skill、Config、源码补丁全部走 Staging 七阶段 CI。MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）持久化失败记忆，幻觉改进无法晋升至生产记忆。
+1. **大模型是协处理器，不是指挥官**：Go 确定性状态机持有控制流，LLM 做概率性填空，不做自由编排。三角色 Swarm（Supervisor / Librarian / Governance）物理隔离，通过异步黑板协调。
+2. **物理安全边界优先**：五级 Taint 只升不降 + Cedar deny-by-default + 三级沙箱。概率过滤不是安全边界（[HE-Rule-2]）。
+3. **Eval 门控进化**：Prompt、Skill、Config、源码补丁全部走 Staging 七阶段 CI。MEMF 持久化失败记忆，幻觉改进无法晋升至生产记忆。
 
 ---
 
 ## 0. SSoT 四层
 
-L1 架构散文（本文档 + 模块文档） → L2 结构真相（`internal/protocol/schema/*.sql` DDL（Data Definition Language，数据定义语言）） → L3 状态机规约（`spec/state.yaml`） → L4 行为真相（`internal/` + `internal/protocol/*.go` 编译器强制）。
-
-四层之间是引用关系，非复制关系。
+L1 架构散文（本文档 + 模块文档） → L2 结构真相（`internal/protocol/schema/*.sql` DDL） → L3 状态机规约（`spec/state.yaml`） → L4 行为真相（`internal/` + `internal/protocol/*.go` 编译器强制）。四层之间是引用关系，非复制关系。
 
 ---
 
 ## 1. 项目定位与硬约束
 
-**定位**：面向 2026+ 的**开源自托管** AI Agent — 单机 8GB+ 内存可运行，Go + Rust 双语言，多 Agent 协同，自演化。
+**定位**：面向 2026+ 的**开源自托管** AI Agent — Go + Rust 双语言，多 Agent 协同，自演化。主形态为桌面版（Tauri v2 外壳 + Go 守护进程 sidecar）+ 浏览器，同一守护进程亦可部署 VPS；HT0 8GB 为开发推荐地板（ADR-0096）。
 
-**用户类型**（驱动可扩展性设计决策）：
-- `[Operator-Developer]`：Fork 源码、参与贡献的技术用户。可直接修改 Go 代码。
-- `[End-User]`：下载二进制/Docker 镜像自托管的普通用户。通过 YAML 配置 + Web UI 驱动，**不修改 Go 源码**。
+**用户类型**（驱动可扩展性设计）：
+- `[Operator-Developer]`：Fork 源码、参与贡献，可直接改 Go 代码。
+- `[End-User]`：下载二进制/Docker 镜像自托管，通过 YAML 配置 + Web/桌面 UI 驱动，**不修改 Go 源码**。
 
-**可扩展性契约**（开源后 End-User 的扩展边界）：
+**可扩展性契约**（End-User 的扩展边界；信任模型见 ADR-0103）：
 - Skills（Wasm）：LLM 主动调用的能力扩展，End-User 可自行编写/加载
-- Hooks：两家共同的 `hooks.json` 生命周期事件（SessionStart / UserPromptSubmit / PreToolUse / Stop 等），用户级 `<data>/hooks/hooks.json` 与插件 hooks（审阅信任后执行，ADR-0103 决策六）
-- MCP（Model Context Protocol，模型上下文协议） 工具：外部工具接入，配置驱动
-- 配置文件：`configs/*.yaml` 控制所有运行时行为
-
-> Shell Script Hooks 为 End-User 级生命周期扩展能力（参见 `[ShellHooks]` in 00-Global-Dictionary §1）。Operator-Developer 直接改源码，无需 hooks。
+- Hooks：`hooks.json` 生命周期事件（SessionStart / UserPromptSubmit / PreToolUse / Stop 等），用户级 `<data>/hooks/hooks.json` 与插件 hooks（审阅信任后执行，ADR-0103 决策六）；见 `[ShellHooks]`（00-Dict §1）
+- MCP 工具：外部工具接入，配置驱动
+- 配置文件：`configs/*.yaml` 控制运行时行为
 
 **设计目标**：
-- 单机 HT0 8GB 完整运行
-- 远程 LLM API 主路径（provider-agnostic；`configs/defaults.toml` 默认推荐 DeepSeek V4 系列），本地推理为隐私/离线 fallback
-- 多 Agent 黑板 + CAS（Compare-And-Swap，比较并交换） 协调，禁止自由 NL 对话；三角色默认拓扑（Supervisor + Librarian + Governance）
-- CodeAct：复杂任务编译为可验证沙箱代码，而非 JSON API 调用链（见 M07 §7.4）
-- Test-Time Compute：SurpriseIndex 驱动 System 1 / 1.5 / 2 三档路由（见 00-Dict §1-ter XR-02 + M04 §5）
+- 单机 HT0 8GB 完整运行；远程 LLM API 为主路径（provider-agnostic，`configs/defaults.toml` 默认推荐 DeepSeek V4 系列）；**本地推理默认关闭**，向量化默认进程内 ONNX 嵌入器，llama-server/Ollama 仅在用户显式配置时启用（ADR-0109）
+- 多 Agent 黑板 + CAS 协调，禁止自由 NL 对话；三角色默认拓扑
+- CodeAct：复杂任务编译为可验证沙箱代码（M07 §7.4）
+- Test-Time Compute：SurpriseIndex 驱动 System 1 / 1.5 / 2 三档路由（00-Dict §1-ter XR-02 + M04 §5）
 - 自学习自进化，所有变更经 staging 7 阶段闸控（§3）；MEMF 沉淀失败知识
-- 长时高质运行，token 使用必须有可计算价值（TokenBurnRate 一等公民）
-- End-User 无需修改源码即可自定义生命周期行为
+- 长时高质运行，token 使用必须有可计算价值：TokenBurnRate 一等公民，cache-first 前缀 + 用量账本（ADR-0105）
+- 会话归属项目（Project）容器，绑定工作目录，记忆按项目隔离（ADR-0097）
+- 多台独立节点可经 MCP 门面 / A2A 1.0 互相委派任务（ADR-0111）
 
-**非目标**：分布式/跨节点/集群 | 单机端侧 7B+ 梯度训练 | 重型基础设施（Kafka/Redis/K8s） | 暴露 0.0.0.0
+**非目标**：分布式/集群 | 单机端侧 7B+ 梯度训练 | 重型基础设施（Kafka/Redis/K8s） | 暴露 0.0.0.0
 
-> 2026-10-12 追记（ADR-0111）：「跨节点」非目标指单个 Agent 跨机分布；独立节点之间经 A2A 1.0 / MCP 委派任务不在此列（各节点仍是单进程、单库、互不共享状态）。远程绑定走 `interface.extra_listen` 显式地址，拒绝 0.0.0.0（除非 `allow_wildcard_listen`）；TLS 本期依赖 Tailscale 链路加密，见 ADR-0111 修订记录的已知偏差。
+> 「跨节点」非目标指**单个 Agent 跨机分布**；独立节点间的任务委派不在此列——每节点仍是单进程、单库、互不共享状态（ADR-0111）。远程绑定走 `interface.extra_listen` 显式地址，拒绝 0.0.0.0（除非 `allow_wildcard_listen`）；TLS 本期依赖 Tailscale 链路加密，已知偏差见 ADR-0111。
 
 **硬约束**：
 - 内存：HT0 8GB 主线，峰值 ≤ 7GB
 - 语言：Go（I/O + 编排 + 服务）+ Rust（推理 + 存储 + 沙箱），不引第三种
-- 进程：单进程主体，Rust 经 cdylib via purego，不引 sidecar
+- 进程：守护进程单进程主体，Rust 经 cdylib via purego，不引数据面 sidecar；桌面外壳（Tauri v2）把 Go 二进制作为 sidecar 分发，外壳不链接内核，客户端与内核之间只有 HTTP/SSE 一条路（ADR-0096）
 - 存储：嵌入式优先（SQLite + SurrealDB-Core + 本地 FS），禁独立进程 DB
-- 网络：默认 127.0.0.1，远程绑定需显式 + TLS + capability + audit
+- 网络：默认 127.0.0.1，远程绑定需显式 + capability + audit
 - 安全：物理隔离 > 提示词加固，外部内容 Taint=High 默认
-- 语音：STT 强制 Sherpa-ONNX + SenseVoice（零 Python 依赖，极低内存开销，Tier 0）；TTS 服务端为 MeloTTS（仅总内存 ≥3600MB 的 C 档开启，A/B 档由前端系统语音兜底；可选 HTTP sidecar），不支持或准备中由前端系统本地语音兜底。资产由后台串行预置，懒加载与空闲卸载，TTS 基准具抗争用门控，Melo 过慢回系统语音。见 ADR-0107、ADR-0108 与 ADR-0110。
+- 语音：STT 强制 Sherpa-ONNX + SenseVoice；服务端 TTS 为 MeloTTS；按总内存分 A/B/C 三档（A 关、B 仅 STT、C STT+Melo，Melo 另受 RTF 基准门控，未启用时前端系统语音兜底）；资产后台串行预置、懒加载与空闲卸载。详见 ADR-0110
 
 **权威源指引**：
-- HE 六不变量（可观测/可验证/可组合/数据驱动/状态机控制流/State-in-DB）：[00-Global-Dictionary §1-bis](./00-Global-Dictionary.md)
-- 跨模块交互规则 XR-01~07：[00-Global-Dictionary §1-ter](./00-Global-Dictionary.md)
-- 反模式完整清单 + 拒绝清单：[ROADMAP §4.3 / §5](./ROADMAP.md)
-- 两维度执行模型（任务难度 × 推理深度）：[00-Global-Dictionary §9-ter](./00-Global-Dictionary.md)
+- HE 六不变量：[00-Global-Dictionary §1-bis](./00-Global-Dictionary.md)；跨模块交互规则 XR-01~07：[§1-ter](./00-Global-Dictionary.md)；两维度执行模型：[§9-ter](./00-Global-Dictionary.md)
+- 反模式 + 拒绝清单：[ROADMAP §4.3 / §5](./ROADMAP.md)
 - 13 模块职责边界：各 [M01..M13](./) 文件 §0
-- C4 视图 + 关键流程时序图：[DIAGRAMS.md](./DIAGRAMS.md)
-- ADR 索引：[decisions/README.md](./decisions/README.md)
-- 文档拓扑 + 加载预算：[INDEX.md](./INDEX.md)
+- C4 视图 + 时序图：[DIAGRAMS.md](./DIAGRAMS.md)；ADR 索引：[decisions/README.md](./decisions/README.md)；文档拓扑 + 加载预算：[INDEX.md](./INDEX.md)
 
 ---
 
@@ -85,25 +72,25 @@ L1 架构散文（本文档 + 模块文档） → L2 结构真相（`internal/pr
 | Tier | 内存 | 本地推理 | 默认路径 | 梯度训练 | 沙箱 |
 |------|------|----------|----------|----------|------|
 | HT0 | 8GB | 不预加载 | 远程 API（provider-agnostic）| 禁用 | L1 InProc + L2 Rust 沙箱 |
-| HT1 | 16GB | 7-8B 可选 | 远程为主 | 1-3B QLoRA（Quantized Low-Rank Adaptation，量化低秩适应） | + gVisor/VZ L3 |
-| HT2 | 24GB+ | 14B reasoning 可选 | 远程为主 | 7B QLoRA / DPO（Direct Preference Optimization，直接偏好优化） | + Firecracker(Linux KVM) |
+| HT1 | 16GB | 7-8B 可选 | 远程为主 | 1-3B QLoRA | + gVisor/VZ L3 |
+| HT2 | 24GB+ | 14B reasoning 可选 | 远程为主 | 7B QLoRA / DPO | + Firecracker(Linux KVM) |
 | HT3 | 64GB+ (Mac M) | 32B+ 可全本地 | local_only / 离线 | 全套 | 全套 |
 
-主线在 HT0 完整运行（`configs/defaults.toml` tier=0）。HT1+ 能力由 `internal/observability/probe/feature_gate.go` + `auto_config.go` 启动时硬件探测自动解锁，无需代码修改。`privacy_mode` 四档（`local_only`/`allowlist`/`cost_optimized`/`quality_optimized`）与 Tier 正交。详见 00-Dict §1 [Tier-X-Limit]。实施现状（哪些 Tier 已验证 / 待硬件）见 [ROADMAP §2 工程现状](./ROADMAP.md)。
+主线在 HT0 完整运行（`configs/defaults.toml` tier=0）。HT1+ 能力由 `internal/observability/probe/feature_gate.go` + `internal/observability/auto_config.go` 启动时硬件探测自动解锁。「本地推理」列均需用户显式启用（ADR-0109）。`privacy_mode` 四档（`local_only`/`allowlist`/`cost_optimized`/`quality_optimized`）与 Tier 正交。详见 00-Dict §1 [Tier-X-Limit]；实施现状见 [ROADMAP §2](./ROADMAP.md)。
 
 ---
 
 ## 3. Staging 流水线 7 阶段(权威定义)
 
-M9 自进化候选（`skill` / `lora` / `prompt` / `config` / `source_patch` / `user_preference`）遵循 **基于爆炸半径的分层豁免**（Radius-based Rollout）机制。
+M9 自进化候选（`skill` / `lora` / `prompt` / `config` / `source_patch` / `user_preference`）遵循**基于爆炸半径的分层豁免**（Radius-based Rollout）。
 
 ```
 Stage 1: candidate_emit       (M9 worker 产出 → staging 表)
 Stage 2: schema_validate      (M11 静态校验 + signature 验证 + sensitive_pattern_filter)
 Stage 3: initial_eval         (M12 黄金集 baseline vs candidate)
-Stage 4: replay_shadow        (M12 历史 trajectory 重放对比；✅ 依赖的 ShadowExecutor 2026-07-10 恢复实现并接入,见 M12 §4/§8)
-Stage 5: mirror_shadow        (M12 实时影子流量副本,Evo-L3+；⚠️ 未实现——ADR-0025 §K 明确不采纳"实时流量镜像"方案,选定异步 EventLog 回放（即 Stage 4），Evo-L3+ 候选目前仅走 Stage 4)
-Stage 6: canary_rollout       (M11 流量比例渐进升,HITL（Human-In-The-Loop，人在回路） 可介入)
+Stage 4: replay_shadow        (M12 历史 trajectory 重放对比；ShadowExecutor 见 M12 §4/§8)
+Stage 5: mirror_shadow        (M12 实时影子流量副本,Evo-L3+；未实现——ADR-0025 §K 不采纳实时流量镜像,以异步 EventLog 回放即 Stage 4 替代)
+Stage 6: canary_rollout       (M11 流量比例渐进升,HITL 可介入)
 Stage 7: full_promotion       (写生产 + audit hash chain)
 ```
 
@@ -115,22 +102,20 @@ Stage 7: full_promotion       (写生产 + audit hash chain)
 
 任一阶段失败 → `rejected` / `rolled_back` / `dead_letter`。safety case 一票否决。
 
-> **与 M09 Rollout 实现映射**：
-> 本节 Stage 1-7 是全局流水线设计语言；`self_improve/rollout.go` 实现六阶段渐进发布（0→1%→5%→25%→100%→Committed），是 Stage 6 canary_rollout 的具体实现细化（详见 M09 §2.3）。
-> 两套编号体系不冲突——Stage 6 展开为 rollout.go 的六阶段门控，Stage 7 对应 Committed 状态落库。
+> **与 M09 Rollout 映射**：Stage 6 canary_rollout 由 `internal/learning/optimizer/rollout.go` 展开为六阶段渐进发布（0→1%→5%→25%→100%→Committed，详见 M09 §2.3），Stage 7 对应 Committed 状态落库。两套编号不冲突。
 
 ---
 
 ## 4. HT0 全模块容量预算累加表
 
-> HT0 全模块预算唯一权威源。各模块子组件细分见对应模块文档实现章节。
+> HT0 全模块预算唯一权威源。各模块子组件细分见对应模块文档。
 
 | 模块 | Remote (MB) | local_only (MB) | 备注 |
 |------|-------------|------------------|------|
-| M01 Inference | 60 | 2,060 | local_only 加载 Qwen3-3B (~2GB) |
+| M01 Inference | 60 | 2,060 | local_only 为显式启用本地生成模型的情形(Qwen3-3B ~2GB) |
 | M02 Storage | 260 | 260 | SQLite(纯 Go)+ SurrealDB-Core |
-| M03 Observability | ~40 | ~40 | OTel（OpenTelemetry） + Prometheus + slog(桌面;服务器 ~70MB) |
-| M04 Agent Kernel | 110 | 110 | 3 Agent goroutine 栈 + DAG（Directed Acyclic Graph，有向无环图） buffer |
+| M03 Observability | ~40 | ~40 | OTel + Prometheus + slog(桌面;服务器 ~70MB) |
+| M04 Agent Kernel | 110 | 110 | 3 Agent goroutine 栈 + DAG buffer |
 | M05 Memory | 177 | 177 | Mem-L0..L3 四层 |
 | M06 Skill Library | 65 | 65 | Wasm cache Gold/Silver/Bronze |
 | M07 Tool Action | 90 | 90 | Rust 脚本沙箱 + MCP Client |
@@ -139,22 +124,20 @@ Stage 7: full_promotion       (写生产 + audit hash chain)
 | M10 Knowledge RAG | 155 | 155 | 文档树 + Chunk 向量 + GraphRAG |
 | M11 Policy Safety | 28 | 28 | Cedar FFI + AuditTrail + SafeDialer cache |
 | M12 Eval Harness | 20 | 20 | EvalStore + TrajectoryRecorder |
-| M13 Interface | 46 | 46 | HTTP/WS + TaskQueue + SurrealDB-Core KV（Key-Value，键值） |
+| M13 Interface | 46 | 46 | HTTP/WS + TaskQueue + SurrealDB-Core KV |
 | **应用层合计** | **~1,220** | **~3,220** | — |
 | OS 预留 (macOS) | 1,500 | 1,500 | Darwin kernel + WindowServer |
 | OS 预留 (Linux) | 800 | 800 | headless |
 | **总计 (macOS)** | **~2,720** | **~4,720** | 8GB 内 ✓ |
 | **总计 (Linux)** | **~2,020** | **~4,020** | 8GB 内 ✓ |
 
-峰值：`local_only` 模式下 macOS 可达 ~5.5GB（M9 PromptOptimizer + M10 GraphRAG + M7 并发 Wasm），但仍低于 7GB 的硬上限。
-
-M3 OSMemoryGuard L1 预警（1.5GB Free）在峰值时，会触发后台任务降级（M9/M10），但这不会影响正常的用户交互。
+峰值：`local_only` 下 macOS 可达 ~5.5GB（M9 PromptOptimizer + M10 GraphRAG + M7 并发 Wasm），仍低于 7GB 硬上限。M3 OSMemoryGuard L1 预警（1.5GB Free）触发后台任务降级（M9/M10），不影响用户交互。
 
 ---
 
 ## 5. 变更控制
 
-任何架构变更须按以下顺序联动同步（缺一即视为孤立修改，禁止合并）：
+任何架构变更须按以下顺序联动同步（缺一即为孤立修改，禁止合并）：
 
 1. **ADR**：全局/宪法级 → 新建 `decisions/ADR-NNNN-*.md`；模块级 → 对应模块 "## 决策" 节
 2. **DDL**：数据模型 → `internal/protocol/schema/`
@@ -162,43 +145,32 @@ M3 OSMemoryGuard L1 预警（1.5GB Free）在峰值时，会触发后台任务�
 4. **状态机**：状态/不变量 → `spec/state.yaml`
 5. **概念标签**：标签语义 → `00-Global-Dictionary.md`
 
-判断标准：单独修改上述任一层而其他四层内容未同步就是孤立修改。例如：只改了 DDL 不改接口和模块文档，或只改了代码不更新 state.yaml——均属孤立修改。
-
-> **约束**：
-> 不允许孤立修改 spec / DDL / 接口 / 代码而不更新架构文档；修改宪法级内容而不留 ADR。
+只改其中一层（如只改 DDL 不改接口和模块文档，或只改代码不更新 state.yaml）即孤立修改；修改宪法级内容必须留 ADR。
 
 ---
 
 ## 6. 配置层与热加载协议
 
-四层优先级（高优先级覆盖低优先级）：
+四层优先级（高覆盖低）：
 
 ```
 Default 代码常量 < ~/.polaris/config/m*.toml（或 POLARIS_THRESHOLDS_DIR）< 环境变量(POLARIS_*) < CLI 启动参数
 ```
 
-1. **加载与验证边界**：
-   所有配置必须在进程启动期由 `internal/config` 统一装载与反序列化（包括统一管理 `data_dir`/`host`/`port` 等基础环境，并据此在启动早期预建所有必需的运行子目录）。
-   
-   校验缺失或格式错误会引发 Fail-Fast，绝不允许在 Agent 执行期延迟崩溃。
-   
-   > **设计决策**：Threshold 加载在 dataDir 解析之后通过 `config.LoadThresholds(dataDir)` 单独进行，不在 `config.Load()` 内完成，避免 dataDir 未知时的 chicken-and-egg 问题。
-
+1. **加载与验证边界**：所有配置在进程启动期由 `internal/config` 统一装载与反序列化（含 `data_dir`/`host`/`port`，并据此预建运行子目录）。校验缺失或格式错误 Fail-Fast，不允许在 Agent 执行期延迟崩溃。Threshold 在 dataDir 解析后经 `config.LoadThresholds(dataDir)` 单独加载，避免 dataDir 未知时的 chicken-and-egg。
 2. **热更新约束**：
-   - 通用运行参数（日志级别、调度池上限等）→ 启动时统一装载。热更新路径（fsnotify + atomic.Value）已设计，在 `internal/config` 实现 `WatchReload` 能力后，可在不重启进程的情况下生效。
-   - 核心防线（Cedar Policy、KillSwitch 门限、M2 Storage 路径等）的 `ZoneImmutable` 常量 → 启动后冻结，禁运行期修改。
-   
-   > **约束**：核心防线必须重启进程使之生效（Crash-Only 哲学）。
+   - 通用运行参数（日志级别、调度池上限等）→ 启动时装载；热更新路径（fsnotify + atomic.Value）已设计，待 `internal/config` 实现 `WatchReload`。
+   - 核心防线（Cedar Policy、KillSwitch 门限、M2 Storage 路径等）的 `ZoneImmutable` 常量启动后冻结，禁运行期修改，须重启进程生效（Crash-Only 哲学）。
 
 ---
 
 ## 8. 启动与关停协议（Bootstrap & Graceful Shutdown）
 
-> 本节是启动序/退出序的架构落点（DS-10-005）。改启动依赖或关停清扫职责前必读——顺序错一步的典型后果是循环依赖起不来，或关停时子进程变孤儿、WAL 没落盘。
+> 启动序/退出序的架构落点（DS-10-005）。改启动依赖或关停清扫职责前必读——顺序错一步的典型后果是循环依赖起不来，或关停时子进程变孤儿、WAL 没落盘。
 
 ### 8.1 生产启动序：`cmd/polaris/` 手工分阶段装配
 
-实际跑的是 `cmd/polaris/main.go run()` 里一条**显式线性装配链**，不是自动拓扑排序。每阶段一个 `boot_*.go` 文件，产出一个 Bundle 结构体供下游阶段消费，层级严格 L0 → L3 下沉：
+实际跑的是 `cmd/polaris/main.go run()` 里一条**显式线性装配链**，不是自动拓扑排序。每阶段一个 `boot_*.go`，产出 Bundle 供下游消费，层级严格 L0 → L3 下沉：
 
 | 序 | 入口 | 产出 | 承载 |
 |---|---|---|---|
@@ -209,31 +181,23 @@ Default 代码常量 < ~/.polaris/config/m*.toml（或 POLARIS_THRESHOLDS_DIR）
 | 5 | `bootAgent` | `AgentBundle` | Agent Kernel、AgentPool、M09 自进化、Supervisor Tree、Reaper |
 | 6 | `bootServer` | `*server.Server` | L3：HTTP/SSE 网关、Channel 适配器、各类 setter 注入 |
 
-**依赖方向由参数签名物理保证**：`bootTools(ctx, sb, mb)` 拿不到 `kb`/`ab`，编译期就杜绝了倒挂引用——这是它相比运行期拓扑排序的唯一实质优势。
+**依赖方向由参数签名物理保证**：`bootTools(ctx, sb, mb)` 拿不到 `kb`/`ab`，编译期杜绝倒挂引用——相比运行期拓扑排序的唯一实质优势。跨节点委派、嵌入器选择等附加装配在同目录 `boot_delegation.go` / `boot_embedding.go` / `boot_mesh.go`，依旧受上述分层约束。
 
-**关停序**：`<-ctx.Done()`（`signal.NotifyContext` 捕获 SIGINT/SIGTERM）后走 30s 超时的清扫链——`httpSrv.Shutdown`（停流）→ `ab.ReaperStop`（停 Reaper，须早于 dbWriter 排空）→ `AuditChain.VerifyChain`（审计链完整性校验）→ 其余经 `defer` 按 LIFO 逆序释放（`tb.PersistentSandbox.Shutdown` 终止 L4 解释器子进程防孤儿、`sb.Store.Close`、`sb.LogFile.Close`）。另有 `TripleCtrlCGuard`：连续 SIGINT 触发 `KillSwitch.OnSIGINT`。
+**关停序**：`<-ctx.Done()`（`signal.NotifyContext` 捕获 SIGINT/SIGTERM）后走 30s 超时清扫链——`httpSrv.Shutdown`（停流）→ `ab.ReaperStop`（须早于 dbWriter 排空）→ `AuditChain.VerifyChain`（审计链完整性）→ 其余经 `defer` 按 LIFO 逆序释放（`tb.PersistentSandbox.Shutdown` 终止 L4 解释器子进程防孤儿、`sb.Store.Close`、`sb.LogFile.Close`）。另有 `TripleCtrlCGuard`：连续 SIGINT 触发 `KillSwitch.OnSIGINT`。
 
 ### 8.2 `internal/bootstrap/`：已定义未接线的自动编排契约
 
-`internal/bootstrap/`（`bootable.go` + `bootstrapper.go`）定义了一套更强的自动编排契约：
+`internal/bootstrap/`（`bootable.go` + `bootstrapper.go`）定义了更强的自动编排契约：`Bootable` 接口（`Init(deps *DependencyMap)` / `Ready()` / `Dependencies()`）、`DependencyMap` 注入表、`Bootstrapper.Ignite` 的 Kahn 拓扑定序、四阶优雅关停接口（`Stage1Stopper.StopIngress` → `Stage2Drainer.Drain` → `Stage3Flusher.Flush` → `Stage4Closer.Close`）、`ConfigProvider.GetMasterKey` 内存级 KMS 密钥总线（`Ignite` 后立即 memclr）。
 
-- `Bootable` 接口（`Init(deps *DependencyMap) error` / `Ready() bool` / `Dependencies() []string`）
-- `DependencyMap` 依赖注入表（`Register`/`Get`/`MustGet`），禁止模块自取全局变量
-- `Bootstrapper.Ignite` 用 **Kahn 拓扑排序**按 `Dependencies()` 声明自动定序初始化，并校验 `Ready()`
-- 四阶优雅关停接口，模块按需实现：`Stage1Stopper.StopIngress`（停流，目标 gateway/channel）→ `Stage2Drainer.Drain`（排干内存队列，目标 orchestrator/scheduler）→ `Stage3Flusher.Flush`（刷盘，WAL Checkpoint）→ `Stage4Closer.Close`（释放句柄/子进程）
-- `ConfigProvider.GetMasterKey` 内存级 KMS 密钥总线，`Ignite` 完成后立即 memclr
-
-> **[未接线]（2026-07-28 核查）**：全仓库除自身包与单测外，**零处 import `internal/bootstrap`**。生产启动完全走 §8.1 的手工装配，`Ignite`/`ListenAndServe`/四阶接口从未在生产路径执行过。
+> **[未接线]（2026-10 复核仍成立）**：除自身包与单测外，**零处 import `internal/bootstrap`**；生产启动完全走 §8.1。
 >
-> 与 `Module-Dependency-Axioms.md §4` 的关系（**不冲突**）：该节 **[MUST]「所有具体实现与接口的注入，必须且仅能在装配层完成」** 约束的是**职责归属**——装配集中、业务模块间禁止互相 new 具体实现；而**装配层的物理落点**是另一件事，当前是 `cmd/polaris/boot_*.go`（Axioms §4 已就此加注）。两条 [MUST] 对手工装配与自动编排两种方式同等有效，本节的未接线状态不构成对它们的违反。唯一需要提醒的是：不要据 [MUST] 字面去 `internal/bootstrap` 里找注入点，那里没有。
+> 与 `Module-Dependency-Axioms.md §2.4` 不冲突：该节 [MUST]「注入必须且仅能在装配层完成」约束**职责归属**，装配层的物理落点是 `cmd/polaris/boot_*.go`；不要据字面去 `internal/bootstrap` 找注入点。
 >
-> 是否把生产启动迁移到 `Bootstrapper`：当前 6 阶段线性链只有 ~6 个节点、依赖关系由函数签名静态可验、且已稳定运行，换成运行期拓扑排序在正确性上无增益，反而把编译期错误降级为运行期错误。迁移的真实收益出现在"模块数量增长到手工排序易错"或"需要按 Tier/FeatureGate 动态增删模块"之后——满足其一再立 ADR 评估。**注意四阶关停接口并非拿来即用**：2026-08-07 接线可行性复核已查出三项契约缺陷（关停四阶内部按 map 随机序、`Init` 无 ctx、`Ignite` 无失败回滚）与两项契约无法表达的装配形态（137 处 setter 回注含反向回注、`protocol.ReplayMode` 进程级独占窗口），立项时须先行处置——详见 `decisions/ADR-0088 §决策七 → internal/bootstrap 接线可行性复核（2026-08-07）`。
+> 不迁移的理由：6 阶段线性链依赖由函数签名静态可验，换成运行期拓扑排序无正确性增益，反把编译期错误降级为运行期错误；迁移收益出现在"模块数量增长到手工排序易错"或"需按 Tier/FeatureGate 动态增删模块"之后，满足其一再立 ADR。四阶关停接口并非拿来即用：接线可行性复核查出三项契约缺陷（关停四阶按 map 随机序、`Init` 无 ctx、`Ignite` 无失败回滚）与两项契约无法表达的形态（137 处 setter 回注含反向回注、`protocol.ReplayMode` 进程级独占窗口）——详见 `decisions/ADR-0088 §决策七`。
 
 ### 8.3 `internal/cli/`：已于 2026-09-21 删除
 
-该包曾是未接线的 CLI 引导契约（`AgentREPL` / `RateLimiterMiddleware` / `WebSocketHub`），在 wiring 白名单中备案。2026-09-21 按 ADR-0096 决策六删除，理由是其中的 `AgentREPL` 依赖 `InferFn` 直连内核，与"客户端与内核之间只有 HTTP/SSE 一条路"的约束正面冲突——留着它等于保留一条与既定架构相悖的目标契约。
-
-命令行版的实际实现在 `cmd/polaris/cli*.go`（HTTP 客户端，不直连数据库与内核）；服务发现所需的运行时状态读写下沉在 `internal/runtimeinfo`。装配层落点仍是 `cmd/polaris/boot_*.go`，不受本次删除影响。
+该包曾是未接线的 CLI 引导契约（`AgentREPL` / `RateLimiterMiddleware` / `WebSocketHub`），按 ADR-0096 决策六删除：`AgentREPL` 依赖 `InferFn` 直连内核，与"客户端与内核之间只有 HTTP/SSE 一条路"正面冲突。命令行版实现在 `cmd/polaris/cli*.go`（HTTP 客户端，不直连数据库与内核）；服务发现所需的运行时状态读写在 `internal/runtimeinfo`。
 
 ---
 
@@ -243,42 +207,33 @@ Default 代码常量 < ~/.polaris/config/m*.toml（或 POLARIS_THRESHOLDS_DIR）
 
 ## 7. 当前实现状态（代码与文档对齐）
 
-> 基于 2026-06-15 代码审计（初版 2026-06-11，本次全量核查）。状态以代码实际行为为准，不以文档预期为准。
+> 状态以代码实际行为为准。2026-10 复核：M1–M13-bis 全部落码；近期增量以 ADR-0096/0097/0098/0103/0104/0105/0109/0110/0111 为准，模块文档已随之更新。
 
 ### 7.1 模块整体完成度
 
-| 模块 | 文档覆盖率 | 代码完成度 | 主要缺口 |
-|------|-----------|-----------|---------|
-| M1 Provider Router | 完整 | ✅ 完整 | — |
-| M2 Storage / EventLog / MutationBus | 完整 | ✅ 完整 | — |
-| M3 Observability | 完整 | ✅ 完整 | SurpriseIndex 基础版（两组件简化版）已实现 |
-| M4 Agent Kernel | 完整 | ✅ 完整 | — |
-| M5 Memory | 完整 | ✅ 完整 | — |
-| M6 Skill Library | 完整 | ✅ 完整 | — |
-| M7 Tool Sandbox / MCP | 完整 | ✅ 完整 | sandbox 内部不重复 Policy 校验（设计决策，依赖 ExecuteTool 前置 PolicyGate） |
-| M8 Multi-Agent Orchestrator | 完整 | ✅ 完整 | — |
-| M9 Self-Improvement Engine | 完整 | ✅ 完整 | 见下方 [M9 补充](#m9-补充) |
-| M10 Knowledge RAG | 完整 | ✅ 完整 | — |
-| M11 Policy / Safety | 完整 | ✅ 完整 | `polaris_cedar_degraded_total` Prometheus Counter 已实现（`internal/observability/metrics/metrics.go` 定义，`internal/security/policy/gate.go` 超时/FFI 报错两处埋点） |
-| M12 Eval Harness | 完整 | ✅ 完整 | — |
-| M13 Scheduler / Gateway | 完整 | ✅ 完整 | 未设置 POLARIS_API_KEY 时所有 /v1/ 端点均无鉴权（部署配置问题，非代码 bug；admin 写入已限 localhost） |
-| M13-bis Extension Registry | 完整 | ✅ 完整 | `marketplace.NewManager` 在 `cmd/polaris/boot_tools.go` 直接实例化装配（原设计的 `runtimeRegistrarAdapter` 中间适配层已在重构中消除，无需独立 `WithRegistrar` 注入点） |
+M1–M13-bis 均为 ✅ 完整，下列为需知的设计取舍/边界：
+
+| 模块 | 说明 |
+|------|------|
+| M3 Observability | SurpriseIndex 基础版（两组件简化版）；完整版在 M9 |
+| M7 Tool Sandbox / MCP | sandbox 内部不重复 Policy 校验（设计决策，依赖 ExecuteTool 前置 PolicyGate） |
+| M9 Self-Improvement | 见下方 [M9 补充](#m9-补充) |
+| M11 Policy / Safety | `polaris_cedar_degraded_total` Counter 已实现（定义于 `internal/observability/metrics/metrics.go`，埋点于 `internal/security/policy/gate.go`） |
+| M13 Scheduler / Gateway | 鉴权依赖部署配置（令牌/`POLARIS_API_KEY`）；admin 写入限 localhost |
+| M13-bis Extension Registry | `marketplace.NewManager` 在 `cmd/polaris/boot_tools.go` 直接装配，无独立 `WithRegistrar` 注入点 |
 
 #### M9 补充
 
 - L2 LogicCollapse 编译后提交 StagingPipeline（`SubmitCandidate`）已实现。
-- `internal/automation/hitl/gateway.go` 的 HITLGateway 包含强制冷却机制 + 全量回归测试 + 影子报告（Task 21+22）。
-- 触发条件为 `p.CheckpointType == "l4_multi_sig"`，仅 `internal/learning/engine.go` 的 `detectL4Trigger`（L4 自我改进候选晋升）触发。
-- `LightweightRegressionDetector.DetectRegression` 基于 EventLog（`events` 表）近期/基线窗口 type 分布 + 错误类 topic 占比对比。
+- `internal/automation/hitl/gateway.go` 的 HITLGateway 含强制冷却 + 全量回归测试 + 影子报告；仅 `CheckpointType == "l4_multi_sig"`（`internal/learning/engine.go` `detectL4Trigger`，L4 自我改进候选晋升）触发。
+- `LightweightRegressionDetector.DetectRegression`（`internal/eval/regression/detector.go`）基于 EventLog 近期/基线窗口 type 分布 + 错误类 topic 占比对比。
 - 明确不做多签（单用户场景无意义）。
 
-### 7.2 已知缺口汇总（2026-08-01 复核：以下两项均已落码，非遗漏或 bug）
+### 7.2 已落码的跨模块重构（原"已知缺口"，均已闭环）
 
-- **M13 ChatOrchestrator 拆分**（ADR-0066 目标态，ADR-0085 落地）：原推迟的重构已完成——`internal/gateway/session` 新领域层收敛 SSE 与 Headless 两条入口的会话生命周期编排（会话确保/历史加载/Hook 分发/斜线命令路由/压缩决策/`SystemPromptGuard` 装配/消息持久化），`chat/sse.go` 仅保留请求解码/SSE 帧翻译/错误码映射。零 `net/http` 依赖 + 唯一 FSM 轮次入口两条防退化 lint 已接入 CI。
-- **M7 MCP Agent-to-Agent 协同**（ADR-0017 战略方向，ADR-0084 落地出站方向）：出站方向（Polaris 向外部 Agent 委派子任务）已实现——外部 Agent 建模为特殊 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 异步挂起机制 + `MCPManager.CallTool`，不新建协议栈。入站方向（ADR-0017 决策三）此前已实现，两翼合一。
+- **M13 ChatOrchestrator 拆分**（ADR-0066 目标态，含原 ADR-0085）：`internal/gateway/session` 收敛 SSE 与 Headless 两条入口的会话生命周期编排（会话确保/历史加载/Hook 分发/斜线命令路由/压缩决策/`SystemPromptGuard` 装配/消息持久化），`chat/sse.go` 仅保留请求解码/SSE 帧翻译/错误码映射。零 `net/http` 依赖 + 唯一 FSM 轮次入口两条防退化 lint 已接入 CI。
+- **跨 Agent / 跨节点委派**（ADR-0111，含原 ADR-0084、ADR-0017 决策三）：出站外部 Agent 建模为 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 异步挂起机制 + `MCPManager.CallTool`；入站为 `/mcp`（Polaris 对端）与 `/a2a/v1`（外部 A2A 1.0）两个门面，共用一个内部委派服务。
 
 ### 7.3 审计依据
 
-初版审计：2026-06-11；全量核查：2026-06-15；缺口闭环：2026-06-15。
-
-**2026-07-23 增量说明**：本次未对 M1-M13bis 全量重新审计，仅核实与本轮 35+ 提交（channel 适配器重构、Gateway SQL 下沉 Repository、EgressGateway 白名单收紧、S_REPLAN 扩展激活降级、开放基准适配器、OpenLLMetry 导出器接线，ADR-0066~0071）相关的模块行为，详见对应 ADR 与 M03/M04/M12/M13 各文件内的同步更新。7.1 完成度表格未重新核验，仍以 2026-06-15 状态为准，不代表本轮无新增能力。
+2026-06-15 全量核查，其后逐 ADR 增量更新；2026-10-12 文档优化轮次对总览章节做代码对齐。

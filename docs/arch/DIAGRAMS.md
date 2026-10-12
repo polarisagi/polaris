@@ -136,13 +136,7 @@ sequenceDiagram
 > 覆盖: Agent Emit → SQLiteEventLog → MutationBus → DatabaseWriter → SQLite COMMIT → Outbox → 崩溃回放
 > 关键防卫点: 所有写入经 DatabaseWriter 单写者串行化
 >
-> **2026-07-08 修正**：本图此前描绘的 M2 EventWriteBuffer（channel 批量缓冲 +
-> 100ms ticker/batch≥64 + leaseChecker 二次校验）经核实全仓库零构造点、零测试
-> 覆盖，已被 `internal/store/audit/eventlog.go` 的 `SQLiteEventLog`（
-> `cmd/polaris/boot_substrate.go` 实际装配）取代——后者按事件同步、逐条直接
-> `Submit` 到 MutationBus，不做批量缓冲也不做租约二次校验。`EventWriteBuffer`
-> 死代码已删除（见 local_playground/reports/phase4-hard-dep-and-deadcode-followup-20260708.md）。
-> 下图已更新为实际路径。
+> 热路径为 `internal/store/audit/eventlog.go` 的 `SQLiteEventLog`（`cmd/polaris/boot_substrate.go` 装配）：按事件同步、逐条 `Submit` 到 MutationBus，无批量缓冲、无租约二次校验。
 
 ```mermaid
 sequenceDiagram
@@ -191,26 +185,28 @@ sequenceDiagram
     Note over Agent: isReplaying = true (禁止 EmitEvent/ToolCall/Outbox)
     Agent->>Agent: 回放至 last success → 追平
     Note over Agent: isReplaying = false → 继续执行
+```
+
 ---
 
 ## 4. Intent→Result 端到端时序图 {#intent-to-result}
 
-> 覆盖: CLI 输入 → Intent 判定 → Agent 规划 → 执行验证 → 结果输出
+> 覆盖: 客户端（Web/桌面/CLI，经 HTTP/SSE）输入 → Intent 判定 → Agent 规划 → 执行验证 → 回复合成 → 结果输出
 > 关键路径包: `internal/gateway`, `internal/agent`, `internal/execute/orchestrator/sqlite_blackboard.go`
 
 ```mermaid
 sequenceDiagram
-    participant CLI as M13 Interface
+    participant CLI as M13 Gateway
     participant M4 as M4 Agent Kernel
     participant M1 as M1 Inference
     participant M7 as M7 Action Sandbox
     
     CLI->>M4: 提交用户 Intent
     Note over M4: FSM 状态: S_IDLE → S_PERCEIVE
-    M4->>M1: LLM（Large Language Model，大语言模型） 结构化解析意图
+    M4->>M1: LLM 结构化解析意图
     M1-->>M4: M4_PerceiveOutput
     Note over M4: FSM 状态: S_PERCEIVE → S_PLAN
-    M4->>M1: 规划 DAG（Directed Acyclic Graph，有向无环图） 子任务
+    M4->>M1: 规划 DAG 子任务
     M1-->>M4: M4_PlanOutput (DAG)
     Note over M4: FSM 状态: S_PLAN → S_VALIDATE
     M4->>M4: 确定性校验图结构
@@ -219,8 +215,10 @@ sequenceDiagram
         M4->>M7: ExecuteTool(taintLevel)
         M7-->>M4: ToolResult
     end
-    Note over M4: FSM 状态: S_EXECUTE → S_REFLECT
-    M4->>CLI: 返回 Result
+    Note over M4: FSM 状态: S_EXECUTE → S_REFLECT → S_RESPOND
+    M4->>M1: S_RESPOND 合成面向用户的回复（唯一自由文本态，ADR-0098）
+    M1-->>M4: 回复流
+    M4->>CLI: 返回 Result（S_RESPOND → S_COMPLETE）
 ```
 
 ## 5. Tool Call 完整执行链 {#tool-call-chain}
@@ -277,7 +275,7 @@ sequenceDiagram
 
 ## 7. Staging 7 阶段流转 {#staging-7-stages}
 
-> 覆盖: 自进化代码/技能从生成到全面上线的门控体系
+> 覆盖: 自进化候选从生成到全面上线的门控体系（阶段定义权威源 ARCHITECTURE §3；分层豁免见该节）
 > 关键路径包: `internal/eval/harness/runner.go`, `internal/security`
 
 ```mermaid
@@ -286,19 +284,18 @@ sequenceDiagram
     participant M12 as M12 Eval Harness
     participant M11 as M11 RolloutGate
     participant Prod as 生产流量
-    
-    M9->>M12: Stage 1: Candidate Emit
-    M12->>M12: Stage 2: Static Analysis
-    M12->>M12: Stage 3: Offline Eval (黄金集)
-    M12->>M11: Stage 4: Canary Rollout (1%)
-    M11->>Prod: 流量接入
+
+    M9->>M12: Stage 1: candidate_emit
+    M12->>M11: Stage 2: schema_validate (静态校验+签名)
+    M12->>M12: Stage 3: initial_eval (黄金集)
+    M12->>M12: Stage 4: replay_shadow (历史轨迹重放)
+    Note over M12: Stage 5 mirror_shadow 未实现，以 Stage 4 替代
+    M11->>Prod: Stage 6: canary_rollout (渐进放量)
     Prod-->>M11: OTel 指标监控
-    M11->>M11: Stage 5: BurnRate/Surprise 校验
     alt 校验劣化
-        M11->>M9: 熔断回滚
+        M11->>M9: 熔断回滚 (rolled_back)
     else 校验通过
-        M11->>M11: Stage 6: Gradual (10%→50%)
-        M11->>M11: Stage 7: Full Promotion
+        M11->>M11: Stage 7: full_promotion (写生产+审计链)
     end
 ```
 

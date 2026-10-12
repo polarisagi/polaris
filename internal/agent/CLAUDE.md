@@ -1,60 +1,39 @@
 # internal/agent — 模块规范
 
-> 对应架构文档：`docs/arch/M04-Agent-Kernel.md`
-> 跨模块规则：`docs/arch/Module-Dependency-Axioms.md §2`
+> 架构文档：`docs/arch/M04-Agent-Kernel.md`；跨模块规则：`docs/arch/Module-Dependency-Axioms.md §2`
 
 ## 模块定位
 
-Agent 核心状态机（Arch-L2）。驱动 FSM 状态转移、思考循环的控制流、
-上下文感知（MemoryFacade 检索）。LLM 是协处理器，Go FSM 是主控制流。
-禁止 `while True: call LLM` 范式。
+Agent 核心状态机（L1）：驱动 FSM 状态转移、思考循环控制流、上下文感知（MemoryFacade 检索）。LLM 是协处理器，Go FSM 是主控制流，禁止 `while True: call LLM`。
 
-DAG 的具体执行（拓扑调度/并发/Saga 补偿）与 S_VALIDATE 四层校验管线 2026-07-12
-已物理迁出至 `internal/execute/dag`（详见 `internal/execute/CLAUDE.md`、
-ADR-0046）：agent 不再直接持有执行引擎实现，只经 `agent/provider.go` 声明的
-`DAGRunner`/`DAGValidator` 消费端接口驱动它，FSM 本身仍是决定"何时进入
-S_EXECUTE/S_VALIDATE"的唯一控制流。
+DAG 执行（拓扑调度/并发/Saga 补偿）与 S_VALIDATE 四层校验在 `internal/execute/dag`（ADR-0046，见 `internal/execute/CLAUDE.md`）：agent 只经 `provider.go` 声明的 `DAGRunner`/`DAGValidator` 消费端接口驱动，FSM 仍是决定"何时进入 S_EXECUTE/S_VALIDATE"的唯一控制流。子包：`fsm/`（状态机与转移）、`context/`（感知与召回上下文）、`schemavalidate/`。
 
 ## 权力边界 [MUST]
 
 ### 拥有
-- FSM 状态转移的唯一触发权（状态机是 agent 核心）
-- 执行结果的语义成功/失败判定权（action 层只执行，agent/fsm 做判定）
+- FSM 状态转移的唯一触发权
+- 执行结果语义成功/失败的判定权（action 层只执行）
 - AgentContext（SystemPrompt / SkillSet / ToolSet）的组装权
 - Budget（Token_Burn_Rate）的监控与熔断触发权
 
 ### 禁止 [MUST NOT]
-- **[MUST NOT]** 直接 import `internal/action/codeact`、`internal/action/lam`、
-  `internal/extension/skill`、`internal/execute/dag` 等具体实现包（必须通过
-  `agent/provider.go` 中声明的接口）。唯一例外：`agent.go` 的
-  `NewAgentWithDefaults`（测试/开发默认构造器）直接 import `internal/execute/dag`
-  以注入默认的无状态 Runner/Validator，生产路径仍由 `cmd/polaris/boot_agent.go`
-  显式注入覆盖，该例外范围严格限定于这一个函数，理由见其函数注释。
-- **[MUST NOT]** 直接 import `internal/memory` 具体实现（通过 MemoryFacade 接口）
-- **[MUST NOT]** 直接调用 LLM API（必须通过注入的 `protocol.Provider` 接口）
-- **[MUST NOT]** 在状态机转移函数中执行阻塞 I/O（FSM 转移必须是非阻塞的，
-  I/O 交给 Effect 异步处理）
-- **[MUST NOT]** 将 LLM 幻觉/失败响应静默视为成功（必须产生对应的错误状态转移）
-- **[MUST NOT]** 在单次 Agent 运行中无限循环（必须有 MaxSteps 上限，由 Budget 控制）
+- 直接 import `internal/action/codeact`、`internal/action/lam`、`internal/extension/skill`、`internal/execute/dag` 等具体实现包（经 `provider.go` 接口）。**唯一例外**：`agent.go` 的 `NewAgentWithDefaults`（测试/开发默认构造器）import `internal/execute/dag` 注入默认无状态 Runner/Validator；生产路径由 `cmd/polaris/boot_agent.go` 显式注入覆盖，例外范围严格限于该函数
+- 直接 import `internal/memory` 具体实现（经 MemoryFacade 接口）
+- 直接调用 LLM API（经注入的 `protocol.Provider`）
+- 在状态机转移函数中执行阻塞 I/O（转移必须非阻塞，I/O 交给 Effect 异步处理）
+- 将 LLM 幻觉/失败响应静默视为成功（必须产生对应错误状态转移）
+- 单次运行无限循环（必须有 `MaxSteps` 上限，由 Budget 控制）
 
 ## 消费端接口声明位置
 
-`internal/agent/provider.go` — 已声明：CodeActEngine、ScriptSkillCache、
-LAMPolicyChecker（世界模型消费端接口 WorldModel 声明于 agent.go）。
-新增外部依赖时先在此文件声明接口，由 `bootstrap` 注入，禁止直接 import 具体实现。
+`internal/agent/provider.go`：`CodeActEngine`、`ScriptSkillCache`、`LAMPolicyChecker`、`DAGRunner`、`DAGValidator`、`HandoffPoster`、`SkillForker`；世界模型消费端接口 `WorldModel` 声明于 `agent.go`。新增外部依赖先在此声明，由 `bootstrap` 注入。
 
 ## FSM 并发约束
 
-单个 Agent 实例的 FSM 转移必须串行（禁止并发触发 Dispatch）。
-多 Agent 并发由 `swarm` 层管理，不在 agent 包内处理。
-AgentContext 缓存 TTL 不超过 60s（防止 Prompt 版本晋升后继续使用旧版本）。
+- 单个 Agent 实例的 FSM 转移必须串行（禁止并发触发 Dispatch）；多 Agent 并发由 `swarm` 管理
+- AgentContext 缓存 TTL ≤ 60s（防止 Prompt 版本晋升后沿用旧版本）
+- 转移产生的 Effect 经 `executeEffect`（`agent_execute_effect.go`）在转移外异步执行；确定性 Effect 走 `executeDeterministicEffect`
 
-**Effect 异步执行与串行保证**：
-FSM Dispatch 产生的 Effect（如 LLM 调用、系统操作）经 `executeEffect` 异步执行。
-主循环通过 `effectDone` channel（缓冲 1）接收 `EffectResult`。
-`effectRunning` (atomic.Bool) 强制保证同一时刻仅有一个 Effect 在后台执行，若上一个未完成则跳过新产生的 Effect（保守策略），维持与 FSM 串行语义的一致性。
+## 结构体分组（SecurityBundle）
 
-## 结构体字段分组设计 (SecurityBundle)
-
-为避免 `Agent` 结构体过于臃肿（超过 40+ 字段），相关组件按业务领域内聚分组。
-`SecurityBundle` 负责将所有安全策略、过滤器和脱敏器（`PolicyGate`, `TaintReviewChecker`, `TokenVault`, `PIIDetector`, `AnomalyFilter`）封装在一起。此设计在不改变既有依赖注入逻辑的前提下，显著改善了长生命周期对象的可读性。
+`Agent` 字段多，相关组件按领域内聚分组。`SecurityBundle`（`agent.go`）封装 `PolicyGate`、`TaintReviewChecker`、`TaintAuditor`、`TokenVault`、`PIIDetector`、`PIIDesensitizer`、`AnomalyFilter`，不改变既有依赖注入逻辑。

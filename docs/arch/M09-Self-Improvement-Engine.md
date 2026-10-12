@@ -2,7 +2,7 @@
 
 > 三环嵌套进化（经验→技能→架构），全无梯度主线（[Tier-0-Limit] 8GB 完整运行）。梯度训练仅 local_only 可选。
 > Go 编排 + Eval 驱动 + Consolidation + 全部自进化逻辑。 [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:37 五路线(CANONICAL) / 2:95 三环嵌套 / 3-bis:218 EvalGenerator / 3:251 五级演化+审批 / 4:281 条件梯度 / 6:305 (SOFT)降级 / 6-bis:321 已知Bug修复记录 / 7:336 依赖 / 8:354 实现状态+2026研究对照 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:34 五路线(CANONICAL) / 2:78 三环嵌套 / 3-bis:177 EvalGenerator / 3:194 五级演化+审批 / 4:224 条件梯度 / 6:245 305 (SOFT)降级 / 6-bis:261 321 已知Bug修复记录 / 7:277 336 依赖 / 8:295 354 实现状态+2026研究对照 -->
 ## 0-bis. 职责边界
 
 | M9 **是** | M9 **不是** |
@@ -23,70 +23,53 @@
 |------|--------|---------|
 | inv_M9_01 | 所有自进化候选必经 staging 7 阶段——禁止 M9 worker 直写生产表 | M9 → M2 Outbox staging 路径审计 |
 | inv_M9_02 | 梯度训练仅 local_only + HT1+ 可选——不参与架构主线 | M3 HardwareProbe 门控 |
-| inv_M9_03 | PromptOptimizer 输出经独立 LLM（Large Language Model，大语言模型）-as-Judge（不同 Provider 模型）安全审查 | M9 §1.1 输出安全流水线 |
+| inv_M9_03 | PromptOptimizer 输出经独立 LLM-as-Judge（不同 Provider 模型）安全审查 | M9 §1.1 输出安全流水线 |
 | inv_M9_04 | Auto-Curriculum 在 Ephemeral Namespace 内执行——禁止 write_network/privileged | M9 §2.2 Ephemeral Namespace |
-| inv_M9_05 | L4 不可变内核受 CI（Continuous Integration，持续集成） pre-receive hook 三重保护——白名单外修改自动拒绝 | CI `immutable_kernel_check` |
+| inv_M9_05 | L4 不可变内核受 CI pre-receive hook 三重保护——白名单外修改自动拒绝 | CI `immutable_kernel_check` |
 | inv_M9_06 | Frequency + 语义方差双门控——单一信号不足以触发 Logic Collapse | M9 §2.0 + M6 §2.2 |
 
----
-
-**M9 Engine 启动方式**：`m9Engine.Run(ctx)` 通过 Supervisor Tree（`sv.AddWorker("m9-engine", ...)`）启动，享受 OneForOne 崩溃重启保护。`// go m9Engine.Start(ctx)` 裸 goroutine 已注释禁用。
-
-**CC-2 ResourceBudget 接线**（ADR-0025（Architecture Decision Record，架构决策记录） BUG-2）：`m9Engine.WithBackgroundGate(...)` 必须传入 `budget.NewResourceBudget(sb.TBR, memGuard, featGate)`，禁止传零值 `&budget.ResourceBudget{}`。零值退化为单维认知压力门控，TBR P95 与内存降级等级两个维度失效。`Blackboard→M9` 事件桥 goroutine 须走 `concurrent.SafeGo(ctx, "m9-bb-bridge", ...)` (XR-14，ADR-0025 BUG-3)。
+- **启动**：`m9Engine.Run(ctx)` 经 Supervisor Tree（`sv.AddWorker("m9-engine", ...)`）启动，享受 OneForOne 崩溃重启；禁止裸 goroutine。
+- **CC-2 ResourceBudget 接线**（ADR-0025 BUG-2）：`m9Engine.WithBackgroundGate(...)` 必须传 `budget.NewResourceBudget(sb.TBR, memGuard, featGate)`，禁止零值 `&budget.ResourceBudget{}`（退化为单维认知压力门控，TBR P95 与内存降级维度失效）。`Blackboard→M9` 事件桥须走 `concurrent.SafeGo(ctx, "m9-bb-bridge", ...)`（XR-14，ADR-0025 BUG-3）。
 
 ## 1. 五条无梯度自改进路线（CANONICAL SOURCE）
 
-| 路线 | 机制 | 实现状态 |
-|------|------|---------|
-| (a) Eval 驱动 Prompt 优化 | Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4] | ✅ 已实现 |
-| (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory | ✅ 已实现：`Engine.Run()` 内环已添加 `RecordSuccess` 调用，成功轨迹写入 HeuristicsMemory |
-| (c) Logic Collapse | 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → Skill Library | ✅ 已实现（Tier 0+/≥8GB 且 L3 可用，并发=1；<8GB VPS 禁用。决策见 ADR-0008） |
-| (d) 检索式个性化 | 用户偏好 + 纠错历史 → UserProfile.InteractionSummary | ✅ 已实现 |
-| (e) Activation Steering | Control vector 推理时注入 | ✅ 已实现（仅 Tier 3+，local_only） |
+| 路线 | 机制 |
+|------|------|
+| (a) Eval 驱动 Prompt 优化 | Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4] |
+| (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory；成功轨迹经 `RecordSuccess` 写 HeuristicsMemory |
+| (c) Logic Collapse | 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → Skill Library（≥8GB 且 L3 可用，并发=1；<8GB VPS 禁用，ADR-0008） |
+| (d) 检索式个性化 | 用户偏好 + 纠错历史 → UserProfile.InteractionSummary |
+| (e) Activation Steering | Control vector 推理时注入（仅 Tier 3+，local_only） |
 
-**local_only 模式下系统能力降级表**:
-| 能力 | 是否可用 | 替代方案 |
-|------|---------|---------|
-| (a) Eval 驱动 Prompt 优化 | 可用 | — |
-| (b) 经验重放与反思 | 可用 | — |
-| (c) Logic Collapse | <8GB VPS 禁用 / L3 不可用时禁用 / Tier 0+（≥8GB 且 L3 可用）LLM 生成 Python 脚本 | 仅加载预生成技能 |
-| (d) 检索式个性化 | 可用 | — |
-| (e) Activation Steering | Tier 0/1/2 禁用 | 无替代 (仅 Tier 3+ 本地模型支持) |
-| Auto-Curriculum | 受限（仅 bash_restricted 工具白名单） | — |
-| **语义向量检索** | **Tier 0 永久降级** | 本地 BGE-small (384-dim) 与 SurrealDB-Core 索引 (4096-dim) 维度不兼容，M05 §12.1 Phase 1 触发 BM25 + GraphTraverse 接管。远程重嵌不可用 → 无法进入 Phase 2-3 恢复。Tier 1+ 可选加载 BGE-large (1024-dim) + 线性投影到 4096-dim，须经 M12 Eval 验证 Recall@10 ≥ 0.85 |
-用户首次进入 local_only 模式时主动提示能力降级影响（含语义检索降级告警）。
+**local_only 模式能力降级**：(a)(b)(d) 可用；(c) <8GB VPS / L3 不可用时禁用，仅加载预生成技能；(e) Tier 0/1/2 禁用，无替代；Auto-Curriculum 受限（仅 `bash_restricted` 工具白名单）；**语义向量检索**默认走进程内 ONNX 嵌入器（统一 512 维，ADR-0109），嵌入器不可用 → 降级 FTS（M05 §12.1）。用户首次进入 local_only 时主动提示降级影响。
 
 ### 1.1 PromptOptimizer — GEPA + MemAPO + ContraPrompt 三融合
 
-实现见 `internal/learning/`（PromptOptimizer）。
+实现 `internal/learning/`（PromptOptimizer）。GEPA（遗传-Pareto 搜索，种群 8 × 5 代）、MemAPO（双记忆跨任务复用）、ContraPrompt（成功/失败对比轨迹）各自产出候选 prompt，经 Pareto 前沿去重后合并。
 
-三种优化策略融合: GEPA（遗传-Pareto 搜索，种群 8 × 5 代前沿探索）、MemAPO（双记忆跨任务复用——从成功历史中学习通用模式）、ContraPrompt（对比轨迹——从成功和失败的差异中提取改进信号）。每种策略独立产出候选 prompt，经 Pareto 前沿去重后合并。
+**触发条件**（OR）: (1) tasks ≤ 100 且每 20 次触发（冷启动专属）；(2) 当前 score 低于 baseline 的 95%；(3) 距上次优化超过 50 个任务。早停: 连续 2 代前沿无新非支配解。Token 预算软上限 1000K/周期。
 
-**触发条件**（OR 逻辑）: (1) tasks ≤ 100 且每 20 次触发（冷启动专属，满 100 次后关闭）；(2) 当前 score 低于 baseline 的 95%（检测退化）；(3) 距上次优化超过 50 个任务（定期巡检）。早停: 连续 2 代前沿无新非支配解时终止本轮优化。Token 预算：得益于 DeepSeek V4 极高的性价比，预算软上限放宽至 1000K/周期，允许进行极深度的代际演化。
+**输出安全流水线**（写入 M5 ZoneMutableSkill 前）:
+1. **Taint Gate**: M11 `SanitizeBySchema` + `SanitizeByDeterministicTransform` → 阳性 → 丢弃 + 审计 `prompt_opt_taint_rejected`
+2. **SIC 检测**: 间接指令注入 → 阳性 → 丢弃 + 审计
+3. **独立 LLM-as-Judge**: 与 PromptOptimizer 用不同 Provider 模型。前 5 次全审；累计 5 次通过后 20% 抽查，优先语义距离 >2σ 的异常输出。unsafe → 丢弃 + `[ESCALATE]`
+4. **签名**: Ed25519 → M5 ZoneMutableSkill
 
-**输出安全流水线** (写入 M5 ZoneMutableSkill 前):
-1. **Taint Gate**: M11 Taint Gate `SanitizeBySchema` + `SanitizeByDeterministicTransform` → 阳性 → 丢弃 + 审计事件 `prompt_opt_taint_rejected`
-2. **SIC（System Instruction Check，系统指令检查） 检测**: 检测间接指令注入 → 阳性 → 丢弃 + 审计事件
-3. **独立 LLM-as-Judge 安全审查**: 与 PromptOptimizer 使用不同 Provider 模型。前 5 次输出全部审查；累计 5 次通过后改为 20% 概率抽查，优先抽查语义距离 >2σ 的异常输出。Judge 返回 unsafe → 丢弃 + `[ESCALATE]`
-4. **签名**: Ed25519 签名 → M5 ZoneMutableSkill
-详细 Taint Gate 流程见 M5 §2.1 "M9 → ZoneMutableSkill Taint Gate（双层）"。
+Taint Gate 详见 M5 §2.1 "M9 → ZoneMutableSkill Taint Gate（双层）"。
 
 ### 1.2 BackgroundTaskScheduler
 
-实现见 `internal/learning/`（BackgroundTaskScheduler）。
+实现 `internal/learning/`。五级优先级: 0=Consolidation（最高）、1=LogicCollapse、2=Reflection、3=AutoCurriculum、4=PromptOptimizer。
 
-后台任务按五级优先级调度: 0=Consolidation（记忆压缩，最高优先）、1=LogicCollapse（技能自动生成）、2=Reflection（失败反思）、3=AutoCurriculum（课程自动生成）、4=PromptOptimizer（最低优先）。
+**空闲门控**: L0/L1 不受限。L2+ 需同时满足：CPU 占用低于 `spec/state.yaml §m9_self_improve.worker_cpu_pct_user_active` 持续超过 `worker_heartbeat_seconds`、空闲内存 >1.5GB、交流电源、无全屏应用；运行中任务条件破坏时挂起（同步宽限期）。电池供电仅允许 L0。`/config background_tasks off` 暂停所有后台任务。
 
-**空闲门控**: L0/L1 级任务不受限制。L2+ 级任务需要同时满足: CPU 占用率低于 `spec/state.yaml §m9_self_improve.worker_cpu_pct_user_active` 持续超过 `worker_heartbeat_seconds`、空闲内存 >1.5GB、交流电源供电、无全屏应用——四项条件全部满足才允许入队。运行中的 L2+ 任务在条件破坏时被挂起（同步宽限期）。电池供电时仅允许 L0 级任务。`/config background_tasks off` 暂停所有后台任务。
-
-**事件消费（channel-based，HE-Rule-6）**: 
-`Engine`（`internal/learning/engine.go`）通过 `select` 循环消费四路只读 channel：`taskEvents`、`versionEvents`、`heuristicEvents`、`evalEvents`。✅ 已实现，统一游标表 `consumer_cursors`（consumer_id=`learning.task|version|heuristic|eval`，Go 侧白名单校验，ADR-0104 决策九）持久化四路独立游标，配合 idempotency_key 双重去重。
+**事件消费（channel-based，HE-Rule-6）**: `Engine`（`internal/learning/engine.go`）`select` 消费 `taskEvents`/`versionEvents`/`heuristicEvents`/`evalEvents` 四路只读 channel；统一游标表 `consumer_cursors`（consumer_id=`learning.task|version|heuristic|eval`，Go 侧白名单校验，ADR-0104 决策九）持久化四路游标，配合 idempotency_key 双重去重。
 
 ### 1.3 Activation Steering（local_only + Tier 1+ 专属）
 
-通过 Control Vector 在本地模型推理时注入 hidden_state 偏移量，实现推理时的行为操控。同层（默认 layer_id=15）的多个 Control Vector 按 Weight×Strength 加权求和后叠加到 hidden_state。CV hash 变更时驱逐当前 Session 的 KV（Key-Value，键值） Cache（仅影响当前 Session）。成功率低于 0.1 的 Control Vector 自动停用。
+Control Vector 在本地模型推理时注入 hidden_state 偏移。同层（默认 layer_id=15）多个 CV 按 Weight×Strength 加权求和；CV hash 变更时驱逐当前 Session 的 KV Cache；成功率 <0.1 自动停用。
 
-**Tier 限制与限制理由**: Tier 0/1/2 不可用（→ ErrTierInsufficient，回退路线 a-d）。Activation Steering 需要本地模型才能注入 hidden_state——远程 API（Application Programming Interface，应用程序接口） 不暴露 hidden_state 接口。只有 Tier 3（64GB+ RAM）才能运行足够大的本地模型（Qwen3-32B+）产生有意义的 steering 效果。低显存跑得动的小模型注入效果差——非内存约束，而是本地模型能力的限制。
+**Tier 限制**: Tier 0/1/2 不可用（→ ErrTierInsufficient，回退路线 a-d）——远程 API 不暴露 hidden_state，只有 Tier 3（64GB+）能运行足够大的本地模型（Qwen3-32B+）产生有意义效果。
 
 用户命令: `/steer list|set <label> <weight>|deactivate|delete|calibrate-layer <task_type>`
 
@@ -96,98 +79,74 @@
 
 ### 2.0 Surprise_Index [SurpriseIndex] — 权威计算实现
 
-SurpriseIndex 的完整三组件计算逻辑归属 M9，因 MEMFMatchScore 依赖本模块的 FallacyMemoryPool。M3 内置基础计算器（两组件简化版，详见 M3 §4.0）作为 staleness>60s 时的回退。M4 优先消费 M9 推送的完整版（M4 §5 RouteReasoning 步骤 0）。
+完整三组件计算归属 M9（MEMFMatchScore 依赖 FallacyMemoryPool）。M3 内置两组件简化版（M3 §4.0）作为 staleness>60s 回退；M4 优先消费 M9 推送的完整版（M4 §5 RouteReasoning 步骤 0）。
 
-**架构决议说明**（2026-05-08，对齐 ROADMAP §4.4）:
-ROADMAP §4.4 决议了"三层机会主义架构"（Layer A logprob / Layer B Markov + embedding / Layer C BurnRate），与本节下方的 Phase 1/2/3 描述并非两套独立方案，而是同一演进路线的不同视角：
+ROADMAP §4.4 "三层机会主义架构"与下方 Phase 是同一演进路线的不同视角：Layer B（Markov + embedding，主信号）= Phase 1（embedding + 编辑距离 + MEMF）→ Phase 2（embedding + 马尔可夫条件概率 + MEMF）；Layer A（logprob，实验 side-channel）= Phase 3，机会主义收集、≥6 个月数据后评估是否升为主信号（DeepSeek V4/Claude 全系不暴露 logprob），不修改主计算式；Layer C（BurnRate）**不进入计算式**——TokenBurnRate 是 M11 KillSwitch 独立熔断信号（M11 §4.3 BurnRateFuse）。
 
-| ROADMAP 层次 | 对应本节 Phase | 说明 |
-|------------|------------|------|
-| Layer B (Markov + embedding，主信号) | Phase 1 → Phase 2 演进 | Phase 1 = embedding + 编辑距离 + MEMF；Phase 2 = embedding + 马尔可夫条件概率 + MEMF |
-| Layer A (logprob，实验 side-channel) | Phase 3 | 机会主义收集，≥6 个月数据后评估是否升为主信号 |
-| Layer C (BurnRate，兜底) | **不进入 SurpriseIndex 计算式** | TokenBurnRate 是 M11 KillSwitch 的独立熔断信号（M11 §4.3 BurnRateFuse），与 SurpriseIndex 语义不重叠。ROADMAP Layer C 指"当 SurpriseIndex 不可用时的系统兜底策略"，而非 SurpriseIndex 的分量 |
-| MEMF 分量 | Layer B 的第三分量（本文档扩展） | ROADMAP 未列出 MEMF，但 MEMF 是 Layer B 的内部信号增强项，不影响层次划分 |
+**当前实现（Tier 0 默认基线）**: `embeddingCosineDistance + toolSequenceDivergence + MEMFMatchScore`。冷启动 (<10条) → 0.5。TotalTrajectories<100 时轨迹追加 `bootstrapping=true` 标签防噪音污染。延迟 100-300ms。
 
-三阶段定义描述 Layer B 的演进路径（主信号），Layer A 和 Layer C 独立运作，不修改三阶段阈值语义。
+**Layer B 马尔可夫矩阵**（`internal/learning/surprise/`，已实现，数据量门控激活）: `MarkovMatrix` 始终初始化并积累数据（启动时由 `session_trajectory` warm-start，ADR-0104 决策七）。`TotalTransitions() >= threshold`（`DefaultLayerBThreshold=1000`，`MinLayerBThreshold=500`，以代码为准）时 toolSequenceDivergence 自动切换为马尔可夫条件概率 O(1) 查表；构建矩阵时排除 `bootstrapping=true`；未达阈值前回落 Levenshtein 编辑距离。
 
-**Layer B 演进路径**（toolSequenceDivergence 实现升级）:
+路由阈值: si < low → System 1 | low ≤ si < high → System 1.5 | si ≥ high → System 2。默认 low=0.30 / high=0.60，由 `M9SelfImproveThresholds.SurpriseRouteLowThreshold/HighThreshold`（`configs/threshold-examples/m9_self_improve.toml`）覆盖，DynamicDifficultyCalibrator 可动态调整。
 
-**当前实现（Tier 0 默认基线）**: 三组件 `embeddingCosineDistance + toolSequenceDivergence + MEMFMatchScore`。冷启动 (<10条) → 0.5。TotalTrajectories<100 时轨迹追加 `bootstrapping=true` 标签防噪音污染。延迟 100-300ms。
-
-**Layer B 马尔可夫矩阵（✅ 代码已实现，数据量门控激活）**: `MarkovMatrix` 始终初始化并持续积累数据（`surprise.go` 第 62 行：`markov: NewMarkovMatrix()`）。`TotalTransitions() >= threshold`（`DefaultLayerBThreshold=100`，`MinLayerBThreshold=50`）时自动切换 toolSequenceDivergence 为马尔可夫条件概率 O(1) 查表，公式形态不变。构建矩阵时排除 `bootstrapping=true` 数据。未达阈值前回落 Levenshtein 编辑距离（Phase 1 基线）。
-
-**Layer A（实验性，不修改主计算式）**: per-token logprob 机会主义旁路收集，依赖上游 Provider 暴露 logprob（DeepSeek V4/Claude 全系不暴露；2027+ 可能）。≥6个月数据后评估是否叠加。
-
-路由阈值: si < low → System 1 | low ≤ si < high → System 1.5 | si ≥ high → System 2。默认 low=0.30 / high=0.60，由 `M9SelfImproveThresholds.SurpriseRouteLowThreshold/HighThreshold`（`configs/threshold-examples/m9_self_improve.toml`）覆盖，DynamicDifficultyCalibrator 可在此基础上动态调整。
-
-SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停止。
-
-**BoundedWorkQueue + LoadShedder**：队列容量 256，固定 4 worker。LoadShedder 在队列满时丢弃 33%，使用率 >90% 持续 30s 升至 50%，<50% 恢复。深度 >64 的 background/auto_curriculum 请求直接丢弃。丢弃事件写 M3 `polaris_surprise_embedding_dropped` Counter。
+**BoundedWorkQueue + LoadShedder**：队列容量 256，固定 4 worker。队列满时丢弃 33%，使用率 >90% 持续 30s 升至 50%，<50% 恢复。深度 >64 的 background/auto_curriculum 请求直接丢弃。丢弃写 M3 `polaris_surprise_embedding_dropped` Counter。
 
 **异步错误处理**：单次失败重试 1 次（1s 退避，5s 超时）；最近 3 次 ≥2 次失败 → 保持上次值 + WARN；持续 >10min 失败 → 降级 safe default 0.5 + ALERT；首次成功自动退出降级。
 
-计算结果异步推送至 M3 `polaris_surprise_index` Gauge，M4 通过读取该 Gauge 进行路由。M3 staleness 监控独立检测值更新间隔。
+结果异步推送至 M3 `polaris_surprise_index` Gauge，M4 读取该 Gauge 路由；M3 staleness 监控独立检测更新间隔。
 
 ### 2.1 内环: 经验积累（实时/小时级）
 
-每次 Agent 任务完成后自动执行:
+每次 Agent 任务完成后：
+- **成功路径**: `Engine.Run()` 调用 `RecordSuccess` 写 HeuristicsMemory + Logic Collapse 触发（ADR-0008）。
+- **失败路径（Reflexion Closed-Loop）**: `ReflexionEngine` 反思 → heuristic 发送至 `heuristicCh` 被 Engine 消费（注入 PromptOptimizer）；`ReflectionWorker` 写 `reflection_memory`（M5 L2），下次任务 Perceive 阶段加载入上下文。
+- **后续**: Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
 
-任务完成后：
-- **成功路径**: HeuristicsMemory 更新 + Logic Collapse 触发（Python 技能蒸馏，ADR-0008）。
-- **失败路径 (Reflexion Closed-Loop)**: `ReflexionEngine` 触发反思 → 生成 heuristic 发送至 `heuristicCh` 被 Engine 消费 (注入 PromptOptimizer)；同时 `ReflectionWorker` 将反思结果写入 `reflection_memory` (M5 L2)。此反思数据将在下一次任务的 Perceive 阶段被加载入上下文，形成完整闭环。
-- **后续阶段**: Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
+**MEMF**（FallacyMemoryPool）/ **HeuristicsMemory** 类型与反馈校准/剪枝见 `internal/learning/`。
 
-> ✅ `Engine.Run()` 已补充 `RecordSuccess` 调用，成功/失败任务均写入 HeuristicsMemory。`ReflexionEngine` 和 `ReflectionWorker` 已完整接入并打通。
-
-**MEMF** (FallacyMemoryPool) / **HeuristicsMemory** 类型和反馈校准/剪枝逻辑见 `internal/learning/`。
-
-**Critic / Veto** (后台协程并行):
-- **Critic**: `[TokenBurnRate] > 2×` → 干预; `[SurpriseIndex]` 持续升高 → 标记偏离; MEMF 高危匹配 → 剪枝; 安全红线 → Veto
-- **Veto** (LLM 不可覆盖): 安全红线 → 中断+回滚; `[TokenBurnRate] > 4×` → 降级; 连续3次 Veto → `[KillSwitch]` Stage1
+**Critic / Veto**（后台协程并行）:
+- **Critic**: `[TokenBurnRate] > 2×` → 干预；`[SurpriseIndex]` 持续升高 → 标记偏离；MEMF 高危匹配 → 剪枝；安全红线 → Veto
+- **Veto**（LLM 不可覆盖）: 安全红线 → 中断+回滚；`[TokenBurnRate] > 4×` → 降级；连续3次 Veto → `[KillSwitch]` Stage1
 - **Failure Clusterer**: 同类失败>3 → L2+ 自修改队列
 
-**DynamicDifficultyCalibrator**: 实现见 `internal/learning/`（DynamicDifficultyCalibrator），已独立解耦。基于最近 50 条 DifficultySample (TaskType/SurpriseIndex/Success) 动态调整 SurpriseIndex 阈值。冷启动（<20 条历史）使用静态 canonical 阈值 [0.3, 0.6]。successRate<0.5 时每步下调 0.05（下限 0.1），successRate>0.7 时每步上调 0.05（**上限 0.85**），targetSuccessRate=0.6。上限 0.85 与 §2.2 Auto-Curriculum MaxCurriculumDifficulty 硬上限对齐——当 DynamicDifficultyCalibrator 将阈值调至 [0.3, 0.85] 区间时，Auto-Curriculum 步骤 6 的 `目标难度 = currentHigh` 不会触发硬上限拦截，消除"高成功率场景下课程任务静默禁止生成"的状态不一致。
+**DynamicDifficultyCalibrator**（`internal/learning/`，已独立解耦）: 基于最近 50 条 DifficultySample（TaskType/SurpriseIndex/Success）动态调整阈值。冷启动（<20 条）用静态 [0.3, 0.6]。successRate<0.5 每步下调 0.05（下限 0.1），>0.7 每步上调 0.05（**上限 0.85**），targetSuccessRate=0.6。上限 0.85 与 §2.2 MaxCurriculumDifficulty 硬上限对齐，避免高成功率场景下课程任务被静默禁止生成。
 
 ### 2.2 中环: 技能演化（日/周级）
 
-技能成功率统计触发 + 定期后台任务:
+触发：成功率 <30% 且使用 >10 次（排除 UncontrollableFailure）；成功率 >90% 且使用 >50 次为金牌技能（高优先级缓存）；连续 3 次 ControllableFailure 标记 deprecated。SKILL.md 收集轨迹后 LLM 蒸馏为 TypeScript 脚本（System1 执行）；已是脚本技能经边缘案例触发验证后 version++。
 
-技能演化触发条件：成功率 <30% 且使用 >10 次（排除 UncontrollableFailure）；成功率 >90% 且使用 >50 次为金牌技能（高优先级缓存）；连续 3 次 ControllableFailure 标记 deprecated。SKILL.md 收集轨迹后 LLM 蒸馏为 TypeScript 脚本（System1 执行）；已是脚本技能经边缘案例触发脚本验证后 version++。
-
-**Auto-Curriculum Generator** 类型和生成流程见 `internal/learning/`。
-
-生成流程:
-1. IdleDetector.IsIdle() → 非空闲跳过（OS（Operating System，操作系统） 可用内存 < 512MB 或 Goroutine 数 ≥ 200 视为繁忙）
-2. SkillGapAnalysis: >90% 成功率 → 更难变体; 50-90% → 相似难度不同场景; <30% → 跳过
-3. **MaxCurriculumDifficulty 硬上限**: SurpriseIndex ≤ 0.85（超过不生成），防持续生成不可完成任务
-4. 同一 SourceSkill 连续 3 次生成的课程任务全部失败 → 临时冻结该技能的课程生成 60 分钟
-5. Curriculum 任务由于 DeepSeek API 成本极低，总成本取消 20% 硬上限，允许在空闲时段全力生成
-6. LLM 生成（当前实现：每技能 `maxPerSkill=3`，总 `maxPerCycle=10`/周期），目标难度 = `currentSurpriseIndex`（传入 `generateDescriptionsLLM`）
-7. 生成后安全审查（五阶段，含 SQL 预筛，ADR-0025 §G）:
-   (0) **SQL 适应度预筛**（`SQLFitnessEvaluator`，前置于所有其他检查）: 查询 `events` 表 7 天窗口内该技能的执行历史，计算 `fitness = 成功率 × (1 - 平均预测误差)`；样本 ≥ 5 且 fitness < 0.5 → 直接拒绝，不调用 LLM；样本 < 5 或 fitness ≥ 0.5 → 进入后续审查。`SQLFitnessEvaluator` nil-safe，未注入时跳过此步骤。实现见 `internal/learning/curriculum/fitness.go`。
-   (a) M11 Taint Gate 扫描任务描述中的注入载荷
-   (b) 若含 shell/bash 命令 → 危险模式黑名单拒绝（同原列表）
-   (c) M11 SIC Cleaning 检测间接 prompt injection（"忽略指令"/"override"/"你是"/"现在你是" 等角色劫持模式 + 语义越界检测）。检测到 injection → 丢弃任务 + 写 curriculum_injection_blocked 审计事件
-   (d) 独立 LLM-as-Judge 安全审查（使用与课程生成不同的 Provider 模型，避免同模型自我审查盲区）: 判定任务描述是否包含隐藏的恶意指令或社会工程诱导。Judge 返回 unsafe → 丢弃任务 + [ESCALATE]。前 10 次全部审查，之后置信度 >0.95 可改为 20% 抽查
-   审查未通过 → 写 curriculum_hazard_log + 丢弃该课程任务
+**Auto-Curriculum Generator**（`internal/learning/curriculum/`）生成流程:
+1. IdleDetector.IsIdle() → 非空闲跳过（OS 可用内存 < 512MB 或 Goroutine ≥ 200 视为繁忙）
+2. SkillGapAnalysis: >90% 成功率 → 更难变体；50-90% → 相似难度不同场景；<30% → 跳过
+3. **MaxCurriculumDifficulty 硬上限**: SurpriseIndex ≤ 0.85（超过不生成）
+4. 同一 SourceSkill 连续 3 次生成的课程任务全部失败 → 冻结该技能课程生成 60 分钟
+5. 总成本无硬上限，允许空闲时段全力生成
+6. LLM 生成：每技能 `maxPerSkill=3`，每周期 `maxPerCycle=10`，目标难度 = `currentSurpriseIndex`
+7. 安全审查（五阶段，ADR-0025 §G）:
+   (0) **SQL 适应度预筛**（`SQLFitnessEvaluator`，`internal/learning/curriculum/fitness.go`，前置于其余检查）: 查 `events` 表 7 天窗口内该技能执行历史，`fitness = 成功率 × (1 - 平均预测误差)`；样本 ≥ 5 且 fitness < 0.5 → 直接拒绝（不调 LLM）；否则进入后续。nil-safe，未注入则跳过
+   (a) M11 Taint Gate 扫描任务描述注入载荷
+   (b) 含 shell/bash 命令 → 危险模式黑名单拒绝
+   (c) M11 SIC Cleaning 检测间接 prompt injection（角色劫持 + 语义越界）→ 丢弃 + 审计 `curriculum_injection_blocked`
+   (d) 独立 LLM-as-Judge（与课程生成不同 Provider）判定隐藏恶意指令/社会工程；unsafe → 丢弃 + [ESCALATE]。前 10 次全审，之后置信度 >0.95 可 20% 抽查
+   未通过 → 写 `curriculum_hazard_log` + 丢弃
 8. [Sandbox-L2] 影子执行验证 → [Blackboard].PostTask(priority=0)
-9. 课程任务失败不进 MEMF（防止污染失败记忆池）; 成功率连续 < 20% → 标记 SourceSkill 需中环演化
+9. 课程任务失败不进 MEMF（防污染）；成功率连续 < 20% → 标记 SourceSkill 需中环演化
 
-**Ephemeral Namespace**: FS → `os.TempDir()/auto_curriculum/{task_id}/` (任务后清理); NotesStore → 临时 SQLite; Semantic Graph → 临时图层 (≥80%成功率+Critic审核后合并); Episodic Memory → session_type='auto_curriculum'; 剥夺 write_network/read_network/privileged; 工具白名单: str_replace_editor, glob, bash_restricted (字符集白名单+Wasm受限挂载); 网络需求 → localhost mock HTTP（HyperText Transfer Protocol，超文本传输协议）
+**Ephemeral Namespace**: FS → `os.TempDir()/auto_curriculum/{task_id}/`（任务后清理）；NotesStore → 临时 SQLite；Semantic Graph → 临时图层（≥80% 成功率 + Critic 审核后合并）；Episodic Memory → session_type='auto_curriculum'；剥夺 write_network/read_network/privileged；工具白名单: str_replace_editor, glob, bash_restricted（字符集白名单 + Wasm 受限挂载）；网络需求 → localhost mock HTTP。
 
 ### 2.3 外环: 架构演化（周/月级）
 
-**四级 Gate + Canary 阶梯发布门控**（`internal/learning/optimizer/rollout.go` `RolloutGate` 枚举 + `rollout_store.go` `SQLiteRolloutStore` 实际实现）：
-1. **Gate 1 EvalRegression**: `SubmitCandidate` 提交后立即进入本 Gate；Eval Harness 离线回归通过（`RecordEvalScore`）即视为满足，等待 Gate 2 影子确认。
-2. **Gate 2 ShadowExecution**: `ShadowExecutor` 周期性回放候选（`internal/eval/analysis/shadow_executor.go`，5 分钟周期，`cmd/polaris/boot_agent.go` 启动），从 `events` 表按游标增量抓取历史 `llm_call`，用候选配置重新推理并与基线响应对比打分；通过率 ≥ `M12Eval.ShadowPassRateThreshold` → `ConfirmShadow` 推进至 Gate 3，否则 `Rollback`。
-3. **Gate 3 CanaryRollout**: `AdvanceGate` 按 `canarySteps=[1,5,25,50,100]` 逐级推进灰度流量，每步 24h 驻留门槛。
+**四级 Gate + Canary 阶梯发布门控**（`internal/learning/optimizer/rollout.go` `RolloutGate` + `rollout_store.go` `SQLiteRolloutStore`）：
+1. **Gate 1 EvalRegression**: `SubmitCandidate` 后进入；Eval Harness 离线回归通过（`RecordEvalScore`）即满足，等待 Gate 2。
+2. **Gate 2 ShadowExecution**: `ShadowExecutor`（`internal/eval/analysis/shadow_executor.go`，5 分钟周期，`cmd/polaris/boot_agent.go` 启动）从 `events` 表按游标增量抓取历史 `llm_call`，用候选配置重推理并与基线对比；通过率 ≥ `M12Eval.ShadowPassRateThreshold` → `ConfirmShadow` 推进 Gate 3，否则 `Rollback`。
+3. **Gate 3 CanaryRollout**: `AdvanceGate` 按 canary 阶梯逐级推进灰度流量（阶梯与驻留时长见 `spec/state.yaml §m9_self_improve.canary_steps` / `canary_dwell_per_step_hours_*`；`rollout.go` 当前硬编码 1/5/25/50/100%）。
 4. **Gate 4 FullRollout**: 100% 流量，`RolloutStatusCommitted`。
 
-> 硬停止条件全局适用：error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback（`ProgressiveRollout.CheckHardStop`）。
+硬停止条件全局适用：error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback（`ProgressiveRollout.CheckHardStop`）。
 
-**候选真正生效的唯一入口**：`ConfirmShadow` 成功后，通过注入的 `promptActivator`（同包窄接口，由 `*optimizer.PromptVersionStore` 实现）回调 `Activate`，读取 `SubmitCandidate` 时随 `AgentVersionSnapshot`（`TaskType`/`BaselineScore` 字段）落盘的 `rollout_states.metadata` 完成激活。`handleEvalCompleted` 本身**不再**在 Eval 通过时直接调用 `Activate`——2026-07-10 之前的实现在此处同步激活，导致 Gate 2/3 对 GEPA 候选完全不构成门禁（详见 ADR-0025 §K 修订记录）。
+**候选生效的唯一入口**：`ConfirmShadow` 成功后经注入的 `promptActivator`（由 `*optimizer.PromptVersionStore` 实现）回调 `Activate`，读取 `SubmitCandidate` 时随 `AgentVersionSnapshot`（`TaskType`/`BaselineScore`）落盘的 `rollout_states.metadata`。`handleEvalCompleted` **不得**在 Eval 通过时直接 `Activate`（否则 Gate 2/3 对 GEPA 候选形同虚设，ADR-0025 §K）。
 
-**单一状态源**：`m9Engine`（GEPA 候选路径）与 `LogicCollapseMonitor`（L2/L3/L4 候选路径）共用同一个 `SQLiteRolloutStore` 实例，由 `cmd/polaris/boot_agent.go` 构造并通过 `AgentBundle.RolloutStore` 传递给 `boot_server.go`——此前两者各自持有互不相干的状态（`m9Engine` 曾注入无 DB 持久化的纯内存版本），已统一。M13 TrafficSplitter 按 Gate 3 的 canary 百分比分发流量。
+**单一状态源**：`m9Engine`（GEPA 候选）与 `LogicCollapseMonitor`（L2/L3/L4 候选）共用同一 `SQLiteRolloutStore`，由 `cmd/polaris/boot_agent.go` 构造并经 `AgentBundle.RolloutStore` 传给 `boot_server.go`。M13 TrafficSplitter 按 Gate 3 canary 百分比分发流量。
 
 ### 2.4 Cross-Module Co-Evolution [Module-Topology] [Blackboard]
 
@@ -207,56 +166,40 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 ### 2.5 免疫系统：founding_anchor 漂移检测 + red_team 常态化对抗探测
 
-两者均由 `cmd/polaris/boot_agent.go` 启动为独立后台 goroutine，与 §2.0-2.4 的三环进化路线并行，目标是防止自进化过程本身悄然偏离初心或引入安全回归——三环负责"变得更好"，本节负责"没有变坏"。
+两者由 `cmd/polaris/boot_agent.go` 启动为独立后台 goroutine，与三环并行——三环负责"变得更好"，本节负责"没有变坏"。
 
-**founding_anchor 漂移检测**（`internal/eval/founding_anchor.go` + `internal/eval/harness`）：`FoundingAnchor` 是首次启动（或历史轨迹积累到 200 条会话上限）时对 Agent 行为的一次性"指纹快照"（`BehaviorFingerprint`，由 `ComputeFingerprint` 从近期 `TrajectoryTrace` 聚合得出）。此后每 24 小时取最近 50 条会话轨迹重新计算指纹，与锚点做 `CompareWithAnchor` 对比生成 `DriftReport`；`DriftReport.OverallDriftScore` 写入 `DriftMonitor`（`atomic.Value` 封装单例），`ShouldFreeze=true` 时触发 M9 `TriggerCurriculum` 冻结课程生成。轨迹来源为 `ChatRepository.ListSessions`（按 `updated_at DESC` 取最近会话 ID）逐一调用 `TrajectoryRecorder.Record`——这条读路径依赖 `sCtx.SessionID` 被正确赋值（见 §6-bis #3），此前该字段从未赋值导致锚点长期建立在空数据上。
+**founding_anchor 漂移检测**（`internal/eval/founding_anchor.go` + `internal/eval/harness`）：`FoundingAnchor` 是首次启动（或历史轨迹达 200 条会话上限）时对 Agent 行为的一次性指纹快照（`BehaviorFingerprint`，`ComputeFingerprint` 聚合近期 `TrajectoryTrace`）。此后每 24 小时取最近 50 条会话轨迹重算指纹，`CompareWithAnchor` 生成 `DriftReport`；`OverallDriftScore` 写入 `DriftMonitor`（`atomic.Value` 单例），`ShouldFreeze=true` 时触发 `TriggerCurriculum` 冻结课程生成。轨迹来源 `ChatRepository.ListSessions` + `TrajectoryRecorder.Record`，依赖 `sCtx.SessionID` 被正确赋值（§6-bis #3）。
 
-**red_team 常态化对抗探测**（`internal/eval/red_team.go`，`RedTeamProtocol`）：内置 4 条探针（L0 配置对抗/L1 Prompt Injection/L2 恶意 Skill 描述/L3 自引用 DAG 无限循环），通过 `AgentPool.AcquireHeadless` 在进程内拉起 Headless Agent 实际执行探测输入，按响应/错误中是否含拒绝关键词（"blocked"/"refused"/"policy_violation"/"killswitch"）判定探针是否被正确拦截。未通过（防御未生效）标记 `SeverityP0` 并经 `InjectFindingsToHoldout` 写入 M12 Eval Holdout 分区；通过标记 `SeverityP2`（仅记录，不注入）。与 ADR-0013 决策二（原 ADR-0014，PR 代码对抗审查 Action，CI 层面）是两个不同机制：前者审查的是提交的代码本身，本节审查的是运行中 Agent 的实际防御行为。
+**red_team 常态化对抗探测**（`internal/eval/red_team.go`，`RedTeamProtocol`）：4 条探针（L0 配置对抗 / L1 Prompt Injection / L2 恶意 Skill 描述 / L3 自引用 DAG 无限循环），经 `AgentPool.AcquireHeadless` 进程内拉起 Headless Agent 实测，按响应/错误是否含拒绝关键词（"blocked"/"refused"/"policy_violation"/"killswitch"）判定拦截。未通过标记 `SeverityP0` 并经 `InjectFindingsToHoldout` 写入 M12 Eval Holdout；通过标记 `SeverityP2`（仅记录）。与 [ADR-0091](./decisions/ADR-0091-gate-coverage-over-gate-results.md) 决策二（CI 层 PR 代码对抗审查 Action，原 ADR-0013/0014）是不同机制：前者审查提交的代码，本节审查运行中 Agent 的实际防御行为。
 
 ---
 
 ## 3-bis. 合成评测数据生成（EvalGenerator）
 
-实现见 `internal/learning/synthetic/synthetic_eval_gen.go`（`EvalGenerator`）。由 M9 BackgroundTaskScheduler 离线批量触发，**禁止在 RunSuite 热路径中调用**。输出 `SyntheticCase` 经调用方适配器转为 `EvalCase(SourceSynthetic)` 注入 M12 Training Set。
+实现 `internal/learning/synthetic/synthetic_eval_gen.go`（`EvalGenerator`）。由 BackgroundTaskScheduler 离线批量触发，**禁止在 RunSuite 热路径调用**。输出 `SyntheticCase` 经调用方适配器转为 `EvalCase(SourceSynthetic)`（`Severity=P2, needs_human_audit=true`）注入 M12 Training Set（M12 §5 DataSplitter 路由）。
 
 ### RAGAS Evolution 三阶段流水线
 
-输入 M10 知识库 chunks，输出 SyntheticCase（Severity 硬上限 P2，needs_human_audit=true）。
+输入 M10 chunks，Severity 硬上限 P2：
+- **Stage 1 Simple**：每 chunk 用 deepseek-chat 生成一个事实性 QA 对（factual/easy，Temperature=0.7）
+- **Stage 2 Evolution**：按 chunk 索引 %3 分流：multi_hop（medium）/ counterfactual（hard）/ 保持 factual/easy
+- **Stage 3 Groundedness**：Judge LLM 过滤，答案无依据者丢弃；通过者 ContextBound=true
+- **n-gram 去重**：3-gram SHA-256 指纹去同义复述
 
-- **Stage 1 — Simple 生成**：对每个 chunk 用 deepseek-chat 生成一个事实性 QA 对（Type: factual/easy，Temperature=0.7 保多样性）。
-- **Stage 2 — Evolution 难度演化**：按 chunk 索引 %3 分流：multi_hop 多步推理（medium）/ counterfactual 反事实推理（hard）/ 保持 factual/easy 不演化。
-- **Stage 3 — Groundedness 验证**：Judge LLM 过滤，答案无法从 chunk 找到依据的丢弃；通过者设 ContextBound=true。
-- **n-gram 去重**：3-gram SHA-256 指纹去除同义复述，保留语义不同变体。
+配置：`Enabled`（默认 false，须显式启用）、`TargetRatio`=0.05（每 100 chunks 生成 5 条，向上取整，最少 1）、`provider`（`protocol.Provider`，必须注入）。字段：ID/Question/GroundTruth/ChunkID/Type/Difficulty/ContextBound。
 
-### EvalGenerator 配置
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| Enabled | false | 须显式启用 |
-| TargetRatio | 0.05 | 每 100 chunks 生成 5 条（向上取整，最少 1 条） |
-| provider | protocol.Provider | LLM 批量生成入口，必须注入 |
-
-### SyntheticCase 结构
-
-类型定义见 `internal/learning/synthetic/synthetic_eval_gen.go`（字段：ID/Question/GroundTruth/ChunkID/Type/Difficulty/ContextBound）。调用方需实现 `SyntheticCase → EvalCase` 适配（设 `Source=SourceSynthetic, Severity=P2, needs_human_audit=true`），M12 §5 DataSplitter 将 `SourceSynthetic` 路由至 Training Set。
-**流程**: 
-1. L2+ 变更
-2. `[Blackboard].Publish(EventCoEvolution)`
-3. 联合回归
-4. 退化按级别补偿 (L0 调参 / L1 prompt / L2+ LogicCollapse)
-5. `[EventLog]`
 
 ---
 
 ## 3. 五级演化层次 + 审批门控
 
-| 级别 | 范围 | 自动化 | 门控 | 回滚 | 实现状态 |
-|------|------|--------|------|------|---------|
-| **L0** | 配置调整 (路由权重/超时/模型选择/[SurpriseIndex]分位) | 全自动 | telemetry 监控 | 即时 | ✅ 已实现 |
-| **L1** | Prompt/Heuristic/system prompt/路由判据 | 全自动 | Eval Harness | 即时 | ✅ 已实现 |
-| **L2** | 新技能生成 (Skill Library 新条目) | 半自动 | 沙箱 + Eval + HMAC-SHA256 签名 | 即时 | ✅ 已实现（LogicCollapseMonitor + StagingPipeline；`logic_collapse_trigger.go`） |
-| **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 | ✅ 已实现（HITL（Human-in-the-loop，人机协同） 触发路径；`detectL3Trigger`。2026-07-10 前 `Engine.SetStagingPipeline` 在生产启动代码中从未被调用，HITL 审批通过后的 `SubmitCandidate` 静默丢弃；已随 §2.3 的单一状态源修复接通） |
-| **L4** | 源码/架构修改 (Go/Rust) | 严格审批 | 形式化验证 + Red Team + 多签 | git revert | ✅ 已实现（管理员触发 + multi-sig HITL；`detectL4Trigger`，同上 SubmitCandidate 接通修复） |
+| 级别 | 范围 | 自动化 | 门控 | 回滚 | 实现 |
+|------|------|--------|------|------|------|
+| **L0** | 配置调整（路由权重/超时/模型选择/[SurpriseIndex]分位） | 全自动 | telemetry 监控 | 即时 | `AutoConfigOptimizer` |
+| **L1** | Prompt/Heuristic/system prompt/路由判据 | 全自动 | Eval Harness | 即时 | PromptOptimizer |
+| **L2** | 新技能生成（Skill Library 新条目） | 半自动 | 沙箱 + Eval + HMAC-SHA256 签名 | 即时 | `LogicCollapseMonitor` + `StagingPipeline`（`logic_collapse_trigger.go`） |
+| **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 | `detectL3Trigger`：SurpriseIndex > 0.8 → HITL `l3_strategy_modify` → Staging |
+| **L4** | 源码/架构修改（Go/Rust） | 严格审批 | 形式化验证 + Red Team + 多签 | git revert | `detectL4Trigger`：`l4TriggerCh` 管理员信号 → HITL `l4_multi_sig` → Staging |
 
 **L4 不可变内核** — `0400` + CI merge-block + pre-receive hook 三重保护:
 
@@ -267,22 +210,20 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 | `internal/agent/` | [KillSwitch] 熔断链路 |
 | `internal/sandbox/` | [Sandbox-L2] 边界实施 |
 | `internal/protocol/immutable_core.go` | 编译期不可变常量 |
-| `internal/protocol/interfaces_*.go` | 安全接口契约 (SafeDialer/Cedar-Gate/TaintLevel/Blackboard) |
-| `internal/protocol/schema/` | EventLog DDL（Data Definition Language，数据定义语言） + Outbox DDL，M11 hash chain 依赖其完整性 |
+| `internal/protocol/interfaces_*.go` | 安全接口契约（SafeDialer/Cedar-Gate/TaintLevel/Blackboard） |
+| `internal/protocol/schema/` | EventLog DDL + Outbox DDL，M11 hash chain 依赖其完整性 |
 
-**L4 白名单 (Default-Deny)**: `internal/swarm/**`, `internal/extension/skill/**`, `internal/memory/**`, `internal/gateway/**`。CI/CD 配置 + 构建入口 + go.mod 等全部禁止 L4 修改。
+**L4 白名单（Default-Deny）**: `internal/swarm/**`, `internal/extension/skill/**`, `internal/memory/**`, `internal/gateway/**`。CI/CD 配置 + 构建入口 + go.mod 等全部禁止 L4 修改。
 
-**CI 强制**: L4 PR → process-external CI pipeline (独立进程，非进程内 eval) → `immutable_kernel_check` 扫描 → 命中白名单外 → auto reject (2 安全审批者 override)。CI 配置自身受 pre-receive hook 保护。L4 自进化不得在运行进程内执行 Holdout Set 评估——必须通过独立 CI runner。
+**CI 强制**: L4 PR → process-external CI pipeline（独立进程，非进程内 eval）→ `immutable_kernel_check` 扫描 → 命中白名单外 → auto reject（2 安全审批者 override）。CI 配置自身受 pre-receive hook 保护。L4 自进化不得在运行进程内执行 Holdout Set 评估——必须经独立 CI runner。
 
-实现见 `internal/learning/`（AutoConfigOptimizer）。L0 级自动配置优化：基于 7 天 ProviderStats 调整路由权重（cps 低于均值 0.8× 上调，高于均值 1.5× 下调）；基于 30 天 System 1 命中率取 P10/P50/P90 替代静态阈值 [0.3, 0.7]。
+L0 自动配置优化（`internal/learning/` AutoConfigOptimizer）：基于 7 天 ProviderStats 调路由权重（cps 低于均值 0.8× 上调，高于均值 1.5× 下调）；基于 30 天 System 1 命中率取 P10/P50/P90 替代静态阈值 [0.3, 0.7]。
 
 ---
 
 ## 4. 条件梯度训练（硬件门控 → AutoConfig 自动化）
 
-QLoRA/PRM（Process Reward Model，过程奖励模型）/ActivationSteering 的 Tier 门控由 `FeatureGate` 自动化：`FeatureQLoRA`(≥Tier1+≥4GB→1-3B; ≥Tier2+≥8GB→7B)、`FeaturePRMTraining`(≥Tier2+≥8GB)、`FeatureActivationSteer`(≥Tier1+≥1.5GB+LocalInference 已启用)，启动时自动判定，调用方使用 `GlobalFeatureGate().IsEnabled(FeatureQLoRA)`，详见 M03 §5。
-
-梯度训练仅 local_only 可选，不参与架构主线。[Phase0-Bootstrapping] 时 HardwareCapabilityProbe 判定。
+Tier 门控由 `FeatureGate` 自动化：`FeatureQLoRA`(≥Tier1+≥4GB→1-3B; ≥Tier2+≥8GB→7B)、`FeaturePRMTraining`(≥Tier2+≥8GB)、`FeatureActivationSteer`(≥Tier1+≥1.5GB+LocalInference 已启用)，调用方用 `GlobalFeatureGate().IsEnabled(...)`（M03 §5）。梯度训练仅 local_only 可选，不参与架构主线。
 
 | 路径 | 最低内存 | GPU | 框架 |
 |------|---------|-----|------|
@@ -290,15 +231,14 @@ QLoRA/PRM（Process Reward Model，过程奖励模型）/ActivationSteering 的 
 | QLoRA 8-bit | 32GB RAM + 24GB VRAM | RTX 4090 / M3 Max+ | unsloth/bitsandbytes |
 | Full FT | 64GB+ RAM + 48GB+ VRAM | A6000 / M4 Ultra | axolotl/torchtune |
 
-**梯度训练硬件门控**: 根据 GPU VRAM 和系统 RAM 自动判定可行路径——VRAM≥24GB + RAM≥32GB → QLoRA 8-bit；VRAM≥8GB + RAM≥16GB → QLoRA 4-bit；Apple Silicon unified memory≥16GB → MLX LoRA；不满足则 PathNone（回退无梯度路线）。
+**硬件门控**: VRAM≥24GB + RAM≥32GB → QLoRA 8-bit；VRAM≥8GB + RAM≥16GB → QLoRA 4-bit；Apple Silicon unified memory≥16GB → MLX LoRA；不满足 → PathNone（回退无梯度路线）。
 
-**Go 侧实现边界**: M9/M1 只负责触发和对接，训练本身由外部进程承载：
-- `QLoRAAdapter`（`internal/llm/adapter/training.go`）: HTTP POST `localhost:8000/v1/train/qlora`，发送 `{Prompt, Completion}` 样本集
-- `PRMAdapter`: HTTP POST `localhost:8001/v1/train/prm`，同格式
-- `GET /v1/export/trajectories`: 导出 ShareGPT/OpenAI JSONL，供外部 SFT/DPO（Direct Preference Optimization，直接偏好优化） 工具消费
-- DPO Chosen/Rejected 数据配对、GRPO Rollout Group、DARE/TIES 适配器合并均为**前置条件未满足的研究方向**，待本地训练服务稳定后再实现（见 ROADMAP §3）
+**Go 侧边界**: M9/M1 只负责触发和对接，训练由外部进程承载：
+- `QLoRAAdapter`（`internal/llm/adapter/training.go`）: POST `localhost:8000/v1/train/qlora`，样本 `{Prompt, Completion}`；`PRMAdapter`: POST `localhost:8001/v1/train/prm`
+- `GET /v1/export/trajectories`: 导出 ShareGPT/OpenAI JSONL，供外部 SFT/DPO 消费
+- DPO 配对、GRPO Rollout Group、DARE/TIES 适配器合并为前置条件未满足的研究方向（ROADMAP §3）
 
-任何梯度训练步骤失败即回退无梯度路线（路线 a-e），不阻塞主线。
+任何梯度训练步骤失败即回退无梯度路线（a-e），不阻塞主线。
 
 ---
 
@@ -306,26 +246,27 @@ QLoRA/PRM（Process Reward Model，过程奖励模型）/ActivationSteering 的 
 
 | 故障场景 | 降级路径 | 恢复策略 |
 |---------|---------|---------|
-| Worker goroutine 崩溃 (Reflexion/Distillation/Curriculum/Fallacy) | suture OneForOne 重启 + backoff（权威源 `spec/state.yaml §m9_self_improve.worker_restart_backoff_initial_ms` / `worker_restart_backoff_max_seconds`） | 5 次上限 → Escalate Root Supervisor |
-| PromptOptimizer 候选生成为空 | 跳过本周期 → 延长触发间隔 | 下次周期正常触发恢复 |
-| PromptVersionStore.OnActivate 回调 nil 或 panic | 激活写库成功，回调失败不回滚；仅热更新路径失效 | Server 重启后从 DB（Database，数据库） 热恢复 |
+| Worker goroutine 崩溃 (Reflexion/Distillation/Curriculum/Fallacy) | suture OneForOne 重启 + backoff（`spec/state.yaml §m9_self_improve.worker_restart_backoff_initial_ms` / `worker_restart_backoff_max_seconds`） | 5 次上限 → Escalate Root Supervisor |
+| PromptOptimizer 候选生成为空 | 跳过本周期 → 延长触发间隔 | 下次周期恢复 |
+| PromptVersionStore.OnActivate 回调 nil 或 panic | 激活写库成功，回调失败不回滚；仅热更新路径失效 | Server 重启后从 DB 热恢复 |
 | MEMF 池检索超时 (>50ms) | 跳过剪枝直接放行 | 池大小削减后恢复 |
-| Auto-Curriculum 任务失败 | 标记课程任务 failed→Ephemeral Namespace 绑定，不影响核心功能 | — |
+| Auto-Curriculum 任务失败 | 标记 failed→Ephemeral Namespace 绑定，不影响核心功能 | — |
 | Staging Stage 失败 | candidate → rejected/dead_letter → audit | 下一代候选重新进入 |
 | CoEvolutionCoordinator 订阅者 OnChange 失败 | L0 调参 / L1 prompt / L2 LogicCollapse 退化补偿 | 手动介入 |
-| GraphRAG LLM 调用日预算超限 | 跳过剩余 graph_build_task + 设置 next_retry_at = 次日 00:00 UTC（保持 pending，M2 Outbox Worker 跳过未来重试时间） | 次日自动恢复 |
+| GraphRAG LLM 调用日预算超限 | 跳过剩余 graph_build_task + `next_retry_at` = 次日 00:00 UTC（保持 pending，M2 Outbox Worker 跳过未来重试时间） | 次日自动恢复 |
 
 与 OSMemoryGuard 协同: L1 预警 → 挂起 Auto-Curriculum + 暂停后台 worker 池 / L2 紧急 → 挂起 Consolidation + Reflexion / L3 临界 → 全部自进化活动暂停。
 
 
 ## 6-bis. 已知 Bug 修复记录
 
-| # | 严重级 | 文件 | 函数 | 问题描述 | 修复提交 |
-|---|--------|------|------|---------|---------|
-| 1 | P1 | `internal/learning/` | DynamicDifficultyCalibrator | 历史条数在 20–50 区间时，窗口切片计算出负索引触发 panic；分母以总长除以窗口计数导致成功率低估，误触发难度下调 | 40917d8 |
-| 2 | P0 | `internal/learning/engine_ops.go` | handleEvalCompleted | Eval(Gate 1) 一通过就同步调用 `versionStore.Activate`，Gate 2(Shadow)/Gate 3(Canary) 对 GEPA 候选完全不构成门禁；根因链还包括 `m9Engine` 注入的 rollout 无 DB 持久化、`SetStagingPipeline`/`SetVersionStore` 从未在生产启动代码中调用、`promptOptimizer` 以 `(nil,nil,0)` 构造 | c1af5b5 |
-| 3 | P0 | `internal/agent/agent.go` | NewAgent | `sCtx.SessionID` 构造时从未赋值（仅设置 `AgentID`），导致 `events:session:{id}:` 前缀写入全部塌缩进空字符串 key（生产环境唯一影响面），连带 `founding_anchor` 漂移检测（见 §2.5）长期拿不到任何真实轨迹、`tokenVault.ClearTask`/记忆巩固 outbox 事件/`withTaskScopeCtx` ctx 注入/PII 快照 `session_id` 字段等分支一并失效。修复为 `SessionID: id`（与 `AgentID` 同源） | e354514 |
-| 4 | P0 | `internal/eval/red_team.go` | runProbe | `RedTeamFinding.Severity` 主路径从未赋值（零值空字符串），`InjectFindingsToHoldout` 的过滤条件 `Severity != P0 && != P1` 对空字符串恒真，导致红队探测发现无论真实结果如何都被静默丢弃，从未真正写入 Holdout——"看起来在跑但没有落地"。修复为按 `passed` 映射 P0/P2（未通过=P0 阻断级，通过=P2 仅记录） | 4b7d665 |
+| # | 级别 | 位置 | 问题与修复 |
+|---|---|---|---|
+| 1 | P1 | DynamicDifficultyCalibrator | 历史 20–50 条时窗口负索引 panic、成功率分母错误 → 已修 |
+| 2 | P0 | `internal/learning/engine_ops.go` handleEvalCompleted | Eval 通过即同步 `Activate`，Gate 2/3 形同虚设 → 改走 `ConfirmShadow` 唯一入口 + 统一状态源（§2.3） |
+| 3 | P0 | `internal/agent/agent.go` NewAgent | `sCtx.SessionID` 未赋值，会话前缀塌缩为空串，`founding_anchor` 等失效 → `SessionID: id` |
+| 4 | P0 | `internal/eval/red_team.go` runProbe | `Severity` 未赋值，Holdout 注入过滤恒真，发现被静默丢弃 → 按 `passed` 映射 P0/P2 |
+
 
 ---
 
@@ -353,25 +294,10 @@ QLoRA/PRM（Process Reward Model，过程奖励模型）/ActivationSteering 的 
 
 ## 8. 实现状态与 2026 研究对照
 
-### 当前实现状态
-
-| 组件 | 状态 | 说明 |
-|------|------|------|
-| 三环架构框架（Engine.Run） | ✅ 已实现 | `internal/learning/` |
-| PromptOptimizer（GEPA/MemAPO/ContraPrompt） | ✅ 已实现 | `internal/learning/` |
-| MEMF + HeuristicsMemory | ✅ 已实现 | `internal/learning/`（SQLite 降级版） |
-| SurpriseIndex 三组件 | ✅ 已实现 | `internal/learning/` |
-| 内环成功轨迹写 HeuristicsMemory | ✅ 已修复 | `Engine.Run()` 已添加 `RecordSuccess`，success_rate 数据来源完整 |
-| L2 SkillGeneration（Logic Collapse → 新技能） | ✅ 已实现 | `LogicCollapseMonitor + StagingPipeline`（`logic_collapse_trigger.go`）；Engine.Run 已调用 |
-| L3 StrategyModify（HITL 触发路径） | ✅ 已实现 | `detectL3Trigger`：SurpriseIndex > 0.8 → HITL `l3_strategy_modify` → Staging |
-| L4 SourceArchitecture（管理员触发 multi-sig） | ✅ 已实现 | `detectL4Trigger`：`l4TriggerCh` 管理员信号 → HITL `l4_multi_sig` → Staging |
-| CurriculumGenerator 接口绑定 | ✅ 已修复 | 通过 Adapter 适配器对齐接口签名 |
-| FastPath 跳过 Intent Vector 记录 | ✅ 已修复 | FastPath 合成感知结果后，异步调用 `memStore.RecordIntentVector`（source="fastpath_synthetic"），确保所有路径均写入 Intent 记录供后续 BM25/语义检索使用 |
-| Gate 2 ShadowExecution（ShadowExecutor） | ✅ 已实现（2026-07-10 恢复接入） | `internal/eval/analysis/shadow_executor.go`；`boot_agent.go` 5 分钟周期触发器发现 Gate 2 候选并回放，此前实现完整但缺顶层触发器，反复被误判死代码删除 |
-| M9Engine ↔ SQLiteRolloutStore 接线 | ✅ 已修复（2026-07-10） | `SetStagingPipeline`/`SetVersionStore` 此前从未在生产启动代码中调用；`m9Engine` 的 rollout 曾是无 DB 持久化的纯内存对象；现与 LogicCollapseMonitor 共用同一份真实状态 |
+三环架构（`Engine.Run`）、PromptOptimizer、MEMF + HeuristicsMemory（SQLite 降级版）、SurpriseIndex 三组件、L2/L3/L4 触发路径均已实现（`internal/learning/`）。接线要点：Gate 2 `ShadowExecutor` 由 `boot_agent.go` 5 分钟周期触发器驱动（曾因缺顶层触发器被误判死代码删除）；`m9Engine` 与 `LogicCollapseMonitor` 共用同一 `SQLiteRolloutStore`；FastPath 合成感知后异步 `RecordIntentVector`（source="fastpath_synthetic"）。
 
 ### 引入计划
 
 | 研究 | 来源 | 核心机制 | 引入点 | 优先级 |
 |------|------|---------|-------|-------|
-| **D-MEM 多巴胺门控** | arXiv:2603.14597, 2026 | 将 SurpriseIndex 输出接入 M5 Consolidation 的情节→语义晋升决策，仅高 surprise 事件触发巩固写入；与现有 SurpriseIndex 已有协同基础 | `internal/learning/` → `internal/memory/` §9 | P1 |
+| **D-MEM 多巴胺门控** | arXiv:2603.14597, 2026 | SurpriseIndex 输出接入 M5 Consolidation 情节→语义晋升决策，仅高 surprise 事件触发巩固写入 | `internal/learning/` → `internal/memory/` §9 | P1 |

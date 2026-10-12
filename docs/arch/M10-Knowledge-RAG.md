@@ -3,7 +3,7 @@
 > 消费 `[Storage-SQLite]` + `[Storage-SurrealDB-Core]`，非独立存储 | Hybrid Search + GraphRAG | 增量索引 | 来源追踪
 > Go 检索流水线 + GraphRAG，Rust SurrealDB-Core FFI 侧车
 > `[Code-Package-Mapping]`: internal/swarm/| `[Module-Topology]`: M10 L2 | `[HE-Rule-5]` `[HE-Rule-6]`
-<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:107 检索 / 3:215 增量索引 / 4:233 来源追踪 / 5:272 Reranking / 6:288 检索质量 / 7:294 数据流闭环 / 9:310 (SOFT)降级 / 10:328 跨模块契约 / 11:347 实现状态+2026研究对照 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:100 检索 / 3:175 增量索引 / 4:187 来源追踪 / 5:215 Reranking / 6:227 288 检索质量 / 7:233 294 数据流闭环 / 9:239 310 (SOFT)降级 / 10:257 328 跨模块契约 / 11:276 347 实现状态+2026研究对照 -->
 ## 0-bis. 职责边界
 
 | M10 **是** | M10 **不是** |
@@ -43,64 +43,57 @@
 
 ### 1.2 知识源摄入 (Plugin-driven + 直连 Connector)
 
-**直连 Connector（已实现，Tier 0 内置）**:
-- `ObsidianConnector` (`internal/knowledge/connector/obsidian_connector.go`): 本地 Markdown 目录监听，基于 fsnotify 实时推送变更事件（created/updated/deleted），List/Fetch/Watch 三接口完整，支持 YAML frontmatter 解析。
-- `NotionConnector` (`internal/knowledge/connector/notion_connector.go`): 拉取 Notion 工作区页面/数据库内容并映射为统一 `Document` 格式。
-- `MCPKnowledgeConnector` (`internal/knowledge/connector/mcp_connector.go`): 消费任意声明 `capability: knowledge_provider` 的 MCP Server，将其暴露的资源纳入摄入流水线。
-- `ExtensionLibrarianHandler` (`internal/knowledge/connector/extension_librarian_handler.go`): 对接扩展市场中 Librarian 角色扩展，索引其暴露的知识资源。
-- `SyncScheduler` (`internal/knowledge/connector/sync_scheduler.go`): 消费 `KnowledgeConnector.Watch` 事件并驱动 `KnowledgePipeline.Ingest/Delete`。启动时执行全量初始同步，后切入增量 Watch 模式。防抖窗口 500ms 合并同一文件的连续变更，指数退避重试最多 3 次。
+**直连 Connector**（Tier 0 内置，`internal/knowledge/connector/`）:
+- `ObsidianConnector`（`obsidian_connector.go`）：本地 Markdown 目录 fsnotify 监听（created/updated/deleted），List/Fetch/Watch 三接口，支持 YAML frontmatter。
+- `NotionConnector`（`notion_connector.go`）：拉取 Notion 页面/数据库并映射为统一 `Document`。
+- `MCPKnowledgeConnector`（`mcp_connector.go`）：消费声明 `capability: knowledge_provider` 的 MCP Server 资源。
+- `ExtensionLibrarianHandler`（`extension_librarian_handler.go`）：对接扩展市场 Librarian 角色扩展。
+- `SyncScheduler`（`sync_scheduler.go`）：消费 `KnowledgeConnector.Watch` 事件驱动 `KnowledgePipeline.Ingest/Delete`；启动先全量同步再切增量 Watch；防抖窗口 500ms，指数退避重试最多 3 次。
 
-**Plugin-driven Ingestion（长期架构目标）**:
-M10 长期方向是消费 `M13-bis Extension Registry` 中声明了 `capability: knowledge_provider` 的 Plugin（MCP 协议），将外部知识获取完全下放至插件沙箱（L2/L3），零信任边界。短期阶段 ObsidianConnector+SyncScheduler 作为 P0 内置 Connector 使用。
+**Plugin-driven Ingestion（长期目标）**: 消费 `M13-bis Extension Registry` 中声明 `capability: knowledge_provider` 的 Plugin（MCP），外部知识获取下放至插件沙箱（L2/L3），零信任边界。
 
-**DocTree 持久化**: `PipelineImpl.Ingest` 将文档分块写入 `rag_chunks` SQLite 表（FTS5 支持）的同时，将 DocTree 序列化为 JSON 写入 `rag_docs` 表（uri 为主键，ON CONFLICT DO UPDATE 幂等）。
-
-**可观测性**: 同步延迟 >1800s → ALERT + 暂停非关键知识源。
+**DocTree 持久化**: `PipelineImpl.Ingest` 将分块写入 `rag_chunks`（FTS5），DocTree 序列化 JSON 写入 `rag_docs`（uri 主键，ON CONFLICT DO UPDATE 幂等）。同步延迟 >1800s → ALERT + 暂停非关键知识源。
 
 ### 1.3 文档树数据结构
 
-DocNode/LeafChunk/ParentChunk/Chunk 类型定义见 `internal/knowledge/rag.go`。DocTree 在 `rag_docs` 表持久化（tree_json 列）。
+DocNode/LeafChunk/ParentChunk/Chunk 类型见 `internal/knowledge/rag.go`；DocTree 持久化于 `rag_docs.tree_json`。
 
 ### 1.4 结构解析 + 父子双存
 
-`DocumentParser` 按 SourceType 选择解析策略（设计目标：Markdown→goldmark AST、PDF→pdfcpu 布局、代码→tree-sitter AST 函数/类、Web→goquery+readability、纯文本→空行+缩进启发式），生成以 document 为根节点的 DocNode 树。
+`DocumentParser` 按 SourceType 选解析策略（Markdown→goldmark AST、PDF→pdfcpu、代码→tree-sitter AST、Web→goquery+readability、纯文本→空行+缩进启发式），生成以 document 为根的 DocNode 树。`Ingester.ParseAndBuildTree` 分层生成 LeafChunk（~256 tokens 语义断点）和 ParentChunk（SectionPath + 前同级 TopicSentence + 完整内容），后台 goroutine 生成多级摘要，`extractStructuredContent` 提取表格 schema 与代码块元数据。
 
-`Ingester.ParseAndBuildTree` 在解析后分层生成 LeafChunk（~256 tokens 语义断点）和 ParentChunk（SectionPath + 前同级 TopicSentence + 完整内容），后台 goroutine 生成多级摘要，`extractStructuredContent` 提取表格 schema 和代码块元数据。
-
-> **当前实现**：`rag_impl.go` 已实现父子双存，`chunkDocument` 采用语义边界切分：先按 `\n\n` 切段落合并为 ParentChunk（≤1000 runes），再按中英文句子结束符（。！？；/ `.` `!` `?` + 空格）切 LeafChunk（≤250 runes），无边界时兜底字符切；结构化解析器（goldmark/pdfcpu/纯Go）见 `internal/knowledge/parsers.go`，已集成 CGO 版 go-tree-sitter 处理代码文件；多级摘要生成已实现，见 §1.6。
+**当前实现**：`rag_impl.go` `chunkDocument` 语义边界切分：先按 `\n\n` 合并为 ParentChunk（≤1000 runes），再按中英文句末符切 LeafChunk（≤250 runes），无边界时兜底字符切；解析器见 `internal/knowledge/parsers.go`（goldmark/pdfcpu/纯 Go，代码文件用 CGO go-tree-sitter）；摘要见 §1.6。
 
 ### 1.5 嵌入维度变更 (三相渐进恢复)
 
-M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-Limit]` 8GB下不可行)。
+Embedder 模型切换致向量不兼容时，禁止全量同步重嵌（`[Tier-0-Limit]` 8GB 下不可行）。进程内 ONNX 两档统一 512 维，切档只按 `embed_model_version` 重嵌，不同模型向量不可混检（ADR-0109 D2/D5）。
 
 | 阶段 | 触发 | 操作 | 延迟 |
 |------|------|------|------|
-| Phase 1: 双索引无缝切换 | Embedder.Dimension() 变更 | SurrealDB-Core 内维护单张动态维度表（`vec_dim` 列随模型切换更新）；切换模型时将检索请求路由至新维度索引。**禁止永久降级 BM25**。 | <1ms |
-| Phase 2: 优先级热恢复 | Phase 1 后 | 优先级队列重嵌 Top 50 Chunk: 0.4×M5 WorkingMemory引用频次 + 0.3×DurativeGroup活跃度 + 0.2×7天查询频率 + 0.1×访问时间倒数。每Chunk 2s超时，原子替换 | ~25-75s |
-| Phase 3: 全量回填 | CPU idle>70% + 空闲内存>500MB | 后台单线程, 5文档/批+1s冷却 | ~5.5h (10K docs) |
-| BM25 永久降级 | >30天未访问 | 不重嵌，永久BM25 | 0 |
+| Phase 1: 双索引无缝切换 | Embedder.Dimension() / 模型版本变更 | SurrealDB-Core 内维护单张动态维度表（`vec_dim` 列随模型切换更新），检索请求路由至新索引。**禁止永久降级 BM25** | <1ms |
+| Phase 2: 优先级热恢复 | Phase 1 后 | 优先级队列重嵌 Top 50 Chunk: 0.4×M5 WorkingMemory引用频次 + 0.3×DurativeGroup活跃度 + 0.2×7天查询频率 + 0.1×访问时间倒数；每 Chunk 2s 超时，原子替换 | ~25-75s |
+| Phase 3: 全量回填 | CPU idle>70% + 空闲内存>500MB | 后台单线程，5 文档/批 + 1s 冷却 | ~5.5h (10K docs) |
+| BM25 永久降级 | >30 天未访问 | 不重嵌，永久 BM25 | 0 |
 
-跨模块: M5 OnlineReindexer 检测维度变更（实现位于 `internal/memory/retrieval/online_reindexer.go`，原地 UPDATE `episodic_events.embedding`，无 shadow table）, M1 Embedder.Init() 暴露 Dimension(), M10 通过 `internal/config/runtime.go` embeddingDim atomic 获取, M5 ActiveDocumentTracker 提供文档热度
+跨模块: M5 OnlineReindexer（`internal/memory/retrieval/online_reindexer.go`，原地 UPDATE `episodic_events.embedding`，无 shadow table）检测变更；M1 Embedder.Init() 暴露 Dimension()；M10 经 `internal/config/runtime.go` embeddingDim atomic 获取；M5 ActiveDocumentTracker 提供文档热度。
 
 ### 1.6 多级摘要生成
 
-文档(~200 tokens) → 章节(~100 tokens) → 段落(~20 tokens)。三级树状预计算。
+三级树状预计算：段落（≤30 tokens，优先取首句零 LLM）→ 章节（~100 tokens，子主题拼接 LLM）→ 文档（~200 tokens，章节摘要+标题 LLM）。速率限制 MaxDocsPerHour=100、MaxTokensPerDoc=700，超限跳过。
 
-三级预计算（段落≤30 tokens 优先取首句零LLM、章节~100 tokens 子主题拼接LLM、文档~200 tokens 章节摘要+标题LLM），速率限制 MaxDocsPerHour=100、MaxTokensPerDoc=700，超限跳过。摘要 Taint 只升不降，存储于 `rag_chunks.taint_level` 列（INT 0-4，schema 009）供 M4 TaintContextPropagation 门控。
+**已实现**：`internal/knowledge/rag_summary_tree.go`（`buildSummaryTree` 编排 `fetchLeafChunks`/`summarizeText`/`insertSummaryChunk`/`generateSummaryLevels`），三级调用 `provider.Infer`，对应 `009_rag_chunks.sql` 的 `chunk_type='para_summary'/'chap_summary'/'doc_summary'`，由 `cmd/polaris/boot_knowledge.go` 接线。查询 leaf chunks 后须在 LLM 调用前显式 `rows.Close()`（R1.16），避免长耗时摘要占住 reader 连接池。另有 `internal/knowledge/graphrag/summary_gen_handler.go`（Outbox 异步处理器，监听 `rag_doc_summary_needed`，同样提前 `rows.Close()`）和 `community_summarizer.go`（`CommunityGenerativeSummarizer`，Leiden 社区摘要+关键词，见 §2.7）。
 
-> ✅ **已实现**（本条注释此前描述的"`PipelineImpl.Ingest` 无摘要生成逻辑"已过时）：三级 LLM 摘要落地于 `internal/knowledge/rag_summary_tree.go`（2026-07-08 从 `rag_impl.go` 抽出，满足 R7 400 行文件上限；`buildSummaryTree` 编排，拆分为 `fetchLeafChunks`/`summarizeText`/`insertSummaryChunk`/`generateSummaryLevels` 四个子函数收敛圈复杂度），段落/章节/文档三级调用 `provider.Infer`，对应 `009_rag_chunks.sql` 的 `chunk_type='para_summary'/'chap_summary'/'doc_summary'`，由 `cmd/polaris/boot_knowledge.go` 接线进生产启动路径。查询 leaf chunks 后显式提前 `rows.Close()`（早于后续 LLM 调用，R1.16），避免大文档摄入时长耗时摘要生成占住 reader 连接池。另有 `internal/knowledge/graphrag/summary_gen_handler.go`（Outbox 异步摘要处理器，监听 `rag_doc_summary_needed` 事件，同样已按 R1.16 显式提前 `rows.Close()`）和 `internal/knowledge/graphrag/community_summarizer.go`（`CommunityGenerativeSummarizer`，对 Leiden 社区检测结果生成摘要+关键词）——后者是比本节"按文档层级摘要"更成熟的 GraphRAG 风格社区摘要，属于同一需求的升级实现。
-
-摘要 Taint: LLM摘要最低 `[Taint-Floor-Medium]`。段落级→继承源段落TaintLevel, 章节级→子节点max, 文档级→章节max。`[Taint-Prop]` 只升不降。存储列 rag_chunks.taint_level(INT 0-4), 供 M4 TaintContextPropagation 门控
+**摘要 Taint**: LLM 摘要最低 `[Taint-Floor-Medium]`；段落级继承源段落 TaintLevel，章节级取子节点 max，文档级取章节 max；`[Taint-Prop]` 只升不降。存储于 `rag_chunks.taint_level`（INT 0-4，schema 009），供 M4 TaintContextPropagation 门控。
 
 ### 1.7 内容感知分块
 
-| 类型 | 叶节点 | 父节点 | 特殊处理 | 实现状态 |
-|------|--------|--------|---------|---------|
-| Markdown | 按段落,~256 tokens,语义断点 | 完整段落+章节路径+前文 | 表格保留schema,代码块保留语言 | ✅ MarkdownChunker（标题边界） |
-| 代码 | 按 func/class 边界 | 完整函数体+文件/包路径 | import block 独立索引 | ✅ CodeChunker；tree-sitter AST 已实现。CGO 依赖为 ADR-0011（Architecture Decision Record，架构决策记录） 的受限例外，理由与边界见 ADR-0011 §受限例外：Tree-sitter CGO 依赖；`chunker_cgo.go`（`//go:build cgo`）/`chunker_nocgo.go`（`//go:build !cgo`）双实现分流，`CGO_ENABLED=0` 交叉编译自动降级为字符串匹配 fallback；`go.mod` 须用 `CGO_ENABLED=1 go mod tidy` 维护，避免 `go-tree-sitter` 被误标 `// indirect`；`chunker_treesitter_test.go` 含嵌套注释内 `func ` 字样的差异化回归测试（验证 fallback 会切错、tree-sitter 切分正确） |
-| PDF | 布局感知段落+表格单独提 | 完整段落+章节标题+页码 | 图片提取alt text | 🟡 `internal/knowledge/parsers.go` `PDFChunker` 已用 pdfcpu（`api.ExtractContent`）做文本提取并接入 `DefaultChunker` 的 `case "pdf"` 路由，但提取后仍交给 `PlainTextChunker` 处理，表格/标题结构等版式感知（layout-aware）尚未实现 |
-| Web | main content 段落,~256 tokens | 完整section/article | 去除导航/广告/页脚 | ✅ PlainTextChunker（双换行边界） |
-| 对话 | 按turn切分 | 前后2turn完整上下文 | 标注speaker | ✅ PlainTextChunker |
+| 类型 | 叶节点 | 父节点 | 特殊处理 | 实现 |
+|------|--------|--------|---------|------|
+| Markdown | 按段落,~256 tokens,语义断点 | 完整段落+章节路径+前文 | 表格保留 schema,代码块保留语言 | `MarkdownChunker`（标题边界） |
+| 代码 | 按 func/class 边界 | 完整函数体+文件/包路径 | import block 独立索引 | `CodeChunker`，tree-sitter AST（`chunker_cgo.go` `//go:build cgo` / `chunker_nocgo.go`，`CGO_ENABLED=0` 自动降级字符串匹配；CGO 依赖为 ADR-0011 受限例外，`go.mod` 须用 `CGO_ENABLED=1 go mod tidy` 维护） |
+| PDF | 布局感知段落+表格单独提 | 完整段落+章节标题+页码 | 图片提取 alt text | 🟡 `parsers.go` `PDFChunker` 用 pdfcpu 提取文本后交 `PlainTextChunker`，版式感知（表格/标题结构）未实现 |
+| Web | main content 段落,~256 tokens | 完整 section/article | 去除导航/广告/页脚 | `PlainTextChunker`（双换行边界） |
+| 对话 | 按 turn 切分 | 前后 2 turn 完整上下文 | 标注 speaker | `PlainTextChunker` |
 
 ---
 
@@ -108,29 +101,23 @@ M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-
 
 ### 2.1 三阶段结构化检索
 
-1. **结构化导航**: query → embed → 摘要层搜索(文档级+章节级摘要向量) → 锁定目标 DocNode
-2. **内容检索**: 目标子树内 Hybrid Search(BM25+Dense+实体图) → Top50 → 命中 LeafChunk
-3. **上下文展开**: LeafChunk → ParentChunk(完整段落+章节路径+前文衔接+来源追踪) → prompt context
+1. **结构化导航**: query → embed → 摘要层搜索（文档级+章节级摘要向量）→ 锁定目标 DocNode
+2. **内容检索**: 目标子树内 Hybrid Search（BM25+Dense+实体图）→ Top50 → LeafChunk
+3. **上下文展开**: LeafChunk → ParentChunk（完整段落+章节路径+前文衔接+来源追踪）→ prompt context
 
-**分数透传**（ADR-0105 决策十）：`KnowledgeBase.Search` 在 `AugmentedContext.Score` 返回检索器分（按 chunk ID 对应展开后的上下文），`fsmKnowledgeAdapter` 据此填充回合内召回的 RAG 分，不再恒填 1.0；召回侧以名次做 RRF 融合，不依赖其绝对量纲。
+**分数透传**（ADR-0105 决策十）：`KnowledgeBase.Search` 在 `AugmentedContext.Score` 返回检索器分，`fsmKnowledgeAdapter` 据此填充回合内 RAG 召回分（不再恒填 1.0）；召回侧以名次做 RRF 融合，不依赖绝对量纲。
 
 ### 2.2 HybridRetriever (内容层)
 
-HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 见 `spec/state.yaml §m5_memory.rrf_k`（M5/M10 共享），OversampleN=3, RerankTopM=50, FinalTopK=5
+HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 见 `spec/state.yaml §m5_memory.rrf_k`（M5/M10 共享）, OversampleN=3, RerankTopM=50, FinalTopK=5
 
-**5 级流水线**:
-1. **三路并行宽召回**: BM25 + Dense Vector + Graph Traverse，限定 scope 子树，部分路失败降级继续
-2. **RRF（Reciprocal Rank Fusion，倒数排名融合） 融合**
-3. **SurrealDB-Core BM25 Reranker**: Top RerankTopM=50
-4. **CrossEncoder 精排**: 可选，consumer-side `protocol.Reranker` 接口注入（代码字段名 `ragReranker`），未注入时跳过
-5. **FinalTopK 截断**: FinalTopK=5
+**5 级流水线**: ① 三路并行宽召回（BM25 + Dense Vector + Graph Traverse，限定 scope 子树，部分路失败降级继续）→ ② RRF 融合 → ③ SurrealDB-Core BM25 Reranker（Top RerankTopM=50）→ ④ CrossEncoder 精排（可选，consumer-side `protocol.Reranker` 注入，代码字段 `ragReranker`，未注入跳过）→ ⑤ FinalTopK 截断。
 
-共享 `internal/store/` 底层 RRF+Rerank 引擎（HybridRetriever）。引擎提供统一检索接口，三路检索器（BM25/DenseVec/GraphTraverser）通过依赖注入绑定各模块实际存储后端。支持 `AsOf` 历史快照查询（时空穿梭），过滤 `valid_from` 和 `valid_until` 不满足条件的实体节点。M5 检索 episodic_events+semantic_entities（跨层并行，scope=memory），M10 检索 doc_nodes（先导航再检索，scope=document_tree）。差异锁定在 RetrievalConfig:
+共享 `internal/store/` 底层 RRF+Rerank 引擎；三路检索器（BM25/DenseVec/GraphTraverser）依赖注入绑定各模块存储后端。支持 `AsOf` 历史快照查询（过滤 `valid_from`/`valid_until` 不满足的实体节点）。M5 检索 episodic_events+semantic_entities（scope=memory），M10 检索 doc_nodes（先导航再检索，scope=document_tree）。差异锁定在 RetrievalConfig：
+
 | 参数 | M5 | M10 |
 |------|-----|------|
-| BM25Weight | 0.3 | 0.3 |
-| VectorWeight | 0.6 | 0.6 |
-| GraphWeight | 0.1 | 0.1 |
+| BM25Weight / VectorWeight / GraphWeight | 0.3 / 0.6 / 0.1 | 0.3 / 0.6 / 0.1 |
 | OversampleN | 3 | 3 |
 | FinalTopK | 10 | 5 |
 | RerankTopM | 30 | 50 |
@@ -138,77 +125,50 @@ HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 
 
 ### 2.3 StructuredNavigator (目录层)
 
-查询在 `rag_chunks_fts`（FTS5）中搜索摘要块，取 BM25 rank 最高的 doc_id 定位目标文档，RelevanceScore 低于阈值时 fallback 全局全文搜索。**注**：向量索引在 SurrealDB-Core；StructuredNavigator 使用 BM25 FTS5 而非向量搜索。实现见 `internal/knowledge/`（StructuredNavigator）。**FeatureGate 门控**：`FeatureDeepRAG`（Tier 0+，≥8GB，需 ≥1GB 空闲内存）；<8GB VPS 自动退化为全文搜索。
+在 `rag_chunks_fts`（FTS5）搜索摘要块，取 BM25 rank 最高的 doc_id 定位目标文档；RelevanceScore 低于阈值 fallback 全局全文搜索（向量索引在 SurrealDB-Core，Navigator 本身用 FTS5）。实现 `internal/knowledge/`。**FeatureGate**：`FeatureDeepRAG`（Tier 0+，≥8GB，需 ≥1GB 空闲内存）；<8GB 退化为全文搜索。
 
 ### 2.4 QueryPlanner
 
-简单查询（<30 tokens）直接跳过分解，走单路检索。复杂查询 LLM 分解为 2-5 个子查询，每个子查询携带 TargetScope 和 Weight，支持 concat/deduplicate/interleave 三种合并策略。**FeatureGate 门控**：`FeatureDeepRAG`（Tier 0+，≥8GB）；<8GB VPS 跳过分解步骤。
+简单查询（<30 tokens）跳过分解走单路检索；复杂查询 LLM 分解为 2-5 个子查询（TargetScope + Weight），支持 concat/deduplicate/interleave 合并。受 `FeatureDeepRAG` 门控（同 §2.3），<8GB 跳过分解。
 
 ### 2.5 KnowledgeBase.Search (完整入口)
 
-实现见 `internal/knowledge/`（KnowledgeBase.Search）。
+实现 `internal/knowledge/`。
+- **<8GB（FeatureDeepRAG 不可用）**：HybridRetriever（BM25+Vector RRF）→ ContextExpander（LeafChunk 扩展 ParentChunk + 兄弟块，纯 DB 查询）
+- **≥8GB（FeatureDeepRAG 开启）**：QueryPlanner → StructuredNavigator → HybridRetriever → ContextExpander → 跨子查询 RRF 去重
 
-- **<8GB VPS（FeatureDeepRAG 不可用）**：HybridRetriever（BM25+Vector RRF）→ ContextExpander（LeafChunk 扩展 ParentChunk + 兄弟块，纯 DB（Database，数据库） 查询）
-- **Tier 0+（≥8GB，FeatureDeepRAG 开启）**：QueryPlanner（LLM 分解）→ StructuredNavigator（目录导航）→ HybridRetriever → ContextExpander → 跨子查询 RRF 去重
-
-ContextExpander 全 Tier 均启用（仅 DB 查询，无 LLM 开销），扩展结果封装为 AugmentedContext（含 ParentChunk / SectionPath / Provenance / 前后兄弟块）。`FeatureDeepRAG` 在 `internal/observability/` 注册，MinTier=Tier0，≥8GB 且 ≥1GB 空闲时返回 true，<8GB 返回 false。
+ContextExpander 全 Tier 启用，结果封装为 AugmentedContext（ParentChunk / SectionPath / Provenance / 前后兄弟块）。`FeatureDeepRAG` 注册于 `internal/observability/`，MinTier=Tier0，≥8GB 且 ≥1GB 空闲返回 true。
 
 ### 2.6 KnowledgeGraph (知识图谱增强)
 
-双模式检索：
-- **LocalSearch**：query 实体 → findSimilarEntities（top-5） → BFS Traverse（depth=2，每节点最多 20 出边，总节点 ≤200） → collectChunks。BFS 路径取 max TaintLevel 为 SubgraphMaxTaint，≥TaintMedium 时 Provenance 显式携带供 M4/M11 门控。
-- **GlobalSearch**：findBestCluster → 社区生成式摘要（CommunityGenerativeSummarizer，DeepSeek 后台预计算） → 注入 M4 LLM prompt。StalenessGuard 检测 generated_at vs 实体 updated_at：有变化注入提示+追加未归档实体，>30% 变化触发后台集群重建。
+- **LocalSearch**：query 实体 → findSimilarEntities（top-5）→ BFS Traverse（depth=2，每节点最多 20 出边，总节点 ≤200）→ collectChunks。BFS 路径取 max TaintLevel 为 SubgraphMaxTaint，≥TaintMedium 时 Provenance 显式携带供 M4/M11 门控。
+- **GlobalSearch**：findBestCluster → 社区生成式摘要（`CommunityGenerativeSummarizer`，后台预计算）→ 注入 M4 prompt。StalenessGuard 比对 generated_at 与实体 updated_at：有变化注入提示+追加未归档实体，>30% 变化触发后台集群重建。
 
 ### 2.7 GraphBuildPipeline (知识图谱构建)
 
-EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `internal/knowledge/graphrag/`（子包：`build.go`/`entity.go`/`cluster.go`/`community_summarizer.go`/`writer.go`）。GraphTraverser 在父包 `internal/knowledge/graphrag/graph_traverser.go`。
+EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 见 `internal/knowledge/graphrag/`（`build.go`/`entity.go`/`cluster.go`/`community_summarizer.go`/`writer.go`），GraphTraverser 在 `graph_traverser.go`。
 
-**[ADR-0077/0077 与 M5 共享抽取]**：`GraphBuildPipeline` 同时作为 `SharedEntityExtractor` 被 M5 Consolidation 复用（Phase1/Phase2 抽取逻辑），消除 M5/M10 重复 LLM 燃烧与实体表述漂移。`GraphWriter`（`internal/knowledge/graphrag/writer.go`）在写入期对来自 M5 的实体标记 `source_type='graphrag_ingest'` 并按此键去重；检索期 Spreading Activation 联合 M5/M10 两侧种子实体（详见 M05-Memory-System.md §9）。
-
-触发: 文档摄入后, Ingester 通过 Outbox 写 graph_build_task。GraphBuildWorker 由 M2 全局 Outbox Worker 消费（注册于 handler 映射，见 §3.2），不独立开启内部轮询 goroutine。Phase 1-5 完整流程见代码。
-
-**CC-2 ResourceBudget 接线**（ADR-0025 BUG-2）：`graphPipeline.WithBackgroundGate(...)` 须传 `budget.NewResourceBudget(sb.TBR, graphGuard, graphGate)`（从 `sb.AutoConf` nil-safe 提取）；禁止传零值 `&budget.ResourceBudget{}`，否则内存降级与 TBR P95 两个维度失效，图重建任务在系统高压时无法被正确抑制。
-
-**DocFetcher 注入**: `EntityExtractor.Extract` 接收文档文本（非 docID），调用方通过 `GraphBuildPipeline.SetDocFetcher(DocFetcher)` 注入内容获取器；未注入时降级为以 docID 字符串作为占位文本执行规则提取。LLM 路径通过 `ProviderLLMClient` 适配，规则路径为词典匹配+正则模式。
-
-**HybridRetrieverImpl 双路检索** (`internal/knowledge/retriever.go`):
-- Tier 0 (embedder=nil): FTS5 BM25 单路，按 rank 排序，TopK 截断。
-- Tier 1+ (embedder 非 nil): FTS5 + Dense Vector 双路 RRF 融合（k=60，FTS5 权重 1.0，向量权重 0.8）。密集向量通过 `VectorEmbedder.Embed` 计算查询向量后，与 `rag_chunks.embedding` 列余弦相似度排序；无 embedding 的 chunk 跳过（幂等）。`NewHybridRetrieverWithEmbedder` 注入 embedder，`NewHybridRetriever` 保持 Tier 0 默认。
-
-**CommunityGenerativeSummarizer**（默认启用 DeepSeek 后台生成管道，不再受限于抽取式）:
-1. **社区检测**: Leiden/Louvain 算法划分社区 (`gonum/graph/community`)
-2. **PageRank**: 计算社区内实体中心度 → Top-5 高中心度实体
-3. **TextRank**: 计算关联文本片段的句子中心度 → Top-3 关键文本片段
-4. **GraphWriter 实体消歧**（纯内存处理，非独立物理写入器）: 写入语义图前对 entity name + type 做余弦相似度匹配 → 同一实体合并（跨名称语义去重，如 "DeepSeek-V3" 与 "DeepSeek V3"）→ 规范化 name 后构造 `MutationIntent`（Table=entities/relations，**Op=OpUpsert**）→ `[MutationBus].Submit` → M2 DatabaseWriter 单一 goroutine 串行物理落盘。所有图写入（M5 UpsertFact + M10 GraphBuildPipeline + M9 Consolidation）统一走此路径，不绕过 M2 单写者不变量（M2 §2.3 [HE-Rule-6]）
-
-  **并发消歧 DDL 约束**：entities 表有 `UNIQUE(name, type)` 约束（DDL 见 `internal/protocol/schema/004_semantic_memory.sql`），GraphWriter 使用 ON CONFLICT DO UPDATE 幂等 Upsert，并发安全下推至 DB 约束；in-memory cosine 相似度检查仅用于 name 规范化（跨名称语义合并），非并发 guard。
-5. **拼接存储**: `"Community entities: {e1, e2, e3}. Key context: {fragment1}. {fragment2}."` → `community_extractive_summary` 表
-6. **延迟**: 纯 Go，<5ms，零外部依赖
-
-**GraphRAG LLM 调用预算释放**:
-- 每日 LLM 调用限制解除: 得益于 DeepSeek 的极低成本，Tier 1+ 原每日 500 次硬上限被彻底移除，全天候全量并发执行实体和关系提取。
-- GraphBuildWorker: 不再因财务开销而强制阻塞 graph_build_task，任务可充分利用空闲算力高速消费。
-- 优先级: 优先处理用户最近 24h 活跃检索的知识库文档的图谱构建，48h+ 未访问的文档降级为低优先级。
-- Global Search: 默认启用高质量的后台 LLM 生成式摘要（Generative Summarization），废弃原“为了省钱而被迫采用的抽取式摘要”方案。
-
-> **2026-09-20 复核**：GraphWriter 已废弃并删除——其通过 MutationBus 写入不存在的 `entities` 表，
-> 与 DDL SSoT（`004_semantic_memory.sql` 的 `semantic_entities`）不兼容。
-> 实体/关系落库统一走 `SemanticMemory.UpsertFact / UpsertRelation`（persistGraph，见 build.go）。
-> Leiden 社区摘要代码保留但标记为未接线：Clusterer.Cluster 零调用方，
-> 待 FeatureGraphRAGFull 门控启用时重新接线经 SemanticMemory 落库。
+- **与 M5 共享抽取**（[ADR-0083](./decisions/ADR-0083-bitemporal-knowledge-graph.md)，原 ADR-0077）：`GraphBuildPipeline` 同时作为 `SharedEntityExtractor` 被 M5 Consolidation 复用（Phase1/Phase2 抽取），消除重复 LLM 燃烧与实体表述漂移；检索期 Spreading Activation 联合 M5/M10 两侧种子实体（M05 §9）。
+- **触发**: 文档摄入后 Ingester 经 Outbox 写 `graph_build_task`；GraphBuildWorker 由 M2 全局 Outbox Worker 消费（handler 映射，见 §3.2），不独立轮询。Phase 1-5 见代码。
+- **落库**: 实体/关系统一走 `SemanticMemory.UpsertFact / UpsertRelation`（`build.go` persistGraph，与 M5 consolidation 同一入口）→ `[MutationBus]` → M2 DatabaseWriter 单写者串行落盘（M2 §2.3 [HE-Rule-6]）。`semantic_entities` 的 `UNIQUE(name, type)`（`004_semantic_memory.sql`）+ ON CONFLICT DO UPDATE 保证并发幂等。`GraphWriter`（`writer.go`）无生产接线，不得作为落库路径。
+- **CC-2 ResourceBudget 接线**（ADR-0025 BUG-2）：`graphPipeline.WithBackgroundGate(...)` 须传 `budget.NewResourceBudget(sb.TBR, graphGuard, graphGate)`；禁止零值 `&budget.ResourceBudget{}`（内存降级与 TBR P95 维度失效，高压下图重建无法被抑制）。
+- **DocFetcher 注入**: `EntityExtractor.Extract` 接收文档文本；调用方经 `GraphBuildPipeline.SetDocFetcher` 注入内容获取器，未注入时以 docID 字符串占位执行规则提取。LLM 路径经 `ProviderLLMClient`，规则路径为词典匹配+正则。
+- **HybridRetrieverImpl 双路检索**（`internal/knowledge/retriever.go`）: embedder=nil → FTS5 BM25 单路；embedder 非 nil → FTS5 + Dense Vector 双路 RRF（k=60，FTS5 权重 1.0，向量权重 0.8），向量与 `rag_chunks.embedding` 余弦排序，无 embedding 的 chunk 跳过。`NewHybridRetrieverWithEmbedder` 注入 embedder。
+- **CommunityGenerativeSummarizer**: Leiden/Louvain 社区检测（`gonum/graph/community`）→ PageRank 取社区 Top-5 中心实体 → TextRank 取 Top-3 关键片段 → LLM 生成式摘要（`community_extractive_summary` 表）。**现状**：`Clusterer.Cluster` 无生产调用方，待 FeatureGraphRAGFull 门控启用时重新接线（经 SemanticMemory 落库）。
+- **预算**（inv_M10_05）：无每日 LLM 调用硬上限，`graph_build_task` 不因财务开销阻塞；优先处理最近 24h 活跃检索的知识库文档，48h+ 未访问降为低优先级。
 
 
 ### 2.7-bis 关系边双时态化 + AsOf 视图（ADR-0083）
 
-`semantic_relations`（事实=边）现与实体侧对齐双时态：新增 `valid_from`/`valid_until`/`status`/`superseded_by`（事务时间=`created_at`/`updated_at`，有效时间=`valid_from`/`valid_until`）。表级 `UNIQUE(source_id, target_id, relation_type)` 改为部分索引 `uq_semantic_rel_active ... WHERE status='active'`，允许同一三元组保留多条历史版本，仅约束"当前活跃版本"唯一。
+`semantic_relations`（事实=边）与实体侧对齐双时态：`valid_from`/`valid_until`/`status`/`superseded_by`（事务时间=`created_at`/`updated_at`，有效时间=`valid_from`/`valid_until`）。表级 `UNIQUE(source_id, target_id, relation_type)` 改为部分索引 `uq_semantic_rel_active ... WHERE status='active'`，同一三元组可保留多条历史版本，仅约束活跃版本唯一。
 
-**信念修正**：`UpsertRelation` 写入时若目标三元组已有活跃边且 `weight` 变化超过 `relation_weight_delta_threshold=0.2`（或 `properties` 不同）→ 判定实质变化 → 旧边 `status='superseded'`/`valid_until=now`/`superseded_by=<新边id>`，插入新活跃边；否则原地 `UPDATE`，避免版本链无谓膨胀。
+**信念修正**：`UpsertRelation` 写入时若目标三元组已有活跃边且 `weight` 变化超过 `relation_weight_delta_threshold=0.2`（或 `properties` 不同）→ 旧边 `status='superseded'`/`valid_until=now`/`superseded_by=<新边id>`，插入新活跃边；否则原地 `UPDATE`。
 
-**AsOf 视图**：`internal/knowledge/graphrag/temporal_view.go` 的 `AsOfFilter{At time.Time}.SQLWhere(alias)` 零值 → `status='active'`（走既有索引，查询计划不变）；非零值 → 时间区间过滤，回答"当时以为的事实是什么"。已接入 `GraphTraverser.fetchNeighbors` 全部 4 条邻居查询与 `findSeedEntities`。`CascadeInvalidator`/`cognitive_replayer` 两处下游读路径同步补齐 `status='active'` 过滤（关系边新增历史版本后，遗漏会让历史版本污染级联传播/图引擎回放）。`TemporalExpirer.ExpireStale` 同一调用内追加对 `semantic_relations` 的到期扫描，不新增 ticker。
+**AsOf 视图**：`internal/knowledge/graphrag/temporal_view.go` 的 `AsOfFilter{At}.SQLWhere(alias)`：零值 → `status='active'`（走既有索引）；非零 → 时间区间过滤（"当时以为的事实"）。已接入 `GraphTraverser.fetchNeighbors` 全部 4 条邻居查询与 `findSeedEntities`；`CascadeInvalidator`/`cognitive_replayer` 下游读路径同步补 `status='active'` 过滤。`TemporalExpirer.ExpireStale` 同调用内追加对 `semantic_relations` 的到期扫描，不新增 ticker。
 
 ### 2.8 ConceptSynthesizer (跨文档合成)
 
-触发门控：DocCount>20 且 Type 不在白名单（"API"/"ConfigParam"/"BusinessRule"/"DataType"）时跳过，防 LLM 洪峰。处理流程：① AggregateContext 从 CrossDocLinks 取相关 ParentChunk；② ContradictionDetection LLM 提取 key claims 跨文档对比；③ EvolutionDetection 按版本排序识别变更；④ LLM 合成 ~200 tokens CrossDocumentSummary（定义+共识+矛盾+演进）。输出 Taint 取 contexts[] max 并设 Floor-Medium，M4 门控禁止 TaintHigh 进入 instruction slot。
+触发门控：DocCount>20 且 Type 不在白名单（"API"/"ConfigParam"/"BusinessRule"/"DataType"）时跳过，防 LLM 洪峰。流程：① AggregateContext 从 CrossDocLinks 取相关 ParentChunk；② ContradictionDetection 提取 key claims 跨文档对比；③ EvolutionDetection 按版本排序识别变更；④ LLM 合成 ~200 tokens CrossDocumentSummary（定义+共识+矛盾+演进）。输出 Taint 取 contexts[] max 并设 Floor-Medium，M4 门控禁止 TaintHigh 进入 instruction slot。
 
 ---
 
@@ -216,56 +176,39 @@ EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `inter
 
 ### 3.1 IncrementalIndexer
 
-`Ingest` 以 ContentHash 检测是否跳过重摄取（hash 不变则直接返回缓存 DocTree）。`Delete` 执行软删除（Tombstone：设 `deleted_at` 时间戳），不做物理删除。`rag_docs` / `rag_chunks` 两表均含 `deleted_at` 列。
-
-**`[2026-07-28 订正]`**：本节此前描述的 `DetectOrphans` 孤儿片段扫描函数与 `FileTracker`（source_uri → FileState 映射）结构体在当前代码中未实现——孤儿片段清理与并发编辑冲突检测（`document_sync_conflicts`）仍是设计目标，尚无对应落地符号，需在 `ROADMAP.md` 登记后再恢复本节描述。
+`Ingest` 以 ContentHash 检测是否跳过重摄取（hash 不变直接返回缓存 DocTree）。`Delete` 软删除（Tombstone：设 `deleted_at`），`rag_docs` / `rag_chunks` 均含 `deleted_at` 列。`DetectOrphans` 孤儿片段扫描、`FileTracker` 与并发编辑冲突检测（`document_sync_conflicts`）为设计目标，代码未实现（需在 `ROADMAP.md` 登记后再恢复描述）。
 
 ### 3.2 Outbox 模式 — 复用 M2 全局引擎
 
-M10 不实现独立的 OutboxWorker，复用 M2 全局 Outbox Worker（`internal/store/`）。
-
-写入路径：`Ingester` 摄取完成后通过 `outboxWriter.Write` 写入 `target_engine=rag_doc_ingested` 事件，由已注册的事件驱动 handler（`graph_build_handler.go`、`summary_gen_handler.go`）消费触发下游 GraphBuild / Summary 生成任务。
-
-Outbox 任务 target_engine 取值：`m10_graph_build` / `m10_summary` / `m10_compaction` / `m10_cluster`。写入和消费均走 M2 MutationBus + DatabaseWriter 统一基础设施，不绕过单写者约束。
+M10 不实现独立 OutboxWorker，复用 M2 全局 Outbox Worker（`internal/store/`）。`Ingester` 摄取完成后经 `outboxWriter.Write` 写 `target_engine=rag_doc_ingested` 事件，由已注册 handler（`graph_build_handler.go`、`summary_gen_handler.go`）消费，触发 GraphBuild / Summary。Outbox 任务 target_engine：`m10_graph_build` / `m10_summary` / `m10_compaction` / `m10_cluster`。写入和消费均走 M2 MutationBus + DatabaseWriter，不绕过单写者约束。
 
 ---
 
 ## 4. 来源追踪
 
-`ChunkProvenance` 携带来源完整元数据（SourceURI/SourceType/DocVersion/ChunkSeqIndex/AuthorityTier/IngestedAt/DocModifiedAt/EmbeddingModel/ChunkerVersion/IngestionRunID/ContentHash/ParentHash/ValidFrom/ValidUntil）。DDL NOT NULL 约束强制执行（inv_M10_03）。
+`ChunkProvenance` 携带 SourceURI/SourceType/DocVersion/ChunkSeqIndex/AuthorityTier/IngestedAt/DocModifiedAt/EmbeddingModel/ChunkerVersion/IngestionRunID/ContentHash/ParentHash/ValidFrom/ValidUntil；DDL NOT NULL 约束强制（inv_M10_03）。
 
-`AuthorityTier`：1=官方/受信 > 2=社区/受信作者 > 3=公共知识库 > 4=用户上传/未验证。**`[2026-07-28 订正]`**：本节此前描述的独立 `RetrieveWithAuthority` 加权检索函数在当前代码中未实现，AuthorityTier 加权逻辑尚未接线到检索路径。
+`AuthorityTier`：1=官方/受信 > 2=社区/受信作者 > 3=公共知识库 > 4=用户上传/未验证。独立的 `RetrieveWithAuthority` 加权检索未实现，AuthorityTier 加权尚未接线到检索路径（仅用于 §4.2 仲裁）。
 
-**`TaintBoundarySerializer` 防篡改封印（inv_M11_02）**：`rag_chunks.taint_hmac` 列（`internal/protocol/schema/009_rag_chunks.sql:15-19`）由 `TaintBoundarySerializer.Seal`（`internal/knowledge/taint_boundary.go`）在写入时计算 `HMAC-SHA256(content+taint_level+taint_source)`；读取时 `Unseal` 重新计算比对，不匹配或缺失（空字符串）视为篡改/不可验证，触发 fail-closed 降级。
+**`TaintBoundarySerializer` 防篡改封印（inv_M11_02）**：`rag_chunks.taint_hmac` 列（`internal/protocol/schema/009_rag_chunks.sql`）由 `TaintBoundarySerializer.Seal`（`internal/knowledge/taint_boundary.go`）写入时计算 `HMAC-SHA256(content+taint_level+taint_source)`；读取时 `Unseal` 重算比对，不匹配或缺失（空串）视为篡改/不可验证，触发 fail-closed 降级。
 
 ### 4.1 `[CitationValidator]` — D6 集成接口（内嵌于 FactualityGuard）
 
-> M11 [FactualityGuard] D6 防线（M11 §6.5）通过本接口核验 LLM 输出的引用真实性。`CitationValidator` 并非独立结构体，其校验逻辑内嵌实现于 `internal/security/guard/factuality_guard.go`（`FactualityGuard` 的 L1 CitationCheck）。
-
-L1 CitationCheck 执行三项全确定性校验（零 LLM，延迟 <20ms）：① chunk 存在性（ChunkIDs 校验 + ContentHash 未变更）；② 主张-证据 BM25 lexical match（70% 关键 token 命中为 valid）；③ 时效性（含时间限定词时检查 ValidUntil/IngestedAt）。返回 `ValidationResult{Valid, MissingTokens[], StaleChunks[], Confidence}`。
-
-调用方: M11 FactualityGuard 抽样调用；M5 HybridRetriever 在 Read Path 末端可选调用（高优任务）。
-延迟预算: <20ms (全确定性，零 LLM)。
+M11 [FactualityGuard] D6 防线（M11 §6.5）经本接口核验 LLM 输出引用真实性。`CitationValidator` 非独立结构体，逻辑内嵌于 `internal/security/guard/factuality_guard.go` 的 L1 CitationCheck：三项全确定性校验（零 LLM，<20ms）：① chunk 存在性（ChunkIDs + ContentHash 未变更）；② 主张-证据 BM25 lexical match（70% 关键 token 命中为 valid）；③ 时效性（含时间限定词时检查 ValidUntil/IngestedAt）。返回 `ValidationResult{Valid, MissingTokens[], StaleChunks[], Confidence}`。调用方：M11 FactualityGuard 抽样；M5 HybridRetriever 在 Read Path 末端可选调用（高优任务）。
 
 ### 4.2 Knowledge Conflict 仲裁
 
-> 多源信息冲突时（如不同知识插件返回矛盾事实），需显式仲裁，不可静默选取。
+多源信息冲突时显式仲裁，不可静默选取。**触发**: `KnowledgeBase.Search` 召回多 chunk，关键事实 token（数字/日期/实体属性）冲突。
 
-**触发**: KnowledgeBase.Search 召回多 chunk，关键事实 token（数字/日期/实体属性）冲突。
+**仲裁规则**（按优先级，`internal/knowledge/conflict.go`）:
+1. **AuthorityTier 高者胜**: Tier1 > Tier2 > Tier3 > Tier4
+2. **时效性优先**: 同 Tier 内 `IngestedAt` 更新者胜（ValidUntil 已过期者排除）
+3. **多数共识**: 时效相同时相同主张 chunk 数 ≥3 → 接受多数；<3 → 标记 `[KnowledgeConflict]` 不裁决，向 Agent 返回**全部**冲突候选 + 来源标签
+4. **不可仲裁**: 三条均不成立 → **兜底选取最高优先级候选**（`Arbitrate` 返回 `consensusPick(recentGroup)` 或 `candidates[0]`，`ArbitrateChunks` 返回 `group[0]`），附 reason 标记供审计；**不抛错、不阻断检索**
 
-**仲裁规则**（按优先级）:
-1. **AuthorityTier 高者胜**: Tier1 (官方) > Tier2 (社区) > Tier3 > Tier4
-2. **时效性优先**: 同 AuthorityTier 内，`IngestedAt` 更新者胜（ValidUntil 已过期者排除）
-3. **多数共识**: 时效相同时，相同主张的 chunk 数 ≥3 → 接受多数；< 3 → 标记 `[KnowledgeConflict]` 不裁决，向 Agent 返回**全部**冲突候选 + 来源标签
-4. **不可仲裁**: 三条均不成立 → **静默兜底选取最高优先级候选**（`Arbitrate` 返回 `consensusPick(recentGroup)` 或 `candidates[0]`，`ArbitrateChunks` 返回 `group[0]`），附带 reason 标记（`"consensus"` 等）供审计追溯；**不抛错、不阻断检索**
+> 裁决（DR-3-008）：文档随代码，不定义 `ErrKnowledgeConflictUnresolved`——仲裁位于检索热路径（全确定性、<5ms），抛错会让无关紧要的版本冲突使整条 RAG 检索失败；HITL 升阶由消费检索结果的 Agent 按下游任务风险决定（M13 §2.4）。
 
-> **裁决记录（2026-07-28，DR-3-008）**：此前本条写作"返回 `ErrKnowledgeConflictUnresolved` + Agent [ESCALATE] HITL"，代码 `internal/knowledge/conflict.go` 从未定义该错误、也从未升阶。经裁决**文档随代码**，不新增该错误：仲裁位于检索热路径（约束要求全确定性、<5ms），若因"无法裁决"抛错阻断，一次无关紧要的知识版本冲突就会让整条 RAG 检索失败，可用性代价远超收益；且 HITL 升阶应由消费该检索结果的 Agent 依据下游任务风险决定（M13 §2.4），不该由检索层越权触发。冲突信息不丢失——被淘汰候选仍经下方 `ConflictMarkers[]` 输出给调用方。
-
-**输出**: KnowledgeBase.Search 返回结构含 `ConflictMarkers[]`（被仲裁淘汰的候选 + 淘汰原因），供 [CitationValidator] 和 [FactualityGuard] 审计追溯。
-
-**约束**:
-- 仲裁逻辑全确定性（零 LLM），延迟 <5ms
-- ReplayMode 下重放仲裁过程一致（依赖 AuthorityTier + IngestedAt 单调性）
+**输出**: `KnowledgeBase.Search` 返回 `ConflictMarkers[]`（被淘汰候选 + 淘汰原因），供 [CitationValidator] 和 [FactualityGuard] 审计。**约束**: 全确定性（零 LLM），<5ms；ReplayMode 下重放一致（依赖 AuthorityTier + IngestedAt 单调性）。
 
 ---
 
@@ -273,37 +216,23 @@ L1 CitationCheck 执行三项全确定性校验（零 LLM，延迟 <20ms）：�
 
 ### 5.1 SurrealDB-Core BM25 Reranker
 
-BM25Reranker (接口定义见 `internal/`，M5/M10 共享): k1=1.2, b=0.75。FinalScore=RRF融合分×0.7+BM25精确分×0.3。实现: SurrealDB-Core FFI (<5ms)。M10 通过接口注入，不直接依赖 SurrealDB-Core。
-
-Tokenization: SurrealDB-Core + jieba-rs / lindera 多语言分词器；M3 启动期检测系统 locale，自动选择默认分词器。
-
-方案选型：SurrealDB-Core BM25 FFI（<5ms，P0 采用）；Late-Interaction ColBERT-style（<20ms，研究方向）；ONNX / Python sidecar（因延迟/包体积不采用）。
+BM25Reranker（接口见 `internal/`，M5/M10 共享）: k1=1.2, b=0.75。FinalScore=RRF融合分×0.7+BM25精确分×0.3。实现: SurrealDB-Core FFI（<5ms），M10 经接口注入，不直接依赖 SurrealDB-Core。分词：SurrealDB-Core + jieba-rs / lindera 多语言分词器，M3 启动期按系统 locale 自动选择。选型：SurrealDB-Core BM25 FFI（P0 采用）；Late-Interaction ColBERT-style（<20ms，研究方向）；ONNX / Python sidecar（延迟/包体积不采用）。
 
 ### 5.2 Late-Interaction (研究方向)
 
-暂不采用真正的 ONNX-ColBERT Late-Interaction——Go 生态无成熟 BPE/WordPiece tokenizer。当前已实现基于 SurrealDB-Core（Rust FFI via purego）的单向量 KNN + BM25 的 RRF (Reciprocal Rank Fusion) 混合检索机制，满足生产环境需求。`internal/store/search/reranker.go` 已实现 `ApproximateColBERTReranker`（n-gram 窗口 + 现有 Embedder 近似模拟 ColBERT MaxSim 公式），但尚未被 `internal/knowledge/`/`internal/memory/retrieval/` 的 HybridRetriever 主链路引用（`cmd/polaris/` 启动代码零处接线，测试文件中仅赋值 nil），仍是未挂载的孤立组件，真正 ONNX 版前置条件不变。
+暂不采用 ONNX-ColBERT Late-Interaction（Go 生态无成熟 BPE/WordPiece tokenizer）；当前为 SurrealDB-Core（Rust FFI via purego）单向量 KNN + BM25 的 RRF 混合检索。`internal/store/search/reranker.go` 的 `ApproximateColBERTReranker`（n-gram 窗口 + 现有 Embedder 近似 MaxSim）未被 HybridRetriever 主链路引用（`cmd/polaris/` 零接线），是未挂载的孤立组件。
 
 ---
 
 ## 6. 检索质量评估
 
-Recall@K = hitCount/len(ExpectedChunks) vs MinRecall。完整Eval Harness集成见M12
+Recall@K = hitCount/len(ExpectedChunks) vs MinRecall。完整 Eval Harness 集成见 M12。
 
 ---
 
 ## 7. 数据流闭环
 
-**数据流闭环流程**:
-1. Knowledge Plugins
-2. Document
-3. 结构解析
-4. 文档树 + 父子双存 + 多级摘要
-5. 结构化导航
-6. 内容检索
-7. 上下文展开
-8. Agent 推理
-
-逐模块契约见 §10。
+Knowledge Plugins → Document → 结构解析 → 文档树 + 父子双存 + 多级摘要 → 结构化导航 → 内容检索 → 上下文展开 → Agent 推理。逐模块契约见 §10。
 
 ---
 
@@ -311,12 +240,12 @@ Recall@K = hitCount/len(ExpectedChunks) vs MinRecall。完整Eval Harness集成�
 
 | 故障场景 | 降级路径 | 恢复策略 |
 |---------|---------|---------|
-| 知识插件 (Plugin) 不可达 | dead_letter + WARN + metric++ | 下次 doSync 重试 |
-| Embedding 维度变更 (M1 Embedder 切换) | 路由切换至对应维度索引表（index_remote_4096 或 index_local_384），后台静默回填增量 | 新维度表就绪即可切换 |
+| 知识插件不可达 | dead_letter + WARN + metric++ | 下次 doSync 重试 |
+| Embedding 模型/维度变更 | 路由切换至对应 `embed_model_version` 索引，后台静默回填增量（§1.5） | 新索引就绪即切换 |
 | GraphRAG 实体数超 Tier 0 上限 (50K) | 拒绝摄入新文档 + polaris status 提示清理/升级 | 用户删除旧文档或升级 Tier |
-| GraphRAG CPU/内存资源层往上触发 M9 BackgroundTaskScheduler 异常（非财务日预算） | 跳过剩余 graph_build_task + GlobalSearch 降级纯 Leiden 社区检测 | 资源释放后下一个窗口期自动恢复 |
-| Chunk 检索超时 (>200ms) | 仅返回 BM25 结果 (跳过重排) | — |
-| SurrealDB-Core FFI crash | 降级 SQLite FTS5 | 进程重启后恢复 SurrealDB-Core |
+| GraphRAG CPU/内存资源层触发 M9 BackgroundTaskScheduler 异常 | 跳过剩余 graph_build_task + GlobalSearch 降级纯 Leiden 社区检测 | 资源释放后下一窗口期恢复 |
+| Chunk 检索超时 (>200ms) | 仅返回 BM25 结果（跳过重排） | — |
+| SurrealDB-Core FFI crash | 降级 SQLite FTS5 | 进程重启后恢复 |
 
 与 OSMemoryGuard 协同: L1 预警 → 限制插件并发摄入 / L2 紧急 → 暂停非关键数据源插件 / L3 临界 → 冻结全部摄入。
 
@@ -346,20 +275,9 @@ Recall@K = hitCount/len(ExpectedChunks) vs MinRecall。完整Eval Harness集成�
 
 ## 11. 实现状态与 2026 研究对照
 
-### 实现记录
+主链路均已实现（`internal/knowledge/`）：ObsidianConnector + SyncScheduler（Tier 0 内置）、HybridRetrieverImpl（Tier 0 纯 FTS5，Tier 1+ 双路 RRF，全 Tier 接入 GraphTraverser，BM25×0.3+Vector×0.6+Graph×0.1）、GraphTraverser（BFS depth=2，每节点≤20边，总节点≤200，关联 chunk 按深度衰减；`TraverseChunksWithOptions(TraverseOptions)` 支持 RelationTypes 白名单 / Direction / MaxDepth）、ConflictArbiter、GraphBuildPipeline Phase 1-5 + ConceptSynthesizer、DefaultChunker（Markdown/Code/PlainText 路由）、StructuredNavigator + QueryPlanner、IncrementalIndexer（Hash 增量）、Outbox handler 注册。
 
-| 组件 | 文件 | 状态 |
-|------|------|------|
-| ObsidianConnector + SyncScheduler | `internal/knowledge/` | ✅ 已实现，Tier 0 内置 Connector |
-| HybridRetrieverImpl（FTS5 + Vector + Graph 三路 RRF） | `internal/knowledge/` | ✅ 已实现；Tier 0 纯 FTS5，Tier 1+ 双路 RRF，全 Tier 接入 GraphTraverser（BM25×0.3+Vector×0.6+Graph×0.1）|
-| GraphTraverser（BFS 图遍历）| `internal/knowledge/` | ✅ 已实现；BFS depth=2，每节点≤20边，总节点≤200，种子实体 LIKE 匹配，关联 chunk 按深度衰减评分。**[Task 16 ✅]** 新增 `TraverseChunksWithOptions(TraverseOptions)`：RelationTypes 关系类型白名单过滤、Direction（outgoing/incoming/both）方向约束、MaxDepth 可配置深度；向后兼容 |
-| ConflictArbiter（三级仲裁） | `internal/knowledge/` | ✅ 已实现 |
-| GraphBuildPipeline Phase 1-5 + ConceptSynthesizer | `internal/knowledge/` | ✅ 已实现 |
-| PipelineImpl 分块策略 | `internal/knowledge/` | ✅ 已实现：DefaultChunker 按 sourceType 路由 MarkdownChunker（标题边界）、CodeChunker（func/class 边界）、PlainTextChunker（双换行 Fallback） |
-| StructuredNavigator + QueryPlanner | `internal/knowledge/` | ✅ 已实现 |
-| IncrementalIndexer（Hash 对比增量检测） | — | ✅ 已修复 |
-| Outbox RegisterOutboxHandlers | — | ✅ 已修复：GraphBuildWorker 无法被 Outbox 驱动 |
-| 向量检索 ANN 索引 | `rust/substrate/src/surreal_store/mod.rs` + `internal/knowledge/retriever.go` | 🟡 Tier1+（有 SurrealDB-Core 认知存储）已用 `DEFINE INDEX hnsw_idx ... HNSW` 定义的 HNSW 索引做 `VecKNN` 检索；仅 Tier0（无 SurrealDB-Core，纯 SQLite 路径）或 cognitive store 不可用时降级走 `searchVectorFallback` 全表线性扫描（O(N)，5000 行上限），并非全 Tier 均为线性扫描 |
+向量检索 ANN：Tier 1+（有 SurrealDB-Core 认知存储）用 HNSW 索引做 `VecKNN`（`rust/substrate/src/surreal_store/mod.rs` + `internal/knowledge/retriever.go`）；仅 Tier 0 或 cognitive store 不可用时降级 `searchVectorFallback` 全表线性扫描（O(N)，5000 行上限）。
 
 ### 引入计划
 

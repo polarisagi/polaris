@@ -1,42 +1,51 @@
-# ADR-0093: M12 Eval Harness 评测隔离层设计
+# ADR-0093: Eval 评测隔离、基准适配器与轨迹导出
 
-- **状态**: Accepted | **日期**: 2026-07-28（**2026-08-09 由 0051 改号至 0093**，见下）| **模块**: M12 `internal/eval/`
+> 状态：Accepted ｜ 首次：2026-07-28 ｜ 最近复核：2026-10-12 ｜ 含原 ADR-0068/0069 ｜ 模块：M12 `internal/eval/`、`internal/observability/trace/`
 
-> **改号说明（2026-08-09）**：本 ADR 原编号 0051，与 `README.md`「已删除」表中的
-> `ADR-0051 跨模块死代码清理与悬空接线收尾` 撞号。git 记录确认是编号复用而非笔误：
-> 旧 0051 于 2026-07-28 14:46（commit `0fd9b38`）删除并入 ADR-0062，本 ADR 于次日
-> 09:17（commit `02534e7`）建立并占用了刚释放的编号，违反 `README.md` 顶部与根
-> `CLAUDE.md §文档可修订性`「三项不可变」中的**编号一经分配不复用**。
->
-> 由本 ADR（后来者）让出编号而非改动已删除记录：全部历史引用——`ADR-0062` 合并
-> 清单、`ADR-0053` 描述行、`local_playground/bake/202607*` 审计快照、多条 commit
-> message——指的都是旧 0051；本 ADR 改号后，"ADR-0051"在全仓恢复单一含义。
-> 改号代价已核实为零代码影响（全仓 `.go` 零引用，仅 README 两行 + 本文件标题）。
+## 决策一：评测隔离与 Benchmark Runner 扩展（原 ADR-0093 决策一，GD-14-007）
 
-## 背景
+- 隔离原则：M9 自进化模块禁止直接修改评测策略；评测数据集完整性不可被被评对象触及，防止模型在验证集作弊。
+- 外部基准在 `internal/eval/harness` 之上扩展：`protocol.EvalRunner.RunBenchmarkDataset` 复用 `RunSuite` 的沙盒执行与评分（统一映射为 `EvalCase`），不干涉 training/validation 存储链路。
+- 公开数据集经 `internal/eval/benchmark` 拉取 JSONL，HTTP 客户端必须是 SafeDialer 派生（XR-06），nil 时 fail-closed 返回 `CodeInvalidInput`。
+- 入口：`POST /v1/eval/benchmark`（`EvalAdmin`），查询参数 `dataset` 选预设，异步触发并立即返回 `StatusAccepted`，调用方轮询状态。
+- 禁止绕过 Sandbox 直接执行 Benchmark 代码（RCE 面）；基准数据视为只读，不得作为 `events` 回流主库。
 
-Polaris 需要一个强隔离的评测系统来验证自进化 (M9) 生成的代码和规划。如果使用单一的集成测试流程，容易产生模型在验证集中作弊的情况。此架构必须确保评测的绝对独立性和数据集完整性，禁止 M9 模块直接修改评测策略。
+## 决策二：开放基准适配器（原 ADR-0068）
 
-## 决策一：Benchmark Runner 扩展（GD-14-007）
+- `protocol.BenchmarkAdapter`（`Name()` / `Load(ctx, datasetPath)`）把外部基准映射为 `harness.EvalCase`，复用 `RunnerImpl`，不另造执行器；`benchmark.GetAdapter(name)` 按名取适配器。
+- 数据集路径由用户运行时指定，不打包进仓库（隐私/许可），仓库仅留 2~3 条 fixture。
+- 现状（代码核实）：已实现 tau-bench / locomo / longmemeval / swe-bench / swe-bench-jsonl / gaia；`terminal`（Terminal-Bench）仍返回 `CodeUnimplemented`，外部格式未定前不臆测实现。
+- CLI `polaris eval bench --suite --data [--execute]`：无 `--execute` 仅验证加载/转换（报告 `executed:false`）；带 `--execute` 由 `main.go` 拦截走完整 boot 序列取合法 `RunnerImpl`，在隔离环境落盘执行，不绕过安全/评测门控。
 
-为使 Polaris 具备接入通用外部基准数据集（如 HumanEval、MBPP）能力，在 `internal/eval/harness` 之上扩展 Benchmark 机制。
+## 决策三：OpenLLMetry 轨迹导出器（原 ADR-0069）
 
-- **隔离加载机制**：在 `internal/eval/benchmark` 包实现独立的公开数据集拉取逻辑，通过 HTTP 直接拉取 JSONL 文件进行解析。
-- **协议兼容**：`protocol.EvalRunner` 新增 `RunBenchmarkDataset` 接口，在底层复用 `RunSuite` 的沙盒执行和评分体系（如 `EvalCase` 统一映射），而不干涉原 `training/validation` 存储链路。
-- **入口编排**：运维端点 `POST /v1/eval/benchmark`（由 `EvalAdmin` 处理）通过查询参数 `dataset` 选择预设类型，异步触发 `RunBenchmarkDataset` 并立即返回 `StatusAccepted`，允许外部持续轮询执行状态。
+- `internal/observability/trace` 提供可插拔 `SpanExporter`；`EndSpan` 内经 `concurrent.SafeGo` 异步最佳努力导出，失败仅 `slog.Warn` + `trace_exporter_errors_total`，绝不阻塞 Agent 热路径（裸 `go func` 已订正为 SafeGo：导出器 panic 会拖垮进程）。
+- 导出器 HTTP 客户端走 SafeDialer（XR-06）；目标域名须在 `EgressAllowedDomains` 内，否则被 egressGW 拒绝（刻意纵深防御）。
+- 默认关闭；`exporters` 为空 slice 即 Noop，不定义 NoopExporter 类型（R6）。首批 `OTLPHTTPExporter`（HTTP/JSON）。
+- `trace.SetDefaultExporters`（`atomic.Pointer`，boot 期单次写入、运行期只读）由 `cmd/polaris/boot_substrate.go` 按 `TraceExport{Enabled,Endpoint}` 注册，`NewTracer()` 自动附加。
 
 ## 反例守护
 
-- **禁止直接绕过 Sandbox 执行 Benchmark Code**：即便数据集来自可信基准，所有代码评判必须使用 M12 原生 Sandbox Runner 执行，以避免任意代码执行 (RCE) 风险。
-- **禁止修改 Benchmark 数据集元数据**：下载解析的数据应视为只读（Immutable），不能作为 `events` 追加回流到主数据库产生干扰。
+- 直接绕过 Sandbox 跑 Benchmark 代码 — RCE — 2026-07-28
+- 修改基准数据集元数据或回流 `events` — 污染验证集 — 2026-07-28
+- 为接口完整性臆测 Terminal-Bench 格式 — 外部格式未定 — 2026-07-23
+- 导出路径引入同步阻塞兜底 — 阻塞 Agent 热路径 — 2026-07-23
+
+## 重新评估触发条件
+
+- 出现真实需要用基准结果反哺训练的场景：须先经安全评估确认不引入验证集作弊，才重议"数据集只读不回流"；图方便的放宽一律拒绝。
+- Terminal-Bench 推进实现前须有明确外部数据格式定义。
+- 新增导出器（Jaeger/Zipkin 原生协议）前须确认 `OTLPHTTPExporter` 无法覆盖；trace 丢失率过高才重议兜底，且不得阻塞热路径。
+
+## 沿革
+
+| 日期 | 变更 | 原编号/理由 |
+|---|---|---|
+| 2026-07-23 | 决策二、决策三 | 原 ADR-0068、ADR-0069 |
+| 2026-07-28 | 决策一 | 原编号 0051 |
+| 2026-08-09 | 由 0051 改号为 0093 | 与已删除的 ADR-0051 撞号（编号不复用） |
+| 2026-10-12 | 并入 0068/0069；适配器清单按代码订正 | 文档合并 |
 
 ## 引用代码
 
-- `internal/eval/benchmark/benchmark.go`
-- `internal/eval/harness/runner.go`
-- `internal/gateway/server/sysadmin/evaladmin/admin.go`
-
-> 2026-08-09 追记：重新评估触发条件——若出现真实需要"部分复用"训练数据与
-> 基准数据集边界的场景（如需要用基准结果反哺训练），须先经安全评估确认不会
-> 引入模型在验证集作弊风险，才重议"数据集只读不回流"边界；单纯为图方便的
-> 边界放宽一律拒绝。
+`internal/eval/benchmark/benchmark.go`、`internal/eval/harness/runner.go`、`internal/eval/harness/benchmark/benchmark.go`、`internal/eval/harness/benchmark/terminalbench.go`、`internal/gateway/server/sysadmin/evaladmin/admin.go`、`cmd/polaris/cli_eval_bench.go`、`internal/observability/trace/tracer.go`、`internal/observability/trace/otlp_exporter.go`、`cmd/polaris/boot_substrate.go`

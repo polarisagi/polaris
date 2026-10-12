@@ -1,25 +1,18 @@
 # 模块 4: Agent Kernel
 
-> 2026-07-12：DAG 执行器（DAGExecutor）与 S_VALIDATE 四层校验管线的物理实现已从
-> `internal/agent/dag` 迁出至 `internal/execute/dag`（详见 ADR-0046、
-> `internal/execute/CLAUDE.md`）。FSM 通过 `agent/provider.go` 的
-> `DAGRunner`/`DAGValidator` 消费端接口驱动，本文档描述的 DAG 语义/校验流程不变，
-> 仅物理归属调整；FSM 仍是决定何时进入 S_EXECUTE/S_VALIDATE 的唯一控制流。
-
-> **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
->
-> **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
-<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 1.1:100 输出通道+S_RESPOND / 2:129 Suspend-on-Idle / 3:145 S_VALIDATE / 4:199 DAG（Directed Acyclic Graph，有向无环图） / 5:296 System1/2 / 6:324 WorldModel / 7:335 推理预算 / 8:394 CrashRecovery / 8-bis:444 Handoff唤醒事件化+无损续跑 / 12:454 已知Bug修复记录 / 13:463 (SOFT)降级 / 14:481 跨模块契约 / 15:505 默认参数 -->
+> Go 状态机持有控制流，LLM 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
+> 代码位置：`internal/agent/`（FSM 在 `internal/agent/fsm/`；DAG 执行器与 S_VALIDATE 四层校验物理实现在 `internal/execute/dag/`，ADR-0046；FSM 经 `internal/agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口驱动，唯一决定何时进入 S_EXECUTE/S_VALIDATE）。
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:133 Suspend-on-Idle / 3:149 S_VALIDATE / 4:188 DAG（Directed Acyclic Graph，有向无环图） / 5:258 System1/2 / 6:282 WorldModel / 7:290 推理预算 / 8:337 CrashRecovery / 8-bis:374 444 Handoff唤醒事件化+无损续跑 / 12:384 454 已知Bug修复记录 / 13:390 463 (SOFT)降级 / 14:407 481 跨模块契约 / 15:431 505 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
 |-----------|-------------|
-| 单 Agent 任务的确定性状态机执行器 | LLM 客户端（那是 M1） |
-| System 1/1.5/2 路由决策（基于 SurpriseIndex） | Provider 选择（那是 M1） |
-| DAG 规划与并发执行控制 | 跨 Agent 协调（那是 M8） |
-| 决定何时调 LLM / 何时调 Tool | 记忆持久化与检索（那是 M5） |
-| 崩溃恢复（从 EventLog 回放状态机） | 工具沙箱执行（那是 M7） |
-| Prompt 组装（Slot 分离 + Taint 门控） | 技能发现与匹配（那是 M6） |
+| 单 Agent 任务的确定性状态机执行器 | LLM 客户端 / Provider 选择（M1） |
+| System 1/1.5/2 路由决策（基于 SurpriseIndex） | 跨 Agent 协调（M8） |
+| DAG 规划与并发执行控制 | 记忆持久化与检索（M5） |
+| 决定何时调 LLM / 何时调 Tool | 工具沙箱执行（M7）、技能发现与匹配（M6） |
+| 崩溃恢复（EventLog 回放 + 轨迹回放） | |
+| Prompt 组装（Slot 分离 + Taint 门控） | |
 
 ---
 
@@ -34,7 +27,7 @@
 | inv_M4_05 | Suspend-on-Idle——空闲 Agent 不轮询，等待 intent channel 唤醒，空载 CPU<1% | M3 `polaris_goroutines` Gauge |
 | inv_M4_06 | 不可逆操作（write_network/privileged）禁止自动回滚——必须显式 HITL（Human-in-the-loop，人机协同） | M7 §5.3 DryRunMode + HITL |
 
-> 进入此模块前必读 **LLM Agent 工程化阵阱和生产原则**：`docs/specs/09-LLM-Agent-Production.md`（HE-Rule-5 实例: A-02/A-09/A-11 + P-1/P-6/P-7）
+> 进入此模块前必读 `docs/specs/09-LLM-Agent-Production.md`（HE-Rule-5 实例: A-02/A-09/A-11 + P-1/P-6/P-7）
 
 #### inv_M4_04 补充
 System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath（0 表示"未计算"，不触发）；FastPath 在 S_PERCEIVE 合成结果、S_PLAN 旁路 LLM（保留已有 DAGModel 或走空执行路径），不操作 DAGModel/ExecuteResult。
@@ -43,9 +36,11 @@ System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath�
 
 ## 1. 状态机
 
-状态枚举权威定义见 `pkg/types/enums_agent.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed/Respond)。`[HE-Rule-5]` LLM 结构化填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)；另有唯一面向用户的自由文本态 S_RESPOND（§1.1）。
+状态枚举权威定义：`pkg/types/enums_agent.go`（AgentState 共 **14 态**：Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed/Respond；Respond 追加在枚举尾部以保持落盘状态值不变，ADR-0098 决策二）。转移注册：`internal/agent/fsm/transitions.go` + `internal/agent/fsm/transitions_respond.go`。`[HE-Rule-5]` LLM 结构化填空三态输出：TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)；S_RESPOND 是唯一面向用户的自由文本态（§1.1）。
 
-`ReflectionModel` 结构：`{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后，若 `Learnings` 非空，逐条写入 episodic memory（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断状态流转至 S_COMPLETE。
+分类：6 主执行态（Perceive/Plan/Validate/Execute/Reflect/Respond）、2 恢复态（Replan/Rollback）、1 中断态（Interrupt）、1 挂起态（Suspended：Suspend-on-Idle 与 provider_exhausted）、1 等待态（AwaitAgent：Handoff 子任务终态前阻塞，`TriggerAwaitAgent` 进 / `TriggerAgentHandoffDone` 出）、2 终态（Complete/Failed）、Idle。
+
+`ReflectionModel` = `{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后 `Learnings` 非空则逐条写入 episodic（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断流转。
 
 ```
 S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 DAG)──→ S_VALIDATE ──┬──OK──→ S_EXECUTE ──┬──OK──→ S_REFLECT ──→ S_RESPOND ──→ S_COMPLETE
@@ -59,140 +54,134 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
                                                           ├──Redirect─→ S_PLAN (用户修正意图)
                                                           └──Abort────→ S_FAILED
 ```
-6 主执行态: Perceive / Plan / Validate / Execute / Reflect / Respond。2 恢复态: Replan / Rollback。1 中断态: Interrupt。1 挂起态: Suspended（Suspend-on-Idle 及 provider_exhausted 挂起）。1 等待态: AwaitAgent（`S_AWAIT_AGENT`，本 Agent 已把子任务 Handoff 给其他 Agent，阻塞等待其终态；由 `TriggerAwaitAgent` 进入、`TriggerAgentHandoffDone` 离开）。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **14 态**（`pkg/types/enums_agent.go` 定义 `AgentStateIdle` ~ `AgentStateRespond`；`AgentStateRespond` 追加在枚举尾部，保持既有落盘状态值不变）。转移注册见 `transitions.go` + `transitions_respond.go`。
-ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel.max_replan_attempts`) 超限 → S_FAILED + `[ESCALATE]`
 
 **`[UserInterrupt]` 协议**（inv_global_08, < 200ms 传播）:
-- **触发**: M13 `POST /v1/agent/{taskID}/interrupt` (M13 §1.2.5) → 通过 EventLog Subscribe 与 `agent.ContextCancel()` 内存通知推送至 Agent（`007_tasks.sql` 无 `interrupt_pending` 列，中断信号不落盘）
+- **触发**: M13 `POST /v1/agent/{taskID}/interrupt` (M13 §1.2.5) → EventLog Subscribe 与 `agent.ContextCancel()` 内存通知推送至 Agent（中断信号不落盘，`007_tasks.sql` 无 `interrupt_pending` 列）
 - **进入 S_INTERRUPT**: `agent.ContextCancel()` 立即取消 → 所有 LLM call / tool call / [BestOfN] ParallelSampler 子 goroutine 同步终止
-- **中断操作语义**:
-  - **Resume**: 用户提供"继续"指令 → 恢复原状态 + 注入用户指令到 ZoneImmutable（标记 `source='user_interrupt'`, [TaintLevel]=TaintUserReviewed）
-  - **Redirect**: 用户修正任务意图 → 跳转 S_PLAN 重新规划 + 保留原 EventLog（不消耗 ReplanCount）
-  - **Abort**: 直接 S_FAILED + Saga 逆序补偿 + workspace GC
+- **Resume**: 用户提供"继续"指令 → 恢复原状态 + 注入用户指令到 ZoneImmutable（`source='user_interrupt'`, [TaintLevel]=TaintUserReviewed）
+- **Redirect**: 用户修正意图 → S_PLAN 重新规划 + 保留原 EventLog（不消耗 ReplanCount）
+- **Abort**: S_FAILED + Saga 逆序补偿 + workspace GC
 - **持久化**: `tasks.suspend_reason='user_interrupt'` + 进入 [Suspend-on-Idle] 等待用户响应
-- **SLO**: 触发 → context cancel 完成 < 200ms（与 [KillSwitch] FULLSTOP 同等级）；M3 `polaris_user_interrupt_latency_ms` Histogram 监控
+- **SLO**: 触发 → context cancel < 200ms（与 [KillSwitch] FULLSTOP 同级）；M3 `polaris_user_interrupt_latency_ms` Histogram
 
-转移表:
+转移表（权威：`transitions.go` / `transitions_respond.go`；全局中断处理器在 `Dispatch()` 中早于本表检查）:
 
 | From | Trigger | To |
 |------|---------|-----|
+| S_IDLE | TriggerIntentReceived | S_PERCEIVE |
+| S_IDLE | TriggerSuspend | S_SUSPENDED |
+| S_SUSPENDED | TriggerResume | S_IDLE |
 | S_PERCEIVE | TriggerPerceiveDone | S_PLAN |
+| S_PERCEIVE | TriggerRespondReady | S_RESPOND |
+| S_PERCEIVE | TriggerValidateOk | S_EXECUTE（System 1 旁路后四层校验通过） |
+| S_PERCEIVE | TriggerValidateFail | S_REPLAN（System 1 旁路后校验失败） |
 | S_PLAN | TriggerPlanDone | S_VALIDATE |
+| S_PLAN | TriggerRespondReady | S_RESPOND |
+| S_PLAN / S_RESPOND | TriggerFillRetry | 自环（空输出重试，ADR-0098 决策七） |
 | S_VALIDATE | TriggerValidateOk | S_EXECUTE |
 | S_VALIDATE | TriggerValidateFail | S_REPLAN |
 | S_EXECUTE | TriggerExecuteDone | S_REFLECT |
 | S_EXECUTE | TriggerExecuteFail | S_ROLLBACK |
+| S_EXECUTE | TriggerAwaitAgent | S_AWAIT_AGENT |
+| S_AWAIT_AGENT | TriggerAgentHandoffDone | S_EXECUTE |
 | S_REFLECT | TriggerReflectDone | S_RESPOND |
-| S_PERCEIVE | TriggerRespondReady | S_RESPOND |
-| S_PLAN | TriggerRespondReady | S_RESPOND |
+| S_REFLECT | TriggerReflectContinue | S_REPLAN |
+| S_ROLLBACK | TriggerRollbackDone | S_REPLAN |
+| S_ROLLBACK | TriggerRollbackPartial | S_FAILED（补偿部分失败 → `[ESCALATE]`） |
+| S_REPLAN | TriggerReplanDone | S_PLAN |
+| S_REPLAN / S_PERCEIVE / S_PLAN / S_REFLECT | TriggerReplanExhausted | S_FAILED |
 | S_RESPOND | TriggerRespondDone | S_COMPLETE |
 | S_RESPOND | TriggerReplanExhausted | S_FAILED |
-| S_ROLLBACK | TriggerRollbackDone | S_REPLAN |
-| S_REPLAN | TriggerReplanDone | S_PLAN |
-| S_REPLAN | TriggerReplanExhausted | S_FAILED |
 
-状态超时:
-- S_PLAN: 300s, S_EXECUTE: 600s (计算性状态)
-- S_PERCEIVE/S_VALIDATE/S_REFLECT/S_RESPOND/S_REPLAN: derivedTimeout = upstream_budget - elapsed, 安全地板 30s
-- S_IDLE/S_COMPLETE/S_FAILED/S_ROLLBACK: 终端/等待态, 无超时
+状态超时: S_PLAN 300s、S_EXECUTE 600s（计算性）；S_PERCEIVE/S_VALIDATE/S_REFLECT/S_RESPOND/S_REPLAN 为 `upstream_budget - elapsed`，安全地板 30s；S_IDLE/S_COMPLETE/S_FAILED/S_ROLLBACK 无超时。
 
-ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1 FatalStreamAbort / M1 JSON Repair 失败 / S_PLAN 拓扑失败。ReplanCount > MaxReplanAttempts → `TriggerReplanExhausted → S_FAILED` → `[ESCALATE]`。S_FAILED 为终态——不进入 S_ROLLBACK，不触发回滚补偿。任务移交 M13 HITL 人工决策。FSM 实现见 `internal/agent/fsm/state_machine.go`（`StateMachine`，唯一生产实现；此前文档提及的 `FallbackFSM`/`use_flowy` build tag 从未落地，2026-07-21 deadcode 审查确认零调用后已删除）。
-
-> 2026-09-25 修订（ADR-0098 决策九）：经 S_VALIDATE / S_ROLLBACK / S_REFLECT 进入 S_REPLAN 时预算已满，改转 S_RESPOND 说明失败（`TurnDegraded`，任务结果按失败计），不再直接 S_FAILED；S_FAILED 仍用于内核错误、KillSwitch、预算硬上限与感知/规划/回复阶段本身失败。
+**ReplanGuard**（S_REPLAN 入口；阈值 `spec/state.yaml §m4_kernel.max_replan_attempts`）覆盖 5 条路径：S_VALIDATE 失败 / S_ROLLBACK 完成 / M1 FatalStreamAbort / M1 JSON Repair 失败 / S_PLAN 拓扑失败。超限处置（ADR-0098 决策九，2026-09-25）：经 S_VALIDATE/S_ROLLBACK/S_REFLECT 进入 S_REPLAN 时预算已满 → 转 S_RESPOND 说明失败（`TurnDegraded`，任务结果按失败计）；`TriggerReplanExhausted → S_FAILED` 用于内核错误、KillSwitch、预算硬上限与感知/规划/回复阶段自身失败，并 `[ESCALATE]` 移交 M13 HITL。S_FAILED 为终态——不进入 S_ROLLBACK、不触发补偿。FSM 唯一生产实现：`internal/agent/fsm/state_machine.go`（`StateMachine`）。
 
 ### 1.1 输出通道与 S_RESPOND（ADR-0098）
 
-- **受众**：`protocol.LLMFillEffect.Audience` 零值 `AudienceInternal`（fail-closed）；仅 S_RESPOND 的 Effect 为 `AudienceUser`。`doStreamInfer` 只对 User 受众发布 `AgentStreamEventToken`，内部阶段 token 仅累积供 OnSuccess 解析（`spec/state.yaml par_inv_06`）。思考链（Thinking）各阶段照常发布，不进回复正文。
-- **阶段进度**：每个 LLMFillEffect 开始时发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`，客户端本地化展示。
+- **受众**：`protocol.LLMFillEffect.Audience` 零值 `AudienceInternal`（fail-closed）；仅 S_RESPOND 的 Effect 为 `AudienceUser`。`doStreamInfer` 只对 User 受众发布 `AgentStreamEventToken`，内部阶段 token 仅累积供 OnSuccess 解析（`spec/state.yaml par_inv_06`）。思考链各阶段照常发布，不进回复正文。
+- **阶段进度**：每个 LLMFillEffect 开始发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`。
 - **路由**：S_PERCEIVE 产出 `TaskModel.NeedsTools`（`*bool`）。`false` → `S_PERCEIVE_DIRECT` → S_RESPOND；`true`/缺失/解析失败 → S_PLAN（保守）。S_PLAN 解析成功但 DAG 为空 → `S_PLAN_EMPTY` → S_RESPOND。
-- **零 LLM 寒暄快路**（ADR-0102 决策一）：`fsm.ClassifyIntentWeight` 判为 `IntentPhatic`（问候/致谢/告别，≤16 rune 整句匹配）时，S_IDLE→S_PERCEIVE 的 Effect 为 `DeterministicEffect`，直接 `S_PERCEIVE_DIRECT`（route=`phatic_bypass`），不调 Perceive、不召回记忆；`IntentAck`（好的/ok/同意）仍走 Perceive（可能授权上一轮提议动作），但跳过长期记忆召回。
-- **直答合并**（ADR-0102 决策四 4b′）：Perceive 在 `NeedsTools=false` 时同次输出 `Reply`；经 `publishableReply` 检查后存入 `PreparedReply`，仅 Perceive→Respond 入边以确定性 Effect 发布（route=`direct_merged`），回合起点清空。`Reply` 缺失/被拦截 → 照常 Respond LLM。
-- **简单任务跳过反思**（ADR-0102 决策四 4a）：首轮、`ExecAllSucceeded` 且 0 < Complexity < `m4_kernel.reflect.skip_complexity`(0.4) 时 S_REFLECT 为 `DeterministicEffect`（route=`reflect_skipped`），直接转 S_RESPOND；其余情形照常 LLM 反思。
-- **工具定义去重**（ADR-0102 决策五）：S_PLAN 文本目录只列工具名，完整定义仅经原生 function-calling 下发；无原生 tools 的本地适配器自行渲染文本。
-- **规划池阶梯**（ADR-0102 决策六，两端取 ADR-0101 的 `model_pool.plan_initial/plan_replan` 与 `thinking.plan_initial`）：LLM 在 Perceive 判 `Complexity`，程序经 `SelectPlanTier` 定池与思考档；只有能力类失败（L0 结构错误、计划不可解析、重复工具报错、规划模型 `escalate=true`）逐级升级，安全拒绝/瞬时故障/观察—再规划不升级。规划输出有内容但不可用时升级重试一次（每回合一次）。
-- **空输出重试**（ADR-0098 决策七）：S_PLAN / S_RESPOND 推理成功但既无正文也无工具调用时，按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环重试一次（S_RESPOND 此时未推出 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
-- **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。超限结果首尾保留截断，全文经 `ToolRefOffloader` 卸载、预览首行给出 `read_tool_ref` 取回提示（ADR-0100 决策三）。各阶段思考档位由 `m4_kernel.thinking.*` 显式配置，记忆蒸馏在回合终态触发一次（ADR-0101）。LLM 请求被 Provider 以上下文超限拒绝（`protocol.ErrContextOverflow`）时，Agent 对固定前缀外的消息确定性修剪一次后重试（ADR-0100 决策二）。
-- **重规划耗尽转回复**（决策九）：进入 S_REPLAN 时预算已满 → S_RESPOND（`TurnDegraded=true`，任务结果按失败计），回复阶段据失败原因如实说明。
-- **步数上限**：`m4_kernel.max_steps=24`（回合内 FSM 触发次数），覆盖 7 步完整工具回合 + 观察循环 2 次 + 校验失败重规划 + 2 次空输出重试 + 耗尽转回复；截断经 `abortTurn` 收尾。
-- **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不以 S_FAILED 丢弃已执行回合的回复。
-- **回复上下文**：五层前缀账本（ADR-0105 决策一，见下）中 L3 为 `kernel/respond.md`，L4 为（执行路径）目标/执行结果/反思（TaintMedium 起）+ 本轮意图压轴。无 tools。`agent/context/respond_context.go`。
-- **五层前缀账本**（ADR-0105 决策一，2026-09-29）：四阶段 × 两条路径（`agent/context` 记忆路径 / `agent/fsm` 降级路径）消息顺序统一为 L0 稳定核（契约段 + `ImmutableCore.StableMessage`，见下条）→ L1 会话层（核心记忆、子 Agent 画像、可信工作区指令、扩展目录、不可信工作区上下文，`fsm.WriteSessionLayer`）→ L2 历史层 → L3 阶段层（阶段模板 + 压力提示 + 工具目录/Plan 提示块 + 易变层 `ImmutableCore.VolatileContent`）→ L4 回合层（召回、TaskModel、GroundingGap、观测、重规划反馈、执行结果、本轮意图）。`PromptBuilder.BuildLayered` 只改输出次序，Zone 信任分区与围栏不变；旧 `Build` 供非内核调用方。字节稳定规则：L0/L1 内集合必须确定序、不得含时间/连接状态（MCP ✓/~/✗ 在 L3）。门控测试：`agent/context/prefix_ledger_test.go`、`agent/fsm/prompt_layers_test.go`。
-- **阶段契约库并入 L0**（ADR-0105 决策九，`m4_kernel.prompt.phase_contracts_in_core`，默认开启）：L0 由两条 system 组成，按稳定度由高到低排列（前缀在首个分歧字节处失效，越易变越靠后）：①部署期常量的 `# PHASE CONTRACTS` 段独立成首条（`configs/phase_contracts.go`：`## PHASE: PERCEIVE/PLAN/REFLECT/RESPOND` 四段，正文即 `kernel/<phase>.md`，约 7.9KB，字节恒定、不计入 `maxSystemPromptBytes`，故不会被截）；②可变核心（`ImmutableCore.StableMessage()`）内部依次为 身份/模型指引/自定义指令/平台提示（配置期）→ 运营指令 → 工具提示（安装期）→ 用户画像 → 偏好（按键排序，会话间演进），超 32KB 时只从该段尾部截断。仅内核经 `ImmutableCore.StableMessagesWithContracts()` 取得 `[契约段, 可变核心]`（L0 多于一条时首条与末条均带 `CacheBreakpoint`）；网关直连/cron/workflow 的 `StableMessage()`/`PrependToMessages` 不含契约段。各阶段 L3 契约位由 `fsm.WritePhaseContract` 写 147 字节选择器（`# ACTIVE PHASE: <NAME>`），压力提示与 `respond_reminder.md` 位置不变；开关关闭、降级路径（无 ImmutableCore）或 ImmutableCore 无契约能力时回退写完整模板。门控测试：`agent/context/phase_contracts_test.go`、`memory/store/immutable_core_contracts_test.go`。
-- **真实请求边界门控**（ADR-0105 决策十一，WP10）：`agent/request_prefix_gate*_test.go` 以录制式 Provider 捕获实际发出的消息，断言同回合 L0..L2 字节一致、相邻回合前缀关系、L0 全程一致、tools 同回合一致且跨回合只追加、无 `Relevant Context:` 旁路、同一 PII 同一令牌；覆盖令牌化、热路径压缩（仅压缩缓存前缀之后的内容，L3 选择器原位保留）、溢出恢复（先只截前缀之后）、PRM 候选（uniform_tools 下带同一 tools）。PII 令牌映射按会话生命周期存活（`TokenVault.ReleaseTask`，回合终态只释放不清空）。
-- **召回预算与回合内复用**（ADR-0105 决策四，`agent/context/recall*.go` + `fsm/turn_recall.go`）：召回段在 L4 首位，受 `m4_kernel.recall.{item_max_chars=400,max_tokens=1200,min_score=0,min_score_ratio=0}` 约束。渲染：情景事件取 payload 的 `summary/description/content/text/message/goal/result/output` 字段，无则压成单行 JSON，时间戳只到日期（UTC），单条超限按 rune 截断；反思/L2/RAG 同受单条上限；L2 分数不再写入提示词。融合与装入（ADR-0105 决策十，`recall_fuse.go`）：召回全内核只有一条管线、一处注入点（L4），原 `injectMemoryToMsgs`/`Assembler` 第二管线已删除。各来源（反思/情景/L2 语义/RAG）先各自按原分降序，再做 RRF（k=60，`score=Σ weight_source/(60+rank)`）；同正文跨来源累加得分、只留一条，因此不同量纲的分数（BM25 无界、RAG 重排分、情景常数）不必校准即可比较。来源权重 `m4_kernel.recall.weight_{reflection=1.2,episodic=1.1,semantic=1.0,rag=1.0}`：反思是 Agent 自生成的经验教训、信息密度最高，情景是本项目真实发生过的事件，L2/RAG 为补充；权重 0 即关闭该来源。用户画像不在召回里（ADR-0105 决策十 WP11）：L0 稳定核的 `ImmutableCore.UserProfile`（网关 `InjectSystemPrompt` 用 `GetUserProfile("default")` 写入、map 按键排序）与原召回画像段是同一份数据，召回段已删除，避免同一内容在 L0 与 L4 各付一次。按融合名次装到 `max_tokens`（遇第一条装不下即止），渲染按来源分组、组序固定（反思>情景>L2>RAG），同分按来源序再按首次出现序，输出确定。相关度门：`min_score_ratio` 默认 0（开关保留，不再是默认裁剪手段），`min_score` 保留；注入 `StateContext.RecallReranker` 时对融合前 `rerank_top_n=12` 条取相关概率，丢弃 p<`rerank_min_prob=0.5` 及未经验证的尾部；超时复用召回 ctx 截止、失败/概率非法一律跳过门（不拦召回）。当前生产无重排器加载路径（`ffi.LlamaRerank` 是单槽位 bi-encoder 余弦，非 cross-encoder、无校准，且无生产调用方），门在生产中不生效，仅保留消费端接口与 `SetRecallReranker` 注入点。自 Assembler 迁入的能力：(a) SurpriseIndex 决定 RAG 深度——低于 `recall.rag_min_surprise=0.3` 本回合不查 RAG，高于 `surprise_hint_threshold` 时 topK 加倍；(b) MaxTaint 过滤——取意图 `OriginTaintLevel`（None 按 High，fail-closed），情景/L2/RAG 条目逐条带 `Taint`，超限丢弃，召回段包装标签的污点取入选条目最大值。L2 语义召回（WIRE）：`cmd/polaris/adapters_recall.go` 的 `recallCognitiveAdapter` 用 FTS 命中 `sement_` 语义实体并按 ID 取回正文，仅返回 active、未过期、非 graphrag_ingest 的实体，项目隔离经 `projectScopedFTS`；向量路不接（实体仅 FTS 索引）；Tier0 无 SurrealDB 时不启用。情景相关度召回（WP11）：同一适配器的 `FTSEpisodic`（`fsm.EpisodicSearcher`）对共享 FTS 做 BM25，剔除 `sement_`/`her_`/`ext_` 文档，`projectScopedEpisodicFTS` 经 `EpisodicProjectOf` 只留"确为情景事件且属当前项目"的命中，过 `min_score` 后按 ID 调 `ListEpisodicEvents(EpisodicQuery.IDs)` 取正文（取正文时再按项目与 MaxTaint 过滤，召回侧再判一次污点，fail-closed），按 FTS 秩渲染；原整句子串匹配（`EpisodicQuery.Semantic`，分恒 1.0、几乎恒空）已删除。FTS 失败、无 SurrealDB（Tier0）或 cognitive 不支持情景检索时，情景来源为空，不阻断回合。RAG 分取检索器真实分（`KnowledgeBase.Search` 透传 `AugmentedContext.Score`）。渲染约束：情景事件取 payload 的 `summary/description/content/text/message/goal/result/output` 字段，无则压成单行 JSON，时间戳只到日期（UTC），单条超限按 rune 截断；L2 分数不写入提示词；token 以 rune 感知估算（CJK 1 token/字，其余 ⌈字节/3⌉）。去重：正文（规范化空白后，≥12 字符）被当前 L2 历史包含则融合前丢弃。复用：`StateContext.TurnRecall`（分来源条目 + `EpisodicDone/GoalDone` 覆盖标记 + 渲染文本）在 IDLE→PERCEIVE 回合起点与 `PreparedReply` 同处清空；Perceive 只查情景（K=4，按本轮原话），反思/L2/RAG 以 Goal 为查询词、Perceive 时 `TaskModel` 是上一回合遗留，一律留给 Plan 用本回合 Goal 补查；Plan 情景已覆盖则不再查（Perceive 被跳过/召回被预算放弃、Goal 非空时才补查，K=5）。读写 `TurnRecall` 须持 `sCtx.Mu`，召回 goroutine 不得触碰 sCtx。查询向量：`search.SyncBatcherAdapter` 内置 32 条/60s 的有界缓存（仅高优先级交互路径）。Reflect/Respond 的执行结果经 `fsm.ExecuteResultForPrompt` 收敛到 `ObservationMaxBytes`（优先取带 `read_tool_ref` 提示的最近观察，污点告警原样保留）。
-- **对话历史**（ADR-0105 决策二）：`AgentController.SetConversationHistory` 由 session 在 `SetTaskIntent` 前注入（剔除 system）；四个阶段共用同一 L2（Plan/Reflect 亦携带）。逐条以真实 user/assistant 角色写入，每条独立 TaintHigh 围栏（标记按单条内容哈希）。`fsm.WindowConversationHistory` 分块跳窗：超过 `thresholds.m4_kernel.conversation.history_max_messages/bytes` 时按 max/2 步长一次丢前若干块，被丢部分以一条确定性锚定摘要（条数 + 最近 8 条首行截断，无 LLM 调用）置于 L2 首位；切点是历史的纯函数，跳窗之间 L2 纯追加。不带 `ReasoningContent`（同回合 tool_call 往返的思考内容不经会话历史）。
-- **重规划闭环**（ADR-0098 决策六）：S_VALIDATE 拒绝 / S_EXECUTE 失败的原因写入 `StateContext.ReplanFeedback`（最近 3 条，每条 ≤400 字节），S_PLAN 与 S_RESPOND 的 prompt 均携带（TaintMedium 数据区）。无允许方案时 Plan 返回空计划 → S_RESPOND 说明限制，而非耗尽重试后报错。
-- **阶段契约 SSoT**：`configs/prompts/kernel/{perceive,plan,reflect,respond}.md`，记忆路径与降级路径同源加载；Perceive/Reflect 请求 `json_object` 约束解码。
+- **零 LLM 寒暄快路**（ADR-0105，原 ADR-0102 决策一）：`fsm.ClassifyIntentWeight` 判 `IntentPhatic`（问候/致谢/告别，≤16 rune 整句匹配）时，S_IDLE→S_PERCEIVE 的 Effect 为 `DeterministicEffect`，直达 `S_PERCEIVE_DIRECT`（route=`phatic_bypass`），不调 Perceive、不召回记忆；`IntentAck`（好的/ok/同意）仍走 Perceive（可能授权上一轮提议动作），跳过长期记忆召回。
+- **直答合并**（原 ADR-0102 决策四 4b′）：`NeedsTools=false` 时 Perceive 同次输出 `Reply`；经 `publishableReply` 检查存入 `PreparedReply`，仅 Perceive→Respond 入边以确定性 Effect 发布（route=`direct_merged`），回合起点清空；缺失/被拦截 → 照常 Respond LLM。
+- **简单任务跳过反思**（原 ADR-0102 决策四 4a）：首轮、`ExecAllSucceeded` 且 0 < Complexity < `m4_kernel.reflect.skip_complexity` 时 S_REFLECT 为 `DeterministicEffect`（route=`reflect_skipped`）→ S_RESPOND。
+- **工具定义去重**（原 ADR-0102 决策五）：S_PLAN 文本目录只列工具名，完整定义仅经原生 function-calling 下发；无原生 tools 的本地适配器自行渲染文本。
+- **规划池阶梯**（原 ADR-0102 决策六 + `model_pool.plan_initial/plan_replan`、`thinking.plan_initial`）：Perceive 判 `Complexity`，程序经 `SelectPlanTier` 定池与思考档；仅能力类失败（L0 结构错误、计划不可解析、重复工具报错、规划模型 `escalate=true`）逐级升级，安全拒绝/瞬时故障/观察—再规划不升级；规划输出有内容但不可用时升级重试一次（每回合一次）。
+- **空输出重试**（ADR-0098 决策七）：S_PLAN/S_RESPOND 推理成功但既无正文也无工具调用 → 按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环；推理错误不重试（Router 已全量 failover）；仍为空 → S_FAILED，原因以错误事件进入事件流。
+- **观察—再规划循环**（决策八）：`GoalAchieved` 显式 false 且 `replanCount+1 < MaxReplan` → `reflect_continue` → S_REPLAN；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），超限首尾保留截断，全文经 `ToolRefOffloader` 卸载并给出 `read_tool_ref` 取回提示（→ ADR-0020 溢出/spill 决策）。各阶段思考档位由 `m4_kernel.thinking.*` 配置，记忆蒸馏在回合终态触发一次。Provider 以 `protocol.ErrContextOverflow` 拒绝时，对固定前缀外的消息确定性修剪一次后重试（`internal/agent/agent_overflow_recovery.go`）。
+- **重规划闭环**（决策六）：S_VALIDATE 拒绝 / S_EXECUTE 失败原因写入 `StateContext.ReplanFeedback`（最近 3 条，每条 ≤400 字节），S_PLAN 与 S_RESPOND prompt 均携带（TaintMedium 数据区）。无允许方案 → Plan 返回空计划 → S_RESPOND 说明限制。
+- **步数上限**：`m4_kernel.max_steps`（回合内 FSM 触发次数，覆盖完整工具回合 + 观察循环 + 校验失败重规划 + 空输出重试 + 耗尽转回复）；截断经 `abortTurn` 收尾。
+- **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不丢弃已执行回合的回复。
+- **阶段契约 SSoT**：`configs/prompts/kernel/perceive.md`、`plan.md`、`reflect.md`、`respond.md`，记忆路径与降级路径同源加载；Perceive/Reflect 请求 `json_object` 约束解码。
+
+**回合上下文（ADR-0105）**
+
+- **五层前缀账本**（决策一）：四阶段 × 两条路径（`internal/agent/context` 记忆路径 / `internal/agent/fsm` 降级路径）消息顺序统一为 L0 稳定核（阶段契约 + `ImmutableCore.StableMessage`）→ L1 会话层（核心记忆、子 Agent 画像、可信工作区指令、扩展目录、不可信工作区上下文，`fsm.WriteSessionLayer`）→ L2 历史层 → L3 阶段层（阶段模板/选择器 + 压力提示 + 工具目录/Plan 提示块 + `ImmutableCore.VolatileContent`）→ L4 回合层（召回、TaskModel、GroundingGap、观测、重规划反馈、执行结果、本轮意图）。`PromptBuilder.BuildLayered` 只改输出次序，Zone 信任分区与围栏不变。字节稳定规则：L0/L1 内集合必须确定序、不得含时间/连接状态（MCP 连接状态在 L3）。门控：`internal/agent/context/prefix_ledger_test.go`、`internal/agent/fsm/prompt_layers_test.go`。
+- **阶段契约并入 L0**（决策九，`m4_kernel.prompt.phase_contracts_in_core`，默认开）：L0 由两条 system 组成，按稳定度由高到低——①`# PHASE CONTRACTS` 段（`configs/phase_contracts.go`，四阶段正文即 `kernel/<phase>.md`，字节恒定、不计入 `maxSystemPromptBytes`）；②可变核心（`ImmutableCore.StableMessage()`：身份/模型指引/自定义指令/平台提示 → 运营指令 → 工具提示 → 用户画像 → 偏好按键排序；超 32KB 只从尾部截断）。仅内核经 `StableMessagesWithContracts()` 取 `[契约段, 可变核心]`（多于一条时首尾均带 `CacheBreakpoint`）；网关直连/cron/workflow 的 `StableMessage()` 不含契约段。各阶段 L3 由 `fsm.WritePhaseContract` 写选择器（`# ACTIVE PHASE: <NAME>`）；开关关闭、降级路径或无契约能力时回退写完整模板。
+- **对话历史进内核**（决策二，ADR-0098 决策四）：`AgentController.SetConversationHistory` 由 session 在 `SetTaskIntent` 前注入（剔除 system）；四阶段共用同一 L2，逐条以真实 user/assistant 角色写入，每条独立 TaintHigh 围栏（标记按单条内容哈希）。`fsm.WindowConversationHistory` 分块跳窗：超 `thresholds.m4_kernel.conversation.history_max_messages/bytes` 时按 max/2 步长一次丢前若干块，被丢部分以一条确定性锚定摘要（条数 + 最近 8 条首行截断，无 LLM）置于 L2 首位；切点是历史的纯函数，跳窗之间 L2 纯追加。不带 `ReasoningContent`。
+- **召回单一管线**（决策四 + 决策十）：全内核一条管线、一处注入点（L4 首位），`injectMemoryToMsgs`/`Assembler` 第二管线已删。各来源（反思/情景/L2 语义/RAG）先按原分降序，再 RRF（k=60，`score=Σ weight_source/(60+rank)`）；同正文跨来源累加只留一条。权重 `m4_kernel.recall.weight_*`（反思 > 情景 > L2 = RAG，0=关闭该来源）。按融合名次装到 `max_tokens`，渲染按来源分组、组序固定，输出确定。预算与阈值见 `spec/state.yaml §m4_kernel.recall`。用户画像不在召回里，仅走 L0 `ImmutableCore.UserProfile`。
+  - 相关度门：`min_score_ratio` 默认 0；注入 `StateContext.RecallReranker` 时对融合前 top-N 取相关概率，丢弃低于 `recall_rerank_min_prob` 者；失败一律跳过门。当前生产无重排器加载路径（`ffi.LlamaRerank` 是单槽位 bi-encoder 余弦，非 cross-encoder），门在生产中不生效，仅保留消费端接口与 `SetRecallReranker` 注入点。
+  - 迁自 Assembler：SurpriseIndex 低于 `recall.rag_min_surprise` 本回合不查 RAG，高于 `surprise_hint_threshold` topK 加倍；MaxTaint 过滤取意图 `OriginTaintLevel`（None 按 High，fail-closed），条目逐条带 `Taint`，超限丢弃。
+  - L2 语义召回与情景相关度召回：`cmd/polaris/adapters_recall.go` 的 `recallCognitiveAdapter` 以 FTS 命中 `sement_` 语义实体与情景事件（BM25，项目隔离经 `projectScopedFTS`/`projectScopedEpisodicFTS`），按 ID 取正文并再判项目与污点（fail-closed）；向量路不接；Tier0 无 SurrealDB 或 FTS 失败时来源为空，不阻断回合。RAG 分取检索器真实分。
+  - 回合内复用：`StateContext.TurnRecall`（分来源条目 + `EpisodicDone/GoalDone` 标记 + 渲染文本）在 IDLE→PERCEIVE 与 `PreparedReply` 同处清空；Perceive 只查情景（按本轮原话），反思/L2/RAG 以 Goal 为查询词，一律留给 Plan 用本回合 Goal 补查；读写 `TurnRecall` 须持 `sCtx.Mu`，召回 goroutine 不得触碰 sCtx。
+  - 去重：正文（规范化空白后 ≥12 字符）被当前 L2 历史包含则融合前丢弃。Reflect/Respond 的执行结果经 `fsm.ExecuteResultForPrompt` 收敛到 `ObservationMaxBytes`（优先取带 `read_tool_ref` 提示的最近观察，污点告警原样保留）。
+- **回复上下文**：L3 为 `kernel/respond.md`，L4 为（执行路径）目标/执行结果/反思（TaintMedium 起）+ 本轮意图压轴；无 tools。`internal/agent/context/respond_context.go`。
+- **真实请求边界门控**（决策十一）：`internal/agent/request_prefix_gate_test.go` 以录制式 Provider 捕获实际发出的消息，断言同回合 L0..L2 字节一致、相邻回合前缀关系、L0 全程一致、tools 同回合一致且跨回合只追加、无 `Relevant Context:` 旁路、同一 PII 同一令牌；覆盖令牌化、热路径压缩（仅压缩缓存前缀之后）、溢出恢复、PRM 候选。PII 令牌映射按会话生命周期存活（`TokenVault.ReleaseTask`，回合终态只释放不清空）。
 
 ---
 
 ## 2. Suspend-on-Idle Actor
 
-Agent 以 goroutine 形式运行，空闲时挂起释放资源。核心状态机与 FSM 实现见 `internal/agent/`（StateMachine）。
+Agent 以 goroutine 运行，空闲时挂起释放资源。
 
-**EpochTracker（上下文指纹隔离）**: `internal/agent/fsm/epoch.go` 实现 `epochTracker`，对每次 LLM 调用前的消息序列计算 SHA-256 全量指纹。指纹变化时 epoch 原子自增，防止陈旧上下文被重复使用。调用方（`state_machine.go`）通过比较 `StateContext.ContextEpoch` 判断上下文是否失效，无需深度比较消息内容。并发安全（`atomic.Int64` + `atomic.Value`）。
+**EpochTracker（上下文指纹隔离）**: `internal/agent/fsm/epoch.go` 的 `epochTracker` 对每次 LLM 调用前的消息序列计算 SHA-256 全量指纹；指纹变化时 epoch 原子自增，调用方（`state_machine.go`）比较 `StateContext.ContextEpoch` 判断上下文是否失效。
 
-Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状态机 → 处理 LLM 和工具返回的 events → 空闲超过 SuspendIdleThreshold (`spec/state.yaml §m4_kernel.suspend_idle_threshold_minutes`) 自动 checkpoint 到 SurrealDB-Core KV（Key-Value，键值） 后释放 goroutine。HITL 等待期间通过 M2 EventLog Subscribe 监听 ApprovalResolved 事件（非 Go channel，防止进程崩溃丢失审批）。
+**运行循环**: 等待 intent channel 脉冲 → 推进状态机 → 处理 LLM/工具 events → 空闲超过 SuspendIdleThreshold（`spec/state.yaml §m4_kernel.suspend_idle_threshold_minutes`）自动 checkpoint 到 SurrealDB-Core KV 后释放 goroutine。HITL 等待期间经 M2 EventLog Subscribe 监听 ApprovalResolved（非 Go channel，防进程崩溃丢审批）。
 
-**咨询式挂起（提案）**：`AskHuman` 特权工具扩展本节 Suspend 语义，新增 `SuspendReason=awaiting_user_input`，复用同一 Suspend/Resume 路径处理"信息缺失需澄清"场景（不新增独立错误类型/独立挂起态）。设计草案见 [ADR-0042](./decisions/ADR-0042-hitl-askhuman-consultation.md)（Proposed，未实现）。
+**咨询式挂起（提案，未实现）**：`AskHuman` 特权工具拟复用同一 Suspend/Resume 路径，新增 `SuspendReason=awaiting_user_input`，不新增状态。→ [ADR-0066](./decisions/ADR-0066-gateway-sql-sink-and-egress-hardening.md)（HITL AskUser，原 ADR-0042）。
 
-**内存持久化失败熔断（GD-13-003，收窄范围后实现）**：四层存储写入路径均为同步落盘，"写失败"以同步 error 直接从 `AppendEpisodicEvent` 等方法返回，不存在原报告描述的"底层 I/O 拒绝导致静默丢失"；真正缺失的只是"收到失败后 FSM 是否转 Suspended"这一层决策。`internal/agent/agent_execute_util.go` 的 `writeEpisodicWithExtract` 捕获写入错误，`isMemoryPersistenceFailure` 用 `apperr.IsCode(err, apperr.CodeStorageUnavailable)` 判定是否为存储层故障（与业务校验错误等不应熔断的错误类型区分）；命中后 `handleMemoryPersistenceFailure` 设置 `StateContext.SuspendReason="memory_persistence_failure"`、写入一条 `m9_storage_degraded` outbox 记录（供后续告警/自愈消费），并调用 `asyncIntent(types.TriggerInterruptReceived)`——复用 FSM `Dispatch()` 中早于 transitions 表检查的全局中断处理器，路由至 `AgentStateInterrupt`（不同于本节 Suspend 语义的 `AgentStateSuspended`，两者是不同的状态/触发对，未新增状态机转换规则）。
+**内存持久化失败熔断（GD-13-003）**：写入路径同步落盘，失败以同步 error 返回。`internal/agent/agent_execute_memory.go` 的 `writeEpisodicWithExtract` 捕获错误，`isMemoryPersistenceFailure` 以 `apperr.IsCode(err, apperr.CodeStorageUnavailable)` 判定存储层故障（业务校验错误不熔断）；命中后 `handleMemoryPersistenceFailure` 设 `StateContext.SuspendReason="memory_persistence_failure"`、写一条 `m9_storage_degraded` outbox 记录，并 `asyncIntent(types.TriggerInterruptReceived)`——复用 `Dispatch()` 中早于 transitions 表的全局中断处理器，路由至 `AgentStateInterrupt`（不是 `AgentStateSuspended`，未新增转换规则）。
 
-内存效率: 活跃 Agent 约消耗 1MB（含 buffer 和栈），休眠 Agent 仅保留约 100 字节的 checkpoint 元数据。Tier 0 硬上限 2 个活跃 Agent。
+内存效率: 活跃 Agent 约 1MB，休眠 Agent 仅留约 100 字节 checkpoint 元数据。Tier 0 硬上限 2 个活跃 Agent。
 
 ---
 
 ## 3. S_VALIDATE 四层校验
 
-**前置条件**：若 `DAGModel == nil`（FastPath 空执行路径），`executeEffect` 在调用四层校验前直接发出 TriggerValidateOk，不进入校验流程。四层校验仅在 DAGModel 非 nil 时执行。
+**前置条件**：`DAGModel == nil`（FastPath 空执行路径）时，`executeEffect` 直接发 TriggerValidateOk，不进入校验。
 
-> **实现说明**：`StateMachine.validateDAG` 和 `executeDAG` 是委托存根，因函数签名限制（无法访问 `a.toolRegistry`）返回硬编码 OK；真正校验逻辑在 `Agent.runValidateDAG`（`agent_execute_validate.go`，L0-L3 四层）和 `Agent.runExecuteDAG`（`agent_execute_dag.go`，Saga 逆序补偿）中执行，由 `Agent.Run` 主循环调用。任何跳过 `Agent.Run` 直接 Dispatch 这两个事件的路径将触发防御守卫返回错误。
+**实现说明**：`StateMachine.validateDAG`/`executeDAG`（`internal/agent/fsm/state_machine_effects.go`）是委托存根（返回硬编码 OK）；真实校验在 `Agent.runValidateDAG`（`agent_execute_validate.go`）与 `Agent.runExecuteDAG`（`agent_execute_dag.go`，Saga 逆序补偿），由 `Agent.Run` 主循环调用。跳过 `Agent.Run` 直接 Dispatch 这两个事件将触发防御守卫返回错误。
 
 | 层级 | 延迟 | 适用范围 | 检查内容 |
 |------|------|---------|---------|
-| L0 拓扑 | <1ms | 所有 DAG | 见下方 [L0 补充](#l0-补充) |
-| L1 确定性 | <1ms | 所有动作 | 见下方 [L1 补充](#l1-补充) |
-| L2 启发式 | <5ms | RiskHigh+ | 批量规模（>100）/ 受保护路径 / 资源预估 vs Tier 阈值 |
-| L3 LLM 看门狗 | ~200ms | 仅 RiskPrivileged | 见下方 [L3 补充](#l3-补充) |
+| L0 拓扑 | <1ms | 所有 DAG | 见 [L0 补充](#l0-补充) |
+| L1 确定性 | <1ms | 所有动作 | 见 [L1 补充](#l1-补充) |
+| L2 启发式 | <5ms | RiskHigh+ | 批量规模（>100）/ 受保护路径（`/etc/`,`/sys/`,`~/.ssh/` → 拒绝）/ 资源预估 vs Tier 阈值 |
+| L3 LLM 看门狗 | ~200ms | 仅 RiskPrivileged | 见 [L3 补充](#l3-补充) |
 
 #### L0 补充
-节点数熔断 → DFS 三色环检测 → 深度熔断 → 孤立节点，阈值见 `spec/state.yaml §m4_kernel.plan_dag_max_nodes/max_depth`。
+节点数熔断 → DFS 三色环检测 → 深度熔断 → 悬空依赖；阈值 `spec/state.yaml §m4_kernel.plan_dag_max_nodes/max_depth`。"悬空依赖"（依赖引用未定义节点 → 拒绝；无依赖的独立节点合法）取代原"孤立节点"规则：后者与原生并行 tool_calls（`toolCallsToDAGJSON` 生成无边独立节点）冲突，且漏检真正的依赖写错（ADR-0098 决策五）。
 
-> 2026-09-25 复核（ADR-0098 决策五）："孤立节点"改为"悬空依赖"。原规则把多节点 DAG 中无边的节点判为非法，与原生并行 tool_calls（`toolCallsToDAGJSON` 生成无边的独立节点，执行器并行调度）直接冲突，使一切并行工具调用在 L0 被拒；且它想拦的"依赖写错"反而漏检——DFS 对未定义的依赖 ID 直接递归不报错。现：依赖引用未定义节点 → 拒绝；无依赖的独立节点合法。
-
-#### L1 PolicyGate 请求形态（2026-09-25，ADR-0098 决策五）
-与执行闸门 `sandbox.ExecEnvelope` 同问：`(principal=agent, action=tool_execute, resource=<工具名>)` + `trust_tier/risk_level/tool_source`（经 ToolExecutor.Lookup）+ `capability_token_valid=false`（规划期未签发令牌）。词汇 SSoT：`internal/protocol/policy_vocab.go`。此前以工具名作 action、会话 ID 作 principal，策略模型无规则认识，deny-by-default 拒绝一切工具。
+#### L1 PolicyGate 请求形态（ADR-0098 决策五）
+与执行闸门 `sandbox.ExecEnvelope` 同问：`(principal=agent, action=tool_execute, resource=<工具名>)` + `trust_tier/risk_level/tool_source`（经 ToolExecutor.Lookup）+ `capability_token_valid=false`（规划期未签发令牌）。词汇 SSoT：`internal/protocol/policy_vocab.go`。
 
 #### L1 补充
-TaintGate + JSON Schema 双向校验 + Tool availability + PolicyGate（Cedar-Gate FORBID 优先）。
+TaintGate + JSON Schema 双向校验 + Tool availability + PolicyGate（Cedar-Gate FORBID 优先）。L1.1 资源冲突检测：规范 artifactID → 对无依赖边的并行写冲突节点自动注入隐式序列化边（EdgePrecondition），审计 `implicit_resource_edge`。
 
 #### L3 补充
-DeepSeek 语义判断输出 ALLOW/DENY；L3 为补充信号，不可推翻 L0/L1/L2 拒绝；LLM 不可用时 fail-open。
+LLMWatchdog（仅 RiskPrivileged，不设频次上限）输出 ALLOW/DENY；L3 为补充信号，不可推翻 L0/L1/L2 拒绝；DENY → S_VALIDATE_FAIL，ALLOW 或 LLM 不可用 → fail-open 推进 S_VALIDATE_OK。
 
-> ✅ L3 看门狗已增加 `RiskPrivileged` 过滤，仅对特权任务触发，消除多余延迟。
+**ActiveTaintLevel**：按 DAG 节点 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点拦截有效。
 
-**ActiveTaintLevel（session 级全局污点）**：已按 DAG 节点 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点拦截有效。
-
-
-L1.1 资源冲突检测: 规范 artifactID → 对无依赖边的并行写冲突节点自动注入隐式序列化边 (EdgePrecondition), 审计 `implicit_resource_edge`。
-
-**TaintGate** (L1 第一道 — `[Taint-Prop]`):
-- **Layer A 上下文传播**: 非系统源 `[Taint-Medium]`+ 数据 → LLM 产出继承上下文最高 `[TaintLevel]` (系统自生成 source∈{compaction, persona_refinement, consolidation, skill_compilation} 排除)
-- **Layer A.1 工具调用结构化降级**: 
-  - LLM 产出的 DAGNode tool_call 若通过 JSON Schema 校验 (InputSchema + OutputSchema 双向验证)，参数值可经 `[Taint-Sanitizer]` SanitizeBySchema 降一级。
-  - 字符串字段仅当 schema 定义 format/pattern/enum/const 内容约束时降级（裸 `{"type":"string"}` 不降级），详见 M11 §2.5 SanitizeBySchema。
-  - TaintMedium 工具调用 → TaintLow 参数，允许写入 workspace（解除 RAG（Retrieval-Augmented Generation，检索增强生成）→代码生成链路阻断，同时确保内容不受限的字符串字段不绕过 Taint 防线）。
-  - 降级仅在 tool_call schema 校验通过且字段满足内容约束时生效，自由文本 LLM 响应不受此规则影响。每次降级写 `taint_schema_downgrade` 审计事件，标注降级依据。
+**TaintGate**（L1 第一道 — `[Taint-Prop]`）:
+- **Layer A 上下文传播**: 非系统源 `[Taint-Medium]`+ 数据 → LLM 产出继承上下文最高 `[TaintLevel]`（系统自生成 source∈{compaction, persona_refinement, consolidation, skill_compilation} 排除）
+- **Layer A.1 工具调用结构化降级**: DAGNode tool_call 通过 JSON Schema 校验（InputSchema + OutputSchema 双向）后，参数值可经 `[Taint-Sanitizer]` SanitizeBySchema 降一级；字符串字段仅当 schema 定义 format/pattern/enum/const 内容约束时降级（裸 `{"type":"string"}` 不降级，见 M11 §2.5）；TaintMedium 工具调用 → TaintLow 参数，允许写 workspace；自由文本 LLM 响应不受此规则影响；每次降级写 `taint_schema_downgrade` 审计事件。
 - **Layer B 精确子串**: `taint_sensitive` 字段 vs active taint set
-- **输入反序列化**: TaintedJSONNode 递归树 (禁止 map[string]any, 防 Go JSON 剥离污点标记)
-- **TaintBlocked**: → HITL → TaintExemptionToken (field_hash+TTL)
-- **SchemaValidator**: Taint 扫描 → InputSchema 校验 → OutputSchema 一致性 → 幂等 ID 合法性（`internal/execute/dag/validator.go` 仅校验结构，字段级 Taint 降级 SanitizeBySchema 在 M7 工具调用层执行）
+- **输入反序列化**: TaintedJSONNode 递归树（禁止 map[string]any，防 Go JSON 剥离污点标记）
+- **TaintBlocked**: → HITL → TaintExemptionToken（field_hash+TTL）
+- **SchemaValidator**: Taint 扫描 → InputSchema → OutputSchema 一致性 → 幂等 ID 合法性（`internal/execute/dag/validator.go` 仅校验结构，字段级降级在 M7 工具调用层）
 
-PolicyGate: `[Cedar-Gate]` {principal, action, resource, context} → FORBID 优先
-
-HeuristicChecker (L2, RiskLevel>=RiskHigh): 批量检查(>100) / 受保护路径(`/etc/`,`/sys/`,`~/.ssh/`→拒绝) / 资源预估 vs Tier 阈值
-
-LLMWatchdog (L3, 仅 RiskPrivileged): 使用 DeepSeek 输出 ALLOW/DENY，不设频次上限（成本可控）。L3 为补充信号——L0/L1/L2 未放行的动作不可因 L3 通过而放行；L3 DENY 推进 S_VALIDATE_FAIL，ALLOW 或 LLM 不可用时 fail-open 推进 S_VALIDATE_OK。实现见 `internal/agent/`。
+PolicyGate: `[Cedar-Gate]` {principal, action, resource, context} → FORBID 优先。
 
 ---
 
@@ -204,98 +193,71 @@ LLMWatchdog (L3, 仅 RiskPrivileged): 使用 DeepSeek 输出 ALLOW/DENY，不设
 |------|-------------------|-------------------|
 | 节点粒度 | 工具调用 (Tool Call) | 子任务 (Sub-task) |
 | 边语义 | 工具间数据依赖 / 时序约束 | 任务间产出/验收依赖 |
-| 执行边界 | 单 Agent errgroup 并发 | 多 Agent `[Blackboard]` CAS（Compare-And-Swap，比较并交换） 认领 |
+| 执行边界 | 单 Agent errgroup 并发 | 多 Agent `[Blackboard]` CAS 认领 |
 | 生命周期 | Agent Kernel 内部，不发布 | M8 发布到 `[Blackboard]` |
 | 所有权 | M4 独占 | M8 编排 / M4 独立执行 |
-| Context 隔离 | 共享父 Agent PromptBuilder | 见下方 [Context 隔离补充](#context-隔离补充) |
+| Context 隔离 | 共享父 Agent PromptBuilder | 见 [Context 隔离补充](#context-隔离补充) |
 
 #### Context 隔离补充
-**每个子 Agent 持有独立 PromptBuilder 实例与 context window**，仅通过 Blackboard 结构化 result entry 交换（[Sub-agent-Isolation]）。
-
-> Sub-agent 物理隔离：M8 派发 Macro-DAG 节点时为每个执行 Agent 创建独立 `prompt.PromptBuilder` 实例（接口在 `internal/protocol/prompt_builder.go`，实现在 `internal/prompt/prompt_builder.go`），禁止共享父 Agent 内存中的 ImmutableCore/MutableSkill/TaintedData zone。子任务结果以结构化 schema（M8 5 原语之 Result）写入 Blackboard，父 Agent 通过订阅 Blackboard 事件消费，避免上下文污染与 token 膨胀（见 00-Global-Dictionary §9-bis [Sub-agent-Isolation]）。
+**每个子 Agent 持有独立 PromptBuilder 实例与 context window**，仅通过 Blackboard 结构化 result entry 交换（[Sub-agent-Isolation]）。M8 派发 Macro-DAG 节点时为每个执行 Agent 创建独立 `prompt.PromptBuilder`（接口 `internal/protocol/prompt_builder.go`，实现 `internal/prompt/prompt_builder.go`），禁止共享父 Agent 的 ImmutableCore/MutableSkill/TaintedData zone；父 Agent 订阅 Blackboard 事件消费子结果（见 00-Global-Dictionary §9-bis）。
 
 ### 4.2 数据模型
 
-DAGNode/DAGEdge/EdgePolarity/RetryPolicy/Compensation 类型定义见 `internal/agent/`（旧版 `internal/agent/` 顶层文件已标记 Deprecated）。
+DAGNode/DAGEdge/EdgePolarity/RetryPolicy/Compensation 类型见 `pkg/types/`（`DAGModel` 等）与 `internal/execute/dag/`。
 
-**DAGModel 两种产出来源，收敛为同一表示**：S_PLAN 阶段 LLM 产出工具调用有两条输入形态——① 文本 JSON DSL（LLM 直接输出符合 plan_dag Schema 的 JSON 文本）；② Provider 原生 `tool_calls` 结构化字段（`types.WithTools` 随工具目录非空自动附加，`doStreamInfer` 消费 adapter 侧 `StreamToolCall` 流式事件累积为 `ProviderResponse.ToolCalls`，经 `toolCallsToDAGJSON` 转换为等价的 DAGModel JSON）。两条输入形态在此收敛为同一个 DAGModel，下游 S_VALIDATE 四层校验与 DAG Executor 不感知来源差异，不存在第二条并行执行路径（2026-07-14，见 §12 Bug 记录 + `internal/agent/agent_execute_effect.go`）。
+**DAGModel 两种来源收敛为同一表示**：S_PLAN 的 LLM 产出有两条输入——① 文本 JSON DSL（符合 plan_dag Schema）；② Provider 原生 `tool_calls`（`types.WithTools` 随工具目录非空自动附加，`doStreamInfer` 累积 `StreamToolCall` 为 `ProviderResponse.ToolCalls`，经 `toolCallsToDAGJSON` 转为等价 DAGModel JSON，`internal/agent/agent_execute_effect.go`）。下游 S_VALIDATE 与 DAG Executor 不感知来源，无第二条执行路径。
 
 ### 4.3 DAG Executor
 
-DAGExecutor 实现见 `internal/agent/`（旧版 `internal/agent/` 顶层文件已标记 Deprecated）。执行流程:
-0. 调用 M8 Blackboard.BeginExecution(taskID, agentID): CAS Claimed→Executing（首次工具调用前的状态转移，闭合 Pending→Claimed→Executing→Done/Failed 完整生命周期）
-1. findReadyNodes: DependsOn ⊆ completedSet → 就绪，同批字典序优先
-2. 副作用分类: read_only/pure → 并发; write_local/write_network → 必须声明 CompensationAction
-
-> **2026-09-20 复核**：废弃 Micro-DAG 中 "write_* 节点必须声明 CompensationAction" 条款。
-> 理由：(1) inv_M4_06（不变量）禁止不可逆操作（write_network/privileged）自动回滚，必须 HITL；
-> (2) plan_dag schema 和 plan prompt 不产出 compensation 字段，LLM 不生成补偿声明；
-> (3) 强制校验会导致全系统所有含写操作的计划 100% 无法通过 S_VALIDATE。
-> 
-> 新规则（分级处理）：
-> - write_local：回滚由 VFS 快照 + Git revert 承担（确定性、不依赖 LLM 声明）
-> - write_network / privileged：由 S_VALIDATE BlindZoneHITL 拦截（inv_M4_06）
-> - CompensationAction 仅保留给 Macro-DAG（跨 Agent 编排的人工预定义静态补偿步骤）
-3. 启动 LeaseHeartbeat goroutine: 每 15s(±5s jitter) 续期，防 M8 Reaper 误判超时
-4. errgroup 并发执行，sem channel 限制并发度 (`spec/state.yaml §m4_kernel.max_concurrent_nodes`)
+实现：`internal/execute/dag/`。执行流程:
+0. M8 `Blackboard.BeginExecution(taskID, agentID)`：CAS Claimed→Executing（闭合 Pending→Claimed→Executing→Done/Failed 生命周期）
+1. findReadyNodes：DependsOn ⊆ completedSet → 就绪，同批字典序优先
+2. 副作用分类：read_only/pure → 并发；write_* 的回滚规则见下
+3. LeaseHeartbeat goroutine：每 15s(±5s jitter) 续期，防 M8 Reaper 误判超时
+4. errgroup 并发，sem channel 限并发度（`spec/state.yaml §m4_kernel.max_concurrent_nodes`）
 5. 任意失败 → 已完成并行节点逆序 Undo 补偿
-6. 循环至全部完成 → 停止 Heartbeat
+6. 全部完成 → 停止 Heartbeat
+
+**回滚分级（2026-09-20 裁决，废止"write_* 节点必须声明 CompensationAction"）**：plan_dag schema 与 plan prompt 不产出 compensation 字段，强制校验会使含写操作的计划 100% 无法通过 S_VALIDATE，且与 inv_M4_06 冲突。
+- write_local：回滚由 VFS 快照 + Git revert 承担（确定性、不依赖 LLM 声明）
+- write_network / privileged：由 S_VALIDATE BlindZoneHITL 拦截（inv_M4_06）
+- CompensationAction 仅保留给 Macro-DAG（跨 Agent 编排的人工预定义静态补偿步骤）
 
 ### 4.4 Dynamic DAG Replanning
 
-节点输出 `[SurpriseIndex]` >0.7 → 未执行下游子图局部重规划。已成功节点保留(防双重副作用)。若必须覆盖已执行节点: 先 Saga Compensation 成功才加入 replan。重规划在 S_EXECUTE 内部, 不跨状态机边界。
+节点输出 `[SurpriseIndex]` >0.7 → 未执行下游子图局部重规划。已成功节点保留（防双重副作用）；必须覆盖已执行节点时，先 Saga Compensation 成功才加入 replan。重规划在 S_EXECUTE 内部，不跨状态机边界。
 
 ### 4.5 StepScorer + Adaptive Max-Steps
 
-实现见 `internal/agent/`（StepScorer，同包调用零 import 开销）。
+实现：`internal/agent/step_scorer.go`、`internal/agent/step_scorer_prm.go`。
 
-- **Tier 0 (纯静态启发式)**: 权重 toolSuccess=0.4, schemaCheck=0.3, latency=0.2, tokenEfficiency=0.1。Score 从 1.0 起点按四项扣分，latency/token 惩罚 cap 封顶。
-- **Tier 1+ (启发式 + 1.5B 挂载 PRM（Process Reward Model，过程奖励模型） 融合)**: M1 LocalProvider 加载极小 PRM，对中间步语义打分 (+1,0,-1)，融合权重 0.6。PRM 超时 >100ms 或 OOM（Out of Memory，内存溢出） → 安全降级纯静态。
+- **Tier 0 纯静态启发式**: 权重 toolSuccess=0.4, schemaCheck=0.3, latency=0.2, tokenEfficiency=0.1；Score 从 1.0 起按四项扣分，latency/token 惩罚封顶。
+- **Tier 1+ 启发式 + PRM 融合**：复用 `Agent.provider`——仅当其实现 `protocol.LocalProvider` 且 `HardwareTier() >= Tier1`（`newStepScorer()` 构造时判定）才挂载 `stepScorer.prm`，否则等价 Tier 0。经 GBNF 约束（`root ::= "+1" | "0" | "-1"`）三态离散打分；融合 `(1-0.6)*static + 0.6*prmNormalized`（+1→1.0/0→0.5/-1→0.0）；100ms 硬超时（独立于调用方 ctx）；FFI 错误（含 Rust `catch_unwind` 的 OOM/panic）与非法输出一律降级为纯静态分，不抛 error。不新增独立 PRM 模型常驻通道（单槽位 FFI 协议限制）。调用点 `internal/agent/agent_execute_dag.go`（工具调用后打分）；测试 `internal/agent/step_scorer_prm_test.go`。
 
-**当前实现状态：已实现（2026-07-03）**。实现见 `internal/agent/step_scorer_prm.go`。
+**Adaptive Max-Steps**:
+- `StateContext` 持有 `StepsUsed / MaxStepsLimit`；`AgentConfig.MaxSteps` 首次 `Run()` 写入 `MaxStepsLimit`（0=无上限，不推荐生产）。
+- `Agent.Run()` 每轮 trigger 前计步：`StepsUsed > MaxStepsLimit` → FSM 熔断 `S_FAILED`，错误码 `MAX_STEPS_EXCEEDED`。
+- 每次工具调用后 `adjustMaxSteps(current, score)`：score < 0.5 → 收紧 10%；≥ 0.5 → 不变。`StateContext.InitialMaxStepsLimit` 记录初始值，每次 S_PLAN 生成新 DAG 时重置，惩罚仅在当前 DAG 周期内生效，不跨任务累积。
 
-与文档描述的差异点（系统级复用而非另起炉灶，理由见文件头注释）：
-- 不新增独立的 PRM 模型加载/常驻通道——`rust/substrate/src/llama_infer`（P3-1）单槽位覆盖式设计下同时常驻两个模型需要更大的 FFI 协议改造，超出本次范围。
-- 转而复用 `Agent.provider`：若其恰好实现 `protocol.LocalProvider`（`newStepScorer()` 在 `Agent` 构造时做类型断言 + `probe.GlobalFeatureGate().HardwareTier() >= Tier1` 判定，两者皆满足才挂载 `stepScorer.prm`，否则等价于纯静态 Tier0 路径）。
-- 并复用 `LocalAdapter.Infer()` 已支持的 GBNF（GGML BNF，GGML 巴科斯范式） grammar 约束（`root ::= "+1" | "0" | "-1"`）做三态离散打分，避免自由生成拖慢单步预算。
-- `scoreWithPRM()` 融合公式：`(1-0.6)*staticScore + 0.6*prmNormalized`（+1→1.0/0→0.5/-1→0.0），100ms 硬超时（`context.WithTimeout`，独立于调用方 ctx）。
-- FFI 错误（含 Rust 侧 `catch_unwind` 转换的 OOM/panic）与非法输出均安全降级为纯静态分，不向上抛出 error。
-- 调用点见 `internal/agent/agent_execute_effect.go`（工具调用后打分处）。单元测试见 `internal/agent/step_scorer_prm_test.go`（覆盖融合方向、超时降级、错误降级、非法输出降级、Tier0/远程 Provider 不启用）。
-
-**Adaptive Max-Steps 闭环**:
-- `StateContext` 持有 `StepsUsed / MaxStepsLimit`；`AgentConfig.MaxSteps` 在首次 `Run()` 时写入 `MaxStepsLimit`（0=无上限，不推荐生产）。
-- `Agent.Run()` 每轮 trigger 前计步：`StepsUsed > MaxStepsLimit` → FSM 熔断至 `S_FAILED`，错误码 `MAX_STEPS_EXCEEDED`。
-- 每次工具调用后调用 `adjustMaxSteps(current, score)`：score < 0.5 → 收紧 10%（防低质量循环），score ≥ 0.5 → 保持不变（防预算膨胀）。**✅ 已修复**：`StateContext.InitialMaxStepsLimit` 记录初始值，每次 S_PLAN 生成新 DAG 时重置 `MaxStepsLimit`，惩罚仅在当前 DAG 执行周期内生效，不跨任务累积。
-
-**Best-of-N 与 Replanning 阻断**:
-双路径输出为 Best-of-N 搜索提供置信度排序，低分分支标记为 MEMF（Memory of Errors and Mistakes Framework，错误记忆框架） 失败候选池，累积低于警戒线立即触发重规划或 Saga 补偿。
+**Best-of-N 与 Replanning 阻断**：低分分支标记为 MEMF 失败候选池，累积低于警戒线立即触发重规划或 Saga 补偿。
 
 ### 4.6 ProcessRewardModel — S_PLAN 候选 DAG 选优
 
-ProcessRewardModel（PRM）集成于 Agent Kernel（`internal/agent/`），在 **S_PLAN 阶段**对多个候选 DAG 方案并发打分，选出最优规划后进入执行。与 §4.5 StepScorer 职责不同：StepScorer 对执行中单步实时评分，PRM 面向规划阶段的完整候选集。
+PRM 在 **S_PLAN** 对多个候选 DAG 并发打分选优；与 §4.5 StepScorer（执行中单步评分）职责不同。
 
-**触发条件**：任务复杂度超过可配置阈值（默认 0.5）且 PRM 已启用；低于阈值的简单任务直接跳过，零额外 token 消耗。复杂度由 S_PERCEIVE 阶段写入任务上下文。
+**实现状态（2026-10-12 按代码订正，推翻 2026-07-28"FSM 未接线"裁决）**：已接线但默认关闭。`cmd/polaris/boot_agent.go` 在 `m4_kernel.prm.enabled`（默认 false，`spec/state.yaml §m4_kernel`）为真时 `InjectPRM(NewDefaultPRM(...))`；多候选分支位于 LLM Effect 执行内（`internal/agent/agent_execute_effect.go`，非 FSM 转移）：`ShouldActivate(Complexity)`（复杂度 ≥ `prm.complexity_gate`）后并发生成 `prm.max_candidates` 份候选（各自过 schema 校验，失败者作废），`DefaultPRM.SelectBest`（`internal/agent/prm.go`）用 budget-tier LLM 打 0–1 分取最高；全部低于 `prm.min_threshold` 或出错 → 取第一个候选；全部候选失败 → 降级单次 Infer。候选 token 计入 `TokensUsed`。默认关闭的原因：每次 S_PLAN 的 LLM 调用量 N+N，与 Tier-0 预算纪律（`ARCHITECTURE.md §1`）冲突；默认开启须先有 Eval 证据（成功率增益 > token 成本增幅）并新立 ADR。`SelectBest` 亦被 ADR-0048 PRM 训练样本采集复用。
 
-**多候选并发选优流程 [未接线]**：设计为 S_PLAN 阶段并发生成多个候选 DAG（默认 3 个），再并发调用 budget-tier LLM 对每个候选打分（0–1），选出最高分方案推进至 S_VALIDATE；若全部候选分数低于最低可接受阈值（默认 0.4），fallback 取第一个候选，保证规划不丢失。
-
-> **实现状态（2026-07-28 裁决）**：`internal/agent/prm.go` 的 `DefaultPRM.SelectBest` 打分算法已完整实现并被 ADR-0048 的 PRM 训练样本采集复用，但 **FSM 主流程未接线**——`transitions.go` 的 S_PLAN 转移（`promptPlan`/`parsePlanOnSuccess`）仍单次调用 LLM 只解出一份 `DAGModel`，从不生成 N 个候选、从不调用 `SelectBest`。
-> 维持未接线为**有意决策**而非缺陷：多候选生成使每次 S_PLAN 的 LLM 调用量变为 N+N（生成 N 份 + 打分 N 次），与 Tier-0 单机预算纪律（`ARCHITECTURE.md §1`）直接冲突，且当前无 ADR 授权该开销。若未来要接线，须先有量化证据（Eval Harness 上多候选选优相对单候选的成功率增益 > token 成本增幅），并新立 ADR。
-
-**关键配置**（均可由 M8 Orchestrator 在运行时注入覆盖）：默认关闭须显式开启；打分模型使用 budget-tier LLM；候选数默认 3（研究数据显示 3 候选 ROI 最优）；复杂度门限默认 0.5。
-
-**DAG 执行结果聚合**：S_EXECUTE 完成后统一收集所有节点输出。单节点直接取 output；多节点序列化为结构化结果集，确保 S_REFLECT 阶段可访问完整 DAG 执行上下文。
+**DAG 执行结果聚合**：S_EXECUTE 完成后统一收集节点输出；单节点取 output，多节点序列化为结构化结果集，供 S_REFLECT 访问完整上下文。
 
 ### 4.7 spawn_planner — 后台子规划器
 
-S_PLAN 阶段若任务复杂度触发子规划策略，异步启动规划器池（`internal/swarm/planner/`）。规划器池内置多 Worker 策略引擎，通过内部通道将子计划异步回传给父 Agent。
-
-> **归属澄清**：`internal/swarm/planner/`（`TaskDecomposer` + `AgentPool`）在架构上属于 **M08 Swarm 层**的 Macro-DAG 分解能力，不是 M04 Agent Kernel 的内部组件——`internal/agent` 不 import 该包，单 Agent FSM 的 S_PLAN 也不直接触发该 goroutine 池。本节列于 M04 仅为说明"复杂任务如何从单 Agent 规划溢出到 Swarm 层"这条链路；组件本体设计见 `M08-Multi-Agent-Orchestrator.md §5`。
+`internal/swarm/planner/`（`TaskDecomposer` + `AgentPool`）属 **M08 Swarm 层**的 Macro-DAG 分解能力，不是 M04 内部组件——`internal/agent` 不 import 该包，单 Agent FSM 的 S_PLAN 不直接触发该池。本节仅标示复杂任务从单 Agent 规划溢出到 Swarm 的链路；设计见 `M08-Multi-Agent-Orchestrator.md §5`。
 
 ---
 
 ## 5. System 1/2 双轨路由
 
-`[HE-Rule-5]` System 1 物理边界: 零 LLM 调用, 100% 本地 Python/Go 技能（ContainerSandbox）+ SurrealDB-Core KV 缓存。未命中 → 无条件升级 System 1.5。FastPath 跳过 LLM 但仍执行确定性记忆写入（Episodic + Outbox），不违反零 LLM 约束。
+`[HE-Rule-5]` System 1 物理边界：零 LLM 调用，100% 本地 Python/Go 技能（ContainerSandbox）+ SurrealDB-Core KV 缓存；未命中 → 无条件升级 System 1.5。FastPath 跳过 LLM 但仍执行确定性记忆写入（Episodic + Outbox）。
 
 | 路径 | `[SurpriseIndex]` | 延迟 | 模型来源 |
 |------|-------------------|------|---------|
@@ -303,38 +265,29 @@ S_PLAN 阶段若任务复杂度触发子规划策略，异步启动规划器池�
 | System 1.5 | 0.3-0.6 | 毫秒-秒 | M1 Budget Pool |
 | System 2 | ≥0.6 | 秒级 | M1 Reasoning Pool |
 
-**`SelectPlanTier` 注入**（与 System 路由正交，ADR-0102 决策六）: M4 `transitions_respond.go` `planEffect` 在 LLM 调用前调用 `SelectPlanTier(sCtx.Escalation, TaskModel.Complexity, SurpriseIndex)` 得到规划的模型池与 `[ThinkingMode]`，分别经 `types.WithModelPool` / `protocol.WithThinkingMode` 传入。`sCtx.Escalation` 只由能力类失败累计（`fsm.RecordFailure`：S_VALIDATE 按层 `ClassifyValidationLayer`、执行按错误码 `executionFailureKind`、规划不可用/自评超纲 `tryEscalatePlan`），安全拒绝/瞬时故障/观察—再规划不升级。阶梯与 Provider 映射见 M1 §5.2-bis。
+**`SelectPlanTier` 注入**（与 System 路由正交）：`internal/agent/fsm/transitions_respond.go` 的 `planEffect` 在 LLM 调用前调 `SelectPlanTier(sCtx.Escalation, TaskModel.Complexity, SurpriseIndex)` 得规划模型池与 `[ThinkingMode]`，经 `types.WithModelPool` / `protocol.WithThinkingMode` 传入。`sCtx.Escalation` 只由能力类失败累计（`fsm.RecordFailure`：S_VALIDATE 按层 `ClassifyValidationLayer`、执行按错误码 `executionFailureKind`、`tryEscalatePlan`）。阶梯与 Provider 映射见 M1 §5.2-bis。
 
-**SurpriseIndex 计算来源（ADR-0025（Architecture Decision Record，架构决策记录） BUG-D）**：`populateSessionContext` 优先从注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，三分量：Jaccard + MEMF + Markov）读取；未注入时退回 `ComputeBasic`（仅 Jaccard）。计算结果同步写入 `metrics.GlobalSurpriseIndex`，供 `SelectPlanTier` 消费。`SurpriseReader` 为 consumer-side 接口，防 L1→L2 包循环。`SurpriseCalculator` 为**进程单例**（cmd/polaris 构造一次注入全部 Agent，关停时 Close；2026-09-29 订正，ADR-0104 决策七：原每会话 Agent 各建一个实例，泄漏 worker goroutine 且 Markov 矩阵随 Agent 丢弃）；结果按 taskID 分桶（有界 LRU，上限 1024），启动时 Markov 矩阵由 `session_trajectory` 最近 500 个会话的工具序列 warm-start。
+**SurpriseIndex 来源（ADR-0025 BUG-D）**：`populateSessionContext` 优先读注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，Jaccard + MEMF + Markov）；未注入退回 `ComputeBasic`（仅 Jaccard）；结果写入 `metrics.GlobalSurpriseIndex`。`SurpriseReader` 为 consumer-side 接口（防 L1→L2 包循环）。`SurpriseCalculator` 为**进程单例**（cmd/polaris 构造一次注入全部 Agent，关停时 Close；ADR-0104 决策七），结果按 taskID 分桶（有界 LRU 1024），启动时 Markov 矩阵由 `session_trajectory` 最近 500 个会话工具序列 warm-start。
 
 RouteReasoning:
-0. si = `Agent.surpriseCalc.CurrentSurprise(taskID)`（已注入时）或 `metrics.GlobalSurpriseIndex().ComputeBasic(nil, toolSeq)`（退化路径）→ 两者均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath；正式 FastPath 仅在 `0 < si < 0.3` 时激活。**
-1. `0 < si < 0.3` → FastPath：合成 S_PERCEIVE 结果跳过 LLM，S_PLAN 阶段同样旁路 LLM（保留已有 DAGModel 或走空执行路径）。skillCache 命中直接执行 Wasm; 不兼容 fall through
-2. 未命中或 si>=0.3 → 调用 `M6.SkillSelector.SelectTopK(intent, K=5)` 选取候选工具/技能描述（**Tool Selection > Tool Design**：避免把全部工具列表塞给 LLM 导致选择崩溃）→ buildMessages → `providerRouter.Route`
-> **2026-09-20 复核**：SkillSelector.SelectTopK 已被 M13-bis CompositeCatalog 懒加载 + search_tools
-> 元工具替代（见 M13-bis §4）。当工具总数超过 LazyLoadThreshold 时，LLM 主动调用 search_tools
-> 进行语义检索与动态激活，覆盖 builtin + MCP + skill 全部工具源。System-1 意图匹配由
-> SkillIntentMatcher 独立承担（boot_agent.go）。原 SkillSelector 接口标注废弃。
-3. buildMessages: ImmutableCore + GoalDescription + DAG 上下文 + SkillSelector 选取的 top-K 工具描述
+0. si = `Agent.surpriseCalc.CurrentSurprise(taskID)` 或退化路径 `ComputeBasic(nil, toolSeq)`；均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath。**
+1. `0 < si < 0.3` → FastPath：合成 S_PERCEIVE 结果跳过 LLM，S_PLAN 同样旁路；skillCache 命中直接执行 Wasm，不兼容 fall through。
+2. 未命中或 si ≥ 0.3 → 走 Plan（`providerRouter.Route`）。工具选择：原 `M6.SkillSelector.SelectTopK` 已废弃，由 M13-bis CompositeCatalog 懒加载 + `search_tools` 元工具取代（工具总数超 LazyLoadThreshold 时 LLM 主动检索并动态激活，覆盖 builtin + MCP + skill，见 M13-bis §4）；System 1 意图匹配由 `SkillIntentMatcher` 独立承担（`cmd/polaris/boot_agent.go`）。**Tool Selection > Tool Design**：禁止把全部工具列表塞给 LLM。
+3. buildMessages：见 §1.1 五层前缀账本。
 
-**AgentPool（ADR-0025 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）而非单个 `AgentController`。每个 sessionID 对应独立 `Agent` 实例，容量由 `TierParams.MaxConcurrentAgents` 限制（Tier-0: 4）；超容量时 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。Idle 超过 10 分钟的 session 由 `Pool.GC()` 低频回收。每个新建 Agent 实例由 `Pool.Acquire` 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（消费其内部 intent channel），语义与 Supervisor 对单例 `agent-0` 的启动方式一致；`GC()` 回收 idle session 时对应调用 `Shutdown()` 停止该循环（详见 ADR-0025 Addendum，2026-07-12 复核修复：此前该循环从未启动，per-session 会话 FSM 实际不会推进状态）。
+**AgentPool（ADR-0025 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）；每个 sessionID 一个独立 `Agent`，容量由 `TierParams.MaxConcurrentAgents` 限制；超容量 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。idle 超 10 分钟由 `Pool.GC()` 回收（调用 `Shutdown()` 停循环）。`Pool.Acquire` 对新建 Agent 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（实现 `internal/agent/pool.go`）。
 
 ---
 
 ## 6. World Model
 
-L1 快速路径：SurpriseIndex < 0.3 时旁路 LLM（在 `agent_execute_effect.go` FastPath 分支执行）。L2：LLM 执行后，SurpriseIndex 更新并影响下一轮路由。StatePredictor / Isotonic Regression 已废弃，路由完全由 SurpriseIndex 主导。
+L1 快速路径：SurpriseIndex < 0.3 旁路 LLM（`agent_execute_effect.go` FastPath 分支）。L2：LLM 执行后 SurpriseIndex 更新并影响下一轮路由。StatePredictor / Isotonic Regression 已废弃，路由完全由 SurpriseIndex 主导。
 
-**知识空缺感知 (Knowledge Gap Awareness)**:
-LLM 推理前调用 `WorldModel.AssessGrounding` 评估上下文充分性。上下文不足时将警告注入 prompt 末尾（`[System Warning: Knowledge gap detected. Consider further retrieval...]`），引导 Agent 优先检索，不直接拦截执行。
-
-WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/prompt/` 的 `PromptBuilder` 统一执行（含四 Zone 布局 + TaintData Spotlighting 门控）。
+**知识空缺感知**：LLM 推理前调 `WorldModel.AssessGrounding` 评估上下文充分性；不足时将警告（GroundingGap，L4）注入 prompt 末尾，引导优先检索，不直接拦截。WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/prompt/` 的 `PromptBuilder` 统一执行（四 Zone + TaintData Spotlighting 门控）。
 
 ---
 
 ## 7. 推理预算管理
-
-四层预算:
 
 | 层级 | 粒度 | 机制 | 默认值 |
 |------|------|------|--------|
@@ -345,118 +298,92 @@ WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/prompt/` 
 
 三模式: `fixed` (MaxReasoningSteps=5, MaxThinkingTokens=4096) / `adaptive` (`min(16384, 4096×(1+[SurpriseIndex]×3))`, 1000+ 样本后) / `batch` (32K, 夜间)
 
-> **BudgetManager**（`budget.go`）：
-> - **入口**：BudgetManager 是唯一预算判断入口（Task 11）。实现 `fsm.BudgetController` 接口，通过 `SetBudget()` 注入 `StateContext.Budget`。
-> - **记账**：BudgetManager 无内存计数，唯一账本为 `llm_calls` 表（ADR-0104 决策四）：`ConsumeTokens(actualTokens)` 的入参仅用于 `trace.RecordBudgetTokens` 埋点，会话用量判定读 `LLMSpendLedger.SessionTokens(sessionID)`（可能滞后一次调用，软熔断可接受）；`MonthlySpendUSD()` 读当月（UTC）真实 `cost_usd` 合计，与 `MonthlyLimitUSD()` 一同向 Cedar `budget_cap` 填充 `monthly_spend_usd`/`monthly_budget_usd`。账本读失败 fail-open（Warn 后放行）。内联 `StateContext.TokenBudget/TokensUsed` 逻辑保留作向后兼容，`Budget != nil` 时双轨并行。
-> - **注入与上限**：`buildAgent`（`cmd/polaris/boot_agent.go`）为每个 Agent（agent-0 与池化会话 Agent）注入绑定自身 sessionID 的 BudgetManager；月度上限每次经 `BudgetRepository.GetBudget()` 读取（30s TTL 缓存），`HandleSetBudget` 只写库，无需向 Agent 推送（已删 `SetMonthlyBudgetUSD`）。
-> - **闭环**：写路径（`HandleSetBudget` 写 kv_store）与运行时读路径（TTL 缓存）同源，与 `MonthlySpendUSD()` 共同构成完整闭环。
+**BudgetManager**（`internal/agent/budget.go`，实现 `fsm.BudgetController`，经 `SetBudget()` 注入 `StateContext.Budget`）是唯一预算判断入口：
+- **记账（ADR-0104 决策四）**：无内存计数，唯一账本为 `llm_calls` 表。`ConsumeTokens` 入参仅用于 `trace.RecordBudgetTokens` 埋点；会话用量读 `LLMSpendLedger.SessionTokens(sessionID)`（可滞后一次调用，软熔断可接受）；`MonthlySpendUSD()` 读当月（UTC）`cost_usd` 合计，与 `MonthlyLimitUSD()` 一同向 Cedar `budget_cap` 填 `monthly_spend_usd`/`monthly_budget_usd`。账本读失败 fail-open（Warn 放行）。内联 `StateContext.TokenBudget/TokensUsed` 保留作向后兼容，`Budget != nil` 时双轨并行。
+- **注入与上限**：`buildAgent`（`cmd/polaris/boot_agent.go`）为每个 Agent 注入绑定自身 sessionID 的 BudgetManager；月度上限每次经 `BudgetRepository.GetBudget()` 读取（30s TTL 缓存），`HandleSetBudget` 只写库，无需推送。
 
 ### 7.0 任务级预算自适应截断
 
-任务级 Token 预算在每次 DAG 节点循环入口处执行三级检测，实现见 `internal/agent/`：
+每次 DAG 节点循环入口三级检测（`internal/agent/`）:
 
 | 阈值 | 条件 | 动作 |
 |------|------|------|
-| 50%（警告） | `TokensUsed * 100 / TokenBudget >= 50` | 首次写 `BudgetWarned=true`，记录 `slog.Info`；后续循环不重复 |
-| 75%（压迫） | `TokensUsed * 100 / TokenBudget >= 75` | 首次写 `BudgetPressure=true`，记录 `slog.Warn`；触发 S_PLAN `[BUDGET_CONSTRAINT]` 指令注入 |
+| 50%（警告） | `TokensUsed * 100 / TokenBudget >= 50` | 首次写 `BudgetWarned=true`，`slog.Info`；不重复 |
+| 75%（压迫） | `TokensUsed * 100 / TokenBudget >= 75` | 首次写 `BudgetPressure=true`，`slog.Warn`；触发 S_PLAN `[BUDGET_CONSTRAINT]` 注入 |
 | 100%（硬熔断） | `TokensUsed > TokenBudget` | FSM 直接转 `S_FAILED`，错误码 `INFERENCE_OOM` |
 
-**BudgetPressure → [BUDGET_CONSTRAINT] 注入**（`promptPlan()`，`state_machine.go`）：
-- `BudgetPressure=true` 时，在 S_PLAN Prompt 末尾追加系统指令：
-  `[BUDGET_CONSTRAINT] Token budget > 75%. Generate a MINIMAL DAG: max 3 nodes, only strictly necessary tool calls, no exploratory steps. Remaining: N tokens.`
-- 该指令来源标记 `TaintNone`，经 `SanitizeToSafe` 后注入 `WriteInstruction` slot（符合 Taint 类型约束）。
-- `BudgetWarned`/`BudgetPressure` 字段定义在 `StateContext`；重放时从 EventLog 恢复，保证 `[inv_M4_03]` promptFn 确定性。
+**BudgetPressure → [BUDGET_CONSTRAINT]**（`promptPlan()`，`internal/agent/fsm/state_machine.go`）：`BudgetPressure=true` 时在 S_PLAN Prompt 追加系统指令 `[BUDGET_CONSTRAINT] Token budget > 75%. Generate a MINIMAL DAG: max 3 nodes, only strictly necessary tool calls, no exploratory steps. Remaining: N tokens.`；来源 `TaintNone`，经 `SanitizeToSafe` 注入 `WriteInstruction` slot。`BudgetWarned/BudgetPressure` 在重放时从 EventLog 恢复，保证 inv_M4_03。
 
-M4 不重复实现 TokenBurnRate 检测逻辑，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate 的 CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 将速率直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是触发 KillSwitch 阶段变迁的**唯一路径**。M4 在每次 LLMFillEffect 前读取 `observability.GlobalKillswitchStage`（原子 int32）并响应（`agent_execute_effect.go §1.5`）:
+**KillSwitch 联动**：M4 不重复实现 TokenBurnRate 检测，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是阶段变迁的**唯一路径**。M4 每次 LLMFillEffect 前读 `observability.GlobalKillswitchStage`（原子 int32）并响应（`agent_execute_effect.go`）:
+- **Throttle**: `sCtx.MaxStepsLimit` 收紧至 3，`sCtx.ThrottleNoNetwork = true`；DAGExecutor `toolExecFn` 对含 `SideNetworkCall` 副作用的工具返回 `ErrForbidden`
+- **Pause**: 返回 CodeInternal 错误，挂起当前 LLM 调用，等待 M11 恢复或 ESCALATE
+- **Fullstop**: 状态机推进 S_FAILED，拒绝新 Infer 调用
 
-- **Throttle 阶段**（已实现）: `sCtx.MaxStepsLimit` 收紧至 3，`sCtx.ThrottleNoNetwork = true`；DAGExecutor `toolExecFn` 对含 `SideNetworkCall` 副作用的工具返回 `ErrForbidden`
-- **Pause 阶段**（已实现）: 返回 CodeInternal 错误，挂起当前 LLM 调用，等待 M11 恢复或 ESCALATE
-- **Fullstop 阶段**（已实现）: 状态机推进 S_FAILED，拒绝新 Infer 调用
+跨模块规则见 `00-Global-Dictionary.md` [XR-01]。
 
-跨模块交互规则见 `00-Global-Dictionary.md` [XR-01]。
-
-ContextWindowManager（热路径上下文管理，与 M5 SessionCompressor 冷路径协同）:
-- maxTokens=90000
-- >70% → salience 排序，底 30% 候选交由 M5 SessionCompressor 压缩（M5 §11，LLM 锚定迭代总结）
+**ContextWindowManager**（热路径上下文管理，默认 maxTokens=90000，`InjectContextWindowManager` 可覆盖；与 M5 SessionCompressor 冷路径协同，实现 `internal/agent/agent_context_compaction.go`）:
+- >70% → salience 排序，底 30% 候选交 M5 SessionCompressor 压缩（M5 §11）
 - >90% → 语义结构感知逐出（以完整 DAGNode/tool_result/Episodic Event 为单位）
-- 仍超限 → 触发 M5 Consolidation 全量压缩（M5 §9，跨 Session 语义压缩）
+- 仍超限 → 触发 M5 Consolidation 全量压缩（M5 §9）
 
-M4 仅持有热路径上下文窗口管理与触发判断；具体压缩算法、锚定策略、cold path 实现委托给 M5（Compaction as First-Class，单一权威源）。
+M4 仅持有热路径窗口管理与触发判断；压缩算法、锚定策略、cold path 委托 M5（Compaction as First-Class，单一权威源）。
 
 ### 7.1 `[ReasoningState]` 跨轮持久化
 
-`StateContext.LastReasoningContent` 持有本轮 LLM 返回的 `reasoning_content`（由 Adapter 从响应中提取写入 `ProviderResponse.ReasoningContent`，M4 在 `agent_execute_effect.go` 存入 `sCtx`）。下次 LLM 调用构建 messages 时，将其作为 assistant 消息的 `reasoning_content` 字段回传，满足 DeepSeek V4 Pro 多轮工具调用的 API 约束。
-
-跨 session / 跨任务不继承。`FeatureReasoningStateCarry`（Tier 1+ 启用）扩展此行为至 episodic_events 落盘持久化（msgpack + AES-256-GCM，SessionPIIVault.SecureZero 同步清零）。
+`StateContext.LastReasoningContent` 持有本轮 `ProviderResponse.ReasoningContent`（Adapter 提取，`agent_execute_effect.go` 存入 `sCtx`）；下次构建 messages 时作为 assistant 消息的 `reasoning_content` 回传，满足 DeepSeek 多轮工具调用 API 约束。同回合 tool_call 往返有效；跨 session/跨任务不继承，会话历史不带该字段（§1.1 对话历史）。`FeatureReasoningStateCarry`（Tier 1+）扩展至 episodic_events 落盘持久化（msgpack + AES-256-GCM，SessionPIIVault.SecureZero 同步清零）。
 
 ---
 
 ## 8. Crash Recovery
 
-满足 [HE-Rule-6]（State-in-DB（Database，数据库））——崩溃恢复从 M2 EventLog 回放，不依赖独立的 FSM checkpoint 文件。状态持久化时机：`runFSM` 在每次状态转移完成后显式触发写入（见 `internal/agent/fsm/transitions.go`），Transition.Effects 回调本身不负责持久化。SurrealDB-Core KV 的 goroutine checkpoint（§8.1）仅用于空闲时释放 goroutine 栈以节省内存，非崩溃恢复路径。
+满足 [HE-Rule-6]（State-in-DB）：崩溃恢复从 M2 EventLog / 轨迹表回放，不依赖独立 FSM checkpoint 文件。状态持久化由 `runFSM` 在每次转移完成后显式触发（`internal/agent/fsm/transitions.go`），Transition.Effects 回调本身不持久化。Suspend-on-Idle 的 KV checkpoint（§2）仅用于释放 goroutine 栈，非崩溃恢复路径。
 
-**回放机制**: M4、M5、M11 启动时统一检查 [ReplayMode] 标志（进程级 atomic.Bool）。回放期间禁止所有外部副作用（EmitEvent/ToolCall/Outbox）——纯函数式重建内存状态。追平事件流后退出回放模式，从崩溃点继续执行。
+**回放机制**: M4、M5、M11 启动时统一检查 [ReplayMode]（进程级 atomic.Bool，`internal/protocol/replay.go`）。回放期间禁止所有外部副作用（EmitEvent/ToolCall/Outbox），纯函数式重建；追平后退出回放，从崩溃点继续。
 
-**网络抖动恢复**:
-触发: 长任务 (>5min) 每 5min 或每 10K tokens 推理输出 → SnapshotContext
-写入: SurrealDB-Core KV `session_snapshots` namespace，key=`{session_id}:{seq}`，TTL=24h，per session 上限 5
-events 表: 轻量 `source='snapshot_checkpoint'` 记录（含 SurrealDB-Core key 引用），供时序定位
-PII（Personally Identifiable Information，个人敏感信息）: 快照不含明文——ToolResult 经 M7 §4.3 Step 5 PostExecution Redact 后写 EventLog；FSM Snapshot 保留原始值供同 session 崩溃恢复
-恢复: 优先加载最近快照 → 差量回放后续事件；快照损坏 → 回退 EventLog 全量回放（ToolResult 红化版本，需 SessionPIIVault 仍存活解析 token）
-与 M5 SessionResume 共享同一 barrier 协同重建。
+**会话崩溃恢复（ADR-0104，原 ADR-0076 决策一/二/四）**:
+- `Agent.Run()` 写 `inflight:session:{id}` KV 标记，干净退出 `defer` 清除；进程崩溃则残留。`recoverCrashedSessions`（`cmd/polaris/boot_crash_recovery.go`，`bootAgent` 后 `bootServer` 前）扫描候选会话，用 `TrajectoryRecorderImpl` 从 `session_trajectory` 表（045）重建 `TrajectoryTrace`，**仅当最后状态落在纯 LLM 状态（S_PERCEIVE/S_PLAN/S_REFLECT）时自动恢复**；S_VALIDATE/S_EXECUTE/S_REPLAN/S_ROLLBACK 保守跳过（2PC 预写日志未经专门审计）。经 `AgentPool.Acquire` + `InjectReplayData` 注入历史 LLM 录像 + `SetReplayMode(true)` 驱动续跑，消费最后一条录像的同一瞬间翻转为 false；工具执行在 ReplayMode 窗口内短路为 stub。
+- 工作流级：`task_checkpoints`（`(task_id,node_id,attempt)`）命中 `done` 节点直接复用；`POST /v1/workflows/runs/{id}/resume` 以同 runID 手动续跑，启动期不自动续跑（ADR-0104 决策二）。
+- 启动期孤儿对账：`cmd/polaris/boot_orphan_reconciler.go`（ADR-0104 决策一）。
+- S_AWAIT_AGENT 被动恢复：见 §8-bis。
 
-**双重幂等防线**: 第一层 isReplaying 标志 物理切断副作用；第二层 UNIQUE(session_id, seq) 约束 + idempotency_key 保证重复事件的幂等消费。
+**双重幂等防线**: ① isReplaying 标志物理切断副作用；② UNIQUE(session_id, seq) 约束 + idempotency_key 保证重复事件幂等消费。
 
-**Replay Key 算法（录像 key）**: 所有写入 EventLog 的事件 ID 格式为 `{session_id}:{seq}:{event_type}`，seq 为单调递增计数器，保证同 session+seq 始终生成相同 ID，不依赖 wall clock。实现见 `internal/agent/`。回放时若 event_type+ID 与 FSM PromptFn 占位符对应关系缺失，触发 `g_inv_08` 防护（禁止重新调 LLM，进入 REPLAY_MISMATCH 审计）。
+**Replay Key（录像 key）**: EventLog 事件 ID 为 `{session_id}:{seq}:{event_type}`，seq 单调递增，同 session+seq 始终同 ID，不依赖 wall clock。回放时 event_type+ID 与 FSM PromptFn 占位符对应缺失 → 触发 `g_inv_08`（禁止重新调 LLM，进入 REPLAY_MISMATCH 审计）。非重放路径上 `uuid.New().String()` 生成的 2PC 中间事件靠 idempotency_key 防重入，回放时被 `isReplaying=true` 切断。
 
-在非重放路径上（`uuid.New().String()` 生成 2PC 中间事件），同一事件的重放时间戳不同但通过 idempotency_key 防重入——回放时 `isReplaying=true` 物理切断所有副作用，确保这些 UUID 事件不会被重新投递。
+**长任务快照（规范保留，代码未实现）**：设计为 >5min 任务每 5min 或每 10K 推理 token 写 SurrealDB-Core KV `session_snapshots`（key=`{session_id}:{seq}`，TTL 24h，per session 上限 5），events 表记 `source='snapshot_checkpoint'`，恢复优先加载最近快照再差量回放，损坏回退 EventLog 全量回放。步频/保留数 `spec/state.yaml §m4_kernel.snapshot_interval_steps` / `snapshot_retention_count`。2026-10-12 `rg` 核实：仓内无 `session_snapshots`/`SnapshotContext` 实现，仅 `internal/config/thresholds.go` 保有配置项。落地前，崩溃恢复以上述轨迹回放为准。
 
-**Snapshot 策略**: 步频与保留数见 `spec/state.yaml §m4_kernel.snapshot_interval_steps` / `snapshot_retention_count`。Snapshot 损坏时回退到完整 EventLog 回放。
+**PII**: 快照/日志不含明文——ToolResult 经 M7 §4.3 Step 5 PostExecution Redact 后写 EventLog；恢复需 SessionPIIVault 仍存活以解析 token。
 
-**S_REPLAN 降级**: M1 CircuitBreaker 熔断时，执行零 LLM 的确定性图剪枝（纯 Go 图遍历）：移除失败节点及其所有直接后继节点，注入 degraded_replan 标记。此步骤禁止任何 LLM 调用——剪枝逻辑为纯函数，幂等且可重放。
+**S_REPLAN 降级**: M1 CircuitBreaker 熔断时执行零 LLM 的确定性图剪枝（纯 Go 图遍历）：移除失败节点及其所有直接后继，注入 degraded_replan 标记；纯函数、幂等、可重放。
 
-**S_REPLAN 扩展激活降级**（ADR-0065，与上述 CircuitBreaker 剪枝为不同触发路径）：按需扩展激活（`FindAndActivate`）超时或失败时不再无重试静默放行，改为有限重试（预算封顶于 `replanExtActivationTimeout`，默认 3s）；重试仍耗尽 → 会话上下文置 `ReplanExtActivationDegraded` 标记 + `GlobalReplanExtActivationDegradedTotal` 指标计数，随后仍照常 dispatch `TriggerReplanDone`（不新增 FSM 状态、不阻塞状态机主流程）。下游 DAG 执行遇 `capability_gap`（工具确实缺失）时，若该标记为真则直接快速失败并给出明确原因，取代此前"缺工具仍强行重规划、大概率再次落空"的空转路径。
+**S_REPLAN 扩展激活降级**（ADR-0098，原 ADR-0065；与 CircuitBreaker 剪枝为不同触发路径）：按需扩展激活（`FindAndActivate`）超时/失败时有限重试（预算封顶 `replanExtActivationTimeout`，默认 3s）；仍耗尽 → 会话上下文置 `ReplanExtActivationDegraded` + `GlobalReplanExtActivationDegradedTotal` 计数，仍照常 dispatch `TriggerReplanDone`（不新增状态）。下游 DAG 遇 `capability_gap` 且该标记为真 → 直接快速失败并给明确原因。
 
-**`ErrAllProvidersFailed` 专项处理（全 Provider 熔断）**:
-1. **确定性图剪枝后检查剩余 DAG 节点**:
-   - (a) 有 System 1 可执行节点（SurpriseIndex <0.3，零 LLM，纯本地 Python/Go 技能）→ 继续执行，**不消耗 ReplanCount**；LLM 依赖节点等 Provider 恢复。
-   - (b) 全部需 LLM → **不消耗 ReplanCount**，转 `Suspended(suspend_reason=provider_exhausted, provider_suspended_count++)`；Blackboard 写标记；调 `SessionPIIVault.Snapshot(ctx, taskID, fields)` 把 PII 加密落 `task_pii_vault` 表（046，ADR-0104 决策八）。
-2. `provider_suspended_count > 5` → 终止自动唤醒，触发 `[ESCALATE]` + HITL。
+**`ErrAllProvidersFailed`（全 Provider 熔断）**:
+1. 确定性图剪枝后检查剩余节点：(a) 有 System 1 可执行节点（SurpriseIndex <0.3，零 LLM）→ 继续执行，**不消耗 ReplanCount**；(b) 全部需 LLM → **不消耗 ReplanCount**，转 `Suspended(suspend_reason=provider_exhausted, provider_suspended_count++)`，Blackboard 写标记，`SessionPIIVault.Snapshot(ctx, taskID, fields)` 把 PII 加密落 `task_pii_vault` 表（046，ADR-0104 决策八）。
+2. `provider_suspended_count > 5` → 终止自动唤醒，`[ESCALATE]` + HITL。
 3. 剪枝后剩余 DAG 为空 → `[ESCALATE]` 人工审批。
 
-**Provider 恢复唤醒**: 
-M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_provider_recovery"` 事件。Handler 注册于 M2 全局 Outbox Worker（`internal/store/`），实现位于 `internal/agent/`——不在 M4 内独立 Worker（违反 M2 §2.3 单写者）。执行序列:
-  1. 扫描 M8 Blackboard 全部 `suspend_reason=provider_exhausted` 任务。
-  2. 逐一 `M11.SessionPIIVault.RestoreFromSnapshot(ctx, taskID)` 校验 `task_pii_vault` 快照仍在（缺失仅告警）。恢复后的任务经 Blackboard 重新领取，意图取自 tasks 表，无消费方读取快照明文；需要时用 `Load(ctx, taskID)` 取解密值。
-  3. `M8.Blackboard.ResumeFromSuspended(taskID)` 重置 Suspended→Pending。
-  4. 重新调度（M8 ListenLoop 扫描认领）。
+**Provider 恢复唤醒**：M1 CircuitBreaker Open→Closed → M2 Outbox 投递（`internal/llm/router.go` 发 `target_engine:"provider_recovery"`、`event_type:"m4_provider_recovery"`）。Handler `ProviderRecoveryHandler`（`internal/agent/recovery.go`）注册于 M2 全局 Outbox Worker（`internal/store/outbox_worker.go`），不在 M4 内另设 Worker（M2 §2.3 单写者）。序列：① 扫描 M8 Blackboard 全部 `suspend_reason=provider_exhausted` 任务；② `SessionPIIVault.RestoreFromSnapshot` 校验 `task_pii_vault` 快照仍在（缺失仅告警；意图取自 tasks 表，需明文时 `Load(ctx, taskID)`）；③ `Blackboard.ResumeFromSuspended(taskID)` Suspended→Pending；④ M8 ListenLoop 重新认领。
 
-**FSM 终态 PII 清零**: M4 转 S_FAILED / S_COMPLETE 时，先于 WorkspaceManager GC 调 `SessionPIIVault.SecureZero(ctx, taskID)`，`task_pii_vault` 行先于 workspace 删除（GDPR 主动擦除）。无可执行节点 → `[ESCALATE]`。
+**FSM 终态 PII 清零**: 转 S_FAILED / S_COMPLETE 时，先于 WorkspaceManager GC 调 `SessionPIIVault.SecureZero(ctx, taskID)`，`task_pii_vault` 行先于 workspace 删除（GDPR 主动擦除）。
 
-**Saga 补偿**: 确定性函数 + 预定义 HTTP（HyperText Transfer Protocol，超文本传输协议） 模板，禁止 LLM 参与。补偿前 M11 PolicyGate.Review 预检——FORBID → `[ESCALATE]` + `compensation_blocked_by_policy_revocation` 审计。非权限型失败重试 3 次（exponential backoff）。
-
-> **2026-09-20 复核**：Micro-DAG（单 Agent 内部）的 CompensationAction 字段保留但不强制校验。
-> 原因见 §4.3 复核。Macro-DAG（跨 Agent 编排，state_graph_saga.go / pipeline_compensation.go）
-> 中人工预定义的 compensation_tool / compensation_args 继续有效。
+**Saga 补偿**: 确定性函数 + 预定义 HTTP 模板，禁止 LLM 参与。补偿前 M11 PolicyGate.Review 预检——FORBID → `[ESCALATE]` + `compensation_blocked_by_policy_revocation` 审计；非权限型失败重试 3 次（exponential backoff）。Micro-DAG 的 CompensationAction 字段保留但不强制（§4.3）；Macro-DAG（`state_graph_saga.go` / `pipeline_compensation.go`）的人工预定义 compensation_tool / compensation_args 继续有效（→ ADR-0088）。
 
 完整时序见 `DIAGRAMS.md#eventlog`。
 
-## 8-bis. Handoff 唤醒事件化 + 无损续跑（ADR-0086）
+## 8-bis. Handoff 唤醒事件化 + 无损续跑（ADR-0104，原 ADR-0086）
 
-`transfer_to_agent` 委派子任务后父 Agent 进入 `S_AWAIT_AGENT`。唤醒机制以 Blackboard 事件订阅（`bb.Subscribe`，`task_completed`/`task_failed`）为主路径，分钟级 `handoffWatchSafetyInterval`（2min）巡检仅覆盖订阅通道静默失活的残余风险；`handoffWatchPollInterval`（1s）纯轮询保留作为 `Subscribe` 不可用时的降级路径。
+`transfer_to_agent` 委派子任务后父 Agent 进入 `S_AWAIT_AGENT`。唤醒以 Blackboard 事件订阅（`bb.Subscribe`，`task_completed`/`task_failed`）为主路径；`handoffWatchSafetyInterval`（2min）巡检覆盖订阅静默失活；`handoffWatchPollInterval`（1s）纯轮询仅作 `Subscribe` 不可用的降级。
 
-进程崩溃重启后，`task_checkpoints.resume_ctx_json` 列持久化 `HandoffResumeContext{SchemaVersion, DAGModel, ExecuteResult, CompletedNodeIDs, GlobalTaintLevel, HandoffNodeID, NamespaceID, SnapshotAt}` 快照（体积上限 `handoffSnapshotMaxBytes`=256KB，超限降级为仅消除死锁）。`AwaitingHandoffReconciler` 扫描 `await_agent` 态 checkpoint，`ResumeAwaitingHandoff` 就位 FSM 后（若快照可用且 `SchemaVersion` 匹配）**强制重跑与正常路径完全相同的 S_VALIDATE 四层校验**才回填 `DAGModel`/`ExecuteResult`/`CompletedNodeIDs`——`resume_ctx_json` 来自数据库，属跨信任边界的反序列化输入，不因"数据来自自家表"而放行（HE-2）。`GlobalTaintLevel` 回填遵循 only-up 语义。校验失败/`dagValidator` 为 `nil`/快照为空一律降级为"仅消除死锁"（委派节点下游 DAG 节点不再续跑，但不会误判为正常完成——`restored=false` 结果显式记录 Warn 日志 + `RecordAgentHandoffResume(ctx,"degraded")` 计数）。
+崩溃重启：`task_checkpoints.resume_ctx_json` 持久化 `HandoffResumeContext{SchemaVersion, DAGModel, ExecuteResult, CompletedNodeIDs, GlobalTaintLevel, HandoffNodeID, NamespaceID, SnapshotAt}`（上限 `handoffSnapshotMaxBytes`=256KB，超限降级为仅消除死锁）。`AwaitingHandoffReconciler` 扫描 `await_agent` 态 checkpoint，`ResumeAwaitingHandoff` 就位 FSM 后（快照可用且 `SchemaVersion` 匹配）**强制重跑与正常路径相同的 S_VALIDATE 四层校验**才回填 `DAGModel`/`ExecuteResult`/`CompletedNodeIDs`——`resume_ctx_json` 来自数据库，属跨信任边界反序列化输入，不因"自家表"放行（HE-2）。`GlobalTaintLevel` 回填 only-up。校验失败 / `dagValidator` 为 nil / 快照为空一律降级为"仅消除死锁"（委派节点下游不再续跑，但不误判为正常完成；`restored=false` 记 Warn + `RecordAgentHandoffResume(ctx,"degraded")`）。FSM 退出 S_AWAIT_AGENT 进入 S_EXECUTE 时清理该 checkpoint（`status="done"`），保证扫描幂等。
 
-实现：`internal/agent/agent_handoff.go`（唤醒）、`internal/agent/agent_handoff_resume.go`（快照/恢复）、`internal/agent/reconciler_handoff.go`（`AwaitingHandoffReconciler`）。
+实现：`internal/agent/agent_handoff.go`、`internal/agent/agent_handoff_resume.go`、`internal/agent/reconciler_handoff.go`；启动调度 `cmd/polaris/boot_handoff_reconciler.go`。
 
 ---
 
 ## 12. 已知 Bug 修复记录
 
-| 级别 | 文件 | 函数 | 问题描述 | 修复 | Commit |
-|------|------|------|---------|------|--------|
-| P1 | `internal/memory/` (synaptic_plasticity) | 衰减指数计算 | 自定义幂函数将指数截断为整数，导致近期访问边被过度修剪 | 改用标准库 `math.Pow` | 4d7682f |
-| P1 | `internal/agent/agent_execute_effect.go` | doStreamInfer | `InferOptions.Tools`（`types.WithTools`）全仓零消费——各 Provider adapter 的原生 `tool_calls` 流式事件（`StreamToolCall`，`stream.go`/`anthropic_request.go`/`google_request.go`）早已产出，唯独消费端从未接收，S_PLAN 只能靠 LLM 输出文本 JSON DSL 一条路径产出 DAGModel | 新增 StreamToolCall 分支累积 `ProviderResponse.ToolCalls`；`toolCallsToDAGJSON` 把原生 tool_calls 转换为 plan_dag Schema 期望的 DAGModel JSON——与文本 JSON DSL 路径在此收敛为同一 DAGModel 表示，复用既有 S_VALIDATE 四层校验 + DAG Executor，不新建第二条执行路径 | b99b9cf |
+过程性修复记录已清理（历史见 git log）。仍具约束力的一条结论：原生 `tool_calls` 与文本 JSON DSL 必须收敛为同一 DAGModel（§4.2），禁止另建第二条执行路径。
 
 ---
 
@@ -468,33 +395,32 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 | DAG 节点执行失败（可逆） | tool error | 单 step | step retry with backoff → 仍失败 → Saga 逆序补偿 → s_rollback | 是 | — |
 | DAG 节点执行失败（不可逆） | Reversible=false + error | 单 Agent | s_failed + HITL 告警 | 否 | 必须 HITL |
 | StructOutput JSON 解析失败 | JSON Repair 失败 | 单次 LLM 调用 | retry (1 次) → 仍失败 → s_replan | 是 | 同模型连续 ≥10 次 → audit |
-| ReplanGuard 超限 | ReplanCount > MaxReplanAttempts (`§m4_kernel.max_replan_attempts`) | 单 Agent | s_failed + HITL 告警 | 否 | 必须 HITL |
+| ReplanGuard 超限 | ReplanCount > MaxReplanAttempts (`§m4_kernel.max_replan_attempts`) | 单 Agent | 经 VALIDATE/ROLLBACK/REFLECT → s_respond（TurnDegraded）；其余路径 s_failed + HITL 告警 | 否 | 必须 HITL |
 | DAG 死锁（无就绪节点） | findReadyNodes 返回空且未完成节点 > 0 | 单 Agent | ErrDAGDeadlock → s_failed + EventLog | 否 | M12 复盘 |
 | Agent goroutine panic | recover() | 单 Agent | Supervisor OneForOne 自动重启 + EventLog 回放 | 是 (100ms→30s, 5 次上限) | 同 Agent 反复 panic ≥3/min → escalate |
 | HITL 审批超时 | deadline 到期 | 单 Agent | s_rollback（不触发 KillSwitch，仅当前任务失败） | 用户重新发起 | 反复 expire → audit |
-| 进程崩溃 | exit | 全局 | 重启后从 EventLog 重放，不重调 LLM | 是 | — |
+| 进程崩溃 | exit | 全局 | 重启后按 §8 恢复，不重调 LLM | 是 | — |
 | Replay key 漂移 | hash mismatch | 单会话重放 | 走 LLM 重新调用 + audit | 是 | 频繁漂移 → M12 排查 |
 
-与 OSMemoryGuard 协同: ResourceGovernor.Admit() 在 Agent 启动前校验可用内存 + CPU。OSMemoryGuard 触发 L3 临界 → 仅保留当前执行中的 Agent，禁止新唤醒。
-
+与 OSMemoryGuard 协同：ResourceGovernor.Admit() 在 Agent 启动前校验可用内存 + CPU；OSMemoryGuard 触发 L3 临界 → 仅保留执行中的 Agent，禁止新唤醒。
 
 ## 14. 跨模块契约
 
-> 接口签名权威源在 `internal/protocol/interfaces_*.go`（按域拆分）+ `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
+> 接口签名权威源在 `internal/protocol/interfaces_*.go`（按域拆分）+ `types.go`。本表仅列依赖方向 + 语义 + 锚点。
 
 | 方向 | 接口/契约 | 用途 / 锚点 |
 |------|----------|-------------|
 | M4→M1 | Provider.Infer / StreamInfer | LLM 推理；SurpriseIndex consumer。M1 §2, §4 |
 | M4→M2 | EventLog Append / GetEvents | 崩溃恢复回放真相源。M2 §2.1 |
-| M4→M2 | Outbox `m4_provider_recovery` handler | `internal/store/` 注册；实现 `internal/agent/`。M2 §2.5, M4 §8 |
-| M4→M3 | OTel（OpenTelemetry） spans + SurpriseIndex 消费 | 双层回退 完整版→基础版→0.5。`[HE-Rule-1]` M3 §4 |
-| M4→M5 | PromptBuilder / HybridRetriever | 记忆检索 + 上下文组装（PromptBuilder Zone 布局：ZoneImmutable→ZoneCoreMemory→ZoneMutableSkill→ZoneTaintedData 四固定 Zone + `ZoneExternalCatalog` 信任分区，见 M11 §2.1）。M5 §2, §7 |
+| M4→M2 | Outbox `m4_provider_recovery` handler | `internal/store/` 注册；实现 `internal/agent/recovery.go`。M2 §2.5, M4 §8 |
+| M4→M3 | OTel spans + SurpriseIndex 消费 | 双层回退 完整版→基础版→0.5。`[HE-Rule-1]` M3 §4 |
+| M4→M5 | PromptBuilder / HybridRetriever | 记忆检索 + 上下文组装（Zone 布局 ZoneImmutable→ZoneCoreMemory→ZoneMutableSkill→ZoneTaintedData 四固定 Zone + `ZoneExternalCatalog` 信任分区，见 M11 §2.1）。M5 §2, §7 |
 | M4→M6 | SkillLookup / SkillRegister | System 1 技能缓存 + Persona 兼容性。M6 §3, §4.3 |
 | M4→M7 | ToolRegistry.ExecuteTool | S_EXECUTE 节点调用 `[Wasm-Sandbox]`。M7 §3 |
 | M4→M11 | TaintGate / PolicyGate / KillSwitch | 查阅，仅响应不主动触发。M11 §2, §4 |
 | M4→M11 | SessionPIIVault | Suspend 时落 task_pii_vault 表；Restore/SecureZero 跟随 FSM 终态。M11 §5.1 |
 | M8→M4 | Blackboard.CAS Claim / LeaseHeartbeat | 多 Agent 调度入口。M8 §1 |
-| Schema | AgentState 枚举、DDL（Data Definition Language，数据定义语言） 001_events / 003_episodic_memory / 007_tasks（含 suspend_reason / provider_suspended_count）| `pkg/types/enums_agent.go`, `internal/protocol/schema/` |
+| Schema | AgentState 枚举、DDL 001_events / 003_episodic_memory / 007_tasks（含 suspend_reason / provider_suspended_count） | `pkg/types/enums_agent.go`, `internal/protocol/schema/` |
 | 全局字典 | HE-Rule-5 状态机控制流、XR-01 | 00-Global-Dictionary §1-bis, §1-ter |
 | 时序图 | EventLog 回放、KillSwitch 响应链 | DIAGRAMS.md#eventlog, #killswitch |
 

@@ -1,179 +1,162 @@
-# ADR-0103: 扩展体系对齐 OpenAI / Anthropic 双标准（技能 / 连接器 / 插件，删除独立 App 类型）
+# ADR-0103: 扩展体系：OpenAI / Anthropic 双标准（技能 / 连接器 / 插件）、统一信任模型、MCP 传输
 
-- **状态**: Accepted | **日期**: 2026-09-26 | **模块**: M13-bis / M7 / internal/extension / internal/action/hook / internal/execute/orchestrator
-- **修订**: ADR-0016 决策二（Hook 仅 5 事件 / Custom Agent 仅 YAML）、决策三（`apps` 作为 Layer 2 运行时表）
+> 状态：Accepted（决策一~十三均已落地） ｜ 首次：2026-09-26（原 ADR-0016/0017/0002 为 2026-05） ｜ 最近复核：2026-10-12 ｜ 含原 ADR-0016、ADR-0017 决策一/二、ADR-0002
+> 模块：M13-bis / M7 / `internal/extension` / `internal/action/hook`。目标：Claude、Codex、agent-plugins.org 1.0 的包可直接安装运行；私有数据只进 `extensions["ai.polarisagi"]`。
 
-## 上下文
+## 旧引用映射（代码注释里的「ADR-0016/0017/0002/0084」按此跳转；各节标题亦含原编号）
 
-2026-09 业界扩展分类收敛为三层：**技能（Skill，教做事）/ 连接器（Connector，接外部系统 = MCP）/ 插件（Plugin，前两者 + hooks/agents 的分发包）**。Claude：Connectors/Skills/Plugins；ChatGPT 2026-07 以 Plugin Directory 取代 App Directory，App 降为插件子组件；Codex 插件 = skills + `.mcp.json` + `.app.json`（连接器绑定）+ hooks；agent-plugins.org 1.0（Amazon/Cursor/Microsoft/OpenAI/Vercel）定义跨厂商可移植包。
-
-Polaris 现状（2026-09-26 审计）：`ext_type=app` + `apps`（028）表仅存 URL，全仓无 Widget 渲染，激活只注入一段描述；`AppDef{name,url,command}` 为自造格式（Codex 真实格式是 `apps.<alias>.id`）；`PluginInstaller` 不注册插件内技能、把 `.mcp.json` 当数组解析（标准 `mcpServers` map 被静默丢弃）；清单解析含自造格式（`plugin.toml`、Google `skills.yaml`、`.polaris-plugin/`）；不解析任何 `marketplace.json`；MCP 客户端停在 2025-11-25。
-
-## 决策一：扩展分类收敛为 技能 / 连接器 / 插件（+ 市场）
-
-- 删除 `ext_type=app`、`types.TypeApp`、`apps` 表（`028_apps.sql` 删除，编号永久留空）、`/v1/apps*` 路由、`AppRepository`、`AppInstaller`、提示词 App 摘要。
-- UI「MCP」标签改名「连接器 / Connectors」；底层 `ext_type` 仍为 `mcp`（协议名不改，改的只是用户可见术语）。
-- 保留的顶层 `ext_type`：`skill` / `mcp` / `plugin` / `automation` / `agent`。
-
-## 决策二：插件清单多格式归一化（单一内部模型 `protocol.PluginManifest`）
-
-探测顺序（同时存在时全部读取，按下表合并）：
-
-| 优先级 | 清单 | 来源标准 | 备注 |
+| 旧引用 | 新节 | 旧引用 | 新节 |
 |---|---|---|---|
-| 1 | 根 `plugin.json`（`$schema` 指向 agent-plugins.org） | Agent Plugins 1.0 | `extensions["com.openai"]` 为对象时**整体替换** `.codex-plugin/plugin.json`（OpenAI 规定，不合并） |
-| 2 | `.claude-plugin/plugin.json` | Anthropic | 可缺省：无清单时按默认布局加载，`name` 取市场条目名或目录名 |
+| 0016 决策一（§2.1，TrustTier） | 决策九 | 0017 决策一/二 | 决策十一 |
+| 0016 决策二（§2.x Hook / agentskills / Custom Agent） | 决策六 / 五 / 三补充 | 0017 决策三 | ADR-0111（A2A；不在本文） |
+| 0016 决策二 §2.5（CSV fan-out）、P3 不做项 | 决策十三 | 0002 | 决策十二 |
+| 0016 决策三/四（实例表 / 升级） | 决策十 | 0084 | ADR-0111 |
+
+## 决策一：分类收敛为 技能 / 连接器 / 插件（+ 市场）
+
+- 删除 `ext_type=app`、`types.TypeApp`、`apps` 表（`028_apps.sql` 编号永久留空）、`/v1/apps*`、`AppRepository`/`AppInstaller`、提示词 App 摘要。UI「MCP」改称「连接器」，底层 `ext_type` 仍为 `mcp`。
+- 顶层 `ext_type` 保留：`skill` / `mcp` / `plugin` / `automation` / `agent`。
+
+## 决策二：插件清单多格式归一化（唯一内部模型 `protocol.PluginManifest`，唯一解析器 `internal/extension/pluginspec`）
+
+| 优先级 | 清单 | 来源 | 备注 |
+|---|---|---|---|
+| 1 | 根 `plugin.json`（`$schema` 指向 agent-plugins.org） | Agent Plugins 1.0 | `extensions["com.openai"]` 为对象时整体替换 `.codex-plugin/plugin.json`（不合并） |
+| 2 | `.claude-plugin/plugin.json` | Anthropic | 可缺省，按默认布局加载 |
 | 3 | `.codex-plugin/plugin.json` | OpenAI Codex | `interface` 为展示元数据 |
 
-- **身份字段**（name/version/description/author/homepage/repository/license/keywords/displayName）取最高优先级清单中的非空值。
-- **组件**按「默认位置 + 清单声明」逐类型解析，语义严格按来源标准：Claude `commands/agents/outputStyles` **替换**默认目录、`skills` **追加**、`hooks/mcpServers/lspServers` **合并**（后声明同名覆盖）。多清单指向同一物理路径时按解析后的绝对路径去重。
-- **路径规则**（两家 + agent-plugins 一致）：组件路径必须 `./` 开头、解析后在插件根内、必须存在；含 `..` 拒绝。违规组件单独失败，不连坐其他组件（agent-plugins 一致性条款 5）。
-- **未知字段**：顶层未知字段剥离 + 告警；严格对象（`userConfig` 项、`channels` 项、`lspServers` 项、`monitors` 项）含未知键 → 该组件失败。
-- **路径变量**：`${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` → 安装根；`${PLUGIN_DATA}` / `${CLAUDE_PLUGIN_DATA}` → `<data>/extensions/plugin-data/<id>/`（升级保留、卸载删除）；`${user_config.KEY}`；stdio 子进程同时导出四个变量。展开非递归、字面替换。
-- **宿主环境变量**：Claude `.mcp.json` 支持 `${VAR}` / `${VAR:-default}` 展开宿主环境变量。Polaris 只允许展开 `sanitizeParentEnv` 白名单内的变量，其余视为未定义（取默认值或空串）并告警——否则插件可用 `${OPENAI_API_KEY}` 等引用把宿主密钥注入自身进程或请求头（R1.15 / HE-7）。
-- **Polaris 生成物也用标准格式**：`PluginCreator` 与市场 MCP 包装产物改为 agent-plugins 1.0 布局（根 `plugin.json` + `mcp.json` + `skills/`），删除 `.polaris-plugin/`。Polaris 私有数据只允许放在 `extensions["ai.polarisagi"]`。
-- 删除自造格式解析：`plugin.toml`、`skills.yaml`/`agent-manifest.yaml`、`ai-plugin.json`（2024-04 已关闭的 ChatGPT Plugins）、`PluginBundleManifest` 的 `entrypoint`/`mcpInline`/`mcp_inline`/`hooks{install,uninstall}`/`skills[{path}]` 私有变体。
+- 身份字段取最高优先级非空值。组件按「默认位置 + 清单声明」解析：Claude `commands/agents/outputStyles` 替换默认目录、`skills` 追加、`hooks/mcpServers/lspServers` 合并（后声明覆盖）；同一物理路径按绝对路径去重。
+- 路径：组件路径须 `./` 开头、解析后在插件根内且存在，含 `..` 拒绝；违规组件单独失败，不连坐。顶层未知字段剥离+告警；严格对象（`userConfig`/`channels`/`lspServers`/`monitors` 项）含未知键 → 该组件失败。
+- 路径变量：`${PLUGIN_ROOT}`/`${CLAUDE_PLUGIN_ROOT}` → 安装根；`${PLUGIN_DATA}`/`${CLAUDE_PLUGIN_DATA}` → `<data>/extensions/plugin-data/<id>/`（升级保留、卸载删除）；`${user_config.KEY}`；展开非递归。
+- 宿主环境变量：`.mcp.json` 的 `${VAR}`/`${VAR:-default}` 只允许展开 `sanitizeParentEnv` 白名单内变量，其余视为未定义并告警（防插件引用 `${OPENAI_API_KEY}` 注入宿主密钥，R1.15 / HE-7）。
+- Polaris 生成物（`PluginCreator`、市场 MCP 包装）用 agent-plugins 1.0 布局。已删除自造格式：`plugin.toml`、`skills.yaml`/`agent-manifest.yaml`、`ai-plugin.json`、`.polaris-plugin/`、`PluginBundleManifest` 私有变体。
 
-## 决策三：组件 → Polaris 运行时映射（语义可映射的全部实现）
+## 决策三：组件 → 运行时映射
 
-| 组件 | 来源 | Polaris 运行时 |
-|---|---|---|
-| skills（`skills/<n>/SKILL.md`、清单 `skills` 路径、根 `SKILL.md` 单技能） | 两家 + agentskills.io | `skills` 表，`plugin_id` FK；决策五 |
-| commands（`commands/*.md`、对象映射 `source`/`content`） | Anthropic | 转为 `user-invocable` 技能（Claude 已声明 commands 为技能旧形态），`kind=command` |
-| agents（`agents/*.md` frontmatter） | Anthropic | `lifecycle.AgentDefinitionProvider` → `types.AgentProfileSpec`（来源 `plugin:<id>`），命名 `<plugin>:<agent>`；见下方「决策三补充」 |
-| hooks（`hooks/hooks.json` + 清单 `hooks` + Codex `extensions.com.openai.hooks`） | 两家 | `internal/action/hook`；决策六 |
-| mcpServers（`.mcp.json`、`mcp.json`、清单内联、`.json` 路径、`.mcpb`/`.dxt` 包） | 两家 + agent-plugins | `mcp_servers`，`plugin_id` FK；类型 `stdio`/`http`/`streamable-http`/`sse`/`ws` |
-| userConfig | Anthropic | `plugin_user_config`；`sensitive=true` 经 `credential.Vault` 加密；提示词中敏感值替换为占位符 |
-| channels | Anthropic | `lifecycle.ChannelService`：插件 MCP 服务器的 `notifications/claude/channel` 事件进入该 channel 专属会话；见「决策三补充：channels」 |
-| dependencies / defaultEnabled | Anthropic | 同市场内解析依赖，安装按拓扑序；启用前校验依赖已启用；见「决策三补充：dependencies」 |
-| apps（`.app.json`） | OpenAI Codex | 决策四 |
-| interface（Codex）/ displayName | 两家 | `plugins` 展示元数据 |
-| lspServers / outputStyles / themes / monitors / workflows / `bin/` / `settings.json` / `experimental.*` | Anthropic | **解析 + 校验，不激活**，记入 `unsupported_components` 并在 UI 标注「此宿主不适用」（agent-plugins 一致性条款 3：Ignore unsupported component types）。`bin/` 不进入任何 PATH |
+| 组件 | Polaris 运行时 |
+|---|---|
+| skills（`skills/<n>/SKILL.md`、清单路径、根 `SKILL.md`） | `skills` 表，`plugin_id` FK；决策五 |
+| commands | `user-invocable` 技能，`kind=command` |
+| agents（`agents/*.md`） | `lifecycle.AgentDefinitionProvider` → `types.AgentProfileSpec`（来源 `plugin:<id>`，命名 `<plugin>:<agent>`） |
+| hooks | `internal/action/hook`；决策六 |
+| mcpServers（`.mcp.json`/`mcp.json`/内联/`.mcpb`/`.dxt`） | `mcp_servers`，`plugin_id` FK；类型 `stdio`/`http`/`streamable-http`/`sse`/`ws` |
+| userConfig | `plugin_user_config`；`sensitive=true` 经 `credential.Vault` 加密，提示词中替换为占位符 |
+| channels / dependencies / defaultEnabled | 见下方补充 |
+| apps（`.app.json`） | 决策四 |
+| lspServers / outputStyles / themes / monitors / workflows / `bin/` / `settings.json` / `experimental.*` | 解析+校验，不激活，记入 `unsupported_components` 并在 UI 标「此宿主不适用」（`bin/` 不进 PATH） |
 
-### 决策三补充：子 Agent 定义与委派（2026-09-26）
+**补充：子 Agent 定义与委派**
+- 来源：插件 `agents/`（`.md`）；项目 `<root>/.polaris/agents/`、用户 `<data>/agents/`（Claude `.md` + Codex `.toml`，同名 `.md` 优先；项目 > 用户）。私有 `agents/*.yaml` 已删。解析唯一实现 `pluginspec.{ParseAgentFile,ListAgentDir}`。
+- 委派入口 `transfer_to_agent` / `list_agents`（内置工具）；`DefaultTaskWorker` 把 `agent_handoff:<name>` 解析为角色规格经 `WithAgentProfile` 注入；未知名称使任务失败并把原因写入 `tasks.result`。
+- 角色只收窄能力，在内核执行入口硬拦截（`Agent.checkProfileTool`，可见性过滤仅辅助）：`tools`/`disallowedTools`（Claude 工具名映射 Polaris 内置名；白名单中参数级规则 `Bash(git *)` 无法等价映射 → 整条忽略，黑名单按整个工具拒绝；`Agent(a, b)` 限定委派目标）；只读（Codex `sandbox_mode="read-only"` / Claude `permissionMode: plan`）→ 只放行能力 ≤ `CapReadOnly`，`code_act` 与未知工具 fail-closed，其余模式继承宿主不得放宽；`maxTurns` 收紧 `MaxStepsLimit`；子 Agent 默认不能再委派（受 `SpawnDepth` 门控）。
+- 角色指令写入 `ZoneMutableSkill`（`<agent_profile>`），不进 `ZoneImmutable`：用户目录 TaintLow，插件/项目目录 TaintMedium。`skills` 字段预加载，缺失即失败。
+- 解析但不生效（记入 `not_applied`）：`model`/`effort`（按阶段池路由，ADR-0105）、`background`、`isolation`、`memory`、`initialPrompt`；插件 agent 的 `hooks`/`mcpServers`/`permissionMode` 按 Claude 安全规则忽略。
 
-- **来源与格式**：插件 `agents/`（仅 Claude `.md`）；项目 `<root>/.polaris/agents/`、用户 `<data>/agents/`（Claude `.md` + Codex `.toml`，同名 `.md` 优先）。同名优先级项目 > 用户（Claude 规则）；插件 agent 带 `<plugin>:` 命名空间。删除 Polaris 私有 `agents/*.yaml`（ADR-0016 §2.4，与决策二「删除自造格式」一致）。解析唯一实现 `pluginspec.{ParseAgentFile,ListAgentDir}`。
-- **调用**：`transfer_to_agent(target_agent_role, context_summary)` 为委派入口，`list_agents` 列出本地子 Agent + `mcp:` A2A 目标 + `general-purpose`；二者注册为内置工具（此前 `transfer_to_agent` 未注册，S_VALIDATE 按未知工具拒绝，委派在生产不可达）。`DefaultTaskWorker` 把 `agent_handoff:<name>` 解析为角色规格经 `WithAgentProfile` 注入 `AcquireHeadless`；未知名称使任务失败（Claude：未知 subagent_type 报错），失败原因写入 `tasks.result` 回传委派方。
-- **角色只收窄能力**，全部在内核执行入口硬拦截（`Agent.checkProfileTool`，可见性过滤仅辅助）：
-  - `tools`/`disallowedTools`：Claude 工具名映射到 Polaris 内置名（`Read`→`read_file`… `Bash`→`bash`/`run_command`/`code_act:*`，`Agent`/`Task`→委派工具，`Skill`/`Skill(x)`，`mcp__server`/`mcp__server__*`）；Polaris 原生名直接有效。白名单中参数级规则（`Bash(git *)`）无法等价映射 → 整条忽略（不放宽为整个工具）；黑名单中按整个工具拒绝。`Agent(a, b)` 限定委派目标。
-  - 只读：Codex `sandbox_mode="read-only"`、Claude `permissionMode: plan` → 只放行能力 ≤ `CapReadOnly` 的工具，`code_act` 与未知工具 fail-closed。其余 sandbox/permission 模式继承宿主，不得放宽。
-  - `maxTurns` → 收紧 `MaxStepsLimit`。
-  - 子 Agent 默认不能再委派（Claude 子 Agent 无 Agent 工具；Codex `agents.max_depth` 默认 1）；深度仍受 `SpawnDepth` 门控。
-- **角色指令**写入 `ZoneMutableSkill`（`<agent_profile>`），不进 `ZoneImmutable`：用户目录 TaintLow；插件/项目目录与 AGENTS.md 同一威胁模型 TaintMedium（Spotlighting）。`skills` 字段经技能执行器渲染后预加载（插件命名空间优先），缺失即失败，不带缺口运行。
-- **解析但不生效**（记入 `not_applied` + 诊断，UI 标注）：`model`/`effort`/Codex `model_reasoning_effort`（模型按阶段池路由，ADR-0101）、`background`、`isolation`、`memory`（子 Agent 共享委派方命名空间）、`initialPrompt`、agent 级 `mcpServers`/`hooks`、Codex 其余 config 覆盖键；插件 agent 的 `hooks`/`mcpServers`/`permissionMode` 按 Claude 安全规则忽略。
+**补充：channels**
+- 协议按 Claude channels reference：`capabilities.experimental["claude/channel"]` 为对象即声明；事件 `notifications/claude/channel {content, meta}` 渲染为 `<channel source=… k=v>`（meta 键仅 `[A-Za-z0-9_]`）。
+- 安装 ≠ 启用：`plugin_channels` 存用户显式开启状态；未启用/未连接/未声明的事件丢弃。启用后事件经 `session.Orchestrator.RunTurn(Headless)` 进专属会话 `ch_plugin_<plugin>_<server>`（同 channel 串行），意图 TaintHigh，回复由模型调用服务器自身回复工具完成。
+- 审批转发须另开 `permission_relay` 且服务器声明 `claude/channel/permission`：只接受宿主签发、未过期、同一服务器回传的裁决，经 `GatewayImpl.Respond` 进同一审批守卫；`RiskPrivileged` 不外发。
 
-### 决策三补充：channels（2026-09-27）
-
-- 协议按 Claude channels reference：服务器 `capabilities.experimental["claude/channel"]` 为对象即声明（`false`/缺省为未声明）；事件 `notifications/claude/channel {content, meta}` 渲染为 `<channel source="<server>" k="v">content</channel>`（meta 键仅 `[A-Za-z0-9_]`，其余丢弃；属性值与闭合标签转义），服务器 `instructions` 以 `<channel-instructions>` 随事件下发。
-- **安装 ≠ 启用**：`plugin_channels` 存用户显式开启状态（Claude 同样要求逐会话 `--channels` 开启）；未启用、服务器未连接或未声明能力的事件丢弃。启用后事件经 `session.Orchestrator.RunTurn(Headless)` 进入专属会话 `ch_plugin_<plugin>_<server>`（同一 channel 串行），意图按 TaintHigh；回复由模型调用服务器自身的回复工具完成，宿主不回发最终文本。
-- **审批转发**：须另行开启 `permission_relay` 且服务器声明 `claude/channel/permission`。HITL 等待注册后发 `notifications/claude/channel/permission_request {request_id(5 位 a-z 去 l), tool_name, description, input_preview}`；只接受宿主签发、未过期、且由同一服务器回传的 `notifications/claude/channel/permission {request_id, behavior}`，裁决经 `GatewayImpl.Respond` 进入同一审批守卫，一个裁决作废同一请求的其余转发。`RiskPrivileged` 请求不外发。
-- sender 鉴别由 channel 服务器负责（Claude 规则）；宿主侧边界是启用开关 + 污点 + 审批守卫。
-
-### 决策三补充：dependencies（2026-09-27）
-
-- 加载期语义按 Claude plugin dependencies：依赖须已安装、已启用，且版本满足 npm semver 范围（`^ ~ >= = ||`、连字符；范围不匹配预发布版本，除非范围自带预发布后缀；实现 Masterminds/semver v3）。不满足 → 依赖方不加载：安装完成但置停用并写诊断；启用请求 409；停用/卸载某插件后 `EnforceAll` 迭代到不动点级联停用依赖方（断开其子 MCP）；启动时在恢复 MCP 连接前执行同一检查。
-- `defaultEnabled`：安装后初始启用状态 = `defaultEnabled` ∧ 依赖满足；用户后续显式启停不被升级覆盖（Claude：`enabledPlugins` 写入后跨更新保留）。
-- 依赖的自动安装、按 git tag 解析版本、跨市场白名单 `allowCrossMarketplaceDependenciesOn` 与 prune 依赖市场来源，随决策七实现；在此之前依赖须由用户先行安装（诊断指明缺失项）。
-  - 2026-09-27 追记：自动安装已落地（`marketplace.CatalogInstaller`）：取回插件后读取其依赖，先装缺失依赖（同市场按名；跨市场仅根市场白名单内，或用户已装且启用）；版本范围按 `<name>--v<version>` 标签取最高（自有仓库无标签即失败；相对路径无标签用当前副本）；循环依赖失败；已装版本不满足新范围时报冲突要求用户先处理。已装依赖不满足新范围时，取全部已安装依赖方范围与新范围的交集重新解析并原地升级，无交集或无满足版本即报 `has conflicting version requirements`；作为依赖自动安装的实例标记 `auto_dependency`，`POST /v1/plugins/prune` 卸载已无依赖方的这类插件（Claude `plugin prune`）。
+**补充：dependencies**
+- 加载期：依赖须已安装、已启用且满足 npm semver 范围（Masterminds/semver v3）；不满足 → 依赖方安装后置停用并写诊断，启用请求 409，停用/卸载后 `EnforceAll` 迭代到不动点级联停用，启动时在恢复 MCP 连接前执行同一检查。
+- `defaultEnabled`：初始启用 = `defaultEnabled` ∧ 依赖满足；用户后续启停不被升级覆盖。
+- 自动安装（`marketplace.CatalogInstaller`）：先装缺失依赖（跨市场仅限根市场白名单或用户已装且启用）；版本按 `<name>--v<version>` 标签取最高；循环依赖失败；已装依赖不满足新范围时取全部依赖方范围交集重解析升级，无交集报 `has conflicting version requirements`；自动安装实例标 `auto_dependency`，`POST /v1/plugins/prune` 卸载无依赖方者。
 
 ## 决策四：Codex「应用」= 插件内的连接器绑定，不是扩展类型
 
-- 格式按 Codex：`.app.json` = `{"apps":{"<alias>":{"id":"<connector_id>"}}}`；由 `extensions.com.openai.apps` 或 `.codex-plugin/plugin.json` 的 `apps` 指向，默认 `./.app.json`。
-- 安装时逐个 alias 在本地连接器目录（`mcp_servers` / `extension_catalog` 的 MCP 条目）按 `id` 解析：命中 → `status=bound`；未命中（例如 ChatGPT 平台专有的 `plugin_asdk_app_*` / `connector_*` id）→ `status=unbound`，UI 引导用户绑定到一个本地连接器。
-- 落库 `plugin_app_bindings(plugin_id, alias, connector_ref, bound_server_id, status)`；**不**把 app 转换成 `ext_type=mcp` 条目，也不生成新的 MCP 进程。
-- 实现（2026-09-27）：`lifecycle.ResolveAppBindings` 在安装/升级时按 `mcp_servers` 的 id / 名称 / catalog_id 解析；用户手动绑定（`lifecycle.BindApp`，API `GET /v1/plugins/{id}/apps`、`PUT /v1/plugins/{id}/apps/{alias}`）在 `connector_ref` 未变且服务器仍存在时跨升级保留；解析失败不阻断安装。
+- `.app.json` = `{"apps":{"<alias>":{"id":"<connector_id>"}}}`，由 `extensions.com.openai.apps` 或 `.codex-plugin/plugin.json` 的 `apps` 指向（默认 `./.app.json`）。
+- 安装/升级时 `lifecycle.ResolveAppBindings` 按 `mcp_servers` 的 id/名称/catalog_id 解析：命中 `bound`，未命中（如 `plugin_asdk_app_*`/`connector_*`）`unbound`，UI 引导绑定。落库 `plugin_app_bindings`；不转成 `ext_type=mcp`，不生成 MCP 进程。
+- 手动绑定（`lifecycle.BindApp`，`PUT /v1/plugins/{id}/apps/{alias}`）在 `connector_ref` 未变且服务器仍存在时跨升级保留；解析失败不阻断安装。
 
-## 决策五：技能遵循 agentskills.io 规范 + 两家扩展字段
+## 决策五：技能遵循 agentskills.io + 两家扩展字段
 
-- 校验分两级（宿主须同时运行两家技能，只有两家都拒绝的才算硬错误）：
-  - **硬错误 → 技能不加载**：frontmatter 不是合法 YAML；解析后的名称为空、>64 字符、含空白 / 路径分隔符 / `..` / 控制字符。
-  - **规范告警 → 加载并在 UI 展示**（agentskills.io 条款，Claude 宽容处理）：`name` 非 `[a-z0-9-]` / 首尾 `-` / 含 `--` / 与目录名不一致；`description` 缺失（按 Claude 回落为正文首个非空行）或 >1024 字符；`compatibility` >500 字符；`metadata` 非 string→string。
-- `name` 缺省取目录名（Claude 规则）；插件内技能对外名为 `<plugin>:<name>`，`name` 已带本插件前缀时不重复加前缀。
-- Polaris 私有技能参数（`exec_mode`、`risk_level`、`sandbox` 等）只从 `metadata` 读取（键前缀 `polaris-`），Polaris 生成的 SKILL.md 同样写入 `metadata`，保证产物可被 `skills-ref validate` 通过。
-- 可选字段全量解析：`license`、`compatibility`、`metadata`、`allowed-tools`；Anthropic 扩展 `when_to_use`、`argument-hint`、`arguments`、`disable-model-invocation`、`user-invocable`、`disallowed-tools`、`model`、`effort`、`context`、`agent`、`paths`；Codex `agents/openai.yaml`（`interface`、`policy.allow_implicit_invocation`、`dependencies.tools`）。
-- 调用控制：`disable-model-invocation: true` 或 `allow_implicit_invocation: false` → 不进入模型可见技能索引，只能用户显式调用；`user-invocable: false` → 仅模型可调用。
-- 正文变量：`$ARGUMENTS` / `$ARGUMENTS[N]` / `$N` / `$name`、`${CLAUDE_SKILL_DIR}`、`${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PLUGIN_DATA}`、`${CLAUDE_SESSION_ID}`。
-- `` !`cmd` `` / ` ```! ` 动态注入：经统一沙箱执行（`CallerType="skill_inject"`），受 PolicyGate 约束；插件技能的注入命令与插件 hooks 同受「安装 ≠ 信任」约束（决策六）。
-- `allowed-tools` 只作为该技能回合内的预授权**提示**，不绕过 Cedar/PolicyGate（HE-7）。
-- `context: fork` + `agent`（2026-09-26 落地）：模型调用时内核把渲染后的正文经 `transfer_to_agent` 委派给 `agent`（缺省 `general-purpose`），复用异步挂起/恢复与 `SpawnDepth`；恢复分支不重复渲染（渲染会再次执行动态注入）。用户调用时在子 Agent 中运行、无会话历史，子 Agent 输出即本轮回复。不能再委派的子 Agent 内按普通技能内联执行。内置 agent 类型：Claude `Explore`/`Plan`（只读）、Codex `default`/`worker`/`explorer`，项目/用户同名定义覆盖。
+- 校验两级（只有两家都拒绝的才算硬错误）：硬错误不加载——frontmatter 非合法 YAML；名称为空、>64 字符、含空白/路径分隔符/`..`/控制字符。规范告警仍加载并在 UI 展示——`name` 非 `[a-z0-9-]`/首尾 `-`/含 `--`/与目录名不一致；`description` 缺失（回落正文首个非空行）或 >1024；`compatibility` >500；`metadata` 非 string→string。
+- `name` 缺省取目录名；插件内技能对外名 `<plugin>:<name>`（已带前缀不重复）。Polaris 私有参数（`exec_mode`、`risk_level`、`sandbox` 等）只从 `metadata` 的 `polaris-` 前缀键读取，生成的 SKILL.md 同样如此。
+- 全量解析：`license`/`compatibility`/`metadata`/`allowed-tools`；Anthropic 扩展 `when_to_use`/`argument-hint`/`arguments`/`disable-model-invocation`/`user-invocable`/`disallowed-tools`/`model`/`effort`/`context`/`agent`/`paths`；Codex `agents/openai.yaml`（`interface`、`policy.allow_implicit_invocation`、`dependencies.tools`）。`disable-model-invocation: true` 或 `allow_implicit_invocation: false` → 不进模型可见索引；`user-invocable: false` → 仅模型可调。
+- 正文变量：`$ARGUMENTS`/`$N`/`$name`、`${CLAUDE_SKILL_DIR|PLUGIN_ROOT|PLUGIN_DATA|SESSION_ID}`。`` !`cmd` ``/` ```! ` 动态注入经统一沙箱（`CallerType="skill_inject"`）受 PolicyGate 约束，插件技能的注入同受「安装 ≠ 信任」（决策六）。`allowed-tools` 只是预授权提示，不绕过 Cedar/PolicyGate（HE-7）。
+- `context: fork` + `agent`：模型调用时内核把渲染后的正文经 `transfer_to_agent` 委派给 `agent`（缺省 `general-purpose`），复用异步挂起/恢复与 `SpawnDepth`，恢复分支不重复渲染；用户调用时在子 Agent 内运行、无会话历史；不能再委派的子 Agent 内按普通技能内联。内置类型：Claude `Explore`/`Plan`（只读）、Codex `default`/`worker`/`explorer`。
+- agentskills 标准适配器位于 `internal/extension/skill/`，信任用 TrustTier（决策九）。
 
 ## 决策六：Hooks 统一为两家共同的 `hooks.json` 模型
 
-- 格式：`{"hooks":{"<Event>":[{"matcher":"<regex>","hooks":[{"type":...}]}]}}`；处理器 `command`（含 `args` exec 形式、`async`、`timeout`、`statusMessage`）、`http`、`mcp_tool`；`prompt`/`agent` 类型走 Polaris LLM 路由（须标注用途与思考档位，ADR-0101）。
-- 事件：实现 Polaris 有对应语义的全部事件——`SessionStart`、`SessionEnd`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、`PostToolUse`、`PostToolUseFailure`、`SubagentStart`、`SubagentStop`、`Stop`、`StopFailure`、`PreCompact`、`PostCompact`、`Notification`、`Elicitation`、`ElicitationResult`、`Interrupt`。IDE/终端专属事件（`Worktree*`、`CwdChanged`、`FileChanged`、`InstructionsLoaded`、`MessageDisplay` 等）解析但不触发，同决策三「不适用」处置。
-- 输入/输出协议兼容两家：stdin JSON 带 `session_id`/`turn_id`/`hook_event_name`/`cwd`/`model`/`permission_mode` 及事件字段；退出码 0/2/其他语义；JSON 输出识别 `continue`/`stopReason`/`systemMessage`/`decision`/`reason`/`hookSpecificOutput.{permissionDecision,permissionDecisionReason,updatedInput,additionalContext}`。
-- **安装 ≠ 信任**（Codex 规则，Polaris 采纳为硬约束）：插件 hooks 按定义内容 hash 记录，未经用户审阅的 hash 不执行；定义变更后重新进入待审。
-- Hook 输出仍强制 `TaintLevel=High`，经 PolicyGate 决定注入，禁止进入 Immutable Zone（ADR-0016 决策二不变）。
-- 实现约束（2026-09-26 落地时补充）：
-  - 命令处理器经 `sandbox.RunStdio`（Rust 沙箱封装 argv，与 MCP stdio 同一能力）执行，以满足 stdin 输入与 stdout/stderr 分离；封装失败拒绝裸执行。原 `ExecEnvelope` Command 分支与 `KindHookExecute` 删除。
-  - PreToolUse / PermissionRequest 为 veto-only：hook 的 `allow` 不绕过 PolicyGate 与人工审批；`updatedInput` 改写后重新执行 PolicyGate；`ask` 在无逐次交互权限通道时按拒绝处理。
-  - PostToolUse 改为同步：`decision:block` 原因与 `additionalContext` 追加到工具输出并强制 TaintHigh（修订原"PostToolUse 不回写结果"）。
-  - Stop `decision:block` 续跑上限 3 次（宿主硬上限，HE-5），hook 自身发起的调用不再触发 hook（防递归）。
-  - 用户级 hooks.json 视为已信任；项目级与插件 hooks 按定义哈希信任。`[ShellHooks]` 私有事件与 `hooks.yaml` 删除。
-  - SubagentStart / SubagentStop（2026-09-26）：由 `orchestrator.SubagentRunner`（委派任务、fork 技能、agent hook 共用的子 Agent 执行唯一实现）触发，matcher 为 agent 类型，`session_id` 为委派方会话（任务 Namespace）；SubagentStart 输出作为 `<hook-context>` 附加到子 Agent 任务；SubagentStop `decision:block` 续跑上限 3 次，续跑带原任务与上一版输出。Stop / SubagentStop 输入改用标准字段 `last_assistant_message`。
-  - `agent` 类型处理器：以只读子 Agent（`Read`/`Grep`/`Glob`/`LS`，≤50 轮，禁委派）运行，多轮由内核 FSM 驱动（HE-5，不在 hook 引擎内写 LLM 循环）；其工具调用以 `protocol.CtxHooksSuppressedKey` 标记不再触发 hooks（防 PreToolUse agent hook 无限递归），亦不触发 Subagent 事件。
+- 格式 `{"hooks":{"<Event>":[{"matcher":"<regex>","hooks":[{"type":...}]}]}}`；处理器 `command`（含 `args`、`async`、`timeout`、`statusMessage`）、`http`、`mcp_tool`；`prompt`/`agent` 类型走 LLM 路由（ADR-0105）。
+- 事件（`internal/action/hook/hook.go` 17 个）：`SessionStart`/`SessionEnd`/`UserPromptSubmit`/`PreToolUse`/`PermissionRequest`/`PostToolUse`/`PostToolUseFailure`/`SubagentStart`/`SubagentStop`/`Stop`/`StopFailure`/`PreCompact`/`PostCompact`/`Notification`/`Elicitation`/`ElicitationResult`/`Interrupt`。IDE/终端专属事件（`Worktree*`、`CwdChanged`、`FileChanged`、`InstructionsLoaded`、`MessageDisplay` 等）解析不触发。
+- 协议兼容两家：stdin JSON 带 `session_id`/`turn_id`/`hook_event_name`/`cwd`/`model`/`permission_mode` 及事件字段；退出码 0/2/其他；JSON 输出识别 `continue`/`stopReason`/`systemMessage`/`decision`/`reason`/`hookSpecificOutput.*`。
+- **安装 ≠ 信任**：插件 hooks 按定义内容 hash 记录，未审阅 hash 不执行，定义变更重新待审；用户级 hooks.json 视为已信任，项目级与插件级按哈希信任。
+- Hook 输出强制 `TaintLevel=High`，经 PolicyGate 决定注入，只能进 MutableSkill Zone，禁止进 Immutable Zone。
+- 执行约束：命令处理器经 `sandbox.RunStdio`（Rust 沙箱封装 argv，与 MCP stdio 同能力），封装失败拒绝裸执行；PreToolUse/PermissionRequest veto-only（`allow` 不绕过 PolicyGate 与人工审批，`updatedInput` 改写后重跑 PolicyGate，`ask` 无交互通道按拒绝）；PostToolUse 同步，`decision:block` 原因与 `additionalContext` 追加到工具输出并强制 TaintHigh；Stop/SubagentStop `decision:block` 续跑上限 3 次（HE-5），hook 发起的调用不再触发 hook；SubagentStart/SubagentStop 由 `orchestrator.SubagentRunner`（委派、fork 技能、agent hook 共用的唯一子 Agent 执行实现）触发，SubagentStart 输出以 `<hook-context>` 附加到子任务。
+- `agent` 类型处理器：只读子 Agent（`Read`/`Grep`/`Glob`/`LS`，≤50 轮，禁委派），多轮由内核 FSM 驱动（HE-5），其工具调用以 `protocol.CtxHooksSuppressedKey` 标记不再触发 hooks 与 Subagent 事件。
 
 ## 决策七：市场格式与来源
 
-- 读取 `.claude-plugin/marketplace.json` 与 `.agents/plugins/marketplace.json`（Codex；`.claude-plugin/marketplace.json` 亦为 Codex 旧位置）。
-- 来源类型：相对路径（含 `metadata.pluginRoot` 裸名）、`local`、`github`、`url`、`git-subdir`、`npm`（禁用安装脚本）、`archive`（HTTPS + `sha256`）。`ref`/`sha` 固定版本。全部出站经 SafeDialer（XR-06）。
-- **不支持 `command` 来源**：在服务端宿主上执行市场声明的任意命令越过安装安全门（HE-2/HE-7），解析后标记为不可安装并展示原因。
-- Claude 条目的 `strict` 合并语义、Codex 条目的 `policy.installation`（`AVAILABLE`/`INSTALLED_BY_DEFAULT`/`NOT_AVAILABLE`）与 `policy.authentication` 按原语义实现；`INSTALLED_BY_DEFAULT` 仍须过 `Manager.InstallExtension`，不得静默安装（M13-bis §5.6）。
-- 实现（2026-09-27）：解析 `pluginspec.GetMarketplace`（两文件合并，同名条目以 Claude 为主、补入 Codex policy/category；条目逐个校验；保留名/冒充名判定）；`headersHelper` 与 `command` 一样属于在宿主执行命令，拒绝。strict 组合在 `pluginspec.Load(LoadOptions.Entry)`：无清单时条目即清单；strict 时追加六类组件、hooks 按事件替换、条目 mcpServers/lspServers/userConfig/channels 不生效；`strict:false` 且条目带组件即冲突。git 来源只接受 https 并禁 file 协议（来源由第三方市场声明，file/ssh 可读宿主文件或绕过 SafeDialer 预检）。`skill` 市场按 agentskills 仓库逐技能列出；`mcp` 市场改为 MCP Registry（`server.json`）——`modelcontextprotocol/servers` 仓库无标准目录元数据，内置种子替换为 `modelcontextprotocol/registry`。`INSTALLED_BY_DEFAULT` 只作推荐标记，安装仍由用户触发经安装网关。依赖自动安装见决策三补充：dependencies。
-- 收尾（2026-09-27）：用户直接给出来源安装插件/技能（`POST /v1/plugins/create`、`/v1/skills/create` 的 `source`，解析 `pluginspec.ParseSourceSpec`：`owner/repo[@ref]`、GitHub 目录地址、https git/zip、`npm:`、本机绝对路径），取代只写实例行、从不取回的 `manifest_url`/`repo_url+entrypoint`；插件清单 mcpServers 的 https `.mcpb` 由安装层经 SafeDialer 预下载（`LoadOptions.RemoteBundles`）；archive 下载携带条目 `headers`（路由/身份类头剔除）；添加市场须 `plugin:manage` 授权，来源规范化（`owner/repo@ref` 等，固定 ref 每次按 ref 重新拉取），插件/技能市场添加时即同步校验，失败撤销。
+- 读 `.claude-plugin/marketplace.json` 与 `.agents/plugins/marketplace.json`（Codex；`.claude-plugin/marketplace.json` 亦为其旧位置），`pluginspec.GetMarketplace` 合并（同名以 Claude 为主、补 Codex policy/category）。来源：相对路径（含 `metadata.pluginRoot`）、`local`、`github`、`url`、`git-subdir`、`npm`（禁安装脚本）、`archive`（HTTPS + `sha256`）；出站全走 SafeDialer（XR-06）；git 只接受 https 且禁 file 协议。
+- **不支持 `command` 来源与 `headersHelper`**：在宿主执行市场声明的任意命令越过安装安全门（HE-2/HE-7），标记不可安装并展示原因。
+- Claude `strict` 合并语义（`pluginspec.Load(LoadOptions.Entry)`；`strict:false` 且条目带组件即冲突）、Codex `policy.installation`/`policy.authentication` 按原语义；`INSTALLED_BY_DEFAULT` 只作推荐标记，安装仍由用户触发经 `Manager.InstallExtension`（M13-bis §5.6）。`mcp` 市场用 MCP Registry。
+- 用户直给来源安装（`POST /v1/plugins/create`、`/v1/skills/create` 的 `source`，`pluginspec.ParseSourceSpec`）；https `.mcpb` 由安装层经 SafeDialer 预下载；archive 下载带条目 `headers`（路由/身份类头剔除）；添加市场须 `plugin:manage` 授权，添加时同步校验、失败撤销。
 
-## 决策八：MCP 客户端对齐 2026-07-28（末阶段）
+## 决策八：MCP 客户端对齐 2026-07-28
 
-`server/discover` 无状态握手 + 对 2025-11-25 服务器回退 `initialize`；`Mcp-Method`/`Mcp-Name` 头；`resultType` 与 `InputRequiredResult` 多轮；Tasks 扩展轮询；OAuth（CIMD、`iss` 校验、按授权服务器绑定凭据）；MCP Apps（`ui://`、`text/html;profile=mcp-app`）在 Web 聊天沙箱 iframe 渲染，UI 发起的调用走同一 ExecuteTool 审计路径。
+- `server/discover` 无状态握手（对 2025-11-25 服务器回退 `initialize`）；`Mcp-Method`/`Mcp-Name` 头；`resultType` 与 `InputRequiredResult` 多轮（MRTR/elicitation，网关 broker + hooks 优先程序化作答）；Tasks 扩展轮询；工具列表变更（旧纪元通知 + `subscriptions/listen`）；OAuth（CIMD、`iss` 校验、按授权服务器绑定凭据）；MCP Apps（`ui://`、`text/html;profile=mcp-app`）在 Web 聊天沙箱 iframe 渲染，UI 发起调用走同一 ExecuteTool 审计路径。逐项见 M13-bis §8.5。
+- `sse` 类型的 url 即 SSE 端点本身，不得再拼 `/sse`。
+- MCP Apps 沙箱异源用独立监听端口（默认主端口 +1；沙箱需 `allow-same-origin`）；反向代理部署用 `apps_sandbox_origin` / `apps_host_origin` 显式配置。ChatGPT `openai/*` 与 `text/html+skybridge` 作别名归一到标准表示，ChatGPT 专属扩展不定义。
+- CIMD 仅在网关以 https 非回环地址对外可达时启用，否则走 DCR 或预注册；OAuth 流程状态（state/code_verifier）只驻内存 10 分钟。
+- 主密钥轮换覆盖全部 Vault 密文（OAuth 令牌、客户端密钥、预注册密钥）与插件敏感配置，单事务改写（`repo.RekeyVaultCiphertexts`）；新增 Vault 密文列必须登记其清单。
 
-- 实现（2026-09-27 ~ 09-29，逐项见 M13-bis §8.5）：双纪元客户端、请求头与 `_meta`、MRTR 与 elicitation（网关 broker + hooks）、Tasks 扩展、工具列表变更（旧纪元通知 + `subscriptions/listen`）、OAuth 客户端与网关接线、MCP Apps 宿主后端与前端桥。
-- MCP Apps 沙箱异源采用**独立监听端口**（默认主端口 +1）：规范要求宿主与 Sandbox proxy 异源且 Sandbox 需 `allow-same-origin`，不带该权限的 opaque-origin iframe 不满足；端口不同即异源，自托管单实例无需第二个域名。沙箱源由前端按自身 hostname + 端口拼出，`frame-ancestors` 按请求 hostname 生成，反向代理部署用 `apps_sandbox_origin` / `apps_host_origin` 显式配置。
-- ChatGPT 兼容：`openai/outputTemplate`、`openai/widgetAccessible`、`openai/widgetCSP`、`text/html+skybridge` 作为别名输入归一到标准表示；`window.openai` 只提供可映射到标准桥的成员，结账/文件/模态等 ChatGPT 专属扩展不定义，交给组件的特性检测回退。
-- CIMD 仅在网关以 https 非回环地址对外可达时启用（授权服务器须能抓取文档）；其余情形走 DCR 或预注册。OAuth 流程状态（state / code_verifier）只驻留内存 10 分钟——一次性临时凭据落盘只扩大泄露面，进程重启后重新授权即可。
-- 主密钥轮换同步覆盖本决策新增的全部 Vault 密文（OAuth 令牌、客户端密钥、预注册密钥）与插件敏感配置，单事务改写（`repo.RekeyVaultCiphertexts`）；新增 Vault 密文列必须登记在其清单中。
+## 决策九：统一信任模型——五级 TrustTier（原 ADR-0016 决策一，§2.1）
 
-## 后果
+- `TrustSystem(4)` 内置硬编码 → `TrustOfficial(3)` 官方 Publisher 白名单（等同系统权限，`approval=auto`）→ `TrustCommunity(2)` cosign 签名未入白名单 → `TrustLocal(1)` HMAC 本地签名 → `TrustUntrusted(0)` fail-closed 拒绝。替代 `SignatureValid bool`（`pkg/types/enums_security.go`）。
+- 官方 Publisher 白名单 `configs/extensions/trusted-publishers.yaml`（内嵌，`config.ListTrustedPublishers` 加载；现含 anthropic/openai/google/modelcontextprotocol/github/microsoft/figma/polarisagi），离线校验为主（Publisher ID + content hash pinning），版本锁定 commit hash + sha256，不自动升级。
+- Plugin Catalog 归 M13；`trust_tier` 列内嵌于 `008/015/019/020/021` 原始 DDL。
 
-- **正向**：两家与 agent-plugins 标准的插件可直接安装运行；删除约 1.5K 行空壳/自造格式代码；插件内技能、MCP 真正生效（修复现存静默丢失）。
-- **负向**：`PluginBundleManifest` 等 `internal/protocol` 契约破坏性变更（B5.2）；hooks 引擎事件扩面需 FSM 多处埋点；分 8 个阶段落地，期间 M13-bis 描述需逐阶段订正。
-- **反例守护**：
-  - 拒绝恢复独立 `app` 扩展类型或 `apps` 表——App 在两家标准中都是连接器/插件子组件。
-  - 拒绝把 `.app.json` 的 app 条目转成 `ext_type=mcp`——违背 Codex 绑定语义（本 ADR 决策四，2026-09-26 用户裁决）。
-  - 拒绝新增 Polaris 私有清单格式或私有字段变体——私有数据只进 `extensions["ai.polarisagi"]`。
-  - 拒绝「安装即信任」执行插件 hooks / 技能注入命令。
-  - 拒绝以 `allowed-tools` 旁路 PolicyGate。
-  - 拒绝支持市场 `command` 来源。
+## 决策十：安装实例表与升级（原 ADR-0016 决策三/四）
 
-## 被驳回的方案
+- `extension_instances`（`020`）是所有已安装扩展的单一事实来源（`ext_type`/`origin`/`catalog_id`/`runtime_id`/`install_path`/`status`/`installed_version`）；安装状态归实例表（Layer 1），运行参数在 `mcp_servers`/`skills`/`plugins`（Layer 2），插件内子组件不污染基础表。
+- 版本：`extension_catalog.version`（市场最新）+ `extension_instances.installed_version`；`POST /v1/plugins/{id}/upgrade`（`HandleUpgradePlugin`）增量升级，保留 `extension_instances.id` 与 `install_path`，不触发卸载副作用。
 
-| 方案 | 驳回理由 |
-|---|---|
-| `.app.json` 映射为 `type=mcp` 条目 | Codex 中 app 是对平台已注册连接器的引用，不是连接定义；映射会凭空造出无端点的 MCP |
-| 保留 App 为顶层类型对应 ChatGPT Apps SDK | 富 UI 已成为 MCP Apps 扩展（MCP 服务器能力），不是独立扩展类型 |
-| 对 LSP/主题等实现宿主适配 | 服务端 Agent 无编辑器/终端渲染面；agent-plugins 1.0 明确允许忽略不支持的组件类型 |
+## 决策十一：MCP 传输层与污点解码（原 ADR-0017 决策一/二）
 
-## 引用代码
+- Streamable HTTP 为默认远程传输（2025-11-25 spec），SSE 仅兼容旧 server 且标 legacy，stdio 仅本地子进程；新接入 server 必须走 Streamable HTTP（`http`/`streamable-http`/`streamable_http` 归一）。
+- MCP JSON-RPC 动态结构禁止 `encoding/json` 直解到 `map[string]interface{}`（丢失 M11 §2.1 TaintLevel）；用 `TaintPreservingDecoder`（`internal/extension/mcp/taint_decoder.go`）递归包装所有 string 叶子为 `TaintedString{Source=MCP, Origin=server_name}`：白名单 server → TaintMedium，其余 TaintHigh。客户端字段读取走 `json.Unmarshal` 抄近路一律驳回。
 
-`internal/protocol/extensions.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin}/`、`internal/action/hook/`、`internal/extension/lifecycle/agent_definitions.go`、`internal/agent/agent_profile.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}*.go`、`internal/execute/orchestrator/subagent_runner.go`、`internal/agent/agent_skill_fork.go`、`internal/extension/lifecycle/channels*.go`、`internal/extension/mcp/mcp_manager_notify.go`、`internal/security/credential/vault.go`、`internal/extension/mcp/{mcp_client_era,mcp_headers,mcp_client_mrtr,elicitation,mcp_client_tasks,mcp_client_subscribe,mcp_manager_refresh}.go`、`internal/extension/mcp/{oauth_*,mcp_apps_*}.go`、`internal/gateway/elicitation/`、`internal/gateway/server/{server_handlers_elicitation,oauth_mcp_handlers,server_handlers_mcp_apps,server_apps_sandbox}.go`、`internal/store/repo/repo_vault_rekey.go`、`internal/protocol/schema/{008,013,015,018,019,020,021,040}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md §1/§2/§5`
+## 决策十二：skill 子包不设并行本地接口（原 ADR-0002，R1.4）
+
+`internal/extension/skill` 统一使用 `protocol.SkillRegistry`/`protocol.SkillMeta`（`internal/protocol/interfaces_skill.go`），不设与之并行的本地接口/类型（曾致字段语义损失）。真有不兼容需求先扩展 protocol 定义，不重引入本地并行接口。
+
+## 决策十三：原 ADR-0016 决策二残余
+
+- CSV Batch Fan-out（`orchestrator.CSVFanoutJob`，CLI `cli_fanout.go`）状态变更走 EventLog（HE-6），不建独立 SQLite。
+- 搁置（P3）：prefix_rule DSL（Cedar 已覆盖）、Permission Profile（OS 沙箱工作量大）。
+
+## 反例守护 / 已驳方案
+
+- 恢复独立 `app` 类型或 `apps` 表 — App 在两家标准中是连接器/插件子组件。
+- `.app.json` 条目转 `ext_type=mcp` — 违背 Codex 绑定语义（2026-09-26 用户裁决），会凭空造出无端点的 MCP。
+- 保留 App 顶层类型对应 Apps SDK — 富 UI 已是 MCP Apps（服务器能力）。
+- 新增 Polaris 私有清单格式/字段变体 — 私有数据只进 `extensions["ai.polarisagi"]`。
+- 「安装即信任」执行插件 hooks / 技能注入；`allowed-tools` 旁路 PolicyGate；支持市场 `command` 来源。
+- 并存 `SignatureValid bool` 信任；在线 cosign Rekor 作主路径（Tier-0 离线不可用）；按类型分四个安装表；Hook 直写 Immutable Zone；对 LSP/主题实现宿主适配。
+- 新 MCP server 用 SSE「以简化」。
 
 ## 重新评估触发条件
 
-1. agent-plugins.org 发布 1.1+ 且 Anthropic 采纳为 Claude 插件主格式 → 重议优先级表（决策二）。
-2. OpenAI 发布可供自托管解析的连接器目录 API → 决策四的 `unbound` 可自动解析。
-3. Polaris 新增编辑器/终端宿主形态 → 重议 LSP/outputStyles 等「不适用」组件。
+1. agent-plugins.org 发布 1.1+ 且 Anthropic 采纳为 Claude 主格式 → 重议决策二优先级表。
+2. OpenAI 发布可自托管解析的连接器目录 API → 决策四 `unbound` 可自动解析。
+3. 新增编辑器/终端宿主形态 → 重议 LSP/outputStyles 等「不适用」组件。
+4. Cedar 被证明有真实缺口 → 重议 P3 搁置项。
+5. MCP spec 发布新的强制传输要求 → 重议跟进，SSE 仅 legacy 定位不变。
 
-## 修订记录
+## 沿革
 
 | 日期 | 变更 |
 |---|---|
-| 2026-09-26 | 初稿 |
-| 2026-09-26 | 决策六：补充落地实现约束（RunStdio 执行、veto-only、PostToolUse 同步回传、Stop 续跑上限、ShellHooks 删除）。 |
-| 2026-09-26 | 决策五：技能校验由「违规即不加载」改为硬错误/规范告警两级。理由：Claude 规定 `name`、`description` 均可缺省（分别回落目录名与正文首行），按 agentskills 严格拒绝会使合法 Claude 技能无法加载，违背双标准兼容目标。新增决策二补充：宿主环境变量展开限制。 |
-| 2026-09-26 | 决策三补充：子 Agent 定义与委派落地（双格式解析、工具名映射、只读/步数/禁委派硬拦截、YAML 私有格式删除、`transfer_to_agent` 注册）。 |
-| 2026-09-26 | 决策五/六补充：`context: fork` 技能、两家内置 agent 类型、SubagentStart/SubagentStop、`agent` 类型 hook（只读子 Agent + hook 抑制）。 |
-| 2026-09-27 | 决策三补充：Claude 插件 channels（事件入会话、`plugin_channels` 显式启用、审批转发）。 |
-| 2026-09-27 | 决策四：应用绑定落地（解析、手动绑定、升级保留）。 |
-| 2026-09-27 | 决策三补充：dependencies 加载期检查（安装停用、启用阻断、级联停用、启动检查）。 |
-| 2026-09-27 | 决策七：标准市场同步与来源取回落地（删除启发式爬虫与 catalog.json；MCP 市场改为 MCP Registry）；决策三补充 dependencies：自动安装落地。 |
-| 2026-09-27 | 决策七收尾：来源直装、远程 .mcpb、archive headers、添加市场规范化与授权；依赖范围交集重解析与 prune。 |
-| 2026-09-29 | 决策八：MCP 2026-07-28 客户端落地（双纪元、MRTR/elicitation、Tasks、工具变更订阅、OAuth、MCP Apps）；沙箱独立端口异源、ChatGPT 别名归一、CIMD 启用条件、主密钥轮换覆盖面。 |
+| 2026-05-16 | 原 ADR-0002：skill 子包本地接口消除（决策十二） |
+| 2026-05-21/22 | 原 ADR-0016 决策一（五级 TrustTier，取代 ADR-0015 §2.1 中间方案）、决策二（Codex 特性集成）、决策三（实例表，原 ADR-0019）；原 ADR-0017 决策一/二（传输、TaintPreservingDecoder，原 ADR-0018） |
+| 2026-07-23 | 原 ADR-0016 决策四：升级版本化（原 ADR-0075） |
+| 2026-09-26 | 本 ADR 初稿，修订 0016 决策二（Hook 5 事件 → 两家共同事件模型；Custom Agent YAML → `.md`/`.toml`）与决策三（删 `apps` 表）；决策五校验由「违规即不加载」改为硬错误/规范告警两级（Claude 允许 `name`/`description` 缺省）；子 Agent、`context: fork`、`agent` 型 hook 落地 |
+| 2026-09-27 | channels、dependencies（含自动安装/prune）、应用绑定、标准市场同步与来源直装落地 |
+| 2026-09-29 | 决策八：MCP 2026-07-28 客户端落地 |
+| 2026-10-12 | 并入 ADR-0016/0017 决策一二/0002；0017 决策三（入站 A2A 端点实为私有协议，且「出站不复用 MCP 客户端」被 ADR-0084 推翻）归 ADR-0111；白名单订正为 YAML 配置 |
+
+## 引用代码
+
+`internal/protocol/{extensions,interfaces_skill}.go`、`internal/extension/{marketplace,lifecycle,native,skill,plugin,pluginspec,mcp}/`、`internal/action/hook/`、`internal/agent/{agent_profile,agent_skill_fork}.go`、`internal/tool/catalog/tool_restriction.go`、`internal/tool/builtin/{list_agents,delegation_tools}.go`、`internal/execute/orchestrator/{subagent_runner,csv_fanout}.go`、`internal/security/{credential/vault,taint/taint}.go`、`internal/config/trusted_publishers.go`、`configs/extensions/trusted-publishers.yaml`、`pkg/types/enums_security.go`、`internal/gateway/elicitation/`、`internal/gateway/server/plugin/`、`internal/store/repo/repo_vault_rekey.go`、`internal/protocol/schema/{008,013,015,018,019,020,021,040}_*.sql`、`docs/arch/M13-bis-Extension-Registry.md`

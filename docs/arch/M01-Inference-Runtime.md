@@ -1,11 +1,11 @@
 # 模块 1：Inference Runtime —— 推理运行时
 
-> **一句话定位**：LLM 推理的统一入口，API 优先架构，Provider Router 为核心，本地推理仅作隐私/离线备选。
+> **定位**：LLM 推理统一入口；API 优先，Provider Router 为核心；本地推理默认关闭，仅显式启用（ADR-0109）。
 >
-> **实现语言**：Go　|　**代码位置**：`internal/llm/`
+> **语言**：Go　|　**代码**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:166 Token预算 / 6:251 SemanticCache / 7:299 Fallback / 8:363 本地推理local_only / 9:416 ModelVersion / 12:453 (SOFT)降级 / 10:470 凭证池+速率追踪 / 13:490 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:25 不变量速查 / 1:40 默认模型 / 2:46 Provider接口 / 3:52 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:121 Token预算 / 6:182 SemanticCache / 7:204 Fallback / 8:234 363 本地推理local_only / 9:277 416 ModelVersion / 12:292 453 (SOFT)降级 / 10:309 470 凭证池+速率追踪 / 13:325 490 依赖 -->
 
 ---
 
@@ -13,13 +13,12 @@
 
 | M1 **是** | M1 **不是** |
 |-----------|-------------|
-| LLM 推理的统一入口 | 会话管理器（M4） |
-| Provider 路由与适配 | Prompt 构建器（M4 PromptFn） |
-| 结构化输出强制（JSON Schema + GBNF（GGML BNF，GGML 巴科斯范式）） | 业务逻辑决策者 |
-| Token 计数与流式成本追踪 | 预算策略制定者（M11） |
-| 本地推理侧车管理（离线/隐私 fallback） | 模型训练（M9） |
-| 流式 SSE 帧归一化（Anthropic/OpenAI/DeepSeek → 统一 StreamEvent） | 推理结果质量评估（M12） |
-| 多模态请求预处理（图片降采样/格式归一，`Infer`/`StreamInfer` 入口统一执行） | 业务侧多媒体采集（M13 Gateway） |
+| LLM 推理统一入口、Provider 路由与适配 | 会话管理器（M4）、Prompt 构建器（M4 PromptFn） |
+| 结构化输出强制（JSON Schema + GBNF） | 业务逻辑决策者、预算策略制定者（M11） |
+| Token 计数与流式成本追踪 | 模型训练（M9）、推理质量评估（M12） |
+| 流式 SSE 帧归一化（Anthropic/OpenAI/DeepSeek → 统一 StreamEvent） | 业务侧多媒体采集（M13 Gateway） |
+| 多模态预处理（`media_opt`，`Infer`/`StreamInfer` 入口统一执行） | — |
+| 向量化引擎选择与进程内 ONNX 嵌入器（`internal/llm/embedonnx`，ADR-0109）；语音 STT/TTS 引擎（`internal/llm/stt`、`tts`、`audiorun`，ADR-0110） | — |
 
 ---
 
@@ -34,48 +33,31 @@
 | inv_M1_05 | CircuitBreaker 全熔断返回 `ErrAllProvidersFailed`，不静默降级 | 集成测试 |
 | inv_M1_06 | API Key 经 `credentialFn() []byte` JIT 获取，RoundTrip 返回后立即 `Header.Del` + `clearBytes` 清零原始切片；Anthropic 适配器用 `keyInjectRT` transport，其余适配器用 `setAuthHeader` + defer cleanup（含 `Header.Del`） | Code Review |
 
-> 进入此模块前必读 **LLM 超时保护 + Failover 全量遍历工程化阵阱**：`docs/specs/09-LLM-Agent-Production.md`（HE-Rule-1/5 实例: A-01/A-04/A-05 + P-1/P-2/P-7）
+> 进入此模块前必读：`docs/specs/09-LLM-Agent-Production.md`（A-01/A-04/A-05 + P-1/P-2/P-7：LLM 超时保护 + Failover 全量遍历）。
 
 ---
 
 ## 1. 默认模型
 
-Provider-agnostic 设计。`configs/defaults.toml` 推荐组合：DeepSeek V4 系列（已在 Tier-0 长程验证）；备选 Claude Sonnet 4.6 / GPT-5.x 等任何符合 §2 Provider Interface 的实现。
+Provider-agnostic。`configs/defaults.toml [inference]` 推荐 DeepSeek V4 系列（default=`deepseek-flash`，reasoning=`deepseek-v4-pro`）；任何符合 §2 接口的实现均可替换。选型依据 → ADR-0020。
 
 ---
 
 ## 2. Provider Interface
 
-接口定义见 `internal/protocol/interfaces_llm.go`（`Provider`），包含 `ModelID() string` 支持真实模型身份认知的系统提示词注入。
-
-类型定义见 `internal/protocol/types.go`（`InferRequest` / `InferResponse` / `StreamEvent` / `ProviderCapabilities` / `TokenizerAdapter`）。
+接口：`internal/protocol/interfaces_llm.go`（`Provider`，含 `ModelID()` 用于系统提示词注入真实模型身份）。类型：`internal/protocol/types.go`（`InferRequest` / `InferResponse` / `StreamEvent` / `ProviderCapabilities` / `TokenizerAdapter`）。
 
 ---
 
 ## 3. Provider Adapter
 
-每个 Adapter 是 Provider 接口的具体实现，直接位于 `internal/llm/`。外部 SDK（如 `openai-go` / `anthropic-sdk-go`）仅在 Adapter 内引用，不暴露至上层。
+Adapter 位于 `internal/llm/adapter/`：`anthropic` / `openai` / `deepseek` / `google`（Agent Platform）/ `ollama`（OpenAI 兼容协议接本机 Ollama）/ `local`（同进程 FFI，见 §8.1）。外部 SDK 仅在 Adapter 内引用。装配入口 `cmd/polaris/server_provider_loader.go`（按 provider_catalog 的 type 构造）。
 
 每个 Adapter 内置：
-
-- Pre-flight token count
-- Post-flight usage recording
-- **KV（Key-Value，键值）Cache 路由与注入（system_and_3 策略）**：
-  Anthropic Adapter 实现 4 断点策略：
-  1. system prompt（PromptCaching 启用时转为 text array 注入 cache_control）
-  2. tools 定义末项（会话内不变，命中率高）
-  3. 倒数第 2 条非 system 消息
-  4. 最后 1 条非 system 消息
-  
-  断点 3+4 缓存会话历史前缀，多轮对话输入 token 成本可降约 75%。与 M5 上下文组装顺序（ImmutableCore → Procedural → Episodic）耦合，stable 层先于 volatile 层，最大化 prefix 命中率。
-- 结构化错误（4xx / 5xx / rate limit / timeout）
-- 自动重试（exponential backoff + jitter）
-- **SSE 帧归一化**：Anthropic SSE（`event:` 行 + JSON data）/ OpenAI SSE（`data: [DONE]` 哨兵）/ DeepSeek JSON 行流 → 统一 `chan StreamEvent`，上层仅见 4 类事件。
-- **凭证安全获取与清理**：
-  API Key 通过 `credentialFn() []byte` JIT 获取，RoundTrip 返回后立即 `Header.Del` + `clearBytes` 清零。两种实现并存：
-  - Anthropic 适配器使用 `keyInjectRT` RoundTrip 拦截器（`Header.Del("x-api-key")`）；
-  - OpenAI/DeepSeek/Google 等适配器使用 `setAuthHeader` + defer cleanup（`Header.Del("Authorization")` + `clearBytes`）。
-  两种模式均满足 inv_M1_06。
+- Pre-flight token count、Post-flight usage recording、结构化错误（4xx/5xx/rate limit/timeout）、指数退避 + jitter 重试。
+- **KV Cache 路由（system_and_3，Anthropic）**：4 断点——system prompt（PromptCaching 启用时转 text array 注入 cache_control）/ tools 末项 / 倒数第 2 条非 system 消息 / 最后 1 条非 system 消息。3+4 缓存会话历史前缀，多轮输入成本约 -75%；与 M5 上下文组装顺序（ImmutableCore → Procedural → Episodic，stable 先于 volatile）耦合以最大化前缀命中。缓存经济学 → ADR-0105。
+- **SSE 帧归一化**：Anthropic SSE（`event:` 行 + JSON）/ OpenAI SSE（`data: [DONE]`）/ DeepSeek JSON 行流 → 统一 `chan StreamEvent`（上层仅见 4 类事件）。
+- **凭证安全**（inv_M1_06）：Anthropic 用 `keyInjectRT` RoundTrip 拦截器（`Header.Del("x-api-key")`）；OpenAI/DeepSeek/Google 用 `setAuthHeader` + defer cleanup（`Header.Del("Authorization")` + `clearBytes`）。
 
 ---
 
@@ -85,81 +67,54 @@ Provider-agnostic 设计。`configs/defaults.toml` 推荐组合：DeepSeek V4 �
 
 | 层 | 机制 | 延迟 | 命中率目标 |
 |----|------|------|----------|
-| L1 规则路由 | 启发式分派（task_type + token 长度，纯规则，零 LLM 零 ML 模型）| <1ms | 90% |
-| L2 复杂度评估 | 启发式打分（ToolCount + outputEstimate EMA（Exponential Moving Average，指数移动平均））输出 0.0–1.0 复杂度，**非 ML 分类器** | ~5ms | 9% |
+| L1 规则路由 | task_type + token 长度，纯规则，零 LLM 零 ML | <1ms | 90% |
+| L2 复杂度评估 | 启发式打分（ToolCount + outputEstimate EMA）输出 0.0–1.0，**非 ML 分类器** | ~5ms | 9% |
 | L3 级联路由 | L1+L2 低置信度时调用 Budget Pool LLM 推荐 provider slot | ~50ms | <1% |
 
-L3 LLM 输出 provider 推荐槽位，由 `Route()` 确定性函数验证（预算门控、quota 可用性、CircuitBreaker 状态）后采纳。
+L3 输出的槽位由 `Route()` 确定性函数验证（预算门控、quota、CircuitBreaker）后采纳；LLM 填空，Go Router 持最终决策权 [HE-Rule-5]。L1/L2 严格零 LLM 调用（inv_M1_03）。
 
-LLM 填空，Go Router 持有最终决策权，符合 [HE-Rule-5]。
+> **路由硬约束**：①90% 走 L1 ②质量优先 → 延迟 → cost tiebreaker ③仅 L3 可用 LLM ④保留 Pre-flight 成本估算 ⑤Cache 一等公民 ⑥3 级软限流（告警不阻断）⑦CircuitBreaker 必备
 
-L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/outputEstimate 的纯启发式公式，不是机器学习分类器。
+### 4.2 Role Pool
 
-> **约束（路由硬约束）**：
-> 1. 90% 走 L1
-> 2. 质量优先 → 延迟 → cost tiebreaker
-> 3. 仅 L3 级联可用 LLM 判定
-> 4. Pre-flight 成本估算保留
-> 5. Cache 一等公民
-> 6. 3 级软限流（告警不阻断）
-> 7. CircuitBreaker 必备
+`ProviderRegistry`（`internal/llm/provider_registry.go`）按 `role` 分组，`BestForRole(role)` 返回最高 healthScore 的可用 Provider。
 
-### 4.2 三个核心 Role Pool
+| Role | 候选示例 | 用途 |
+|------|---------|------|
+| `default` | flash 档（DeepSeek Flash / Claude Haiku 等） | 默认主路径（感知、直答、摘要、简单工具） |
+| `reasoning` | pro 档（DeepSeek V4 Pro / Claude Opus / o 系列等） | 复杂规划、重规划、长链推理 |
+| `general` | 路由层派生，不单独配置 | `poolRoles("general") = [default, general]`：先取对话模型，`role=general` 的备用模型仅兜底 |
 
-实际实现：`ProviderRegistry`（`router.go`）按 `role` 字段分组注册，`BestForRole(role)` 返回最高健康分可用 Provider。
+Pool 级联降级链（`internal/llm/router.go` `poolFallbackChain`）：reasoning→general→default→budget；general→default→budget；default→budget。跨 Pool 降级沿用已失败条目跳过集（`tryPoolFallback`，`internal/llm/router_failover.go`）。catalog 只写 default/reasoning 并只补空缺（`internal/gateway/server/provider/catalog.go`）。历史：旧版 catalog 为 general 复制模型行，致降级重试同一模型（2026-09-25 订正为派生）。
 
-| Role | 候选模型示例 | 默认用途 |
-|------|------------|---------|
-| `default`（对话） | `<flash-class>`（DeepSeek Flash / Claude Haiku 等）| 默认主路径（感知、直答、摘要、简单工具）|
-| `reasoning`（推理） | `<reasoning-class>`（DeepSeek V4 Pro / Claude Opus / o-系列等）| 复杂规划、重规划、长链推理 |
-| `general`（通用） | 恒等于对话模型，不单独配置 | `poolRoles("general") = [default, general]`：先取对话模型，`role=general` 的备用模型（手动添加或被独占角色挤下）仅兜底 |
-
-> 2026-09-25 追记（以代码为准订正）：原表为 `general`=flash / `default`=standard / `reasoning`=pro 三档。实际 catalog 种子与路由早已是 `default`=flash、`reasoning`=pro；catalog 曾为 `general` 复制一行模型（两模型厂商复制推理模型，三模型厂商另配中档模型），复制行与原行各持凭据池/熔断器，推理→通用降级会重试同一模型，且手动改对话模型后通用不跟随。现改为路由层派生（`internal/llm/provider_registry.go poolRoles`），catalog 只写 default/reasoning 并只补空缺（`internal/gateway/server/provider/catalog.go`）；跨 Pool 降级沿用已失败条目跳过集（`tryPoolFallback`/`streamPoolFallback`）。
-
-> **设计决策**：`configs/defaults.toml` 选 DeepSeek V4 系列组合（价格优势与 Tier-0 极速响应兼具）。系统已不再为普通设备维护本地模型策略（本地模型仅限 Tier-3 超高配置节点独立启用）。
+本地模型不属普通设备的默认策略（ADR-0109）；`ollama` / `llama_local` 类型 Provider 未填 role 时默认 `general`，避免空 role（costTier=0）与 default 同档竞争而吞掉后台调用（ADR-0109 D6，`cmd/polaris/server_provider_loader.go`）。
 
 ### 4.3 多模态请求预处理
 
-多模态请求预处理（`internal/llm/`，`media_opt` 模块）在所有推理入口统一执行，覆盖 Gateway、Kernel、MCP（Model Context Protocol，模型上下文协议）工具结果、Swarm 全部调用路径：
-
-- 图片降采样：长边 > 1568px 等比缩放，满足主流 Vision Provider token 预算上限
-- 格式归一：PNG/GIF 转 JPEG（quality=85），减少传输体积
-- 不修改文本内容、工具定义、路由参数，对非图片 Part 零开销
-
-调用方无需手动处理；MCP 工具返回的 `protocol.ImagePart` 由此路径自动压缩。
+`media_opt`（`internal/llm/media_opt.go`）在所有推理入口统一执行（Gateway/Kernel/MCP 工具结果/Swarm）：图片长边 >1568px 等比缩放；PNG/GIF 转 JPEG(q=85)；不改文本、工具定义、路由参数；非图片 Part 零开销。MCP 返回的 `protocol.ImagePart` 自动经此压缩。
 
 ### 4.4 ComplexityDeterminer
 
-**已废弃并移除**：项目初期曾设计 `determineComplexity`（基于工具数量 + 预估输出 token 给出 1-3 级复杂度评分）作为 L2 路由辅助。
-
-但在实际验证中发现，当前的单层 HealthScore 路由 + Role Pool（`general`/`default`/`reasoning`）+ ADR-0020（Architecture Decision Record，架构决策记录） ThinkingMode 三档设计已完全能覆盖“简单任务便宜模型、复杂任务深度思考”的核心诉求。为避免引入不必要的判断分支和复杂度，`determineComplexity` 及其相关代码已被彻底删除。
-
-注意与 ADR-0020 / ADR-0102 决策六（ThinkingMode + 规划池阶梯，`internal/observability/metrics/metrics_handler.go` 的 `SelectPlanTier`）区分：后者选的是”思考强度”而非”Provider”，两者是并行机制，不能互相替代。
+**已删除**：`determineComplexity`（工具数 + 输出预估的 1-3 级评分）被单层 healthScore 路由 + Role Pool + ThinkingMode 三档完全覆盖，代码已清除（ADR-0020）。ThinkingMode 选的是「思考强度」而非「Provider」（§5.2-bis），与路由是并行机制，不可互相替代。
 
 ### 4.5 Route 方法
 
-实现见 `internal/llm/`（`InferenceRouter`）。Provider 选择按健康分降序 + CircuitBreaker 状态 + 多模态能力过滤；失败则 Failover，全部不可用返回 `ErrAllProvidersFailed`。
+实现：`internal/llm/router.go`（`InferenceRouter`）。Provider 选择 = healthScore 降序 + CircuitBreaker 状态 + 多模态能力过滤；失败 Failover，全部不可用返回 `ErrAllProvidersFailed`。成功调用及 failover 后产出 topic `llm.call.recorded` 事件至 events 表（成本数据唯一生产者）。
 
-> **2026-09-20 复核**：GR-10.1-001。InferenceRouter 作为成本数据的唯一真实生产者，在成功调用及 failover 后会产出 topic 为 `llm.call.recorded` 的事件至 events 表，记录使用量和成本。
-
-**熔断器由 `ProviderRegistry` 直接持有**（`internal/llm/provider_registry.go`），无独立 `fallback.go` 或 `FallbackExecutor` 类型：
-- `circuitBreaker`（`internal/llm/circuit_breaker.go`）：基于连续失败次数的标准 3 态熔断器（Closed/Open/HalfOpen）。
-- `windowCircuitBreaker`（`internal/llm/window_breaker.go`）：基于滑动时间窗口错误率的熔断器，与 `circuitBreaker` 并行生效，窗口内请求数达到 `minRequests` 后按 `errorRateThreshold` 判定熔断。
+**熔断器由 `ProviderRegistry` 直接持有**（无独立 `FallbackExecutor`）：
+- `circuitBreaker`（`internal/llm/circuit_breaker.go`）：连续失败次数 3 态（Closed/Open/HalfOpen）。
+- `windowCircuitBreaker`（`internal/llm/window_breaker.go`）：滑动窗口错误率，与前者并行生效；窗口内请求数达 `minRequests` 后按 `errorRateThreshold` 判定。
 
 ### 4.5 路由配置参数
 
 | 参数 | 默认值 |
 |------|--------|
 | L1 目标命中率 | `spec/state.yaml §m1_router.l1_target_hit_rate` |
-| L1 超时 | <1ms |
-| L2 超时 | ~5ms |
-| L3 超时 | ~50ms |
-| CircuitBreaker 连续失败熔断阈值 | `spec/state.yaml §m1_router.circuit_breaker_failure_count` |
-| CircuitBreaker 冷却时间 | `spec/state.yaml §m1_router.circuit_breaker_cooldown_seconds` |
-| CircuitBreaker 半开探测上限 | `spec/state.yaml §m1_router.circuit_breaker_half_open_max` |
+| L1 / L2 / L3 超时 | <1ms / ~5ms / ~50ms |
+| CircuitBreaker 连续失败阈值 / 冷却 / 半开探测上限 | `spec/state.yaml §m1_router.circuit_breaker_failure_count` / `circuit_breaker_cooldown_seconds` / `circuit_breaker_half_open_max` |
 | MaxStreamBufferSize | `spec/state.yaml §m1_router.max_stream_buffer_kb`（Tier 1+ 可配至 1MB） |
 
-> ✅ `NewProviderRegistry(cfg)` 已接受 `M1RouterThresholds`，熔断器参数通过配置注入，TOML 热覆盖生效。
+`NewProviderRegistry(cfg)` 接受 `M1RouterThresholds`，熔断参数经配置注入，TOML 热覆盖生效。
 
 ---
 
@@ -176,75 +131,51 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 | Provider 配额 | 可配置 | 自动切换备选 |
 | 后台任务 LLM 调用 | — | Stage1 THROTTLE → 挂起；Stage2 PAUSE → 跳过 |
 
+Token 经济（缓存稳定前缀、cheap-first、账本）→ ADR-0105。
+
 ### 5.2 Reasoning Budget Scheduling
 
-实现见 `internal/llm/`（`StreamGuard`）。
-
-支持三种模式：
-- `fixed`：MaxReasoningSteps=5, MaxThinkingTokens=4096
-- `adaptive`：`min(16384, 4096×(1+SI×3))`
-- `batch`：32K, 夜间 2-6am, 非交互
-
-[TokenBurnRate] 处于 Stage1 THROTTLE 时 → 降一档：`batch` → `adaptive`，`adaptive` → `fixed`，`fixed` → `256`。
+实现：`internal/llm/stream_guard.go`（`StreamGuard`）。三模式：`fixed`（MaxReasoningSteps=5, MaxThinkingTokens=4096）/ `adaptive`（`min(16384, 4096×(1+SI×3))`）/ `batch`（32K，夜间 2-6am，非交互）。[TokenBurnRate] 处于 Stage1 THROTTLE 时降一档：`batch`→`adaptive`→`fixed`→`256`。
 
 ### 5.2-bis Test-Time Compute — `[ThinkingMode]`
 
-> **设计决策**：对齐 DeepSeek V4 Pro / Claude Sonnet thinking 原生推理范式。MCTS/BestOfN/多候选路由已废弃——Provider 原生扩展思考（native extended thinking）覆盖相同能力。
+对齐 DeepSeek V4 Pro / Claude thinking 原生推理；MCTS/BestOfN/多候选路由已废弃（ADR-0020 决策二）。权威定义 00-Global-Dictionary §9-ter `[ThinkingMode]`。
 
-> 权威定义见 00-Global-Dictionary §9-ter `[ThinkingMode]`；本节为映射表的实现细节展开，避免双份定义漂移。
-
-**`[ThinkingMode]`** —— `internal/observability/metrics/metrics_handler.go` 中 `SelectPlanTier(escalation, complexity, surpriseIndex)` 同时决定规划的模型池与思考档（ADR-0102 决策六，由 M4 `transitions_respond.go` `planEffect` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
+`SelectPlanTier(escalation, complexity, surpriseIndex)`（`internal/observability/metrics/metrics_handler.go`）同时决定规划的模型池与思考档（ADR-0105，由 M4 `internal/agent/fsm/transitions_respond.go` `planEffect` 调用）；Adapter 翻译为 Provider 字段（`ReasoningEffort` + `*ThinkingConfig`，`internal/llm/adapter/client.go`）：
 
 | level | 模型池 | 档位 | 进入条件 |
 |------|------|------|---------|
 | 0 | `m4_kernel.model_pool.plan_initial`（默认 default） | `m4_kernel.thinking.plan_initial`（默认 high） | 默认 |
 | 1 | 同上 | 上调一档（≤low→high，high→max） | SI ≥ 0.3；或一次能力类失败 |
-| 2 | `m4_kernel.model_pool.plan_replan`（默认 reasoning） | `ThinkingHigh` | Complexity ≥ 0.7（`m4_kernel.plan.reasoning_complexity`，LLM 在 Perceive 判定）；规划模型自评 `escalate`；或累计能力类失败 |
-| 3 | 同上 | `ThinkingMax` | 以上再叠加 SI ≥ 0.6 或继续失败 |
+| 2 | `m4_kernel.model_pool.plan_replan`（默认 reasoning） | `ThinkingHigh` | Complexity ≥ 0.7（`m4_kernel.plan.reasoning_complexity`，Perceive 由 LLM 判定）；规划模型自评 `escalate`；或累计能力类失败 |
+| 3 | 同上 | `ThinkingMax` | 以上叠加 SI ≥ 0.6 或继续失败 |
 
-其余阶段（Perceive/Reflect/Respond/L3 看门狗）的池与思考档由 `m4_kernel.model_pool.*` / `thinking.*` 直接配置（ADR-0101 决策三/七），不走阶梯。
+其余阶段（Perceive/Reflect/Respond/L3 看门狗）由 `m4_kernel.model_pool.*` / `thinking.*` 直接配置，不走阶梯（ADR-0105）。
 
-档位 → Provider 映射：`ThinkingLow` → DeepSeek `reasoning_effort="low"`；`ThinkingHigh` → DeepSeek `reasoning_effort="high"` / Claude `budget_tokens=4096`；`ThinkingMax` → `"max"` / `16384`；`ThinkingDisabled` → DeepSeek 显式 `thinking.type=disabled`。
+档位映射：`ThinkingLow` → DeepSeek `reasoning_effort="low"`；`ThinkingHigh` → `"high"` / Claude `budget_tokens=4096`；`ThinkingMax` → `"max"` / `16384`；`ThinkingDisabled` → DeepSeek `thinking.type=disabled`。
 
-> **能力类失败**（只有这些累计 escalation，`fsm.RecordFailure`）：S_VALIDATE L0 结构错误、规划输出有内容但不可解析、第二次起的工具报错、规划模型自评超纲。安全拒绝、瞬时故障（超时/网络/限流）、观察—再规划不升级——换更贵的模型不改变这些结果。污点不参与：旧规则下用户输入恒 TaintHigh，每轮规划恒为 Pro + ThinkingMax。
+> **能力类失败**（仅此类累计 escalation，`fsm.RecordFailure`）：S_VALIDATE L0 结构错误、规划输出有内容但不可解析、第二次起的工具报错、规划模型自评超纲。安全拒绝、瞬时故障（超时/网络/限流）、观察—再规划不升级；污点不参与（旧规则下用户输入恒 TaintHigh 致每轮恒为 Pro + Max）。
 >
-> **约束**：
-> - DeepSeek V4 Pro thinking 启用时温度强制为 0（API 要求）
-> - 多轮工具调用序列中，`reasoning_content` 必须随 assistant 消息回传至下一轮 prompt——Adapter 负责从响应中提取并写入 `ProviderResponse.ReasoningContent`；M4 通过 `StateContext.LastReasoningContent` 跨轮持有
-> - HT0 下 `ThinkingMax` 可正常运行（DeepSeek V4 Pro token 成本低，无预算门控）
+> **约束**：DeepSeek V4 Pro thinking 启用时温度强制为 0；多轮工具调用中 `reasoning_content` 须随 assistant 消息回传（Adapter 写入 `ProviderResponse.ReasoningContent`，M4 经 `StateContext.LastReasoningContent` 跨轮持有）；HT0 下 `ThinkingMax` 可正常运行。
 
-**`[ReasoningTokens]`** 计量：`InferResponse.Usage` 分字段 `reasoning_tokens`，计入 [TokenBurnRate]；M3 导出 `polaris_reasoning_tokens_total` Gauge。
+**`[ReasoningTokens]`**：`InferResponse.Usage` 分字段 `reasoning_tokens`，计入 [TokenBurnRate]；M3 导出 `polaris_reasoning_tokens_total` Gauge。
 
 ### 5.3 StreamBudgetGuard
 
-实现见 `internal/llm/`（`StreamBudgetGuard` + `TokenBurnDetector`）。
-
-GuardChunk 摊销检查（每 100 chunk 或首 chunk）：
+实现：`internal/llm/stream_guard.go`（`StreamBudgetGuard` + `TokenBurnDetector`）。GuardChunk 摊销检查（每 100 chunk 或首 chunk）：
 - **L1**：剩余预算 <= 0 → WARN（不阻断）
-- **L2**：TokenBurnDetector 加速度检测（5s 窗口，3 采样点，accel > 3× baseline → BurnAlert → FatalStreamAbort 硬阻断）
+- **L2**：加速度检测（5s 窗口，3 采样点，accel > 3× baseline → BurnAlert → FatalStreamAbort 硬阻断）
 - **L3**：预算耗尽 → 硬阻断
 
-TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `polaris_token_burn_rate` Gauge 单源读取。
+TokenBurnDetector 仅做单流检测；系统级燃烧速率从 M3 `polaris_token_burn_rate` Gauge 单源读取。
 
 ### 5.4 trackStreamCost
 
-实现见 `internal/llm/`（`StreamGuard` - 流成本追踪）。
-
-流结束时的处理策略：
-- **正常结束**：记录精确 API usage。
-- **流中断（FatalStreamAbort）**：丢弃输出 → M4 `S_REPLAN`（禁止 JSONRepair——失控 LLM 截断输出语义不可靠）。
-- **超过最大缓冲区（256KB）**：写入 workspace 临时文件 + 返回 `ErrResponseTooLarge`。
-- **正常中断**：执行 JSONRepair + 双重安全校验。
+实现：`StreamGuard` 流成本追踪。正常结束记录精确 usage；FatalStreamAbort → 丢弃输出 → M4 `S_REPLAN`（禁 JSONRepair——失控 LLM 截断语义不可靠）；超最大缓冲（256KB）→ 写 workspace 临时文件 + `ErrResponseTooLarge`；正常中断 → JSONRepair + 双重安全校验。
 
 ### 5.5 JSONRepair
 
-实现见 `internal/llm/`（`StreamGuard` - JSONRepair）。
-
-采用栈式括号匹配 → 自动闭合 → 移除不完整 key-value。确定性 Go 实现，延迟 <1ms。
-
-**双重安全校验**：
-1. `required` 字段完整性检查。
-2. 如果 `SideEffects > read_only` 且 `DiscardedKeys` 非空 → 强制拒绝 → 触发 `S_REPLAN`。
+`StreamGuard` 内栈式括号匹配 → 自动闭合 → 移除不完整 key-value；确定性，<1ms。**双重安全校验**：①`required` 字段完整 ②`SideEffects > read_only` 且 `DiscardedKeys` 非空 → 强制拒绝并触发 `S_REPLAN`。
 
 ---
 
@@ -252,47 +183,21 @@ TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `pol
 
 ### 6.1 EmbeddingBatcher & OpenAICompatibleAdapter
 
-实现见 `internal/llm/`（`EmbeddingBatcher`, `OpenAICompatibleEmbeddingAdapter`）。支持通过 OpenAI `/v1/embeddings` 标准接口接入云端/端侧的各种 Semantic Embedding 服务（Tier 2 Embedding）。
+`EmbeddingBatcher`（`internal/store/search/embedding_batcher.go`）+ `OpenAICompatibleEmbeddingAdapter`（`internal/llm/adapter/embedding.go`）经 OpenAI `/v1/embeddings` 标准接口接入云端/端侧 Embedding。引擎选择见 §8.1 向量化。
 
-**双优先级队列**：
-- `pendingHigh[180]`：SurpriseIndex、交互式查询
-- `pendingLow[76]`：GraphRAG、Consolidation
-
-配置参数：`batchWindow=10ms`，`maxBatchSize=100`，保留 20% 槽位给 Low 队列防饥饿。Low 队列等待 >100ms 自动升为 High。
-
-**背压策略**：
-- High 队列容量达 80% → 指数退避（50ms 初始，max 2s）
-- Low 队列容量达 80% → 强制排队 30ms
-
-> 2026-09-25 复核（ADR-0099）：上述"单循环混装一批 + 20% 防饥饿 + Low 升 High"导致交互请求排在后台大批次之后（实测 100 条/批 13.8s，交互嵌入稳定 30s 超时）。现为 High/Low **各自独立 flush 循环**；Low 单批上限 `low_max_batch_size=8`（约束其在串行后端上的占用，实测 ≈1s）；每次下游调用 `call_timeout_s=30` 独立超时；`search.Embedder.Embed(ctx, text)` 携带调用方 ctx。原防饥饿与升级机制随双通道取消。
-
-**文本去重（dedup）**：相同文本重复入队时，仅占用一个队列槽位，额外等待者追加到扇出列表。API 调用返回后，结果同步广播给所有等待同一文本的调用方。消除并发场景下对相同文本的重复 Embedding API 调用。
-
-文本在发往远程 API 前，必须经过 [PIIGuard]（PII（Personally Identifiable Information，个人可识别信息）：Personally Identifiable Information，个人可识别信息）红化预处理。
+- **双通道独立 flush**（ADR-0109 / ADR-0105 沿革；原「单循环混装 + 20% 防饥饿 + Low 升 High」已取消，因交互请求排在后台大批之后致 30s 超时）：High 通道（SurpriseIndex、交互查询）与 Low 通道（GraphRAG、Consolidation）各自 flush 循环；Low 单批上限 `low_max_batch_size=8`；`batchWindow=10ms`、`maxBatchSize=100`、每次下游调用 `call_timeout_s=30` 独立超时（值以 `spec/state.yaml §m1_router.embed_*` 为准）。
+- **背压**：High 队列 ≥80% → 指数退避（50ms 起，max 2s）；Low 队列 ≥80% → 强制排队 30ms。
+- **文本去重**：相同文本重复入队只占一个槽位，结果扇出给全部等待者；dedup 按通道隔离。
+- `search.Embedder.Embed(ctx, text)` 携带调用方 ctx。
+- 发往远程 API 前文本必须经 [PIIGuard] 红化。
 
 ### 6.2 SemanticCache
 
-实现见 `internal/store/search/semantic_cache.go`（`SemanticCache`，含 `CacheStore` 接口和 LRU 淘汰逻辑）。
+实现：`internal/store/search/semantic_cache.go`（`SemanticCache`，含 `CacheStore` 接口与 LRU）。向量后端 `internal/store/search/surreal_cache_store.go`（`SurrealCacheStore`，SurrealDB-Core HNSW）；`cmd/polaris/boot_substrate.go` 在 `surrealStore != nil` 时构造并经 `llm.WithSemanticCache` 注入 `InferenceRouter`，store=nil 为 SurrealDB 未启用时的正常降级。
 
-**`[2026-07-21 订正]`**：本节此前写的"向量索引后端待激活/store=nil 时安全空操作"已过期——
-`internal/store/search/surreal_cache_store.go` 的 `SurrealCacheStore`（SurrealDB-Core HNSW）
-是完整实现，`cmd/polaris/boot_substrate.go` 在 `surrealStore != nil` 时已构造真实
-`cacheStore` 并通过 `llm.WithSemanticCache` 注入 `InferenceRouter`；`store=nil` 只在
-SurrealDB 未启用时才发生，属正常降级，不是"待激活"状态。
-
-**`[2026-07-28 订正]`**：本节此前描述的 `types.WithSemanticCacheHints(...)` Option 已在
-ADR-0062（deadcode 最终结清，D3 条目）中作为死代码删除——`StreamInfer` 对称缓存分支始终
-未落地、Option 无消费者。`ContextHintFingerprint` 所需的 SHA-256 指纹目前仍在
-`internal/agent/fsm/epoch.go`（`epochTracker.check`）里逐条计算，但只返回 epoch 计数器、
-不再有下游消费该指纹的路径。若后续需要重新接入语义缓存提示，需在 ADR 中重新论证
-`StreamInfer` 的对称缓存分支设计，而非直接恢复已删除的 Option。
-
-**缓存三重匹配**：RequestHash + Namespace + SystemPromptHash。
-`hashRequest` 计算公式：`SHA-256(Namespace + SystemPromptHash + ContextHint.Fingerprint + ActiveControlVectorLabels + TaskType + MessageContents)`。
-
-缓存满时执行 LRU 淘汰（批量淘汰 MaxEntries/10）。
-
-SimilarityThreshold、MaxEntries、TTL 等参数详见 `spec/state.yaml` 中的 `§m1_router.semantic_cache_similarity_threshold` / `semantic_cache_max_entries` / `semantic_cache_ttl_hours`。
+- **三重匹配**：RequestHash + Namespace + SystemPromptHash；`hashRequest` = `SHA-256(Namespace + SystemPromptHash + ContextHint.Fingerprint + ActiveControlVectorLabels + TaskType + MessageContents)`。
+- 缓存满时 LRU 批量淘汰 MaxEntries/10。参数见 `spec/state.yaml §m1_router.semantic_cache_similarity_threshold` / `semantic_cache_max_entries` / `semantic_cache_ttl_hours`。
+- `types.WithSemanticCacheHints` 已作为死代码删除（ADR-0062 D3；`StreamInfer` 对称缓存分支未落地）。`internal/agent/fsm/epoch.go` 仍逐条计算指纹但无下游消费；重新接入须先在 ADR 中论证 `StreamInfer` 对称缓存设计。
 
 ---
 
@@ -310,143 +215,77 @@ Primary → Secondary（同级备选）→ Tertiary（降级备选）→ Gracefu
 | Server Error | 5xx | 立即换 provider + 冷却原 provider |
 | Timeout | — | 减少 MaxToken 后重试 |
 | Content Filter | 400 | 不重试 |
-| Token Limit | 400 | 压缩 context 后重试 |
+| Token Limit | 400 | 压缩 context 后重试（请求侧故障语义见 §10 `ClassifyError`） |
 
-### 7.3 CircuitBreaker + FallbackExecutor
+### 7.3 CircuitBreaker
 
-CircuitBreaker 三态：
-- Closed（正常）
-- Open（熔断，冷却期拒绝请求）
-- HalfOpen（探测）
-- 恢复至 Closed
+三态 Closed→Open（`failureThreshold` 次连续失败）→HalfOpen（冷却 `cooldownPeriod` 后探测）→探测成功回 Closed；参数 `spec/state.yaml §m1_router.circuit_breaker_*`。全部 Provider 不可用返回 `ErrAllProvidersFailed`（inv_M1_05）。无独立 `FallbackExecutor`：健康判断在 `ProviderRegistry`，推理 failover 在 `InferenceRouter`（`internal/llm/router_failover.go`）。
 
-`failureThreshold` 次连续失败触发 Open，冷却 `cooldownPeriod` 后进入 HalfOpen，探测成功恢复 Closed。参数见 `spec/state.yaml §m1_router.circuit_breaker_*`。
+**StreamInfer Failover**：与 `Infer` 同等纳入 CircuitBreaker；每次调用记录延迟并更新 healthScore，Provider 报错触发切换（`internal/llm/router_stream.go`）。流式错误中断时 EventLog 追加 `streaming_interrupted: true`（inv_M1_04）。
 
-FallbackExecutor（`internal/llm/`）：仅检查 Provider 可用性并更新 CircuitBreaker 状态，**不执行实际推理**。全部不可用时返回 `ErrAllProvidersFailed`。
-
-实际推理 failover 由 InferenceRouter 在调用链内处理；两者职责不同，前者负责健康判断，后者负责推理重试。
-
-**StreamInfer Failover**：
-`StreamInfer` 与 `Infer` 同等纳入 CircuitBreaker 覆盖。每次 `StreamInfer` 调用记录延迟并更新 HealthScorer，若 Provider 返回错误则触发 Failover 切换至下一可用 Provider（逻辑与 Infer 路径一致）。
-流式错误中断时 EventLog 追加 `streaming_interrupted: true` 字段（inv_M1_04）。
-
-**Provider 恢复事件**：
-当所有 Provider 均处于 Open 状态（`ErrAllProvidersFailed` 已触发）后，任意一个 Provider 的 CircuitBreaker 完成 HalfOpen→Closed 转换（半开探测成功）时，M1 向 M2 Outbox 写入：
-
-```text
-MutationIntent{
-    Table: "outbox",
-    Op: OpInsert,
-    Payload: {
-        "target_engine": "m4_provider_recovery",
-        "provider_id": <providerID>,
-        "recovered_at": <timestamp>
-    }
-}
-```
-
-此事件经 M2 Outbox Worker 投递至 M4（M4 §8 Provider 恢复唤醒路径），M4 据此自动唤醒处于 `Suspended(suspend_reason=provider_exhausted)` 的任务。多 Provider 场景下，若多个 Provider 同时恢复，事件幂等合并（M4 Outbox Worker 在同一 batch 内去重 `task_id`，避免重复唤醒）。
+**Provider 恢复事件**：`ErrAllProvidersFailed` 触发后，任一 Provider 完成 HalfOpen→Closed 时，`ProviderRegistry` 恢复回调（`InjectRecoveryHandler`，`internal/llm/router.go`）向 M2 Outbox 写 `MutationIntent{Table:"outbox", Op:OpInsert, Payload:{target_engine:"m4_provider_recovery", provider_id, recovered_at}}`，经 Outbox Worker 投递至 M4（M4 §8 Provider 恢复唤醒路径），唤醒 `Suspended(suspend_reason=provider_exhausted)` 的任务；多 Provider 同时恢复时同 batch 内按 `task_id` 去重。
 
 ### 7.4 HealthScorer
 
-| 维度 | 权重 | 指标 |
-|------|------|------|
-| 可用性 | 40% | 最近 N 次成功率 |
-| 延迟 | 30% | P95 延迟趋势 |
-| 成本 | 20% | 实际 vs 预估偏差 |
-| 质量 | 10% | token 截断率、finish_reason 分布 |
-
-健康度 < 阈值 → 降权，减少路由分配。
+`providerEntry.healthScore()`（`internal/llm/provider_registry.go`）= 可用性 40%（最近 N 次成功率）+ 延迟 30%（P95 趋势）+ 成本 20%（实际 vs 预估偏差）+ 质量 10%（token 截断率、finish_reason 分布）。低于阈值降权。
 
 ---
 
-## 8. 本地推理（local_only 模式）
+## 8. 本地推理与向量化
 
-隐私/离线备选。不参与 Provider Router 主路由，仅作为 Fallback 最后一级。`llama.cpp` 统一负责 Embedding + LLM 推理 + Rerank，GGUF Q4_K_M。利用 Metal (macOS) / CUDA (Linux) 硬件加速，单 FFI 桥接点，统一 GGUF 量化生态。
+**本地推理默认关闭（OFF-by-default，ADR-0109）**：不自动拉起任何本地推理子进程，不自动注册本地对话 Provider。本地对话模型仅在用户于 provider_catalog 显式添加 `ollama`（HTTP 接本机 Ollama）或 `llama_local`（同进程 FFI `LocalAdapter`，需二进制以 `--features tier1` 编译，`ffi.LlamaAvailable()` 为真才构造）类型 Provider 时存在。不参与主路由，仅是用户显式选择的备选。
 
-模型加载策略：
+**向量化（Embedding）选择顺序**（`cmd/polaris/boot_embedding.go chooseEmbedding`，ADR-0109 D1 唯一事实源；`[embedding].backend = auto|onnx|ollama|llama_server|none`，默认 `auto`）：
+1. `[embedding].base_url` 非空 → 远程 OpenAI 兼容 API（最高优先，绝不再拉起本地 Ollama）
+2. `backend = ollama|llama_server` 且 `model` 非空 → 显式本地服务（`internal/llm/ollamamgr`）
+3. `auto|onnx` 且 ONNX 可用 → 进程内 ONNX 嵌入器（默认，`internal/llm/embedonnx`，purego 调独立钉版本的 ORT，与语音资产完全解耦）
+4. 否则 → 不挂载嵌入器，检索降级 SQLite FTS（BM25）
 
-| 模型 | 用途 | 大小 | 加载条件 |
-|------|------|------|---------|
-| Qwen3-32B-Q4_K_M | LLM 推理 | ~20GB | Tier 3+ (64GB) local_only 专享 |
-| bge-reranker-base-Q4_K_M | Cross-encoder 重排 | ~50MB | 懒加载，首次 rerank 请求时 |
-| BGE-small-Q4_K_M | 本地 Embedding | ~100MB | 见下方 [BGE-small 补充说明](#bge-small-补充说明) |
+进程内 ONNX 档位：平衡档 EmbeddingGemma-300M int8（Matryoshka 截断 512 维）/ 轻量档 `bge-small-zh-v1.5` int8（原生 512 维）；两档统一 512 维（HNSW DIMENSION 不变，按 `embed_model_version` 重嵌）；首次启用基准自动降档（结论持久化于 preferences `embed.tier_bench`）；懒加载，空闲 10 分钟卸载。远程路径默认 `inference.embedder_dim=1536`。模型选型演进（Qwen3-0.6B GGUF → ONNX 默认）见 ADR-0109（取代 ADR-0062 相关选型）。本地 384 维隔离见 M10 §2 双索引方案。
 
-#### BGE-small 补充说明
-用于 `local_only` 或隐私 embedding 模式。输出 384-dim，通过 SurrealDB-Core 双索引隔离表（`index_local_384`）维持语义检索能力，避免永久降级 BM25。详见 M10 §2 双索引方案。
+**语音（STT/TTS）三档**（ADR-0110；引擎 `internal/llm/stt`、`internal/llm/tts`，生命周期 `internal/llm/audiorun`，资产清单 `internal/llm/audioassets` 钉死 URL/sha256）：
+
+| 档 | 条件 | 能力 |
+|---|---|---|
+| A | 总内存 <1800MB 或 <2 核 | STT/TTS 均关 |
+| B | 总内存 <3600MB（2GB/2 核起） | 仅 STT（SenseVoice int8）；朗读用前端系统语音 |
+| C | ≥3600MB 且 ≥2 核 | STT + 服务端 TTS（MeloTTS，首次基准 RTF ≤ 0.8，过慢回系统语音；下载前先以 STT 代理测速） |
+
+资产由守护进程后台串行预置（`[inference.audio].auto_install`，可关），懒加载、空闲卸载（`idle_unload_minutes=10`）；`[inference.tts].provider = sherpa|http`。改下载 URL/资产名须跑 `make audio-nettest`。
 
 ### 8.1 LocalProvider
 
-**当前实现状态：已实现（P3-1，2026-07-03）。**
-`protocol.LocalProvider`（`internal/protocol/interfaces_llm.go`）扩展 `protocol.Provider`，新增 `LoadModel` / `UnloadModel` / `EvictKVCache` / `LocalStatus` / `Probe` 五个生命周期方法（`Probe` 供网络隔离安全检查与 StartupCheck 使用）。
+`protocol.LocalProvider`（`internal/protocol/interfaces_llm.go`）扩展 `Provider`：`LoadModel` / `UnloadModel` / `EvictKVCache` / `LocalStatus` / `Probe`（供网络隔离检查与 StartupCheck）。唯一实现 `LocalAdapter`（`internal/llm/adapter/local.go`）→ `internal/ffi/llama.go`（purego 懒绑定 + `recover()` 降级）→ `rust/substrate/src/llama_infer/`（`llama-cpp-2`，`tier1` feature 门控）。
 
-`internal/llm/adapter/local.go` 的 `LocalAdapter` 是其唯一实现。底层通过 `internal/ffi/llama.go`（purego 懒绑定 + `recover()` 优雅降级，与 `native_sandbox`/`surreal_store`/`cedar_ffi` 同款 FFI 模式）调用 `rust/substrate/src/llama_infer/`（`llama-cpp-2` crate，`tier1` Cargo feature 门控）导出的 `llama_infer_*` 函数。
-
-**架构偏离说明（遵循“系统最优、复用现有代码”原则）**：
-
-- **无独立 `/rerank` HTTP 端点**：Rerank 直接走进程内 FFI 调用（`llama_infer_rerank`），而非“同进程 llama.cpp `/rerank` 端点”——省去端口管理与 HTTP 序列化开销，属于更优的同进程调用路径。Rerank 算法是双塔嵌入余弦相似度（复用 Embed 批量嵌入），而非 cross-encoder 分类头——GGUF/llama.cpp 生态缺乏统一的 cross-encoder 调用约定，双塔相似度是能用任意已加载 embedding 模型实现、无额外模型格式假设的最稳健通用方案。
-- **单模型槽位、无 Blue-Green 双模型常驻**：与热切换语义（见 §8.2）对齐，Tier-1/Tier-3 硬件显存/内存有限，多模型同时常驻不具备性价比。
-- **不与具体模型型号（Qwen3-32B/bge-reranker-base/BGE-small）绑定**：`LoadModel(modelPath, opts)` 接受任意 GGUF 文件路径，模型选型是调用方（配置/CLI）职责，Provider 层保持模型无关。
-- **StreamInfer 非逐 token 流式**：`llama_infer_generate` FFI 协议是 run-to-completion（Rust 侧一次性返回完整文本），`StreamInfer` 当前实现为“整体生成后单帧下发”到 `<-chan types.StreamEvent`。真正的逐 token SSE 需要 Rust 侧改为回调/迭代器式 FFI，记录为已知后续优化点，不影响 `protocol.Provider` 接口契约的满足。
-
-**KV Cache 管理**：
-`LocalAdapter` 底层持有一个跨请求复用的 `LlamaContext`（避免每次生成重新分配 KV cache 缓冲区），但不做跨请求增量前缀复用，`generate()` 开头总是显式 `clear_kv_cache()` 保证正确性。`EvictKVCache`（对应 `protocol.LocalProvider.EvictKVCache`）作为独立操作暴露，供会话切换/内存回收场景主动触发。
-
-**GBNF grammar 结构化输出**：
-`types.InferOptions.ResponseFormat.Type == "gbnf"` 时，`Grammar` 字段透传给 Rust 侧 `LlamaSampler::grammar()`，在采样阶段强约束输出符合给定语法（`llama-cpp-2` crate 的 `common` feature，默认已启用）。
-
-**硬件门控**：
-`FeatureLocalInference`（`internal/observability/probe/feature_gate.go`，`MinTier: Tier1, MinMemoryMB: 2048`）之外，额外叠加 `ffi.LlamaAvailable()` 判断——区分“硬件满足 Tier-1”与“二进制是否以 `--features tier1` 编译”两个独立维度，二进制未编译时不注册一个必然失败的 Provider（`cmd/polaris/boot_substrate.go`）。
-
-**功能对照（ADR-0109 更新）**：
-按 ADR-0109 规范，本地推理默认全量关闭（OFF-by-default）。`internal/llm/adapter/ollama.go`（HTTP 接入本机 Ollama 服务）与 `LocalAdapter`（同进程 FFI）不再无条件自动注册；仅在用户显式配置 `inference.backend` 时才按需注册为 `ollama-local` / `llama-local`。向量化嵌入（Embedding）首选远端 base_url，次选显式本地模型，三选零外部依赖的进程内 ONNX 引擎（纯 Go purego ORT 绑定），不可用时降级为 SQLite BM25 全文检索（FTS）。
+- **Rerank 走进程内 FFI**（`llama_infer_rerank`），算法为双塔嵌入余弦相似度（复用 Embed），非 cross-encoder——GGUF 生态无统一 cross-encoder 调用约定。
+- **单模型槽位**，无 Blue-Green 双模型常驻（Tier-1/3 内存有限）。
+- **不绑定模型型号**：`LoadModel(modelPath, opts)` 接受任意 GGUF，选型由调用方决定。
+- **StreamInfer 非逐 token**：`llama_infer_generate` 为 run-to-completion，整体生成后单帧下发；逐 token 需 Rust 侧回调式 FFI（已知后续优化）。
+- **KV Cache**：跨请求复用一个 `LlamaContext`，不做增量前缀复用，`generate()` 起始总 `clear_kv_cache()`；`EvictKVCache` 独立暴露。
+- **GBNF**：`types.InferOptions.ResponseFormat.Type == "gbnf"` 时 `Grammar` 透传 `LlamaSampler::grammar()`。
+- **硬件门控**：`FeatureLocalInference`（`internal/observability/probe/feature_gate.go`，`MinTier: Tier1, MinMemoryMB: 2048`）+ `ffi.LlamaAvailable()` 两个独立维度，二进制未编译则不注册必败 Provider。
 
 ### 8.2 生命周期
 
-- **懒加载**：`LocalAdapter` 构造时不加载任何模型（`ModelID()` 返回 `local:unloaded`），`LoadModel` 由调用方显式触发。
-- **热切换**：`LoadModel` 覆盖式替换——若已有模型常驻，先完整 `unload`（释放 `LlamaContext` 与模型内存）再加载新模型（单槽位，`rust/substrate/src/llama_infer/mod.rs` `ModelHolder`）。
-- **空闲卸载 / Tier 降级**（OSMemoryGuard 空闲内存 < 1.0GB 强制卸载）：
-  Go API（`UnloadModel`）已具备。
-  `cmd/polaris/boot_substrate.go` 已启动 `autoConf.RunMemoryWatcher`（5s 轮询）驱动 `internal/observability/auto_config_pressure.go` 的 `MemoryPressureCallback`。
-  `DegradationCritical`（< 1GB）时会执行 `Gate.Override(FeatureLocalInference, Disabled)` + GC + 终止沙箱，作为过渡性降级措施先阻止新的本地推理请求。但该回调尚未直接调用 `UnloadModel` 主动释放已加载模型内存，“OSMemoryGuard 自动触发 UnloadModel”这一直接对接仍待后续完成。
-- **命令面**：`protocol.LocalProvider` 的生命周期方法已在 Go API 层完整可调用（通过 `llm.ProviderRegistry.Get("llama-local")` 取出后类型断言），面向用户的 `/model local <model_id>` 命令解析/HTTP 端点属于命令面对接工作，不在本次 FFI 核心交付范围内。
+- **懒加载**：构造时不加载模型（`ModelID()` 返回 `local:unloaded`），`LoadModel` 显式触发。
+- **热切换**：覆盖式替换，先完整 unload 再加载（单槽位，`rust/substrate/src/llama_infer/mod.rs` `ModelHolder`）。
+- **内存压力联动**：`cmd/polaris/boot_substrate.go` 启动 `autoConf.RunMemoryWatcher`（5s 轮询）驱动 `internal/observability/auto_config_pressure.go`：Warning → `evictLocalKVCache`（清 `llama-local` KV cache）；Critical（空闲 <1GB）→ Gate 置 `FeatureLocalInference` Disabled → `unloadLocalModel`（3s 超时，fail-open）→ GC → 清沙箱。
+- **命令面**：用户面 `/model local <model_id>` 命令解析/HTTP 端点未对接，生命周期方法仅在 Go API 层可经 `ProviderRegistry.Get("llama-local")` 类型断言调用。
 
 ---
 
 ## 9. ModelVersionRegistry
 
-`ModelVersionEntry` 持有 Provider/ModelID/版本/废弃状态、PromptTemplate/ToolCallStyle/MaxContext/Capabilities 等元数据，以及 `ValidatedOn`（技能兼容测试通过列表）和 `CompatibilityScore`（0-1）。
+`ModelVersionEntry` 持有 Provider/ModelID/版本/废弃状态、PromptTemplate/ToolCallStyle/MaxContext/Capabilities，以及 `ValidatedOn` 与 `CompatibilityScore`（0-1）。迁移三档：≥0.9 自动 / 0.7–0.9 自动+WARN / <0.7 禁止自动；`OnModelUpgrade` 评分 <0.8 发 WARN；连续 3 次 4xx/5xx 自动回退；Embedding 模型废弃触发重嵌。
 
-`OnModelUpgrade` 流程：对比行为差异 → 重跑关联技能兼容测试 → 更新 ValidatedOn 与 CompatibilityScore，低于 0.8 时发 WARN。废弃迁移按 CompatibilityScore 分三档（≥0.9 自动 / 0.7-0.9 自动+WARN / <0.7 禁止自动）；连续 3 次 4xx/5xx 自动回退。Embedding 模型废弃时触发 M2 OnlineReindexer 全量重嵌。
+三层结构（已实现）：
+- DDL：`internal/protocol/schema/033_model_version_registry.sql`（`model_version_entries`）
+- 接口：`internal/protocol/repo/repo_modelversion.go`；SQLite 实现：`internal/store/repo/repo_modelversion.go`
+- 业务：`internal/llm/modelregistry/registry.go`（`Registry`）：`DecideMigration(score)`；`OnModelUpgrade(ctx, provider, modelID, skillNames, tester)`（`SkillCompatTester` 为 consumer-side 接口，无生产实现时传 `nil` 仅刷新元数据）；`RecordCallResult` 连续失败 3 次返回回退目标（`FindPredecessor`）；`DeprecateModel` 标记废弃并在 `Capabilities.embedding=true` 时调 `ReindexTrigger`。
 
-**当前实现状态：已实现（P3-2，2026-07-03）。**
-DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/schema/033_model_version_registry.sql`（`model_version_entries` 表）。三层结构：
+**偏离设计**：不建影子表/Blue-Green 重嵌——`OnlineReindexer`（`internal/memory/retrieval/online_reindexer.go`）按 `episodic_events.embed_model_version` 与 `Embedder.ModelVersion()` 差异驱动，切模型后下一次 `Run()` 自然重嵌；`ReindexTrigger` 仅提供「立即」语义（`cmd/polaris/boot_memory.go` `startOnlineReindexer`，取代 5min 周期等待）。
 
-- `internal/protocol/repo/repo_modelversion.go`（`ModelVersionEntry` / `ModelVersionRepository` 接口契约，字段与 DDL（Data Definition Language，数据定义语言）一一对应）
-- `internal/store/repo/repo_modelversion.go`（SQLite 实现 `SQLiteModelVersionRepository`，`Get`/`List`/`ListDeprecated`/`FindPredecessor`/`Upsert`/`Delete`）
-- `internal/llm/modelregistry/registry.go`（业务逻辑层 `Registry`）：
-  - `DecideMigration(score)` 三档判定（纯函数，阈值与本节一致）
-  - `OnModelUpgrade(ctx, provider, modelID, skillNames, tester)` —— `tester` 为 `SkillCompatTester` 接口（consumer-side，当前无生产实现时可传 `nil`，仅刷新元数据不重测）；score < 0.8 时 `slog.Warn`
-  - `RecordCallResult(ctx, provider, modelID, success)` —— 连续失败计数，达到 3 次返回 `shouldRollback=true` + 通过 `FindPredecessor`（查询“谁把 successor_model_id 指向当前模型”）定位的回退目标模型 ID；成功调用清零计数
-  - `DeprecateModel(ctx, provider, modelID, successorModelID)` —— 标记废弃 + 记录继任模型；`Capabilities.embedding=true` 时唤醒注入的 `ReindexTrigger` 回调
-
-**架构偏离说明（遵循“系统最优、复用现有代码”原则）**：
-
-文档原描述“触发 M2 OnlineReindexer 全量重嵌（影子表 → Blue-Green swap）”，实际未新建影子表或 Blue-Green 切换机制。
-
-`internal/memory/retrieval/online_reindexer.go` 的 `OnlineReindexer` 本身已是版本差异驱动（比较 `episodic_events.embed_model_version` 与当前 `Embedder.ModelVersion()`）。Embedding 模型切换后，下一次 `Run()` 就会自然重嵌所有旧版本行，Blue-Green 影子表是不必要的重复设计。
-
-`DeprecateModel` 的 `ReindexTrigger` 回调只解决“尽快”语义（`cmd/polaris/boot_memory.go` 中 `startOnlineReindexer` 返回一个可立即调用的 `onlineReindexer.Run` 闭包，取代默认 5min 周期等待），不传时不影响正确性。
-
-**resolveXXXModel() 数据迁移**：
-
-`internal/llm/adapter/{anthropic,openai,deepseek}.go` 的 `resolveXXXModel()` 函数**未被删除或改动**（dev prompt 显式要求保留为无数据库依赖的编译期兜底路径）。
-
-`Registry.SeedFromStaticResolvers(ctx)` 将这些函数内硬编码的废弃名映射（如 `claude-3-opus-20240229 → claude-3-5-sonnet-latest`、`gpt-4 → gpt-4o-mini`、`deepseek-chat → deepseek-flash` 等 10 条）幂等灌入 registry 表（`CompatibilityScore=1.0`，视为已长期生产验证），供需要 DB 侧结构化查询兼容性评分/继任模型的调用方使用。
-
-已存在条目不覆盖，避免抹掉运营中产生的真实评分数据。启动时由 `bootMemory`（`cmd/polaris/boot_memory.go`）自动调用一次。
-
-测试覆盖：`internal/store/repo/repo_modelversion_test.go`（Repository CRUD）、`internal/llm/modelregistry/registry_test.go`（三档迁移判定、兼容性评分更新、Embedding 废弃触发重嵌、连续失败回退、静态映射幂等灌入）。
+`internal/llm/adapter/{anthropic,openai,deepseek}.go` 的 `resolveXXXModel()` 保留为无 DB 依赖的编译期兜底；`Registry.SeedFromStaticResolvers(ctx)` 幂等灌入其废弃名映射（`CompatibilityScore=1.0`，已存在不覆盖），启动时由 `bootMemory`（`cmd/polaris/boot_memory.go`）调用一次。测试：`internal/llm/modelregistry/registry_test.go`、`internal/store/repo/repo_modelversion_test.go`。
 
 ---
 
@@ -457,27 +296,23 @@ DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/sche
 | 单 Provider 限流/不可用 | EWMA p95 > 阈值 / 5xx 连续 | 仅本 Provider | Fallback：同 Pool → 降级 Pool → 拒绝 | 半开探测 | 同 Pool 全断 → audit severity=warn |
 | 全部 Provider 熔断 | CircuitBreaker 全开 | 全模块 LLM 路径 | 返回 `ErrAllProvidersFailed` | 冷却期满后半开探测 | 持续 > 5min → audit |
 | SemanticCache 满 (10000 entries) | 内存水位触发 | 仅缓存查询 | LRU 淘汰 MaxEntries/10 条目 | 自动 | — |
-| StreamBudgetGuard L2 触发 | TokenBurnDetector 加速度检测 (5s 窗口, accel > 3× baseline) | 单流 | FatalStreamAbort 硬阻断 → M4 `S_REPLAN` | TokenBurnRate 恢复正常后自动解除 | 单 session 反复触发 ≥3 次 → audit |
-| Tier-3 本地模型加载失败 | llama.LoadModelFromFile err / RSS 检测 | local_only 全模块 LLM 路径 | 降级远程 API（非 local_only）；local_only → ErrLocalModelUnavailable | 空闲内存恢复后重新加载。local_only 模式下若持续 > 30s 无法重载 → 触发 M13 ResourceGovernor local_only 死锁恢复 | local_only 模式下死锁恢复仍失败 → 必须 HITL（Human-In-The-Loop，人在回路） |
-| Embedding API 不可用 | err return / timeout | 检索路径 | EmbeddingBatcher 返回错误，调用方降级 BM25/FTS5 | API 恢复后自动切回 | 全断 > 1h → audit |
-| EmbeddingBatcher High 队列 >80% | 队列水位 | 非交互 embedding 请求 | 指数退避 (50ms→2s) | 队列水位下降后恢复正常 | 持续 > 5min → audit |
+| StreamBudgetGuard L2 触发 | TokenBurnDetector 加速度 (5s 窗口, accel > 3× baseline) | 单流 | FatalStreamAbort → M4 `S_REPLAN` | TokenBurnRate 恢复后自动解除 | 单 session 反复触发 ≥3 次 → audit |
+| 显式本地模型加载失败 | `LoadModel` err / RSS 检测 | 本地 Provider 路径 | 该 Provider 不可用，Router 按 §7 换 Provider | 空闲内存恢复后重新加载 | local_only 模式下死锁恢复仍失败 → HITL |
+| Embedding 不可用 | err / timeout | 检索路径 | EmbeddingBatcher 返回错误，调用方降级 BM25/FTS5 | 恢复后自动切回 | 全断 > 1h → audit |
+| EmbeddingBatcher High 队列 >80% | 队列水位 | 非交互 embedding | 指数退避 (50ms→2s) | 水位下降后恢复 | 持续 > 5min → audit |
 | ModelVersionRegistry 废弃迁移失败 | 连续 3 次 4xx/5xx | 单模型 | 保持旧模型 + WARN + 禁止自动切换 | 下一检测周期重试 | 版本 EOL 日迫近 |
 
-与 OSMemoryGuard 协同：(仅 Tier-3) 空闲内存 < 1.0GB → 强制卸载本地模型；L3 临界 → 全部 LLM 调用路由至远程 API。
+与内存压力联动：见 §8.2（Critical → 卸载本地模型；L3 临界 → 全部 LLM 调用路由至远程 API）。
 
 ---
 
-## 10. 凭证池与速率限制追踪（已实现）
+## 10. 凭证池与速率限制追踪
 
-以下三个组件均位于 `internal/llm/`：
+组件位于 `internal/llm/`：
 
-**CredentialPool**：多 API Key 线程安全池，支持四种选择策略（FillFirst / RoundRobin / Random / LeastUsed）。按策略选取冷却期已过的凭证，失败后按错误类型设置冷却期（Auth 5min / Billing+RateLimit 60min / AuthPermanent 30天）。
-
-**RateLimitTracker**：解析 Provider HTTP 响应头中的 12 个速率限制字段（分钟/小时 × 请求/Token），提供退避延迟建议。以 RoundTripper 包装层自动捕获限速头，无需改动各 Adapter。退避算法采用去相关抖动指数策略（防雷群效应）。
-
-> 2026-09-19 订正（GR-2.2-006）：`RateLimitTracker` / `RateLimitCapturingTransport` 目前是**库组件**，未接入生产出站链路——此前唯一构造点在 `InferenceRouter` 内部且全仓零读取（Router 不直接发 HTTP），已随孤儿字段一并删除。限速后的冷却现由 `ClassifyError` → `CredentialPool` 冷却（RateLimit 60min）承担；若要按响应头精确退避，须在 `boot_substrate.go` 的 SafeHTTPClient 外层包 `RateLimitCapturingTransport` 并让选路读取 `Tracker.Get`，二者缺一即为假接线。
-
-**`ClassifyError`（`error_classifier.go`）**：提取 HTTP 状态码 + 关键词，分类为 17 种失败原因，返回 `*ClassifiedError`，包含可重试性、上下文压缩、凭证轮换、降级策略在内的恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 Provider 错误体格式。`ShouldCompress` 类错误（上下文超限 / payload 过大）是请求侧故障：路由不计入熔断与成功率，只 failover 到 `MaxContextTokens` 更大的 Provider，否则以 `protocol.ErrContextOverflow` 交还调用方（`router_request_fault.go`，ADR-0100 决策一）。
+- **CredentialPool**（`credential_pool.go`）：多 Key 线程安全池，四种策略（FillFirst / RoundRobin / Random / LeastUsed）；失败按错误类型设冷却（Auth 5min / Billing+RateLimit 60min / AuthPermanent 30 天）。
+- **RateLimitTracker**（`rate_tracker.go`）：解析 12 个速率限制头字段，去相关抖动指数退避建议；`RateLimitCapturingTransport` 为 RoundTripper 包装。**现为库组件，未接入生产出站链路**（GR-2.2-006：原唯一构造点全仓零读取，已随孤儿字段删除）；限速冷却现由 `ClassifyError` → `CredentialPool`（RateLimit 60min）承担；若要按响应头精确退避，须在 `boot_substrate.go` 的 SafeHTTPClient 外层包 `RateLimitCapturingTransport` 并让选路读 `Tracker.Get`，二者缺一即假接线。
+- **`ClassifyError`**（`error_classifier.go`）：HTTP 状态码 + 关键词分 17 种失败原因，返回 `*ClassifiedError`（可重试性、上下文压缩、凭证轮换、降级策略提示），覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎错误体。`ShouldCompress` 类（上下文超限/payload 过大）是请求侧故障：不计入熔断与成功率，只 failover 到 `MaxContextTokens` 更大的 Provider，否则以 `protocol.ErrContextOverflow` 交还调用方（`router_request_fault.go`，ADR-0020）。
 
 ---
 

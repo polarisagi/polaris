@@ -1,60 +1,110 @@
-# ADR-0087: 降级必须显式——三个 fail-closed 实例 + 通用规则
+# ADR-0087: Fail-Closed 与禁止静默降级：通用规则、三个降级实例、八条判定规则与 Lint 门控
 
-- **状态**: Accepted（已执行）| **日期**: 2026-08-01 | **模块**: M7 `internal/sandbox/`、M11 `internal/security/policy/`、M11 `internal/security/guard/`
+> 状态：Accepted ｜ 首次：2026-08-01 ｜ 最近复核：2026-10-12 ｜ 含原 ADR-0094 ｜ 模块：全局（`internal/security/`、`internal/sandbox/`、`internal/gateway/`、`internal/bootstrap/`、`internal/lint/`）
 
-## 上下文
+## 旧引用映射（代码注释里的「ADR-0094 决策N」按此跳转）
 
-阶段03（R-01/R-02/R-05）review 中反复出现同一类问题：某条件不满足时代码悄悄切换到另一条路径，但切换本身不可观测（无 counter、无 Error 级日志、无配置开关），使得"系统正在按降级模式运行"这一事实对运维/未来维护者不可见。本 ADR 把三个独立发现的具体实例统一到一条通用原则下，作为横切沉淀。
+| 旧引用 | 新节 |
+|---|---|
+| 0087 通用规则 | 决策一 |
+| 0087 实例 1/2/3 | 决策二 |
+| 0094 决策一（Fail-Closed 三态） | 决策三 |
+| 0094 决策二（身份单源） | 决策四 |
+| 0094 决策三（生命周期锚定） | 决策五 |
+| 0094 决策四（落盘不吞错） | 决策六 |
+| 0094 决策五（FFI KeepAlive） | 决策七 |
+| 0094 决策六（禁字符串直拼） | 决策八 |
+| 0094 决策七（包装器透传） | 决策九 |
+| 0094 决策八（封闭枚举） | 决策十 |
 
-## 决策
+## 决策一：任何降级必须显式（原 ADR-0087 通用规则）
 
-**三个 fail-closed 实例**：
+- 任何 fallback 必须有 counter + 明确日志，禁止静默；引入降级路径前须回答"谁能看见它发生了"，答案是"没人，除非翻源码"则不合格。
+- 反例（已发现的静默降级）：可信来源 Wasm 不可用 → 静默 InProcess；ollama StreamInfer 静默跳过 TokenBurnRate；summary_gen 静默写 `taint_level=0`；22 处 `_ =` 静默吞没。共同模式：无 counter、无 Error 日志、无配置开关。
+- 凡符合上述模式（静默切换执行路径 / 静默降低安全等级 / 静默丢弃错误）的新代码，审查一律驳回，除非同时补 counter + Error 日志 +（适用时）显式开关。
 
-1. **沙箱可信来源 InProcess 回退需显式 opt-in**（阶段03 R-05）：可信来源（TrustOfficial 及以上）在 Wasm/Container/Remote 均不可用时，默认**不**允许降级到 InProcess 执行（`allow_trusted_inprocess_fallback=false`）。可信 ≠ 稳定，可信来源代码仍可能死循环/内存爆炸/panic。完整决策见 `ADR-0008-sandbox-three-tier-platform-fallback.md` 决策六（本 ADR 不重复承载，避免同一决策两处维护）。
+## 决策二：三个 fail-closed 实例（原 ADR-0087 实例 1/2/3）
 
-2. **cedarLeaks 用时间窗而非累计阈值**（阶段03 R-01）：`internal/security/policy/gate.go` 的 Cedar FFI 泄漏计数改为滑动时间窗（`cedarLeakWindow=30分钟`）内的有效泄漏数，而非进程生命周期累计值——累计值会把"进程存活很久、早期偶发几次泄漏"误判为"持续故障"并触发不必要的 KillSwitch。窗口内达到 `cedarLeakKillSwitchThreshold=5` 才触发 KillSwitch；`cedarLeaksTotal`（只增不减）单独暴露为 Prometheus Gauge `polaris_cedar_ffi_leaks_total` 供长期趋势观测，两个计数器职责分离，互不干扰判定逻辑。窗口内淘汰采用惰性衰减（每次记录时顺带清理过期项），不引入额外后台 goroutine。
+1. **沙箱可信来源 InProcess 回退需显式 opt-in**：TrustOfficial 及以上在 Wasm/Container/Remote 均不可用时默认不降级 InProcess（`allow_trusted_inprocess_fallback=false`，`state.yaml sbx_allow_trusted_inprocess_fallback`）。可信 ≠ 稳定。完整决策见 ADR-0008 决策六（不在此重复）。实现 `internal/sandbox/sandbox_router.go`。
+2. **cedarLeaks 用时间窗而非累计阈值**：`internal/security/policy/gate.go` 以滑动窗口 `cedarLeakWindow`=30min 内有效泄漏数判定，窗口内达 `cedarLeakKillSwitchThreshold`=5 才触发 KillSwitch；`cedarLeaksTotal`（只增不减）单独暴露为 Gauge `polaris_cedar_ffi_leaks_total` 供趋势观测，两计数器互不干扰；惰性衰减（记录时顺带清理），无后台 goroutine。
+3. **PII 映射 LRU + 分区回收**：`internal/security/guard/pii_desensitizer.go` 按分区（通常=SessionID）有界 LRU：单分区 `piiMappingMaxEntries`=10000，分区数 `piiPartitionMaxEntries`=256，超限淘汰最久未用；被淘汰原值再现会得新假值（一致性仅窗口内保证）；无 SessionID 落 `piiGlobalPartition="global"`（受条目上限约束，不能被 `ReleasePartition` 精确回收）。淘汰日志按 `evictLogSampleN`=100 采样，`metrics.RecordPIIMappingEviction` 每次计数。阈值组 `cedar_gate`/`pii`/`sandbox` 见 `state.yaml`。
 
-3. **PII 映射 LRU + 分区回收**（阶段03 R-02）：`internal/security/guard/pii_desensitizer.go` 的 original→fake 映射表原为无界增长（`Clear()` 全仓生产代码零调用，唯一调用在测试）。改为按分区（通常=SessionID）的有界 LRU：单分区 `piiMappingMaxEntries=10000` 条，超限淘汰最久未使用映射（一致性仅在窗口内保证，被淘汰的原值再次出现会得到新假值）；同时保留的分区数上限 `piiPartitionMaxEntries=256`，超限整体淘汰最久未用分区。无法提供 SessionID 时落入 `piiGlobalPartition="global"` 兜底分区，仍受条目数上限约束但无法被 `ReleasePartition` 精确回收。淘汰事件按 `evictLogSampleN=100` 采样打 Warn 日志（避免长会话刷屏），但 `metrics.RecordPIIMappingEviction` 计数器每次淘汰都记录，不采样。
+## 决策三：Fail-Closed 三态安全判定（原 ADR-0094 决策一）
 
-**通用规则**：任何 fallback 必须有 counter + 明确日志，禁止静默。新代码引入任何降级路径前，必须先回答："谁能看见它发生了？"——如果答案是"没有人，除非翻源码"，该降级路径不合格。
+- 返回"是否放行/风险等级"的函数必须区分 allow / deny / undetermined，undetermined 按 deny 处置；解析失败或异常路径禁止返回最低风险或隐式放行。
+- 反例：`security_audit_agent.parseAuditResult` 无 JSON 时返回 `RiskLevel:"none"`。
+- 已落实的依赖缺失即拒绝点：`ShadowExecutor.scoreShadow`（judge provider 未注入拒评）、`KnowledgeBase.Search`（`TaintMax` 零值拒检索）、`ContextRefExpander.resolveFile`（`workDir` 未配置拒绝）、`run_command`/`bash`（HITL 网关未注入拒绝，不回退执行）、`NewMCPMarketplaceClient`（拒绝未经 `SafeDialer` 包装的客户端）。
+- 门控：`internal/lint/security_lint_test.go` `TestFailClosedSafetyVerdict`。
 
-## 反例守护
+## 决策四：身份判定单源与 Authenticated 显式断言（原 ADR-0094 决策二）
 
-本轮发现的全部"静默降级"实例，作为反面样本：
+- `authcontext.AuthContext.Authenticated`；HTTP handler 禁止用 `UserID == ""` / `UserID != "admin"` 猜测未认证，一律读 `Authenticated` 或经网关 ACL 中间件。`FromContext` 永不返回 nil，未认证时为 `UserID:"anonymous", Authenticated:false`。
+- 反例：`admin_killswitch.HandleKill` 检查 `UserID == ""` 恒假，未授权请求越权进入 killswitch。
+- 门控：`internal/gateway/server/sysadmin/admin_killswitch_test.go`（anonymous 与 admin 场景）。
 
-```
-- sandbox_router.go 可信来源 Wasm 不可用 → 静默 InProcess（findings GR-6-002）
-- ollama StreamInfer 静默跳过 TokenBurnRate（findings Batch 2 #4）
-- summary_gen 静默写 taint_level=0（findings GR-7-007）
-- 22 处 `_ =` 静默吞没（findings Batch 1/5/6/7/9）
-共同模式：降级路径没有 counter、没有 Error 级日志、没有配置开关。
-新代码引入任何 fallback 前，必须先回答：谁能看见它发生了？
-```
+## 决策五：生命周期锚定与 Channel/Ticker 监听（原 ADR-0094 决策三）
 
-## 后果
+- `internal/` 内禁止用 `context.Background()` 派生生存期超过单次调用的 goroutine；长驻任务继承 `Bootstrapper.RootContext()`（`internal/bootstrap`）。带 `time.Ticker` 的循环与 long-lived goroutine 的 channel 发送必须在 `select` 中监听 `<-ctx.Done()`。
+- 反例：`logic_collapse_trigger.go` 用 `context.Background()` 派生 10 分钟 context；`obsidian_connector.go` 裸写 channel 发送致协程泄漏。
+- 门控：`internal/lint/bare_goroutine_test.go` 的 `TestNoBackgroundCtxInLongLivedGoroutine` / `TestTickerLoopHonorsCtxDone` / `TestChannelSendHonorsCtxDone`。
 
-- **正向**：三处降级路径从"不可观测"变为"有 counter + 有日志 + 可配置"，运维可通过 Prometheus 告警提前发现降级正在发生，而非事后翻日志排查。
-- **负向**：新增少量计数器与配置项维护面（`cedar_gate`/`pii`/`sandbox` 三个 state.yaml 阈值组，见阶段06 §6 登记）。
-- **反例守护**：拒绝任何"静默切换执行路径/静默降低安全等级/静默丢弃错误"的实现——凡符合上述反例列表中任一模式的新代码，审查时一律驳回，除非同时补上 counter + Error 日志 + （如适用）显式开关。
+## 决策六：状态落盘不得静默吞错（原 ADR-0094 决策四）
 
-## 被驳回的方案
+- 持久化写失败（`ExecContext`/`Update`/`Delete` 等）不得仅记日志并返回"看似成功"的伪值；须返回 `error` 或未变更旧值。确属 best-effort/遥测写入须在 `slog.Warn` 上方写中文注释理由。
+- 反例：`edge_weight.go` `ReinforcePath` 写失败仅 Warn 却返回 `currentWeight + reinforceRate`。
+- 门控：`internal/lint/errcheck_lint_test.go` `TestDBWriteFailureNotSilentlySwallowed`。
+
+## 决策七：FFI 指针保活判据（原 ADR-0094 决策五）
+
+- 仅当实参写为 `uintptr(unsafe.Pointer(x))`（转整数擦除 GC 可达性）时，FFI 调用后紧跟 `runtime.KeepAlive(x)`；形参为 `*T`/`unsafe.Pointer` 时编译器与 GC 保证存活，**禁止**冗余 `KeepAlive`。
+- 反例：对形参为 `*byte`/`unsafe.Pointer` 的函数误加 `KeepAlive` 产生假阳性。
+- 门控：`internal/lint/ffi_abi_lint_test.go` `TestFFIKeepAliveBoundary`（按调用点语法扫描 `internal/tool/sandbox`、`internal/ffi`；原名 `TestUintptrFFIArgHasKeepAlive` 从未实现）。
+
+## 决策八：结构化载体禁字符串直拼（原 ADR-0094 决策六）
+
+- JSON 用 `json.Marshal` + 具名结构体；FTS5 `MATCH` 参数过 `pkg/util.QuoteFTS5`（精确短语）/`QuoteFTS5Query`（多词逐词转义）；Prompt 非受信变量用 `prompt.NewRandomBoundary` 包裹。
+- 反例（均已改）：`episodic_mem_overflow.go` 直拼 JSON；`graph_traverser.go`/`retriever.go`/`rag_retrieval.go`/`repo_chat.go` 裸 `MATCH ?`；`community_summarizer.go` 节点内容直拼 Prompt。
+- 门控：`internal/lint/security_lint_test.go` `TestNoRawStringIntoStructuredSink`（SQL 拼接，范围限 `internal/store/audit/`，放大到全仓会误报编译期 const 拼接）+ `TestFTS5MatchArgsUseQuoteHelper`（全仓）。
+
+## 决策九：stdlib 接口包装器必须透传底层能力（原 ADR-0094 决策七）
+
+- 包装 `http.ResponseWriter` 的类型必须实现 `Unwrap() http.ResponseWriter`（供 `http.ResponseController` 识别 Flusher/Hijacker/`SetWriteDeadline`）；包装 `slog.Handler` 的类型其 `WithAttrs`/`WithGroup` 必须返回重新包装自身的实例。
+- 反例：`LoggingResponseWriter` 无 `Unwrap()` 致 `SetWriteDeadline` 静默失效；`LogStore.WithAttrs` 丢弃 `LogStore`。
+- 门控：`internal/lint/arch_lint_test.go` `TestResponseWriterWrapperImplementsUnwrap` / `TestSlogHandlerWrapperPreservesSelf`。
+
+## 决策十：封闭枚举禁止裸字符串（原 ADR-0094 决策八）
+
+- 模型池（`general`/`default`/`reasoning`，另有 `budget`）等封闭枚举必须在 `pkg/types` 定义具名类型与常量（`pkg/types/enums_llm.go`），禁止调用点字符串字面量或不存在的池名。
+- 反例：4 处字面量 `"standard"` 被静默回落 default。
+- 门控：`internal/lint/naming_and_size_test.go` `TestModelPoolEnumOnly`。
+- 孤儿 doc comment（`docs/specs/00-Constitution.md §R7`）由 `internal/lint/doc_comment_name_test.go` `Test_inv_DocCommentOrphan` 门控。
+
+## 已驳方案
 
 | 方案 | 驳回理由 |
-|------|---------|
-| cedarLeaks 继续用进程生命周期累计值，只是提高阈值 | 治标不治本——长期运行进程仍会在累计值缓慢逼近阈值后触发误判性 KillSwitch，时间窗才是正确的语义（"最近是否密集失败"而非"历史上失败过多少次"） |
-| PII 映射表不设上限，定期整表 `Clear()` | `Clear()` 会清空所有分区（含仍活跃会话），且原计划的调用点从未真正接入生产路径；分区级 LRU 才能做到"只回收真正过期的会话，不影响活跃会话" |
-| 三个实例各自独立成 ADR | 三者虽分属不同模块，但共享同一条"降级必须显式"的治理原则，合并为一份横切 ADR 更利于未来同类审查直接引用（README 合并原则：紧耦合决策合入锚点文件） |
+|---|---|
+| cedarLeaks 继续用累计值只提高阈值 | 长期运行进程仍会缓慢逼近阈值误触发 KillSwitch；语义应为"最近是否密集失败" |
+| PII 映射表无上限 + 定期整表 `Clear()` | 清空含活跃会话；`Clear()` 从未接入生产；分区级 LRU 只回收过期会话 |
+| 三实例各自独立成 ADR | 共享同一治理原则，合并更利于引用 |
+
+## 重新评估触发条件
+
+- 新降级路径引入前必须先回答"谁能看见它发生了"。
+- 重提 cedarLeaks 提阈值或 PII 整表 `Clear()`：须先证明原驳回理由（误判性 KillSwitch / 影响活跃会话）已不成立。
+
+## 沿革
+
+| 日期 | 变更 | 原编号 |
+|---|---|---|
+| 2026-08-01 | 三个 fail-closed 实例 + 通用规则（阶段03 R-01/R-02/R-05） | 0087 |
+| 2026-08-09 | 八条规范性决策 + 对应 CI 门控 | 0094 |
+| 2026-08-10 | 复核订正：KeepAlive 门控名、孤儿 doc comment 门控名、`ModelPool` 枚举所在文件、`TestNoRawStringIntoStructuredSink` 范围收窄 | 0094 |
+| 2026-08-13 | 增补依赖缺失即拒绝点（决策三） | 0094 |
+| 2026-10-12 | 0094 并入；wiring 棘轮基线现位于 `tools/baselines/wiring-allowlist.txt`（L-13） | — |
 
 ## 引用代码
 
-- `internal/sandbox/sandbox_router.go`（可信来源降级判定，决策承载于 ADR-0008 决策六）
-- `internal/security/policy/gate.go`（`cedarLeakWindow`/`cedarLeakKillSwitchThreshold`/`recordCedarLeak`/`cedarLeaksTotal`）
-- `internal/security/guard/pii_desensitizer.go`（`lruMapping`/`piiMappingMaxEntries`/`piiPartitionMaxEntries`/`piiGlobalPartition`/`evictLogSampleN`）
-- `local_playground/upgrade/98-rejected-findings.md`（相关驳回条目交叉索引）
-
-## 修订记录
-
-| 日期 | 变更 |
-|------|------|
-| 2026-08-01 | 初稿，阶段06 ADR 归档补录（对应阶段03 R-01/R-02/R-05 已落地实现） |
-| 2026-08-09 | 追记：重新评估触发条件——任何新降级路径引入前须先回答"谁能看见它发生了"；`cedarLeaks` 提高阈值而非用时间窗、PII 映射表去上限改整表 `Clear()`，两个被驳回方案的重提须先证明本 ADR 记录的原始驳回理由（误判性 KillSwitch / 影响活跃会话）已不成立。 |
+- `internal/sandbox/sandbox_router.go`、`internal/security/policy/gate.go`、`internal/security/guard/pii_desensitizer.go`、`internal/security/token/capability_token.go`
+- `internal/gateway/authcontext/context.go`、`internal/gateway/server/sysadmin/admin_killswitch.go`、`internal/gateway/server/middleware.go`、`internal/gateway/server/logstream.go`
+- `internal/bootstrap/bootstrapper.go`、`internal/memory/graph/edge_weight.go`、`internal/tool/sandbox/rust_native_sandbox.go`、`pkg/util/fts5.go`、`pkg/types/enums_llm.go`
+- `internal/lint/`（各门控）、`tools/baselines/wiring-allowlist.txt`
