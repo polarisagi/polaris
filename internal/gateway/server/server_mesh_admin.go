@@ -85,6 +85,12 @@ func (s *Server) issueInvite(ctx context.Context, svc *mesh.Service, peerName, s
 	if err != nil {
 		return nil, "", apperr.Wrap(apperr.CodeOf(err), "server: issue peer token", err)
 	}
+	// 新邀请作废此前未被接受的邀请令牌（已绑定节点的令牌仍可能在用，不动）。
+	if n, serr := svc.Tokens().Supersede(ctx, peerName, info.TokenID, true); serr != nil {
+		slog.Warn("mesh: revoke superseded pending tokens failed", "peer", peerName, "err", serr)
+	} else if n > 0 {
+		slog.Info("mesh: superseded pending invite tokens revoked", "peer", peerName, "count", n)
+	}
 	if p, err := svc.Peers().Get(ctx, peerName); err == nil {
 		p.IssuedTokenID = info.TokenID
 		if uerr := svc.Peers().Upsert(ctx, *p); uerr != nil {
@@ -181,30 +187,77 @@ func (s *Server) handleMeshAcceptPeer(w http.ResponseWriter, r *http.Request) {
 		"mcp_server": map[string]any{
 			"id": mesh.MCPServerID(req.Name), "name": req.Name, "transport": "streamable_http",
 			"url": inv.URL + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + inv.Token},
-			"enabled": true, "timeout": 30, "trust_tier": 1, "requires_network": true,
+			// trust_tier 2（Community）：默认 auto_review 模式下无需额外审批即可登记——`peer accept`
+			// 本身就是人对该对端的显式确认；结果仍按 TrustTier<=2 打 TaintHigh。HTTP 传输不进 bwrap，
+			// requires_network 对它无意义，置 false 免得出现「待网络审批」的误导告警。
+			"enabled": true, "timeout": 30, "trust_tier": 2, "requires_network": false,
 		},
 	}
-	tokenID, bound, err := svc.Tokens().BindPendingToken(ctx, req.Name, inv.NodeID)
+	bound, err := s.finishPairing(ctx, svc, req, peer, inv, resp)
 	if err != nil {
 		writeAppErr(w, err)
 		return
 	}
-	if bound {
-		peer.IssuedTokenID = tokenID
-		if uerr := svc.Peers().Upsert(ctx, peer); uerr != nil {
-			slog.Warn("mesh: record bound token on peer failed", "peer", req.Name, "err", uerr)
-		}
-		resp["paired"] = true // 双向都已完成
-	} else {
-		reply, _, rerr := s.issueInvite(ctx, svc, req.Name, req.URL, 0)
-		if rerr != nil {
-			writeAppErr(w, rerr)
-			return
-		}
-		resp["reply_invite"] = reply.Encode()
-	}
 	slog.Info("mesh: peer accepted", "peer", req.Name, "node_id", inv.NodeID, "url", inv.URL, "paired", bound)
 	httputil.WriteJSON(w, resp)
+}
+
+// finishPairing accept 的收尾：双向已完成则作废旧令牌并标记 paired，否则签发回邀请写入 resp。
+func (s *Server) finishPairing(ctx context.Context, svc *mesh.Service, req acceptRequest, peer mesh.Peer,
+	inv *mesh.Invite, resp map[string]any) (bool, error) {
+	tokenID, bound, err := s.completedPairingToken(ctx, svc, req.Name, inv)
+	if err != nil {
+		return false, err
+	}
+	if !bound {
+		reply, _, rerr := s.issueInvite(ctx, svc, req.Name, req.URL, 0)
+		if rerr != nil {
+			return false, rerr
+		}
+		resp["reply_invite"] = reply.Encode()
+		return false, nil
+	}
+	// 对方已用这枚令牌完成 accept（它的 MCP 连接配置已换成新令牌），之前签发给它的都作废。
+	if n, serr := svc.Tokens().Supersede(ctx, req.Name, tokenID, false); serr != nil {
+		slog.Warn("mesh: revoke superseded peer tokens failed", "peer", req.Name, "err", serr)
+	} else if n > 0 {
+		slog.Info("mesh: superseded peer tokens revoked", "peer", req.Name, "count", n)
+	}
+	peer.IssuedTokenID = tokenID
+	if uerr := svc.Peers().Upsert(ctx, peer); uerr != nil {
+		slog.Warn("mesh: record bound token on peer failed", "peer", req.Name, "err", uerr)
+	}
+	resp["paired"] = true // 双向都已完成
+	return true, nil
+}
+
+// completedPairingToken 判断这次 accept 之后双向配对是否已完成，返回对方手里那枚本节点令牌。
+//   - 首次配对：本节点先前发出的 pending 邀请令牌被绑定到对方真实节点 ID；
+//   - 重新配对：对方的邀请已写明发给本节点（for_node_id，说明它登记过本节点，也就持有本节点的令牌），
+//     且本节点仍有签发给它、未吊销未过期的令牌——取最新一枚。不这样判断时，两边都已互相登记的
+//     重新配对会无限互发回邀请（双实例实测发现）。
+func (s *Server) completedPairingToken(ctx context.Context, svc *mesh.Service, name string, inv *mesh.Invite) (string, bool, error) {
+	tokenID, bound, err := svc.Tokens().BindPendingToken(ctx, name, inv.NodeID)
+	if err != nil {
+		return "", false, apperr.Wrap(apperr.CodeOf(err), "server: bind pending peer token", err)
+	}
+	if bound {
+		return tokenID, true, nil
+	}
+	if inv.ForNodeID == "" {
+		return "", false, nil
+	}
+	tokens, err := svc.Tokens().List(ctx) // 按签发时间倒序
+	if err != nil {
+		return "", false, apperr.Wrap(apperr.CodeOf(err), "server: list peer tokens", err)
+	}
+	now := time.Now()
+	for _, t := range tokens {
+		if t.PeerName == name && t.PeerNodeID == inv.NodeID && !t.Revoked && now.Before(t.ExpiresAt) {
+			return t.TokenID, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // handleMeshListPeers GET /v1/mesh/peers[?probe=1] —— 对端列表；probe=1 时并发拉卡验签探活（5s 超时）。

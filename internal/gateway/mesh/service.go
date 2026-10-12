@@ -76,6 +76,9 @@ type Config struct {
 	// AllowRelay 对端任务能否继续委派（含转发给第三个节点）。默认 false：
 	// 对端任务连委派工具都看不到，环在源头上就不可能形成；链校验是第二道防线。
 	AllowRelay bool
+	// FileRoot 对端任务唯一可访问的文件目录（AgentProfileSpec.FileRoot）。空 = 不收窄（仅测试使用；
+	// 生产装配恒设置，见 cmd/polaris/boot_mesh.go）。
+	FileRoot string
 }
 
 // DefaultConfig 默认参数。
@@ -406,6 +409,7 @@ func (s *Service) PeerProfile(_ *types.TaskSnapshot) *types.AgentProfileSpec {
 		InstructionTaint: types.TaintLow,
 		ReadOnly:         s.cfg.ReadOnly,
 		AllowDelegation:  s.cfg.AllowRelay,
+		FileRoot:         s.cfg.FileRoot,
 	}
 }
 

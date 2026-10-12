@@ -293,7 +293,10 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerAwaitAgent,
 		To:      types.AgentStateAwaitAgent,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			return nil, nil
+			// 必须产出一个效应：拦截点在 executeDeterministicEffect 里，零效应的转移根本不会
+			// 走到那里——watcher 从不启动，父任务永远挂在 S_AWAIT_AGENT（cd93d66 把这里改成
+			// nil 后的回归，ADR-0111 双实例实测发现）。Fn 留空：拦截分支先于 Fn 调用返回。
+			return []protocol.Effect{protocol.DeterministicEffect{}}, nil
 		},
 	})
 
@@ -304,7 +307,8 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerAgentHandoffDone,
 		To:      types.AgentStateExecute,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			return nil, nil
+			// 同上：恢复依赖 S_EXECUTE 拦截分支重新进入 runExecuteDAG，零效应则永不恢复。
+			return []protocol.Effect{protocol.DeterministicEffect{Fn: sm.executeDAG}}, nil
 		},
 	})
 

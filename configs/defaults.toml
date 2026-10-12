@@ -336,4 +336,5 @@ allow_relay = false            # 对端任务不能再委派（从源头杜绝�
 result_retention_hours = 168   # 结果留存 7 天，对端休眠醒来后仍可取回
 max_input_bytes = 65536
 blocking_wait_seconds = 60
+peer_file_root = ""            # 对端任务唯一可读目录；空 = <data_dir>/workspace/peer-shared（自动创建）
 # 已登记的对端存放在数据库（mesh_peers），用 `polaris peer invite` / `polaris peer accept` 配对，不在本文件里。

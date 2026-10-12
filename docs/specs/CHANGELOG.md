@@ -6,6 +6,15 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-12（ADR-0111 双实例实测修订 — 含**契约变更**）
+
+- **[契约] `AgentProfileSpec.FileRoot`** + `protocol.WithConfinedRoot`：非空时内置文件/命令工具只能访问该目录（`guard.ScopedPaths` / `SearchRoots` 替换白名单；根非法 fail-closed）。对端任务固定为 `[mesh] peer_file_root`。
+- **[契约] 只读角色**：MCP 工具一律视为可写；只读/禁止委派角色的工具目录同步隐藏写类工具与 MCP 委派通道；越权计划在 S_VALIDATE 前段打回（`checkPlanAgainstProfile`），不进污点 → HITL。
+- **[契约] `MCPManager.SetDelegationTokenMinter`**：仅为 ADR-0084 契约工具（`a2a_delegate` / `a2a_list_agents` / `get_task` / `cancel_task`）补发一次性能力令牌。
+- **[修复] FSM**：S_EXECUTE→S_AWAIT_AGENT 与 S_AWAIT_AGENT→S_EXECUTE 恢复产出 DeterministicEffect（零效应时委派 watcher 从不启动，父任务永不恢复）。
+- **[契约] `orchestrator.PendingTaskLister`**（`SQLiteBlackboard.ListPendingTaskIDs`）：`DefaultTaskWorker` 启动时补扫积压任务。
+- **[配置] `[mesh] peer_file_root`**（默认空 = `<data_dir>/workspace/peer-shared`）。
+
 ## 2026-10-12（ADR-0111 跨节点委派 — 含**契约变更**）
 
 - **[契约] 新增 `ClientTypePeer`**（`authcontext`）：对端令牌 `pmt_…` 的持有者只能访问 `/a2a/v1`、`/mcp`、Agent Card，其余路由中间件一律 403；`AuthContext` 增 `Peer*` 字段。

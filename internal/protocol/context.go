@@ -111,6 +111,27 @@ func IsDeferrableBackgroundWork(ctx context.Context) bool {
 	return backgroundModeOf(ctx) == backgroundDefer
 }
 
+// CtxConfinedRootKey 本次调用唯一可访问的文件根（AgentProfileSpec.FileRoot）。与项目目录不同，
+// 它替换而不是追加进程级白名单；由 agent 在执行 effect 前注入。
+type CtxConfinedRootKey struct{}
+
+// WithConfinedRoot 注入受限文件根；root 为空时原样返回。
+func WithConfinedRoot(ctx context.Context, root string) context.Context {
+	if root == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxConfinedRootKey{}, root)
+}
+
+// ConfinedRootFrom 读取受限文件根；ok=false 表示未受限。
+func ConfinedRootFrom(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	root, ok := ctx.Value(CtxConfinedRootKey{}).(string)
+	return root, ok && root != ""
+}
+
 // CtxProjectRootKey 会话所属项目的工作目录（规范路径，ADR-0097 决策五）。
 // 由 agent 在执行 effect 前注入（仅当项目绑定了目录且目录的规范路径未变），
 // 内置文件/命令工具据此把该目录追加为本次调用的可访问根——会话级收窄，

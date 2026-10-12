@@ -143,8 +143,31 @@ func (s *TokenStore) Verify(ctx context.Context, plain string) (*Principal, erro
 		// last_used_at 仅供 `polaris peer tokens` 展示，写失败不应拒绝一次合法鉴权。
 		slog.Warn("mesh: update token last_used_at failed", "token_id", row.TokenID, "err", err)
 	}
+	if row.LastUsedAtMs == 0 && !strings.HasPrefix(row.PeerNodeID, "pending:") {
+		s.revokeOlderOnFirstUse(ctx, row)
+	}
 	return &Principal{TokenID: row.TokenID, PeerName: row.PeerName, PeerNodeID: row.PeerNodeID,
 		Scopes: strings.Split(row.Scopes, ",")}, nil
+}
+
+// revokeOlderOnFirstUse 某节点第一次用上一枚新令牌，即证明它已换用新令牌：签发给同一节点、
+// 更早的令牌随之作废（重新配对后旧令牌不再悬空到期满）。失败只记日志，不影响本次鉴权。
+func (s *TokenStore) revokeOlderOnFirstUse(ctx context.Context, used *repo.MeshTokenRow) {
+	rows, err := s.repo.ListMeshTokens(ctx)
+	if err != nil {
+		slog.Warn("mesh: list tokens for supersede failed", "err", err)
+		return
+	}
+	for _, r := range rows {
+		if r.RevokedAtMs != 0 || r.PeerNodeID != used.PeerNodeID || r.TokenID == used.TokenID || r.CreatedAtMs >= used.CreatedAtMs {
+			continue
+		}
+		if err := s.Revoke(ctx, r.TokenID); err != nil {
+			slog.Warn("mesh: revoke superseded token failed", "token_id", r.TokenID, "err", err)
+			continue
+		}
+		slog.Info("mesh: superseded token revoked on first use of a newer one", "token_id", r.TokenID, "peer", r.PeerName)
+	}
 }
 
 // Revoke 吊销令牌（幂等）。没有这个 token_id 时返回 NotFound。
@@ -182,6 +205,30 @@ func (s *TokenStore) BindPendingToken(ctx context.Context, peerName, nodeID stri
 		return "", false, apperr.Wrap(apperr.CodeOf(err), "mesh: bind pending token", err)
 	}
 	return tokenID, tokenID != "", nil
+}
+
+// Supersede 吊销签发给 peerName 的其余有效令牌（keep 除外），返回吊销数。pendingOnly 时只动
+// 尚未绑定节点的令牌。重复 invite / accept 时旧令牌不再有人持有却一直有效到期满——双实例实测里
+// 两轮配对后各留下 2~3 枚孤儿令牌，故在新令牌生效的时刻收口。
+func (s *TokenStore) Supersede(ctx context.Context, peerName, keep string, pendingOnly bool) (int, error) {
+	tokens, err := s.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, t := range tokens {
+		if t.Revoked || t.TokenID == keep || t.PeerName != peerName {
+			continue
+		}
+		if pendingOnly && t.PeerNodeID != PendingNodeID(peerName) {
+			continue
+		}
+		if err := s.Revoke(ctx, t.TokenID); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // PendingNodeID 待绑定令牌的占位节点 ID。持有它的令牌发起的委派若携带委派链，链尾不可能等于

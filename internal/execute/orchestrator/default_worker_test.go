@@ -407,3 +407,73 @@ func TestDefaultTaskWorker_PeerTaskFailsClosedWithoutProfile(t *testing.T) {
 		t.Fatalf("peer task without profile must fail closed, queries=%v failCalled=%v", pool.queriesForTest(), bb.failCalledForTest())
 	}
 }
+
+// listingBlackboard 在 mockBlackboard 上补 PendingTaskLister。
+type listingBlackboard struct{ *mockBlackboard }
+
+func (b listingBlackboard) ListPendingTaskIDs(context.Context, int) ([]string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var ids []string
+	for id, e := range b.tasks {
+		if e.Status == types.TaskPending {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// TestDefaultTaskWorker_PicksUpBacklogOnStart 重启前投递、未被认领的任务不会再有 task_posted 事件；
+// Worker 启动时必须补扫，否则任务一直饿到 reaper 的 60 分钟超时（对端节点委派来的任务就此卡在 working）。
+func TestDefaultTaskWorker_PicksUpBacklogOnStart(t *testing.T) {
+	inner := &mockBlackboard{tasks: make(map[string]*types.TaskEntry), events: make(chan types.BlackboardEvent, 10)}
+	inner.tasks["task-backlog"] = &types.TaskEntry{ID: "task-backlog", Type: PeerDelegationTaskType, Status: types.TaskPending,
+		Intent: []byte("list files")}
+	inner.tasks["task-excluded"] = &types.TaskEntry{ID: "task-excluded", Type: "workflow_step", Status: types.TaskPending,
+		Intent: []byte("{}")}
+	pool := &mockAgentPool{replyOutput: "ok"}
+	worker := NewDefaultTaskWorker(listingBlackboard{inner}, pool, "workflow_step").
+		WithPeerProfile(func(*types.TaskSnapshot) *types.AgentProfileSpec {
+			return &types.AgentProfileSpec{Name: "peer", ReadOnly: true}
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		inner.mu.Lock()
+		st := inner.tasks["task-backlog"].Status
+		ex := inner.tasks["task-excluded"].Status
+		inner.mu.Unlock()
+		if st == types.TaskDone {
+			if ex != types.TaskPending {
+				t.Fatalf("backlog sweep must still respect excluded types, got %v", ex)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending task posted before startup must be picked up without an event, status %v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSQLiteBlackboard_ListPendingTaskIDs(t *testing.T) {
+	ctx := context.Background()
+	bb := NewSQLiteBlackboard(newSchemaBackedDB(t))
+	for _, id := range []string{"p1", "p2", "c1"} {
+		if err := bb.PostTask(ctx, &types.TaskEntry{ID: id, Type: "agent_query", Intent: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := bb.ClaimTask(ctx, "c1", "w"); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	ids, err := bb.ListPendingTaskIDs(ctx, 0)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("only unclaimed tasks are pending, got %v %v", ids, err)
+	}
+	var _ PendingTaskLister = bb
+}

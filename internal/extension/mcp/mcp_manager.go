@@ -65,6 +65,7 @@ type MCPManager struct {
 	entries          map[string]*mcpEntry
 	sandbox          SandboxToolRegistrar  // 向进程内沙箱注册工具（接口，实现为 *sandbox.InProcessSandbox）
 	envelope         *sandbox.ExecEnvelope // 用于 CallTool 下沉
+	delegationMinter DelegationTokenMinter // 可选：A2A 契约工具的一次性能力令牌（见 CallTool）
 	toolReg          ToolRegistrar         // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
 	catalog          catalog.Catalog       // 新的统一工具目录（仅注册 schema 和 metadata）
 	httpClient       network.SafeHTTPClient

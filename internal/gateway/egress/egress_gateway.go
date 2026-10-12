@@ -5,6 +5,8 @@ package egress
 import (
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +36,27 @@ type EgressGateway struct {
 	inner          http.RoundTripper // 下层 transport（SafeDialer-backed）
 	allowedDomains atomic.Pointer[[]string]
 	mu             sync.Mutex // 保护 AddAllowedDomain 的写操作
+	// peerAllowed 跨节点委派登记的对端（ADR-0111）：按精确 host:port 放行，与域名白名单并列。
+	// 对端多为 IP 地址（Tailscale 100.x / 局域网），不可能出现在域名白名单里。
+	peerAllowed atomic.Pointer[func(host string, port int) bool]
+}
+
+// SetPeerAllowlist 注入对端精确 host:port 放行判定（mesh.PeerRegistry.Allowed）。
+func (gw *EgressGateway) SetPeerAllowlist(fn func(host string, port int) bool) {
+	gw.peerAllowed.Store(&fn)
+}
+
+func (gw *EgressGateway) peerAllowedURL(u *url.URL) bool {
+	fn := gw.peerAllowed.Load()
+	if fn == nil || *fn == nil {
+		return false
+	}
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+	}
+	p, err := strconv.Atoi(port)
+	return err == nil && (*fn)(u.Hostname(), p)
 }
 
 // NewEgressGateway 创建 EgressGateway，inner 为已配置 SafeDialer 的 *http.Client.Transport。
@@ -48,7 +71,7 @@ func NewEgressGateway(inner http.RoundTripper, allowedDomains []string) *EgressG
 // RoundTrip 执行域名预检后委托底层 transport。
 func (gw *EgressGateway) RoundTrip(req *http.Request) (*http.Response, error) {
 	host := req.URL.Hostname()
-	if !gw.isAllowed(host) {
+	if !gw.isAllowed(host) && !gw.peerAllowedURL(req.URL) {
 		return nil, apperr.New(apperr.CodeForbidden,
 			fmt.Sprintf("egress_gateway: domain %q not in allowlist (M13 §1.2.2)", host))
 	}

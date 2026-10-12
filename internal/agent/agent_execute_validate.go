@@ -65,6 +65,15 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		return apperr.New(apperr.CodeInternal, "runValidateDAG: dagValidator is nil (fail-closed)")
 	}
 
+	// 角色约束先于污点闸门：越权节点（只读角色的写类工具、禁止委派角色的委派工具）直接打回重规划，
+	// 不能落到 L1 污点 → HITL——那会为对端委派来的任务向本机用户索要审批（ADR-0111）。
+	if err := a.checkPlanAgainstProfile(plan); err != nil {
+		a.sCtx.RecordReplanFeedback(validationFeedback(plan, err))
+		a.sCtx.RecordFailure(validationFailureKind(err))
+		a.asyncIntent(types.TriggerValidateFail)
+		return apperr.Wrap(apperr.CodeForbidden, "s_validate: plan violates agent profile", err)
+	}
+
 	if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
 		a.sCtx.RecordReplanFeedback(validationFeedback(plan, err))
 		a.sCtx.RecordFailure(validationFailureKind(err))

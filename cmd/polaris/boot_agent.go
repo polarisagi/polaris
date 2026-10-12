@@ -21,6 +21,7 @@ import (
 
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 
+	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/action/lam"
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/optimizer"
@@ -30,6 +31,7 @@ import (
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/token"
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
@@ -656,6 +658,15 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ADR-0084：MCP A2A 出站委派专用 Worker，认领 "agent_handoff:mcp:<server>/<agent>"
 	// 任务，转译为对目标 MCP Server 的 a2a_delegate 工具调用。*mcp.MCPManager 已天然
 	// 满足 orchestrator.MCPToolCaller（结构子类型，无需适配器）。
+	// 契约工具（a2a_delegate 等）由 Worker 代为调用，没有 Agent 的 JIT 令牌；为其补发一次性令牌，
+	// 否则 trust_tier≤2 的委派目标会被执行闸门拒绝（见 MCPManager.SetDelegationTokenMinter）。
+	tb.MCPMgr.SetDelegationTokenMinter(func(llmTool string) (*token.Token, func(), error) {
+		tok, err := action.NewJITToken("mcp_a2a_worker", []action.TokenOperation{{ToolName: llmTool, MaxCalls: 1}}, 0)
+		if err != nil {
+			return nil, func() {}, apperr.Wrap(apperr.CodeForbidden, "boot: mint a2a contract tool token", err)
+		}
+		return tok, func() { action.GetTokenManager().Revoke(tok.Claims.TokenID) }, nil
+	})
 	mcpA2AWorker := orchestrator.NewMCPA2AWorker(blackboard, tb.MCPMgr,
 		time.Duration(sb.Cfg.Thresholds.M8Orchestrator.A2AHandoffTimeoutSeconds)*time.Second)
 	if meshSvc != nil {

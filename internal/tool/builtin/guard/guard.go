@@ -92,6 +92,20 @@ func CheckScopeRoot(root string) error {
 	return nil
 }
 
+// confinedRoot 受限文件根（AgentProfileSpec.FileRoot）。ok=true 时调用方只能用返回的根：
+// 根本身不满足 CheckScopeRoot（落在敏感目录或是其祖先）时返回空集——CheckAllowedPath 对空集
+// fail-closed，任何路径都不放行，而不是退回进程级白名单。
+func confinedRoot(ctx context.Context) ([]string, bool) {
+	root, ok := protocol.ConfinedRootFrom(ctx)
+	if !ok {
+		return nil, false
+	}
+	if CheckScopeRoot(root) != nil {
+		return []string{}, true
+	}
+	return []string{filepath.Clean(root)}, true
+}
+
 // scopeRoot 取 ctx 中的项目工作目录；不满足 CheckScopeRoot 时视为无（fail-closed：
 // 写入侧已校验，此处是纵深防御——存库后规则收紧或目录被替换时不放大访问面）。
 func scopeRoot(ctx context.Context) string {
@@ -106,6 +120,9 @@ func scopeRoot(ctx context.Context) string {
 // 置首位是因为 bash/run_command 以 allowedPaths[0] 作默认工作目录：项目会话里
 // 命令应在项目目录执行。
 func ScopedPaths(ctx context.Context, base []string) []string {
+	if confined, ok := confinedRoot(ctx); ok {
+		return confined
+	}
 	root := scopeRoot(ctx)
 	if root == "" {
 		return base
@@ -123,6 +140,9 @@ func ScopedPaths(ctx context.Context, base []string) []string {
 // SearchRoots grep/glob 未指定路径时的默认搜索根：项目会话只搜项目目录
 // （把 DataDir 里的数据库/日志混进项目代码的搜索结果没有意义），否则沿用白名单。
 func SearchRoots(ctx context.Context, base []string) []string {
+	if confined, ok := confinedRoot(ctx); ok {
+		return confined
+	}
 	if root := scopeRoot(ctx); root != "" {
 		return []string{root}
 	}

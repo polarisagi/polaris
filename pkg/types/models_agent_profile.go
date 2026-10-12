@@ -21,4 +21,8 @@ type AgentProfileSpec struct {
 	// SuppressHooks 本角色的工具调用不触发 hooks.json（agent 类型 hook 的评估子 Agent：
 	// 其工具调用再触发 hook 会无限递归）。亦不触发 SubagentStart/SubagentStop。
 	SuppressHooks bool
+	// FileRoot 非空时，内置文件/命令工具只能访问这一个目录（替换进程级白名单与项目目录，而非追加）。
+	// 对端节点委派来的任务用它把可读范围收窄到共享目录：只读不等于安全——进程级白名单含整个
+	// DataDir，read_file / data_query 可直接读到 vault.key 与 polaris.db（ADR-0111）。
+	FileRoot string
 }

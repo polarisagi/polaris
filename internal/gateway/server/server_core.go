@@ -353,6 +353,11 @@ func (s *Server) SetMCPManager(m MCPManager) {
 	})
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.MCPMgr = m
+		// mcpadmin 子处理器在 NewSysAdminHandler 里按值拷贝了构造时的 nil，此前从未回填：
+		// POST /v1/mcp-servers 建档后不立即连接、/test 恒返回 503（ADR-0111 双实例实测发现）。
+		if s.sysadminHandler.MCP != nil {
+			s.sysadminHandler.MCP.MCPMgr = m
+		}
 	}
 	if s.pluginHandler != nil {
 		s.pluginHandler.MCPMgr = m

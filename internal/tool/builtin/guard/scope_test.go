@@ -83,3 +83,33 @@ func TestScopedPaths_ReadGateEndToEnd(t *testing.T) {
 		t.Fatalf("项目会话应可写项目目录: %v", err)
 	}
 }
+
+// TestConfinedRoot_ReplacesAllowlist 受限根（对端委派任务）替换而不是追加白名单：DataDir 里的
+// vault.key / polaris.db 不可达，项目目录也不可达；根本身非法时一律拒绝，不回落到白名单。
+func TestConfinedRoot_ReplacesAllowlist(t *testing.T) {
+	dataDir := t.TempDir()
+	shared := filepath.Join(dataDir, "workspace", "peer-shared")
+	project := t.TempDir()
+	base := []string{dataDir}
+
+	ctx := protocol.WithProjectRoot(protocol.WithConfinedRoot(context.Background(), shared), project)
+	if err := CheckAllowedPath(filepath.Join(shared, "notes.md"), ScopedPaths(ctx, base)); err != nil {
+		t.Fatalf("shared dir must stay readable: %v", err)
+	}
+	for _, p := range []string{filepath.Join(dataDir, "vault.key"), filepath.Join(dataDir, "data", "polaris.db"),
+		filepath.Join(project, "main.go")} {
+		if err := CheckAllowedPath(p, ScopedPaths(ctx, base)); err == nil {
+			t.Fatalf("%s must not be reachable from a confined task", p)
+		}
+	}
+	if sr := SearchRoots(ctx, base); len(sr) != 1 || sr[0] != shared {
+		t.Fatalf("search must default to the confined root only, got %v", sr)
+	}
+	bad := protocol.WithConfinedRoot(context.Background(), "relative/dir")
+	if got := ScopedPaths(bad, base); len(got) != 0 {
+		t.Fatalf("an invalid confined root must yield no roots (fail-closed), got %v", got)
+	}
+	if err := CheckAllowedPath(filepath.Join(dataDir, "vault.key"), ScopedPaths(bad, base)); err == nil {
+		t.Fatal("invalid confined root must not fall back to the process allowlist")
+	}
+}

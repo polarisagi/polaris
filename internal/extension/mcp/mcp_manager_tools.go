@@ -10,9 +10,35 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// DelegationTokenMinter 为一次 A2A 契约工具调用签发一次性能力令牌，返回令牌与撤销函数。
+type DelegationTokenMinter func(llmToolName string) (*token.Token, func(), error)
+
+// isA2AContractTool ADR-0084 出站委派契约里由系统代为调用的工具（不是 LLM 直接选的工具）。
+func isA2AContractTool(name string) bool {
+	switch name {
+	case "a2a_delegate", A2AListAgentsToolName, "get_task", "cancel_task":
+		return true
+	}
+	return false
+}
+
+// SetDelegationTokenMinter 注入契约工具的令牌签发器（Boot 用 action.NewJITToken 实现）。
+//
+// 为什么需要：CallTool 走执行闸门，而闸门对 trust<3 的工具要求有效能力令牌。LLM 直接选用的
+// 工具由 Agent 在 S_VALIDATE 后 JIT 签发；但 transfer_to_agent → MCPA2AWorker → a2a_delegate
+// 这一跳由 Worker 代为调用，从来没有令牌——trust_tier≤2 的委派目标（包括 ADR-0111 的对端节点）
+// 一律被闸门拒绝（ADR-0111 双实例实测发现）。授权在上游已经发生（transfer_to_agent 本身通过了
+// S_VALIDATE 与它自己的令牌），这里只为固定的契约工具补发一次性令牌，任意其它工具名不受影响。
+func (m *MCPManager) SetDelegationTokenMinter(f DelegationTokenMinter) {
+	m.mu.Lock()
+	m.delegationMinter = f
+	m.mu.Unlock()
+}
 
 // CallTool 直接路由调用指定的 MCP 工具。
 // 执行 PolicyGate 校验（与 InMemoryToolRegistry.ExecuteTool 语义一致）。
@@ -28,11 +54,21 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 	argsBytes, _ := json.Marshal(args)
 
 	m.mu.RLock()
-	env := m.envelope
+	env, minter := m.envelope, m.delegationMinter
 	m.mu.RUnlock()
 
 	if env == nil {
 		return "", apperr.New(apperr.CodeInternal, "mcp_manager: envelope not initialized")
+	}
+
+	var capTok *token.Token
+	if minter != nil && isA2AContractTool(toolName) {
+		tok, revoke, err := minter(llmName)
+		if err != nil {
+			return "", apperr.Wrap(apperr.CodeForbidden, "mcp_manager: mint delegation capability token", err)
+		}
+		defer revoke()
+		capTok = tok
 	}
 
 	res, err := env.Execute(ctx, sandbox.ExecRequest{
@@ -42,6 +78,7 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 		TrustTier:  types.TrustTier(e.cfg.TrustTier),
 		Tool:       types.Tool{Name: llmName, Source: types.ToolMCP, TrustTier: types.TrustTier(e.cfg.TrustTier)},
 		Input:      argsBytes,
+		CapToken:   capTok,
 		TaintLevel: types.TaintMedium,
 	})
 	if err != nil {

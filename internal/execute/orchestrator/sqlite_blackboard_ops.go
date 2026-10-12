@@ -227,6 +227,33 @@ func (bb *SQLiteBlackboard) Ping(ctx context.Context) error {
 	return nil
 }
 
+// ListPendingTaskIDs 按优先级、投递时间列出待认领任务（只读，limit<=0 取 100）。
+// 供自订阅式 Worker 启动时补扫：认领只由 task_posted 事件驱动，进程重启前已投递而未认领的
+// 任务没有人再广播，会一直饿到 reaperPhase2 的 60 分钟超时（ADR-0111 双实例实测发现）。
+func (bb *SQLiteBlackboard) ListPendingTaskIDs(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := bb.db.QueryContext(ctx,
+		`SELECT task_id FROM tasks WHERE status=? ORDER BY priority DESC, created_at ASC LIMIT ?`, statusPending, limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "blackboard.ListPendingTaskIDs", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "blackboard.ListPendingTaskIDs scan", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "blackboard.ListPendingTaskIDs rows", err)
+	}
+	return ids, nil
+}
+
 // CountByStatus 返回处于任一给定状态的任务数（活跃度信号，只读）。
 func (bb *SQLiteBlackboard) CountByStatus(statuses ...types.TaskStatus) int {
 	if len(statuses) == 0 {

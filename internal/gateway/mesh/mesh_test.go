@@ -156,6 +156,62 @@ func TestTokens_IssueVerifyRevoke(t *testing.T) {
 	}
 }
 
+func TestTokens_Supersede(t *testing.T) {
+	ctx := context.Background()
+	ts := NewTokenStore(storerepo.NewSQLiteMeshRepository(newTestDB(t)))
+	bound, _, _ := ts.Issue(ctx, "desktop", "pn-aaa", nil, time.Hour)
+	oldPending, _, _ := ts.Issue(ctx, "desktop", PendingNodeID("desktop"), nil, time.Hour)
+	other, _, _ := ts.Issue(ctx, "vps", PendingNodeID("vps"), nil, time.Hour)
+	newest, info, _ := ts.Issue(ctx, "desktop", PendingNodeID("desktop"), nil, time.Hour)
+
+	// 新邀请只作废同名的旧待绑定令牌：已绑定的、别的对端的、自己都保留。
+	if n, err := ts.Supersede(ctx, "desktop", info.TokenID, true); err != nil || n != 1 {
+		t.Fatalf("pending-only supersede must revoke exactly the old invite, got %d %v", n, err)
+	}
+	if _, err := ts.Verify(ctx, oldPending); err == nil {
+		t.Fatal("superseded invite token must stop working")
+	}
+	for _, tok := range []string{bound, other, newest} {
+		if _, err := ts.Verify(ctx, tok); err != nil {
+			t.Fatalf("unrelated token must survive: %v", err)
+		}
+	}
+	// 配对完成后，同名其余令牌（含已绑定的旧令牌）一并作废。
+	if n, err := ts.Supersede(ctx, "desktop", info.TokenID, false); err != nil || n != 1 {
+		t.Fatalf("full supersede must revoke the old bound token, got %d %v", n, err)
+	}
+	if _, err := ts.Verify(ctx, bound); err == nil {
+		t.Fatal("old bound token must stop working after re-pairing")
+	}
+	if _, err := ts.Verify(ctx, other); err != nil {
+		t.Fatal("other peer's token must survive")
+	}
+}
+
+func TestTokens_FirstUseRetiresOlderTokensOfSameNode(t *testing.T) {
+	ctx := context.Background()
+	ts := NewTokenStore(storerepo.NewSQLiteMeshRepository(newTestDB(t)))
+	base := time.Now()
+	ts.now = func() time.Time { return base }
+	old, _, _ := ts.Issue(ctx, "desktop", "pn-aaa", nil, time.Hour)
+	other, _, _ := ts.Issue(ctx, "vps", "pn-bbb", nil, time.Hour)
+	ts.now = func() time.Time { return base.Add(time.Second) }
+	newer, _, _ := ts.Issue(ctx, "desktop", "pn-aaa", nil, time.Hour)
+
+	if _, err := ts.Verify(ctx, old); err != nil { // 旧令牌先被用：不影响更新的
+		t.Fatal(err)
+	}
+	if _, err := ts.Verify(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.Verify(ctx, old); err == nil {
+		t.Fatal("older token of the same node must be retired once the newer one is used")
+	}
+	if _, err := ts.Verify(ctx, other); err != nil {
+		t.Fatal("tokens of other nodes must be untouched")
+	}
+}
+
 func TestTokens_ExpiredAndUnknown(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
@@ -394,5 +450,14 @@ func TestService_AuditsAcceptAndReject(t *testing.T) {
 	if len(aud.recs) != 2 || aud.recs[0].Outcome != "allow" || aud.recs[1].Outcome != "deny" ||
 		!strings.HasPrefix(aud.recs[1].DenyReason, "depth") || aud.recs[0].AgentID != "peer:pn-a" || aud.recs[0].CapTokenID == "" {
 		t.Fatalf("unexpected audit records: %+v", aud.recs)
+	}
+}
+
+func TestService_PeerProfileCarriesFileRoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.FileRoot = "/srv/peer-shared"
+	svc := NewService(storerepo.NewSQLiteMeshRepository(newTestDB(t)), nil, nil, cfg)
+	if p := svc.PeerProfile(nil); p.FileRoot != "/srv/peer-shared" || !p.ReadOnly || p.AllowDelegation {
+		t.Fatalf("peer profile must be read-only, non-relaying and confined, got %+v", p)
 	}
 }

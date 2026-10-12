@@ -53,6 +53,11 @@ type DefaultTaskWorker struct {
 	peerProfile     func(*types.TaskSnapshot) *types.AgentProfileSpec
 }
 
+// PendingTaskLister 可选：能列出待认领任务的黑板（SQLiteBlackboard 实现），供启动补扫。
+type PendingTaskLister interface {
+	ListPendingTaskIDs(ctx context.Context, limit int) ([]string, error)
+}
+
 // PeerDelegationTaskType 对端节点经 A2A / MCP 门面委派来的任务类型（ADR-0111）。
 // 由 internal/gateway/mesh 投递；本 Worker 认领后必须以 WithPeerProfile 注入的角色执行。
 const PeerDelegationTaskType = "peer_delegation"
@@ -128,6 +133,25 @@ func (w *DefaultTaskWorker) RunLoop(ctx context.Context) error {
 		return apperr.Wrap(apperr.CodeInternal, "default task worker: subscribe failed", err)
 	}
 	slog.Info("default task worker: started listening on blackboard")
+	// 订阅就绪后补扫一次积压：先订阅再扫，扫描与新事件之间的任务两头都能看到，
+	// tryClaimAndExecute 的 CAS 认领保证不重复执行。
+	if lister, ok := w.bb.(PendingTaskLister); ok {
+		concurrent.SafeGo(ctx, "orchestrator.default_task_worker.backlog", func(ctx context.Context) {
+			ids, lerr := lister.ListPendingTaskIDs(ctx, 0)
+			if lerr != nil {
+				slog.Warn("default task worker: backlog scan failed", "err", lerr)
+				return
+			}
+			if len(ids) > 0 {
+				slog.Info("default task worker: picking up pending tasks posted before startup", "count", len(ids))
+			}
+			for _, id := range ids {
+				concurrent.SafeGo(ctx, "orchestrator.default_task_worker.claim", func(ctx context.Context) {
+					w.tryClaimAndExecute(ctx, id)
+				})
+			}
+		})
+	}
 
 	for {
 		select {

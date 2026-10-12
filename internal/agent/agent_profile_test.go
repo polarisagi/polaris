@@ -71,3 +71,59 @@ func TestAgentProfile_DelegationTargetsAndCatalogView(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentProfile_PeerProfileHidesWritesAndMCPDelegation 对端委派任务的角色（只读 + 禁止再委派）：
+// 写类工具与 MCP 委派通道都不展示；含越权节点的计划在 S_VALIDATE 前段即被打回，不落到污点 → HITL。
+func TestAgentProfile_PeerProfileHidesWritesAndMCPDelegation(t *testing.T) {
+	a := NewAgentWithDefaults("peer-agent")
+	cat := catalog.NewMemoryCatalog()
+	for name, lv := range map[string]types.CapabilityLevel{
+		"read_file": types.CapReadOnly, "bash": types.CapPrivileged,
+		"mcp__laptop__a2a_delegate": types.CapReadOnly, "mcp__laptop__a2a_delegate_async": types.CapReadOnly,
+		"mcp__laptop__a2a_list_agents": types.CapReadOnly, "mcp__laptop__get_task": types.CapReadOnly,
+	} {
+		src := types.ToolMCP
+		if name == "read_file" || name == "bash" {
+			src = types.ToolBuiltin
+		}
+		cat.Register(protocol.CatalogEntry{Name: name, Source: src, Capability: lv, TrustTier: types.TrustCommunity})
+	}
+	a.InjectCatalog(cat)
+	a.InjectToolExecutor(capToolExecutor{"read_file": types.CapReadOnly, "bash": types.CapPrivileged})
+	a.SetAgentProfile(&types.AgentProfileSpec{Name: "peer:laptop", ReadOnly: true})
+
+	got := map[string]bool{}
+	for _, e := range a.visibleCatalog().List(context.Background(), types.TrustUntrusted) {
+		got[e.Name] = true
+	}
+	// MCP 工具没有能力等级元数据，只读角色一律视为可写（fail-closed）。
+	want := map[string]bool{"read_file": true}
+	if len(got) != len(want) {
+		t.Fatalf("peer profile view = %v, want only %v", got, want)
+	}
+	for n := range want {
+		if !got[n] {
+			t.Fatalf("peer profile view must keep %s, got %v", n, got)
+		}
+	}
+
+	if err := a.checkPlanAgainstProfile(&protocol.DAGPlan{Nodes: []protocol.ExecNode{{ID: "n1", ToolName: "read_file"}}}); err != nil {
+		t.Fatalf("read-only plan must pass: %v", err)
+	}
+	for _, bad := range []string{"bash", "mcp__laptop__a2a_delegate", "mcp__laptop__get_task"} {
+		if err := a.checkPlanAgainstProfile(&protocol.DAGPlan{Nodes: []protocol.ExecNode{{ID: "n1", ToolName: bad}}}); apperr.CodeOf(err) != apperr.CodeForbidden {
+			t.Fatalf("plan using %s must be rejected by the profile, got %v", bad, err)
+		}
+	}
+}
+
+func TestAgentProfile_FileRootConfinesTaskCtx(t *testing.T) {
+	a := NewAgentWithDefaults("peer-agent-root")
+	if _, ok := protocol.ConfinedRootFrom(a.withTaskScopeCtx(context.Background())); ok {
+		t.Fatal("no profile → no confinement")
+	}
+	a.SetAgentProfile(&types.AgentProfileSpec{Name: "peer", ReadOnly: true, FileRoot: "/srv/peer-shared"})
+	if root, ok := protocol.ConfinedRootFrom(a.withTaskScopeCtx(context.Background())); !ok || root != "/srv/peer-shared" {
+		t.Fatalf("profile FileRoot must reach tool ctx, got %q %v", root, ok)
+	}
+}

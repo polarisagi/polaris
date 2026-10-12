@@ -151,7 +151,8 @@ func runPeerAccept(args []string) error {
 		}
 	}
 	if err := cliPost("/v1/mcp-servers", resp.MCPServer, nil); err != nil {
-		return apperr.Wrap(apperr.CodeOf(err), "对端已登记，但注册其 MCP 连接失败（可重新运行同一条 accept 命令）", err)
+		return apperr.Wrap(apperr.CodeOf(err), "对端已登记，但注册其 MCP 连接失败（若提示需要审批：权限模式为 default 时"+
+			"需在控制台批准 mcp:"+name+"，或改用 auto_review；之后可重新运行同一条 accept 命令）", err)
 	}
 	fmt.Printf("%s  已添加委派目标 mcp:%s/default\n", clr(ansiOk, "✓"), name)
 

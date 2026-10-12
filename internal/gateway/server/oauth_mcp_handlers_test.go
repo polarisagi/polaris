@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -196,4 +197,17 @@ func TestHandleMCPOAuthClientMetadata(t *testing.T) {
 			t.Fatalf("want 404, got %d", w.Code)
 		}
 	})
+}
+
+// TestSetMCPManager_BackfillsMCPAdmin mcpadmin 子处理器构造时拿到的是 nil MCPManager，
+// SetMCPManager 必须回填，否则 POST /v1/mcp-servers 建档后不连接、/test 恒 503。
+func TestSetMCPManager_BackfillsMCPAdmin(t *testing.T) {
+	s := &Server{sysadminHandler: sysadmin.NewSysAdminHandler(sysadmin.Dependencies{})}
+	if s.sysadminHandler.MCP == nil || s.sysadminHandler.MCP.MCPMgr != nil {
+		t.Fatal("precondition: mcpadmin is constructed with a nil MCPManager")
+	}
+	s.SetMCPManager(&mockOAuthCallbackMCPManager{})
+	if s.sysadminHandler.MCP.MCPMgr == nil {
+		t.Fatal("SetMCPManager must backfill the mcpadmin sub-handler")
+	}
 }

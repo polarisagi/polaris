@@ -15,6 +15,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
+	"github.com/polarisagi/polaris/internal/gateway/egress"
 	"github.com/polarisagi/polaris/internal/gateway/mesh"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
@@ -70,8 +71,12 @@ func newPairNode(t *testing.T, name string) *pairNode {
 	sd.SetPeerAllowlist(svc.Peers().Allowed)
 
 	n := &pairNode{svc: svc, bb: bb}
+	// 与生产 boot_substrate 同一套出站栈：SafeDialer + EgressGateway 域名白名单，两层都挂对端放行。
+	safe := network.NewSafeHTTPClient(sd)
+	gw := egress.NewEgressGateway(safe.Transport, egress.DefaultAllowedDomains())
+	gw.SetPeerAllowlist(svc.Peers().Allowed)
 	n.s = &Server{a2aCfg: config.A2AConfig{Enabled: true, Name: name}, rootCtx: context.Background(),
-		httpClient: network.NewSafeHTTPClient(sd).Client}
+		httpClient: &http.Client{Transport: gw}}
 	n.s.SetLocalToken(pairLocalToken)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/agent-card.json", n.s.serveMesh)
@@ -191,5 +196,56 @@ func TestPairing_RejectsBadInvites(t *testing.T) {
 	}
 	if peers, _ := b.svc.Peers().List(context.Background()); len(peers) != 0 {
 		t.Fatalf("failed accept must roll back the peer registration, got %+v", peers)
+	}
+}
+
+// TestPairing_RepairCompletesInOneRound 已互相登记的两节点重新配对：一次 invite + accept 即完成，
+// 不再互发回邀请；B 侧只剩一枚有效令牌；A 侧旧令牌在 B 第一次用上新令牌时作废。
+func TestPairing_RepairCompletesInOneRound(t *testing.T) {
+	a, b := newPairNode(t, "laptop"), newPairNode(t, "desktop")
+	_, inv := a.call(t, http.MethodPost, "/v1/mesh/invites", map[string]any{"peer_name": "desktop"})
+	_, accB := b.call(t, http.MethodPost, "/v1/mesh/peers", map[string]any{"name": "laptop", "invite": inv["invite"]})
+	if code, accA := a.call(t, http.MethodPost, "/v1/mesh/peers", map[string]any{"name": "desktop", "invite": accB["reply_invite"]}); code != http.StatusOK || accA["paired"] != true {
+		t.Fatalf("initial pairing: %d %v", code, accA)
+	}
+
+	_, inv2 := a.call(t, http.MethodPost, "/v1/mesh/invites", map[string]any{"peer_name": "desktop"})
+	code, acc := b.call(t, http.MethodPost, "/v1/mesh/peers", map[string]any{"name": "laptop", "invite": inv2["invite"]})
+	if code != http.StatusOK || acc["paired"] != true || acc["reply_invite"] != nil {
+		t.Fatalf("re-pairing must complete without a reply invite, got %d %v", code, acc)
+	}
+	valid := func(n *pairNode) int {
+		toks, err := n.svc.Tokens().List(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := 0
+		for _, tk := range toks {
+			if !tk.Revoked {
+				c++
+			}
+		}
+		return c
+	}
+	if valid(b) != 1 {
+		t.Fatalf("re-pairing must leave B with a single valid token, got %d", valid(b))
+	}
+	// A 无法知道 B 是否接受了新邀请，旧令牌先保留。
+	if valid(a) != 2 {
+		t.Fatalf("A keeps its old token until B is known to hold the new one, got %d", valid(a))
+	}
+	auth := acc["mcp_server"].(map[string]any)["headers"].(map[string]any)["Authorization"].(string)
+	req, err := http.NewRequest(http.MethodPost, a.srv.URL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", auth)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("B must reach A with the new token: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	if valid(a) != 1 {
+		t.Fatalf("first use of the new token must retire the old one, got %d valid", valid(a))
 	}
 }

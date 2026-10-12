@@ -421,5 +421,8 @@ type MeshConfig struct {
 	MaxInputBytes int `toml:"max_input_bytes"`
 	// BlockingWaitSeconds A2A SendMessage 未设 returnImmediately 时的最长阻塞秒数。默认 60。
 	BlockingWaitSeconds int `toml:"blocking_wait_seconds"`
+	// PeerFileRoot 对端任务唯一可访问的文件目录（内置文件/命令工具不再能看到 DataDir 其余部分）。
+	// 空 = <data_dir>/workspace/peer-shared，启动时自动创建。把要给对端看的文件放进去。
+	PeerFileRoot string `toml:"peer_file_root"`
 	// 已登记的对端存放在数据库（mesh_peers，State-in-DB），由 `polaris peer` 命令维护，不在配置文件里。
 }

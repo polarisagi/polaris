@@ -240,3 +240,46 @@ func (c restrictedCatalog) Schemas(ctx context.Context, minTrust types.TrustTier
 	}
 	return out
 }
+
+// Filter 返回只暴露 keep 为真的条目的目录视图（可见性过滤，同样不是安全边界）。
+func Filter(c Catalog, keep func(protocol.CatalogEntry) bool) Catalog {
+	if c == nil || keep == nil {
+		return c
+	}
+	return filteredCatalog{Catalog: c, keep: keep}
+}
+
+type filteredCatalog struct {
+	Catalog
+	keep func(protocol.CatalogEntry) bool
+}
+
+func (c filteredCatalog) List(ctx context.Context, minTrust types.TrustTier) []protocol.CatalogEntry {
+	all := c.Catalog.List(ctx, minTrust)
+	out := make([]protocol.CatalogEntry, 0, len(all))
+	for _, e := range all {
+		if c.keep(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (c filteredCatalog) Lookup(name string) (protocol.CatalogEntry, bool) {
+	e, ok := c.Catalog.Lookup(name)
+	if !ok || !c.keep(e) {
+		return protocol.CatalogEntry{}, false
+	}
+	return e, true
+}
+
+func (c filteredCatalog) Schemas(ctx context.Context, minTrust types.TrustTier) []types.ToolSchema {
+	all := c.Catalog.Schemas(ctx, minTrust)
+	out := make([]types.ToolSchema, 0, len(all))
+	for _, s := range all {
+		if e, ok := c.Catalog.Lookup(s.Name); ok && c.keep(e) {
+			out = append(out, s)
+		}
+	}
+	return out
+}

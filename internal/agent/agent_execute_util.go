@@ -132,6 +132,12 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 	if a.background.Load() {
 		ctx = protocol.WithBackgroundWork(ctx)
 	}
+	// 角色的受限文件根（对端委派任务等）替换进程级白名单，见 guard.ScopedPaths。
+	if a.sCtx != nil {
+		if p := a.agentProfile(); p != nil && p.FileRoot != "" {
+			ctx = protocol.WithConfinedRoot(ctx, p.FileRoot)
+		}
+	}
 	return protocol.WithProjectRoot(ctx, a.currentProjectRoot())
 }
 

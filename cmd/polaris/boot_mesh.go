@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -24,7 +26,13 @@ func bootMesh(sb *SubstrateBundle, blackboard *orchestrator.SQLiteBlackboard) *m
 		slog.Error("polaris: mesh node identity unavailable, cross-node delegation disabled", "err", err)
 		return nil
 	}
-	svc := mesh.NewService(repo.NewSQLiteMeshRepository(sb.Store.DB()), blackboard, self, meshServiceConfig(sb.Cfg.Mesh))
+	cfg := meshServiceConfig(sb.Cfg.Mesh)
+	cfg.FileRoot = peerFileRoot(sb.DataDir, sb.Cfg.Mesh.PeerFileRoot)
+	if err := os.MkdirAll(cfg.FileRoot, 0o700); err != nil {
+		// 目录建不出来时工具对空目录 fail-closed（读不到任何文件），不放宽。
+		slog.Warn("polaris: create mesh peer file root failed; peer tasks will not be able to read any file", "dir", cfg.FileRoot, "err", err)
+	}
+	svc := mesh.NewService(repo.NewSQLiteMeshRepository(sb.Store.DB()), blackboard, self, cfg)
 	if sb.AuditTrail != nil {
 		svc.WithAuditor(sb.AuditTrail)
 	}
@@ -35,9 +43,21 @@ func bootMesh(sb *SubstrateBundle, blackboard *orchestrator.SQLiteBlackboard) *m
 		// ADR-0111 决策六第 2 条：只对 mesh_peers 登记的精确 host:port 放行，不按网段。
 		sb.Dialer.SetPeerAllowlist(svc.Peers().Allowed)
 	}
+	if sb.EgressGW != nil {
+		// 域名白名单层同样只放行登记过的对端（对端是 IP，不可能在域名白名单里）。
+		sb.EgressGW.SetPeerAllowlist(svc.Peers().Allowed)
+	}
 	slog.Info("polaris: cross-node delegation enabled", "node_id", self.NodeID, "fingerprint", self.Fingerprint(),
-		"extra_listen", sb.Cfg.Interface.ExtraListen)
+		"extra_listen", sb.Cfg.Interface.ExtraListen, "peer_file_root", cfg.FileRoot)
 	return svc
+}
+
+// peerFileRoot 对端任务的唯一文件根：配置值优先，空则 <data_dir>/workspace/peer-shared。
+func peerFileRoot(dataDir, configured string) string {
+	if configured != "" {
+		return filepath.Clean(configured)
+	}
+	return filepath.Join(dataDir, "workspace", "peer-shared")
 }
 
 func meshServiceConfig(c config.MeshConfig) mesh.Config {

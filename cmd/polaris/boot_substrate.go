@@ -111,7 +111,9 @@ type SubstrateBundle struct {
 	// 网络安全层
 	Dialer         *network.SafeDialer
 	SafeHTTPClient network.SafeHTTPClient
-	SafeHTTP       *http.Client
+	// EgressGW 包裹 SafeHTTP 的域名白名单预检层；跨节点委派在其上追加对端精确放行（ADR-0111）。
+	EgressGW *egress.EgressGateway
+	SafeHTTP *http.Client
 
 	// 推理层
 	InfReg   *llm.ProviderRegistry
@@ -622,6 +624,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		ResourceGov:              gov,
 		Dialer:                   dialer,
 		SafeHTTPClient:           safeHTTPClient,
+		EgressGW:                 egressGW,
 		SafeHTTP:                 safeHTTPClient.Client,
 		InfReg:                   reg,
 		Router:                   router,
