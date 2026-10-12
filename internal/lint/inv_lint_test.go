@@ -382,18 +382,13 @@ func Test_inv_NoCrossLayerImport(t *testing.T) {
 		forbiddenImportPrefixes []string
 	}
 
-	// 2026-07-07 修正：原规则表键入 pkg/substrate|cognition|action|extensions|swarm/，
-	// 这些目录在仓库重构（pkg/* → internal/* 四层布局）后已不存在，导致本检查对着
-	// 一批空目录扫描、filepath.Walk 直接因 IsNotExist 提前返回、规则从未被真正触发过
-	// （见 local_playground/reports/code-quality-remediation-verification-20260707.md）。
-	// 现按 CLAUDE.md 当前四层真实布局重写：
-	//   L0: store/observability/security/llm/ffi/protocol/config
-	//   L1: agent/action/memory/tool/sandbox/prompt/vfs
+	// 层级表按 CLAUDE.md 当前四层布局（原 pkg/* 键已随重构消失，曾导致规则空转）：
+	//   L0: store/observability/security/llm/ffi/protocol/config/sysinfo/downloader/runtimeinfo
+	//   L1: agent/action/memory/tool/sandbox/prompt/vfs/execute
 	//   L2: swarm/learning/knowledge/extension
 	//   L3: gateway/automation/eval/channel/sysmgr
-	//   （原 L3 的 cli 于 2026-09-21 删除，见 ADR-0096 决策六）
 	// 依赖方向必须单向 L0←L1←L2←L3（R1.7），即低层禁止反向 import 高层。
-	l1 := []string{"agent", "action", "memory", "tool", "sandbox", "prompt", "vfs"}
+	l1 := []string{"agent", "action", "memory", "tool", "sandbox", "prompt", "vfs", "execute"}
 	l2 := []string{"swarm", "learning", "knowledge", "extension"}
 	l3 := []string{"gateway", "automation", "eval", "channel", "sysmgr"}
 
@@ -405,14 +400,8 @@ func Test_inv_NoCrossLayerImport(t *testing.T) {
 		return out
 	}
 
-	// 2026-07-07 复核发现 internal/sysmgr/{sysinfo,downloader} 被 L0(llm/ollamamgr、
-	// llm/stt、llm/tts 下载模型二进制)/L1(agent 的硬件分级、tool/builtin/sys_probe)/
-	// L2(extension/marketplace 下载插件包) 广泛引用，但 sysmgr/ 整体按 CLAUDE.md
-	// 目录表归类在 L3——这两个子包实质是"系统探测/文件下载"通用能力，不含 L3 特有的
-	// 接口治理语义，是被物理放错目录的 L0 工具。经人工确认后物理迁移为
-	// internal/sysinfo/ 与 internal/downloader/ 两个独立 L0 顶层包（不再挂靠
-	// sysmgr/），无需再对其做跨层豁免——直接并入 l0 列表参与正常规则生成。
-	l0 := []string{"store", "observability", "security", "llm", "ffi", "protocol", "config", "sysinfo", "downloader"}
+	// sysinfo/downloader 是被放错在 sysmgr/ 下的通用 L0 能力，已迁出为独立顶层包，无需跨层豁免。
+	l0 := []string{"store", "observability", "security", "llm", "ffi", "protocol", "config", "sysinfo", "downloader", "runtimeinfo"}
 	rules := make([]layerRule, 0, len(l0)+len(l1)+len(l2))
 	for _, p := range l0 {
 		rules = append(rules, layerRule{

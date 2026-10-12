@@ -306,7 +306,7 @@ func TestAdvanceGate_MetaAuditEnabled_AdvancesWhenFreshAndPassed(t *testing.T) {
 	if state.CurrentGate != GateCanaryRollout+1 {
 		t.Errorf("expected gate to advance past Gate2 when meta_audit passed and fresh, got gate=%d", state.CurrentGate)
 	}
-	if state.CanaryPercent != 25 {
-		t.Errorf("expected canary_percent=25 (next step after 5), got %d", state.CanaryPercent)
+	if state.CanaryPercent != 50 {
+		t.Errorf("expected canary_percent=50 (next step after 10), got %d", state.CanaryPercent)
 	}
 }

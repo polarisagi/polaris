@@ -44,7 +44,7 @@
 
 ## 决策五：生命周期锚定与 Channel/Ticker 监听（原 ADR-0094 决策三）
 
-- `internal/` 内禁止用 `context.Background()` 派生生存期超过单次调用的 goroutine；长驻任务继承 `Bootstrapper.RootContext()`（`internal/bootstrap`）。带 `time.Ticker` 的循环与 long-lived goroutine 的 channel 发送必须在 `select` 中监听 `<-ctx.Done()`。
+- `internal/` 内禁止用 `context.Background()` 派生生存期超过单次调用的 goroutine；长驻任务继承进程根 ctx（`cmd/polaris` 的 `main` 以 `signal.NotifyContext` 创建，并经 boot 装配注入）。带 `time.Ticker` 的循环与 long-lived goroutine 的 channel 发送必须在 `select` 中监听 `<-ctx.Done()`。
 - 反例：`logic_collapse_trigger.go` 用 `context.Background()` 派生 10 分钟 context；`obsidian_connector.go` 裸写 channel 发送致协程泄漏。
 - 门控：`internal/lint/bare_goroutine_test.go` 的 `TestNoBackgroundCtxInLongLivedGoroutine` / `TestTickerLoopHonorsCtxDone` / `TestChannelSendHonorsCtxDone`。
 
@@ -101,6 +101,7 @@
 | 2026-08-10 | 复核订正：KeepAlive 门控名、孤儿 doc comment 门控名、`ModelPool` 枚举所在文件、`TestNoRawStringIntoStructuredSink` 范围收窄 | 0094 |
 | 2026-08-13 | 增补依赖缺失即拒绝点（决策三） | 0094 |
 | 2026-10-12 | 0094 并入；wiring 棘轮基线现位于 `tools/baselines/wiring-allowlist.txt`（L-13） | — |
+| 2026-10-12 | 决策五 ctx 来源改为进程根 ctx（ADR-0112 决策七） | 0094 |
 
 ## 引用代码
 

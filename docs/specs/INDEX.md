@@ -6,15 +6,15 @@
 
 | # | 文件 | 内容 | 何时加载 |
 |---|------|------|------|
-| 00 | `00-Constitution.md` | 反模式 R1~R8 + 命名字典 + HE-Rules 量表 | **会话启动强制** |
-| 05 | `05-Coding-Workflow.md` | W0 排障 + Spec-First 四阶段 + W6 PR 纪律 + W7 Schema 流程 | **会话启动强制** |
+| 00 | `00-Constitution.md` | 反模式 R1~R8 + 命名字典 + HE-1~7 量表 | **会话启动强制** |
+| 05 | `05-Coding-Workflow.md` | W0 排障 + Spec-First 四阶段 + W6 PR 纪律 + W7 Schema 流程 + W8 多代理协作 | **会话启动强制** |
 | -  | `CHANGELOG.md` | 规范变更日志 | **会话启动扫近 5 条** |
 | 07 | `07-Reference-Implementation.md` | 标杆代码索引（每功能域 1 份） | 写新代码前 |
 | 01 | `01-Go-Code.md` | Go 结构/错误/并发/日志/Handler/Context | 写 Go 时 |
 | 02 | `02-Rust-FFI.md` | Rust FFI 边界 / purego ABI / 内存安全 | 碰 `rust/substrate/` |
 | 03 | `03-Agent-Pattern.md` | FSM/事件/Memory/Skill/TrustTier/CodeAct | 改 `internal/agent/` `memory/` `swarm/` |
 | 04 | `04-Module-Boundary.md` | 层依赖方向 B1 / 契约版本化 B5 | 新包/跨模块/契约变更 |
-| 06 | `06-Review.md` | C1~C9 审查清单 | 提交前 |
+| 06 | `06-Review.md` | C1~C11 审查清单 | 提交前 |
 | 08 | `08-Doc-Hygiene.md` | `docs/arch/` 维护边界 H1~H9 | 改架构文档前 |
 | 09 | `09-LLM-Agent-Production.md` | A-01~A-14 陷阱 + P-1~P-9 原则 + RAG/并发检查清单 | 写任何 Agent/LLM/Tool/RAG/Memory 代码前 |
 

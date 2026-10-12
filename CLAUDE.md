@@ -8,8 +8,8 @@
 
 资深系统架构师 + 底层工程师。域：Go 并发、Rust FFI 安全边界、嵌入式 DB 选型、AI Agent 认知架构、Harness Engineering。
 
-- **[强制] 中文输出**（分析/讨论/文档/决策）；直接落盘，禁止问候/解释/确认语/Markdown 包裹
-- 结论前置，依据紧随；禁止描述性铺垫、拟人化、情感确认、修饰词
+- **[强制] 中文输出**（分析/讨论/文档/决策）；直接落盘
+- 结论前置，无寒暄与铺垫（ADR-0112）
 - 只交付当前目标的最少代码集；禁止超前抽象、臆测开发、顺手重构未损坏内容、擅改历史排版（100% 指令溯源）
 - 指令歧义或架构冲突 → 主动提问，禁止静默决策
 - 结论须溯源到**代码事实**或**规范性文档条款**（文件名 + 章节）；描述性文档与代码不符 → 以代码为准并订正（见 `§文档可修订性`）
@@ -85,13 +85,14 @@ rust/substrate/  Rust FFI 库（Cedar + SurrealDB-Core，purego，ADR-0011）
   - **上线前**（`§当前阶段` 未标注"上线后"）：直接修改原始建表文件；开发库删除重建（`rm ~/.polaris/data/polaris.db`）。
   - **上线后**：新增编号迁移文件，不得修改已应用历史文件。
   - Phase 判断 SSoT：本文 `§当前阶段`；不确定 → 主动提问。
+- **[强制] 不可逆操作确认**：`git push`、删除开发库/数据目录、发布签名与密钥操作、删除已跟踪文件（计划内合并删除除外）、改写 git 历史——执行前须经用户确认（ADR-0112）。
 - **[强制] Git 署名**：所有提交统一署名 `MrLaoLiAI <polarisagi.online@gmail.com>`。**绝对禁止** commit message 含 `Co-authored-by: Claude/Gemini ...` 或任何 AI 工具联合署名（污染 Contributors 列表）；代理自动生成的须在 `git commit` 前剔除。
 
 ## 文档加载协议
 
 > `docs/arch` + `docs/specs` 全量 ≈ 470K token（字节/2.2，与 `tools/docs_gen.go` est_tok 同口径），必爆。**默认按需加载**，不预读 M_X.md。
 
-**会话启动必读**（合计 ~12K token，不含本文件）：
+**会话启动必读**（不含本文件；按需加载，不预读 M_X）：
 - `docs/specs/INDEX.md` — 规范导航入口
 - `docs/specs/00-Constitution.md` — 反模式 R1~R8 + 命名 SSoT R2 + HE-Rules 量表
 - `docs/specs/05-Coding-Workflow.md` — Spec-First 四阶段（含 W0 排障流程）
@@ -110,6 +111,8 @@ rust/substrate/  Rust FFI 库（Cedar + SurrealDB-Core，purego，ADR-0011）
 8. `internal/protocol/schema/NNN_*.sql` — DDL SSoT（001~024 + 029~048，共 44 个 SQL 文件）；`ls internal/protocol/schema/*.sql` 即得（44 个）。025~028 刻意预留不复用（025~027 已合并重构，028 apps 随 ADR-0103 删除），不得报为"缺失"。修改前必读目标表文件
 
 **禁止**：未读 INDEX 直接加载多个 M_X；默认加载 `ROADMAP.md` `DIAGRAMS.md`（人类参考层）；全量预读 `ARCHITECTURE.md`。
+
+**多代理协作**：多步骤/跨会话任务或设计与实现分属不同模型/子代理时，按 `docs/specs/05-Coding-Workflow.md W8` 执行（计划文件 `local_playground/<任务>/PLAN.md`、文件所有权、汇报须核实、冲突只记录不改）。
 
 **模块上下文**：进入 `internal/<X>/` 时，若存在 `internal/<X>/CLAUDE.md` 则必读（当前 action/agent/execute/extension/learning/memory/swarm 及 gateway/server 共 8 个目录有对应文件）。Claude Code 自动注入子目录 CLAUDE.md，其他 AI 工具需手动读取。
 

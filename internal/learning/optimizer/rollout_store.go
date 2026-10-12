@@ -39,8 +39,8 @@ type MetaAuditReader interface {
 // Gate 语义:
 //   Gate 0 (Pending):       SubmitCandidate → 等待 Eval 完成（eval_score 置位）
 //   Gate 1 (Shadow 1%):     Eval 通过后自动进入，路由 1% 真实流量做影子对比
-//   Gate 2 (Canary 5%):     Shadow 稳定 24h 后推进
-//   Gate 3 (Canary 25%+):   按 canarySteps 逐步推进（25/50/100）
+//   Gate 2 (Canary 10%):    Shadow 稳定 24h 后推进
+//   Gate 3 (Canary 50%+):   按 canarySteps 逐步推进（50/100）
 //   Gate 4 (Committed):     100% 流量切换，保留 7d 回滚窗口
 
 // rollout_states 表由 internal/protocol/schema/010_self_improve.sql（DDL SSoT）统一创建，
@@ -124,7 +124,7 @@ func (s *SQLiteRolloutStore) RecordEvalScore(ctx context.Context, version string
 	return nil
 }
 
-// ConfirmShadow 确认影子执行结果正常，允许从 Gate 1 推进到 Gate 2（Canary 5%）。
+// ConfirmShadow 确认影子执行结果正常，允许从 Gate 1 推进到 Gate 2（Canary 第二档，默认 10%）。
 // 由影子执行监控组件（ShadowExecutor）在 shadow_ok 条件满足后调用。
 // Gate 推进成功后，若已注入 promptActivator，进一步激活对应 Prompt 候选——这是
 // M9 自进化真正生效的唯一入口，取代此前 handleEvalCompleted 内 Eval 一过就同步
@@ -147,9 +147,9 @@ func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) 
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE rollout_states
-		SET shadow_ok = 1, current_gate = 2, canary_percent = 5, status = 'running', last_advanced_at = ?
+		SET shadow_ok = 1, current_gate = 2, canary_percent = ?, status = 'running', last_advanced_at = ?
 		WHERE version = ?
-	`, now, version)
+	`, s.rollout.canarySteps[1], now, version)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ConfirmShadow", err)
 	}

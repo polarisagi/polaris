@@ -272,7 +272,7 @@ func genArchIndexTable() (string, error) {
 		{"`M02-Storage-Fabric.md`", "L0 存储", "三轴存储、EventLog、MutationBus、Outbox、SchemaManager", "docs/arch/M02-Storage-Fabric.md", 0},
 		{"`M05-Memory-System.md`", "L1 记忆", "四层记忆、PromptBuilder、HybridRetriever、Consolidation", "docs/arch/M05-Memory-System.md", 0},
 		{"`ARCHITECTURE.md`", "总览", "见下方 [ARCHITECTURE 补充](#architecture-补充)", "docs/arch/ARCHITECTURE.md", 0},
-		{"`M04-Agent-Kernel.md`", "L1 内核", "状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga", "docs/arch/M04-Agent-Kernel.md", 0},
+		{"`M04-Agent-Kernel.md`", "L1 内核", "状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga", "docs/arch/M04-Agent-Kernel.md", 0},
 		{"`M13-Interface-Scheduler.md`", "L3 接口", "见下方 [M13 补充](#m13-补充)", "docs/arch/M13-Interface-Scheduler.md", 0},
 		{"`M13-bis-Extension-Registry.md`", "L3 扩展", "见下方 [M13-bis 补充](#m13-bis-补充)", "docs/arch/M13-bis-Extension-Registry.md", 0},
 		{"`M10-Knowledge-RAG.md`", "L2 知识", "文档树、6 阶段摄入、GraphRAG、IncrementalIndexer", "docs/arch/M10-Knowledge-RAG.md", 0},

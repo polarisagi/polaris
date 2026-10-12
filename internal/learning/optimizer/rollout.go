@@ -1,6 +1,11 @@
 package optimizer
 
-import "context"
+import (
+	"context"
+	"math"
+
+	"github.com/polarisagi/polaris/internal/config"
+)
 
 // M9 Staging 流水线发布骨架
 // 架构文档: docs/arch/M09-Self-Improvement-Engine.md §2.3
@@ -10,7 +15,7 @@ type RolloutGate int
 const (
 	GateEvalRegression  RolloutGate = iota // Gate 1: Eval Harness 离线回归 (p<0.05)
 	GateShadowExecution                    // Gate 2: Shadow Execution (影子执行) 强制隔离
-	GateCanaryRollout                      // Gate 3: Canary Rollout (1%→5%→25%→50%→100%)
+	GateCanaryRollout                      // Gate 3: Canary Rollout (1%→10%→50%→100%，SSoT: state.yaml §m9 canary_steps)
 	GateFullRollout                        // Gate 4: Full Rollout (保留7天 rollback)
 )
 
@@ -29,7 +34,7 @@ type RolloutState struct {
 	CandidateVersion string
 	BaselineVersion  string
 	CurrentGate      RolloutGate
-	CanaryPercent    int // 1, 5, 25, 50, 100
+	CanaryPercent    int // 1, 10, 50, 100（SSoT: state.yaml §m9 canary_steps）
 	Status           RolloutStatus
 	StartedAt        int64
 	LastAdvancedAt   int64
@@ -70,10 +75,27 @@ type ProgressiveRollout struct {
 	canarySteps []int
 }
 
+// defaultCanarySteps 返回与 state.yaml §m9 canary_steps [0.01, 0.10, 0.50, 1.00] 一致。
+func defaultCanarySteps() []int { return []int{1, 10, 50, 100} }
+
+// NewProgressiveRollout 阶梯取自 config M9SelfImprove.CanarySteps（小数比例 → 百分比）；
+// 配置缺失或非法（非递增 / 越界）时回落 defaultCanarySteps。
 func NewProgressiveRollout() *ProgressiveRollout {
-	return &ProgressiveRollout{
-		canarySteps: []int{1, 5, 25, 50, 100},
+	steps := make([]int, 0, 4)
+	prev := 0
+	for _, f := range config.CurrentThresholds().M9SelfImprove.CanarySteps {
+		pct := int(math.Round(f * 100))
+		if pct <= prev || pct > 100 {
+			steps = nil
+			break
+		}
+		steps = append(steps, pct)
+		prev = pct
 	}
+	if len(steps) < 2 || steps[len(steps)-1] != 100 {
+		steps = defaultCanarySteps()
+	}
+	return &ProgressiveRollout{canarySteps: steps}
 }
 
 // CheckHardStop 检查是否触发硬停止条件。

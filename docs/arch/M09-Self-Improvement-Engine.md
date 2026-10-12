@@ -2,7 +2,7 @@
 
 > 三环嵌套进化（经验→技能→架构），全无梯度主线（[Tier-0-Limit] 8GB 完整运行）。梯度训练仅 local_only 可选。
 > Go 编排 + Eval 驱动 + Consolidation + 全部自进化逻辑。 [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:34 五路线(CANONICAL) / 2:78 三环嵌套 / 3-bis:177 EvalGenerator / 3:194 五级演化+审批 / 4:224 条件梯度 / 6:245 305 (SOFT)降级 / 6-bis:261 321 已知Bug修复记录 / 7:277 336 依赖 / 8:295 354 实现状态+2026研究对照 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:34 五路线(CANONICAL) / 2:78 三环嵌套 / 3-bis:177 EvalGenerator / 3:194 五级演化+审批 / 4:224 条件梯度 / 6:245 305 (SOFT)降级 / 6-bis:260 321 已知Bug修复记录 / 7:276 336 依赖 / 8:294 354 实现状态+2026研究对照 -->
 ## 0-bis. 职责边界
 
 | M9 **是** | M9 **不是** |
@@ -253,7 +253,6 @@ Tier 门控由 `FeatureGate` 自动化：`FeatureQLoRA`(≥Tier1+≥4GB→1-3B; 
 | Auto-Curriculum 任务失败 | 标记 failed→Ephemeral Namespace 绑定，不影响核心功能 | — |
 | Staging Stage 失败 | candidate → rejected/dead_letter → audit | 下一代候选重新进入 |
 | CoEvolutionCoordinator 订阅者 OnChange 失败 | L0 调参 / L1 prompt / L2 LogicCollapse 退化补偿 | 手动介入 |
-| GraphRAG LLM 调用日预算超限 | 跳过剩余 graph_build_task + `next_retry_at` = 次日 00:00 UTC（保持 pending，M2 Outbox Worker 跳过未来重试时间） | 次日自动恢复 |
 
 与 OSMemoryGuard 协同: L1 预警 → 挂起 Auto-Curriculum + 暂停后台 worker 池 / L2 紧急 → 挂起 Consolidation + Reflexion / L3 临界 → 全部自进化活动暂停。
 

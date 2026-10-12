@@ -115,7 +115,7 @@ Fork 源码、参与贡献的技术用户。可直接修改 Go/Rust 代码。扩
 | XR-09 | **LLM 调用规范**。见下方 [XR-09 补充](#xr-09-补充) | M1→M4,M9,M10 |
 | XR-10 | **工具/技能/插件执行规范**。见下方 [XR-10 补充](#xr-10-补充) | M7→M4,M6,M13 |
 | XR-11 | **文件系统操作分层规范**。见下方 [XR-11 补充](#xr-11-补充) | M7→全模块 |
-| XR-12 | **模块 import 层级约束**。业务模块（Arch-L2~L4）禁止跨层直接 import 具体实现；接口定义权属于消费方；装配层是唯一允许跨层引用的位置（物理落点 `cmd/polaris/boot_*.go`；`internal/bootstrap` 的自动编排契约未接线，见 ARCHITECTURE §8）。完整规则见 `docs/arch/Module-Dependency-Axioms.md`。 | 全模块 |
+| XR-12 | **模块 import 层级约束**。业务模块（Arch-L2~L4）禁止跨层直接 import 具体实现；接口定义权属于消费方；装配层是唯一允许跨层引用的位置（规范落点 `cmd/polaris/boot_*.go` 手工装配，ADR-0112 决策七）。完整规则见 `docs/arch/Module-Dependency-Axioms.md`。 | 全模块 |
 | XR-13 | **pkg/ 净化约束**。`pkg/` 目录仅允许 POD 数据结构（struct/enum/const/纯内存方法），绝对禁止定义任何 `interface`，禁止 import 任何 `internal/` 包。interface 必须定义在消费方模块内部。 | pkg/→internal/ |
 
 #### XR-04 补充
@@ -166,7 +166,7 @@ Fork 源码、参与贡献的技术用户。可直接修改 Go/Rust 代码。扩
 
 完整约束见 `docs/arch/Module-Dependency-Axioms.md`。核心：
 - Arch-L2 模块间禁止跨包直接 import 具体实现（使用 provider.go consumer-side interface）
-- 装配层（`cmd/polaris/boot_*.go`）是全仓库唯一允许跨层引用的位置
+- 装配层（`cmd/polaris/boot_*.go` 手工装配）是全仓库唯一允许跨层引用的位置
 - **`internal/protocol/` 叶子契约层准则**：`internal/protocol/` 是全系统被引用最广的包。为保证它永远是无环图的安全叶子节点，`protocol` **应避免**引入其他 `internal/` 兄弟包的具体类型（即使当前未构成循环），优先在 `protocol` 内重新声明最小必要类型/接口（如 `TaintLevel`，权威定义在 `internal/protocol/types.go`）。少量既有例外（`interfaces_memory.go` 引用 `observability/budget`、`prompt_builder.go` 引用 `security/taint.TaintedString`）允许保留，新增代码禁止再扩大此类引用面，长期应收敛迁移。
 
 #### XR-13 补充
