@@ -83,6 +83,8 @@ func newPairNode(t *testing.T, name string) *pairNode {
 	mux.HandleFunc("/a2a/v1", n.s.serveMesh)
 	mux.HandleFunc("/mcp", n.s.serveMesh)
 	mux.HandleFunc("GET /v1/mesh/self", n.s.handleMeshSelf)
+	mux.HandleFunc("GET /v1/mesh/settings", n.s.handleGetMeshSettings)
+	mux.HandleFunc("PUT /v1/mesh/settings", n.s.handlePutMeshSettings)
 	mux.HandleFunc("POST /v1/mesh/invites", n.s.handleMeshCreateInvite)
 	mux.HandleFunc("GET /v1/mesh/peers", n.s.handleMeshListPeers)
 	mux.HandleFunc("POST /v1/mesh/peers", n.s.handleMeshAcceptPeer)

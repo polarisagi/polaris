@@ -53,6 +53,7 @@ func bootMesh(sb *SubstrateBundle, blackboard *orchestrator.SQLiteBlackboard) *m
 }
 
 // peerFileRoot 对端任务的唯一文件根：配置值优先，空则 <data_dir>/workspace/peer-shared。
+// 设置页热更新走 server.resolvePeerFileRoot，规则须与此一致。
 func peerFileRoot(dataDir, configured string) string {
 	if configured != "" {
 		return filepath.Clean(configured)

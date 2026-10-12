@@ -46,6 +46,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/mcp", s.serveMesh)
 	// 跨节点委派本机管理（配对 / 令牌）。/v1 下：对端令牌被路由白名单拒绝。
 	mux.HandleFunc("GET /v1/mesh/self", s.handleMeshSelf)
+	mux.HandleFunc("GET /v1/mesh/settings", s.handleGetMeshSettings)
+	mux.HandleFunc("PUT /v1/mesh/settings", s.handlePutMeshSettings)
 	mux.HandleFunc("POST /v1/mesh/invites", s.handleMeshCreateInvite)
 	mux.HandleFunc("GET /v1/mesh/peers", s.handleMeshListPeers)
 	mux.HandleFunc("POST /v1/mesh/peers", s.handleMeshAcceptPeer)

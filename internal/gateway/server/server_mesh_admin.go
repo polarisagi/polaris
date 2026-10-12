@@ -24,7 +24,7 @@ import (
 // meshAdmin 取委派服务；未启用时写 404 并返回 nil。
 func (s *Server) meshAdmin(w http.ResponseWriter) *mesh.Service {
 	st := s.mesh.Load()
-	if st == nil || !s.a2aCfg.Enabled {
+	if st == nil || !s.a2aConf().Enabled {
 		http.Error(w, "cross-node delegation is disabled (a2a.enabled=false)", http.StatusNotFound)
 		return nil
 	}
@@ -34,10 +34,10 @@ func (s *Server) meshAdmin(w http.ResponseWriter) *mesh.Service {
 // selfURLs 本节点可被其他节点访问的地址（advertised_url 优先，其次 extra_listen）。
 func (s *Server) selfURLs() []string {
 	var out []string
-	if s.a2aCfg.AdvertisedURL != "" {
-		out = append(out, strings.TrimRight(s.a2aCfg.AdvertisedURL, "/"))
+	if s.a2aConf().AdvertisedURL != "" {
+		out = append(out, strings.TrimRight(s.a2aConf().AdvertisedURL, "/"))
 	}
-	for _, addr := range s.extraListen {
+	for _, addr := range s.currentExtraListen() {
 		out = append(out, "http://"+addr)
 	}
 	return out
@@ -51,9 +51,9 @@ func (s *Server) handleMeshSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	self := svc.Self()
 	httputil.WriteJSON(w, map[string]any{
-		"name": s.a2aCfg.Name, "node_id": self.NodeID, "fingerprint": self.Fingerprint(),
+		"name": s.a2aConf().Name, "node_id": self.NodeID, "fingerprint": self.Fingerprint(),
 		"public_key": self.PublicKeyB64(), "urls": s.selfURLs(),
-		"peer_read_only": svc.Config().ReadOnly, "allow_relay": svc.Config().AllowRelay,
+		"peer_read_only": svc.Policy().ReadOnly, "allow_relay": svc.Policy().AllowRelay,
 	})
 }
 
@@ -98,7 +98,7 @@ func (s *Server) issueInvite(ctx context.Context, svc *mesh.Service, peerName, s
 		}
 	}
 	self := svc.Self()
-	inv := &mesh.Invite{Version: 1, Name: s.a2aCfg.Name, NodeID: self.NodeID, PublicKey: self.PublicKeyB64(),
+	inv := &mesh.Invite{Version: 1, Name: s.a2aConf().Name, NodeID: self.NodeID, PublicKey: self.PublicKeyB64(),
 		URL: strings.TrimRight(selfURL, "/"), Token: token}
 	if !strings.HasPrefix(nodeID, "pending:") {
 		inv.ForNodeID = nodeID

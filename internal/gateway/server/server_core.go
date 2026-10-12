@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/action/hook"
@@ -146,8 +147,17 @@ type Server struct {
 	a2aCfg            config.A2AConfig
 	// mesh 跨节点委派门面（ADR-0111），SetMeshService 注入，请求期原子读取。
 	mesh atomic.Pointer[meshState]
-	// extraListen 额外监听地址（interface.extra_listen，已经 config.Validate 校验），Start 时逐个绑定。
+	// extraListen 额外监听地址（interface.extra_listen，已经 config.Validate 校验），Start 时逐个绑定；
+	// 设置页改写后由 applyExtraListen 增量启停（extraMu 保护，extraLns 为当前已绑定的监听器）。
 	extraListen []string
+	extraMu     sync.Mutex
+	extraLns    map[string]net.Listener
+	// a2aLive 设置页改写后的 [a2a] 配置（nil = 沿用启动时的 a2aCfg），经 a2aConf 读取。
+	a2aLive atomic.Pointer[config.A2AConfig]
+	// meshCfg 启动时的 [mesh] 配置（SetMeshConfig 注入，设置页读取 peer_file_root 等原始值）。
+	meshCfg atomic.Pointer[config.MeshConfig]
+	// configPath 用户 config.toml 的绝对路径（SetConfigPath 注入）：设置页据此读写。
+	configPath string
 	// elicitationBroker MCP elicitation 网关侧 broker（ADR-0103 决策八）：nil 表示未接入
 	// hooks.json/HTTP 交互能力，handleGetElicitations/handleRespondElicitation 均降级 501。
 	elicitationBroker *elicitation.Broker

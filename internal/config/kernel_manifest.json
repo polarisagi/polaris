@@ -87,6 +87,7 @@
   "internal/config/immutable_constants.go": "a6155e74614e51bd9e9bbce07ef9e08567564bf5ae03b9be2e67199d7516dd0a",
   "internal/config/integrity_check.go": "887c7694dd34ec9eec2fd8d1e149219c70f80524169dafd90925a4f486f8914d",
   "internal/config/layout.go": "0d17a30f108a267bdca135b6c689fa907dee4fd760d704e0c9e8e73b4d4f8ee4",
+  "internal/config/patch.go": "c415cb4ad5653992ea96478eff631f74e8e7fea30d45230662f4d1139363edc6",
   "internal/config/runtime.go": "25eec2bf54acae957d109fa49066373e1eab97bd8869b1d98a5601b0c1a05cb9",
   "internal/config/system_params.go": "11ac0def4a90cea6418e101f49afbdcdff4a9c65921bfdd184f1801402795f61",
   "internal/config/thresholds.go": "fe0b550c8f0e996c4a2a90ed03f72ef4090750506374c9487cc066a4561f9e8a",

@@ -6,6 +6,14 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-12（ADR-0111 设置页「多节点」— 含**契约变更**）
+
+- **[契约] `config.PatchUserConfig`**：按 (section, key) 就地改写用户 `config.toml`，保留注释与书写顺序，`Load` 校验通过后原子替换；设置页写配置的唯一入口。
+- **[契约] `GET/PUT /v1/mesh/settings`**（本机令牌，对端令牌 403）：节点名 / 额外监听地址 / 对端策略即时生效，`a2a.enabled` 变化返回 `restart_required`。
+- **[契约] `mesh.Service.Policy` / `SetPolicy`**：对端任务执行策略可运行期更新。`Server.SetConfigPath` / `SetMeshConfig`；额外监听器改为增量启停（`applyExtraListen`）。
+- **[修复] `GET /v1/config`** 未设 `POLARIS_CONFIG` 时显示实际加载的用户 `config.toml`（此前恒为内嵌 defaults）。
+- **[UI] 设置 → 多节点**（`web/src/js/store/mesh.js`，中英文案齐全）。
+
 ## 2026-10-12（ADR-0111 双实例实测修订 — 含**契约变更**）
 
 - **[契约] `AgentProfileSpec.FileRoot`** + `protocol.WithConfinedRoot`：非空时内置文件/命令工具只能访问该目录（`guard.ScopedPaths` / `SearchRoots` 替换白名单；根非法 fail-closed）。对端任务固定为 `[mesh] peer_file_root`。

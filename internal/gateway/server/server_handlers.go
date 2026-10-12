@@ -64,7 +64,8 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 //
 // 读取优先级：
 //  1. POLARIS_CONFIG 环境变量指向的文件（Operator 运行时覆盖）
-//  2. 二进制内嵌的 configs/defaults.toml（embedded FS，始终可用）
+//  2. 实际加载的用户 config.toml（SetConfigPath 注入且文件存在）
+//  3. 二进制内嵌的 configs/defaults.toml（embedded FS，始终可用）
 //
 // 使用 embedded FS 而非相对路径 os.ReadFile，确保二进制在任意工作目录下均可运行。
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +75,15 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		err    error
 	)
 
-	if cfgPath := os.Getenv(config.EnvPolarisConfig); cfgPath != "" {
+	cfgPath := os.Getenv(config.EnvPolarisConfig)
+	if cfgPath == "" && s.configPath != "" {
+		// 实际生效的用户 config.toml（设置页改写的也是它）；此前未设 POLARIS_CONFIG 时恒显示内嵌
+		// defaults.toml，与实际运行配置不符。
+		if _, statErr := os.Stat(s.configPath); statErr == nil {
+			cfgPath = s.configPath
+		}
+	}
+	if cfgPath != "" {
 		// Operator 显式指定配置文件：从文件系统读取，路径可为绝对路径或相对路径。
 		raw, err = os.ReadFile(cfgPath)
 		if err != nil {

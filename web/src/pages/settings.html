@@ -1,4 +1,4 @@
-<div x-show="$store.nav.page === 'settings'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100" x-data="{ tab: 'providers', _chLoaded: false, _cfgLoaded: false }">
+<div x-show="$store.nav.page === 'settings'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100" x-data="{ tab: 'providers', _chLoaded: false, _cfgLoaded: false, _meshLoaded: false }">
   <div class="max-w-5xl mx-auto w-full flex flex-col">
     <div class="mb-8 border-b border-base-300 pb-4">
       <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_settings')"></h2>
@@ -9,6 +9,7 @@
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'channels' }" @click="tab = 'channels'; if (!_chLoaded) { $store.channels.load(); _chLoaded = true }" x-text="$store.i18n.t('nav_channels')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'config' }" @click="tab = 'config'; if (!_cfgLoaded) { $store.config.load(); _cfgLoaded = true }" x-text="$store.i18n.t('nav_config')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'computer' }" @click="tab = 'computer'" x-text="$store.i18n.t('nav_computer')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'mesh' }" @click="tab = 'mesh'; if (!_meshLoaded) { $store.mesh.load(); _meshLoaded = true }" x-text="$store.i18n.t('nav_mesh')"></a>
       </div>
     </div>
 
@@ -293,6 +294,270 @@ dim = 2560</code></pre>
         <pre class="bg-base-200 border border-base-300 rounded-box p-4 overflow-auto font-mono text-sm leading-relaxed flex-1 text-base-content/80 shadow-inner" x-text="$store.config.raw"></pre>
       </div>
     </div>
+
+    <!-- Multi-node Tab（ADR-0111 跨节点委派） -->
+    <div x-show="tab === 'mesh'" class="space-y-6" x-data="{ m: $store.mesh }">
+      <div class="flex justify-between items-start gap-4">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('mesh_title')"></h3>
+          <p class="text-sm text-base-content/60" x-text="$store.i18n.t('mesh_desc')"></p>
+        </div>
+        <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="m.load()" :disabled="m.loading">
+          <span x-show="m.loading" class="loading loading-spinner loading-xs"></span>
+          <span x-show="!m.loading" x-text="$store.i18n.t('config_reload')"></span>
+        </button>
+      </div>
+
+      <div x-show="m.restartRequired" class="alert alert-warning text-sm">
+        <span x-text="$store.i18n.t('mesh_restart_hint')"></span>
+      </div>
+
+      <!-- 本机 -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card-body p-6">
+          <div class="flex items-center gap-2 mb-3">
+            <h4 class="font-bold" x-text="$store.i18n.t('mesh_self_title')"></h4>
+            <span class="badge badge-sm" :class="m.info.running ? 'badge-success' : 'badge-ghost'"
+                  x-text="m.info.running ? $store.i18n.t('mesh_running') : $store.i18n.t('mesh_not_running')"></span>
+          </div>
+          <template x-if="m.info.running">
+            <div class="grid grid-cols-1 sm:grid-cols-[max-content_1fr] gap-x-6 gap-y-1 sm:gap-y-2 text-sm">
+              <span class="text-base-content/60" x-text="$store.i18n.t('mesh_node_id')"></span>
+              <span class="font-mono break-all" x-text="m.info.node_id"></span>
+              <span class="text-base-content/60" x-text="$store.i18n.t('mesh_fingerprint')"></span>
+              <span class="flex items-center gap-2 flex-wrap">
+                <span class="font-mono break-all" x-text="m.info.fingerprint"></span>
+                <button class="btn btn-ghost btn-xs" @click="m.copy(m.info.fingerprint)" x-text="$store.i18n.t('config_copy')"></button>
+              </span>
+              <span class="text-base-content/60" x-text="$store.i18n.t('mesh_reachable_at')"></span>
+              <span class="font-mono break-all" x-text="(m.info.listening || []).length ? m.info.listening.map(a => 'http://' + a).join('，') : $store.i18n.t('mesh_no_address')"></span>
+            </div>
+          </template>
+          <p x-show="!m.info.running" class="text-sm text-base-content/60" x-text="$store.i18n.t('mesh_not_running_desc')"></p>
+        </div>
+      </div>
+
+      <!-- 设置 -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card-body p-6 space-y-5">
+          <h4 class="font-bold" x-text="$store.i18n.t('mesh_settings_title')"></h4>
+
+          <div class="flex items-center justify-between gap-4 p-4 bg-base-100 rounded-box border border-base-300">
+            <div>
+              <div class="font-bold text-sm" x-text="$store.i18n.t('mesh_enabled')"></div>
+              <div class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_enabled_desc')"></div>
+            </div>
+            <input id="mesh-enabled" name="mesh-enabled" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" x-model="m.form.enabled">
+          </div>
+
+          <div class="flex flex-col gap-1 w-full">
+            <label for="mesh-node-name"><span class="label-text font-bold" x-text="$store.i18n.t('mesh_node_name')"></span></label>
+            <input id="mesh-node-name" name="mesh-node-name" type="text" maxlength="64" class="input input-bordered w-full max-w-md" x-model="m.form.node_name" :placeholder="$store.i18n.t('mesh_node_name_ph')">
+            <span class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_node_name_desc')"></span>
+          </div>
+
+          <div class="flex flex-col gap-1 w-full">
+            <label for="mesh-listen-input"><span class="label-text font-bold" x-text="$store.i18n.t('mesh_listen')"></span></label>
+            <p class="text-xs text-base-content/50 mb-1" x-text="$store.i18n.t('mesh_listen_desc')"></p>
+            <div class="flex flex-wrap gap-2 mb-2">
+              <template x-for="a in m.form.extra_listen" :key="a">
+                <span class="badge badge-lg badge-outline gap-1 font-mono">
+                  <span x-text="a"></span>
+                  <button class="btn btn-ghost btn-xs px-1" @click="m.removeListen(a)" aria-label="remove">✕</button>
+                </span>
+              </template>
+              <span x-show="!m.form.extra_listen.length" class="text-xs text-base-content/50" x-text="$store.i18n.t('mesh_listen_empty')"></span>
+            </div>
+            <div class="flex gap-2 max-w-md">
+              <input id="mesh-listen-input" name="mesh-listen-input" type="text" class="input input-bordered input-sm flex-1 font-mono" x-model="m.listenInput" @keydown.enter.prevent="m.addListen()" placeholder="100.101.102.103:28888">
+              <button class="btn btn-sm" @click="m.addListen()" x-text="$store.i18n.t('mesh_add')"></button>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-2" x-show="m.unusedSuggestions().length">
+              <span class="text-xs text-base-content/60 self-center" x-text="$store.i18n.t('mesh_suggestions')"></span>
+              <template x-for="s in m.unusedSuggestions()" :key="s.addr">
+                <button class="btn btn-xs btn-outline" :class="s.kind === 'tailscale' ? 'btn-primary' : ''" @click="m.addListen(s.addr)">
+                  <span class="font-mono" x-text="'+ ' + s.addr"></span>
+                  <span class="opacity-70" x-text="s.kind === 'tailscale' ? 'Tailscale' : $store.i18n.t('mesh_kind_lan')"></span>
+                </button>
+              </template>
+            </div>
+            <p x-show="m.form.extra_listen.some(a => !a.startsWith('100.'))" class="text-xs text-warning mt-2" x-text="$store.i18n.t('mesh_plaintext_warn')"></p>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between gap-4 p-4 bg-base-100 rounded-box border border-base-300">
+              <div>
+                <div class="font-bold text-sm" x-text="$store.i18n.t('mesh_read_only')"></div>
+                <div class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_read_only_desc')"></div>
+              </div>
+              <input id="mesh-read-only" name="mesh-read-only" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" x-model="m.form.peer_read_only">
+            </div>
+            <div class="flex items-center justify-between gap-4 p-4 bg-base-100 rounded-box border border-base-300">
+              <div>
+                <div class="font-bold text-sm" x-text="$store.i18n.t('mesh_allow_relay')"></div>
+                <div class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_allow_relay_desc')"></div>
+              </div>
+              <input id="mesh-allow-relay" name="mesh-allow-relay" type="checkbox" class="toggle toggle-warning toggle-sm shrink-0" x-model="m.form.allow_relay">
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-1 w-full">
+            <label for="mesh-file-root"><span class="label-text font-bold" x-text="$store.i18n.t('mesh_file_root')"></span></label>
+            <input id="mesh-file-root" name="mesh-file-root" type="text" class="input input-bordered w-full max-w-xl font-mono text-sm" x-model="m.form.peer_file_root" :placeholder="m.info.effective_file_root || $store.i18n.t('mesh_file_root_ph')">
+            <span class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_file_root_desc')"></span>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 flex-wrap pt-2">
+            <span class="text-xs text-base-content/50 font-mono break-all" x-show="m.info.config_path" x-text="$store.i18n.t('mesh_saved_to') + ' ' + m.info.config_path"></span>
+            <button class="btn btn-primary btn-sm" @click="m.save()" :disabled="m.saving">
+              <span x-show="m.saving" class="loading loading-spinner loading-xs"></span>
+              <span x-text="$store.i18n.t('mesh_save')"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 对端 -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm" x-show="m.info.running">
+        <div class="card-body p-6">
+          <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <h4 class="font-bold" x-text="$store.i18n.t('mesh_peers_title')"></h4>
+            <div class="flex gap-2 flex-wrap">
+              <button class="btn btn-ghost btn-sm" @click="m.loadPeers()" :disabled="m.peersLoading">
+                <span x-show="m.peersLoading" class="loading loading-spinner loading-xs"></span>
+                <span x-text="$store.i18n.t('mesh_check_status')"></span>
+              </button>
+              <button class="btn btn-outline btn-sm" @click="m.openAccept()" x-text="$store.i18n.t('mesh_accept')"></button>
+              <button class="btn btn-primary btn-sm" @click="m.openInvite()" :disabled="!(m.info.listening || []).length" x-text="$store.i18n.t('mesh_invite')"></button>
+            </div>
+          </div>
+          <p x-show="!(m.info.listening || []).length" class="text-xs text-warning mb-3" x-text="$store.i18n.t('mesh_invite_needs_listen')"></p>
+          <div x-show="!m.peers.length" class="text-sm text-base-content/60 py-4" x-text="$store.i18n.t('mesh_no_peers')"></div>
+          <div class="overflow-x-auto" x-show="m.peers.length">
+            <table class="table table-sm">
+              <thead><tr>
+                <th x-text="$store.i18n.t('mesh_col_name')"></th><th x-text="$store.i18n.t('mesh_col_address')"></th>
+                <th x-text="$store.i18n.t('mesh_col_status')"></th><th x-text="$store.i18n.t('mesh_col_seen')"></th><th></th>
+              </tr></thead>
+              <tbody>
+                <template x-for="p in m.peers" :key="p.name">
+                  <tr>
+                    <td><div class="font-bold" x-text="p.name"></div><div class="text-xs font-mono text-base-content/50" x-text="p.node_id"></div></td>
+                    <td class="font-mono text-xs" x-text="p.url"></td>
+                    <td><span class="badge badge-sm" :class="m.peerState(p).cls" :title="p.last_error || ''" x-text="m.peerState(p).text"></span></td>
+                    <td class="text-xs" x-text="m.fmtTime(p.last_seen_at)"></td>
+                    <td class="text-right"><button class="btn btn-ghost btn-xs text-error" @click="m.removePeer(p.name)" x-text="$store.i18n.t('mesh_remove')"></button></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-4">
+            <button class="btn btn-ghost btn-xs" @click="m.showTokens = !m.showTokens"
+                    x-text="(m.showTokens ? '▾ ' : '▸ ') + $store.i18n.t('mesh_tokens_title') + ' (' + m.tokens.filter(t => !t.revoked).length + ')'"></button>
+            <div x-show="m.showTokens" class="overflow-x-auto mt-2">
+              <p class="text-xs text-base-content/50 mb-2" x-text="$store.i18n.t('mesh_tokens_desc')"></p>
+              <table class="table table-xs">
+                <tbody>
+                  <template x-for="t in m.tokens" :key="t.token_id">
+                    <tr :class="t.revoked ? 'opacity-40' : ''">
+                      <td class="font-mono" x-text="t.token_id"></td>
+                      <td x-text="t.peer_name"></td>
+                      <td class="font-mono text-xs" x-text="t.peer_node_id"></td>
+                      <td class="text-xs" x-text="$store.i18n.t('mesh_last_used') + ' ' + m.fmtTime(t.last_used_at)"></td>
+                      <td class="text-right">
+                        <span x-show="t.revoked" class="text-xs" x-text="$store.i18n.t('mesh_revoked')"></span>
+                        <button x-show="!t.revoked" class="btn btn-ghost btn-xs text-error" @click="m.revokeToken(t.token_id)" x-text="$store.i18n.t('mesh_revoke')"></button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 邀请弹窗 -->
+    <dialog class="modal" id="mesh_invite_modal" x-effect="$store.mesh.showInvite ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.mesh.showInvite = false">
+      <div class="modal-box bg-base-200 border border-base-300 max-w-2xl">
+        <h3 class="font-bold text-lg mb-2" x-text="$store.i18n.t('mesh_invite_title')"></h3>
+        <p class="text-sm text-base-content/60 mb-4" x-text="$store.i18n.t('mesh_invite_desc')"></p>
+        <div x-show="!$store.mesh.invite.result" class="flex flex-col gap-1 w-full">
+          <label for="mesh-invite-name"><span class="label-text font-bold" x-text="$store.i18n.t('mesh_peer_name')"></span></label>
+          <input id="mesh-invite-name" name="mesh-invite-name" type="text" class="input input-bordered w-full font-mono" x-model="$store.mesh.invite.peer_name" placeholder="desktop" @keydown.enter.prevent="$store.mesh.createInvite()">
+          <span class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_peer_name_desc')"></span>
+        </div>
+        <template x-if="$store.mesh.invite.result">
+          <div class="space-y-3">
+            <textarea readonly class="textarea textarea-bordered w-full font-mono text-xs h-28" x-text="$store.mesh.invite.result.invite"></textarea>
+            <div class="flex items-center justify-between">
+              <span class="text-sm"><span x-text="$store.i18n.t('mesh_fingerprint') + '：'"></span><span class="font-mono" x-text="$store.mesh.invite.result.fingerprint"></span></span>
+              <button class="btn btn-primary btn-sm" @click="$store.mesh.copy($store.mesh.invite.result.invite)" x-text="$store.i18n.t('mesh_copy_invite')"></button>
+            </div>
+            <div class="alert text-xs" x-text="$store.i18n.t('mesh_invite_next')"></div>
+            <p class="text-xs text-warning" x-text="$store.i18n.t('mesh_invite_secret')"></p>
+          </div>
+        </template>
+        <div class="modal-action">
+          <button class="btn btn-ghost btn-sm" @click="$store.mesh.showInvite = false" x-text="$store.i18n.t('mesh_close')"></button>
+          <button x-show="!$store.mesh.invite.result" class="btn btn-primary btn-sm" @click="$store.mesh.createInvite()" :disabled="$store.mesh.invite.busy || !$store.mesh.invite.peer_name.trim()">
+            <span x-show="$store.mesh.invite.busy" class="loading loading-spinner loading-xs"></span>
+            <span x-text="$store.i18n.t('mesh_generate')"></span>
+          </button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+
+    <!-- 接受邀请弹窗 -->
+    <dialog class="modal" id="mesh_accept_modal" x-effect="$store.mesh.showAccept ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.mesh.showAccept = false">
+      <div class="modal-box bg-base-200 border border-base-300 max-w-2xl">
+        <h3 class="font-bold text-lg mb-2" x-text="$store.i18n.t('mesh_accept_title')"></h3>
+        <p class="text-sm text-base-content/60 mb-4" x-text="$store.i18n.t('mesh_accept_desc')"></p>
+        <div x-show="!$store.mesh.accept.result" class="space-y-4">
+          <div class="flex flex-col gap-1 w-full">
+            <label for="mesh-accept-name"><span class="label-text font-bold" x-text="$store.i18n.t('mesh_peer_name')"></span></label>
+            <input id="mesh-accept-name" name="mesh-accept-name" type="text" class="input input-bordered w-full font-mono" x-model="$store.mesh.accept.name" placeholder="laptop">
+            <span class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('mesh_peer_name_desc')"></span>
+          </div>
+          <div class="flex flex-col gap-1 w-full">
+            <label for="mesh-accept-invite"><span class="label-text font-bold" x-text="$store.i18n.t('mesh_invite_string')"></span></label>
+            <textarea id="mesh-accept-invite" name="mesh-accept-invite" class="textarea textarea-bordered w-full font-mono text-xs h-28" x-model="$store.mesh.accept.invite" placeholder="polaris-invite:…"></textarea>
+          </div>
+        </div>
+        <template x-if="$store.mesh.accept.result">
+          <div class="space-y-3 text-sm">
+            <div class="alert alert-success">
+              <span x-text="$store.i18n.t('mesh_accept_ok').replace('{0}', $store.mesh.accept.name)"></span>
+            </div>
+            <div><span class="text-base-content/60" x-text="$store.i18n.t('mesh_fingerprint') + '：'"></span><span class="font-mono" x-text="$store.mesh.accept.result.fingerprint"></span></div>
+            <p class="text-xs text-base-content/60" x-text="$store.i18n.t('mesh_verify_fingerprint')"></p>
+            <template x-if="$store.mesh.accept.result.paired">
+              <div class="alert alert-info text-xs" x-text="$store.i18n.t('mesh_paired_done')"></div>
+            </template>
+            <template x-if="$store.mesh.accept.result.reply_invite">
+              <div class="space-y-2">
+                <p class="font-bold" x-text="$store.i18n.t('mesh_reply_title')"></p>
+                <textarea readonly class="textarea textarea-bordered w-full font-mono text-xs h-24" x-text="$store.mesh.accept.result.reply_invite"></textarea>
+                <div class="flex justify-end"><button class="btn btn-primary btn-sm" @click="$store.mesh.copy($store.mesh.accept.result.reply_invite)" x-text="$store.i18n.t('mesh_copy_invite')"></button></div>
+                <p class="text-xs text-warning" x-text="$store.i18n.t('mesh_invite_secret')"></p>
+              </div>
+            </template>
+          </div>
+        </template>
+        <div class="modal-action">
+          <button class="btn btn-ghost btn-sm" @click="$store.mesh.showAccept = false" x-text="$store.i18n.t('mesh_close')"></button>
+          <button x-show="!$store.mesh.accept.result" class="btn btn-primary btn-sm" @click="$store.mesh.acceptInvite()" :disabled="$store.mesh.accept.busy || !$store.mesh.accept.name.trim() || !$store.mesh.accept.invite.trim()">
+            <span x-show="$store.mesh.accept.busy" class="loading loading-spinner loading-xs"></span>
+            <span x-text="$store.i18n.t('mesh_accept_submit')"></span>
+          </button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
 
     <!-- Computer Control Tab -->
     <div x-show="tab === 'computer'" class="space-y-6" x-data="{ store: $store.computer }">

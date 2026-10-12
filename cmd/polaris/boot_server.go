@@ -97,6 +97,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetDataLayout(sb.Layout)
 	// 跨节点委派（ADR-0111）：额外监听地址 + 委派门面 + 结果留存维护协程。
 	httpServer.SetExtraListen(sb.Cfg.Interface.ExtraListen)
+	// 设置页「多节点」改写的就是这份用户 config.toml（只改目标行，见 config.PatchUserConfig）。
+	httpServer.SetConfigPath(configFilePath())
+	httpServer.SetMeshConfig(sb.Cfg.Mesh)
 	if ab.Mesh != nil {
 		httpServer.SetMeshService(ab.Mesh, sb.Cfg.Mesh)
 		concurrent.SafeGo(ctx, "mesh.service.sweep", ab.Mesh.Run)

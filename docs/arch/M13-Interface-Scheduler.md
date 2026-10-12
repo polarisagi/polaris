@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:503 对内调度 / 3:626 MCP / 6:644 (SOFT)降级 / 6-bis:657 已知Bug修复记录 / 7:669 跨模块契约 / 8:686 Web UI 规约 / 8.6:832 插件聚合市场DB+流 / 8.7:868 自动化中心DB+流+工作流 / 8.8:985 电脑操控权限+Preferences / 8.9:1025 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:505 对内调度 / 3:628 MCP / 6:646 (SOFT)降级 / 6-bis:659 已知Bug修复记录 / 7:671 跨模块契约 / 8:688 Web UI 规约 / 8.6:834 插件聚合市场DB+流 / 8.7:870 自动化中心DB+流+工作流 / 8.8:987 电脑操控权限+Preferences / 8.9:1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -393,6 +393,8 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/mesh/peers` | `handleMeshAcceptPeer` |
 | DELETE | `/v1/mesh/peers/{name}` | `handleMeshRemovePeer` |
 | GET | `/v1/mesh/self` | `handleMeshSelf` |
+| GET | `/v1/mesh/settings` | `handleGetMeshSettings` |
+| PUT | `/v1/mesh/settings` | `handlePutMeshSettings` |
 | GET | `/v1/mesh/tokens` | `handleMeshListTokens` |
 | DELETE | `/v1/mesh/tokens/{tokenID}` | `handleMeshRevokeToken` |
 | GET | `/v1/plugins` | `pluginHandler.HandleListPlugins` |
@@ -468,7 +470,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 160 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 162 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
