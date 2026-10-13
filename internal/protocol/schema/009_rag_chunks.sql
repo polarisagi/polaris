@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     doc_version        TEXT    NOT NULL DEFAULT '',
     chunk_seq          INTEGER NOT NULL DEFAULT 0,
     content_hash       TEXT    NOT NULL DEFAULT '',
-    -- 向量嵌入版本（inv_M5_03）：空字符串=未索引，OnlineReindexer 触发条件
+    -- 向量嵌入版本（inv_M5_03 / ADR-0113）：KnowledgeReindexer 判据——!= 当前嵌入模型版本即待重嵌；
+    -- ''=从未索引（摄入写 ''）。向量本体在 SurrealDB，本列只记录已写入向量的模型版本。
     embed_model_version TEXT   NOT NULL DEFAULT '',
     chunk_type         TEXT    NOT NULL DEFAULT 'leaf',
     chunk_index        INTEGER NOT NULL DEFAULT 0,

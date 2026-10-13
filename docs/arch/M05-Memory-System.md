@@ -298,7 +298,7 @@ Spreading Activation（关联发现）：top-3 种子 activation_energy=1.0 → 
 
 **M5/M10 共享**：检索范围不同（M5：episodic+semantic 前缀；M10：doc_nodes/chunk:），`HybridRetrieverImpl` 经 `scope.Type` 路由，一套实例；M10 参数差异见 M10 §2.2。
 
-**跨版本嵌入兼容**：`MemoryEntry.EmbedModelVersion` 触发 `OnlineReindexer`（inv_M5_03）；Tier 0 BM25+Simhash 路径不依赖 embedding API，模型变更不影响 Tier 0 召回。
+**跨版本嵌入兼容**：`MemoryEntry.EmbedModelVersion` 触发 `OnlineReindexer`（inv_M5_03）；Tier 0 BM25+Simhash 路径不依赖 embedding API，模型变更不影响 Tier 0 召回。Tier0 降级向量路（`fetchVectorResultsFromSQL`，SQLite 余弦扫描）按版本过滤（ADR-0113 决策四）：版本取自 `hr.embedder.ModelVersion()`，SQL 为 `embed_model_version = ?` 参数化过滤；embedder 为 nil 或版本为 `''`（未就绪）不走向量路；未重嵌的旧版本事件在 OnlineReindexer 收敛前只经 BM25 召回。查询失败 Warn 日志后降级返回空（ADR-0087）。换模型清空向量库时版本戳同步置空（ADR-0113 决策六）。
 
 **OnlineReindexer**（`internal/memory/retrieval/online_reindexer.go`）：
 - 触发：`episodic_events.embed_model_version = ''`（尚未投影）或 `!= currentVersion`（模型切换），走 `idx_ep_embed_ver` 偏索引

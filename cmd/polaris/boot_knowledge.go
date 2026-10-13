@@ -29,6 +29,46 @@ type KnowledgeBundle struct {
 	KnowledgeBase *knowledgepkg.KnowledgeBase
 }
 
+// startKnowledgeReindexer 构造并启动知识库向量重嵌后台循环（ADR-0113 决策一）。
+// 需要 SurrealDB（向量落点）与嵌入器同时可用，否则不构造并返回 nil（知识向量路随之为空，
+// BM25/图谱照常）。嵌入走 Low 优先级通道（ADR-0099），ModelVersion 唯一来源是 DynamicEmbedder（ADR-0109）；
+// 后台准入与嵌入退避口径同 startOnlineReindexer。
+func startKnowledgeReindexer(ctx context.Context, sb *SubstrateBundle) *knowledgepkg.KnowledgeReindexer {
+	if sb.SurrealStore == nil || sb.Embedder == nil {
+		slog.Info("polaris: knowledge reindexer not started (SurrealDB or embedder unavailable); knowledge vector recall disabled",
+			"surreal", sb.SurrealStore != nil, "embedder", sb.Embedder != nil)
+		return nil
+	}
+	// newMemEmbedderAdapter 只是 Embed(ctx)+ModelVersion 的通用桥接（名称沿用记忆侧），版本取自 DynEmbedder。
+	kr := knowledgepkg.NewKnowledgeReindexer(
+		sb.Store.DB(),
+		newMemEmbedderAdapter(backgroundEmbedder(sb), sb),
+		&surrealCognAdapter{s: sb.SurrealStore},
+	).WithGate(func() (func(), bool) {
+		if sb.EmbedBackoff != nil && !sb.EmbedBackoff.CanAttempt() {
+			slog.Debug("polaris: knowledge reindexer skipped due to backoff guardrail",
+				"consecutive_failures", sb.EmbedBackoff.ConsecutiveFailures(),
+				"next_retry_at", sb.EmbedBackoff.NextRetryAt())
+			return nil, false
+		}
+		return admitBackground(sb, "knowledge_reindex")
+	}).WithResultHook(func(err error) {
+		if sb.EmbedBackoff == nil {
+			return
+		}
+		if err != nil {
+			sb.EmbedBackoff.RecordFailure()
+			return
+		}
+		sb.EmbedBackoff.RecordSuccess()
+	})
+	concurrent.SafeGo(ctx, "boot_knowledge.reindex_loop", func(ctx context.Context) {
+		kr.Loop(ctx, knowledgepkg.KnowledgeReindexInterval)
+	})
+	slog.Info("polaris: knowledge reindexer started", "backend", sb.EmbedChoice.Kind, "interval", knowledgepkg.KnowledgeReindexInterval)
+	return kr
+}
+
 // bootKnowledge 执行 §7~§7.7 初始化，返回知识 RAG bundle。
 func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle) (*KnowledgeBundle, error) { //nolint:gocyclo
 	// ragTaintSerializer 跨边界 HMAC 校验器（inv_M11_02），构造于 boot_substrate.go
@@ -52,7 +92,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		if sb.Embedder != nil {
 			knowledgeEmb = &knowledgeEmbedderAdapter{e: sb.Embedder}
 		}
-		retriever = knowledgepkg.NewHybridRetrieverWithCognitive(sb.Store.DB(), knowledgeEmb, &surrealCognAdapter{s: sb.SurrealStore}, sb.Cfg.Storage.Tier0VectorScanLimit)
+		retriever = knowledgepkg.NewHybridRetrieverWithCognitive(sb.Store.DB(), knowledgeEmb, &surrealCognAdapter{s: sb.SurrealStore})
 		// SurrealDB 路径使用 protocol.Reranker 接口（含 error 返回），通过
 		// colbertRerankerAdapter 适配同一个 colbertReranker 实例，两条检索栈
 		// 共用一套重排逻辑，不重复实例化 Embedder 调用链。
@@ -110,6 +150,10 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		searchEngine = dr.Engine()
 	}
 	ingester := knowledgepkg.NewDefaultIngestionPipeline(sb.StorageRouter, sb.Router, sb.Outbox, searchEngine, ragTaintSerializer).WithOffPeak(sb.OffPeak)
+	// ADR-0113 决策一：知识向量由 KnowledgeReindexer 单一路径写入；摄入提交后非阻塞唤醒它。
+	if kr := startKnowledgeReindexer(ctx, sb); kr != nil {
+		ingester.WithReindexKick(kr.Kick)
+	}
 
 	// ─── §7.5 知识图谱构建管线（GraphBuildPipeline，M10 §2.7）────────────────
 	var graphLLMClient graphrag.LLMClient

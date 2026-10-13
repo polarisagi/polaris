@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/rand"
 	"strings"
@@ -105,9 +106,22 @@ func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db
 	if scanLimit <= 0 {
 		scanLimit = 500
 	}
-	// 按时间倒序提取最近的 scanLimit 条带向量记录参与相似度计算
-	rows, queryErr := db.QueryContext(ctx, fmt.Sprintf("SELECT id, event_uuid, content, embedding FROM episodic_events WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT %d", scanLimit))
+	// ADR-0113 决策四：只扫描与当前 embedder 版本一致的行，旧版本向量与查询向量不同空间，
+	// 余弦无意义。embedder 未注入或版本为 ""（未就绪）→ 不走向量路，仅靠 BM25 召回。
+	if hr.embedder == nil {
+		return vectorResults
+	}
+	curVersion := hr.embedder.ModelVersion()
+	if curVersion == "" {
+		return vectorResults
+	}
+	// 按时间倒序提取最近的 scanLimit 条同版本带向量记录参与相似度计算
+	rows, queryErr := db.QueryContext(ctx,
+		"SELECT id, event_uuid, content, embedding FROM episodic_events WHERE embedding IS NOT NULL AND embed_model_version = ? ORDER BY id DESC LIMIT ?",
+		curVersion, scanLimit)
 	if queryErr != nil {
+		// ADR-0087：读失败降级为空结果（BM25 仍可用），但必须可观测。
+		slog.WarnContext(ctx, "polaris: tier0 vector scan query failed, degrading to empty", "err", queryErr)
 		return vectorResults
 	}
 	defer rows.Close()
@@ -141,6 +155,10 @@ func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db
 				TaintLevel:   types.TaintHigh,
 			})
 		}
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		// 迭代中途出错：保留已读到的结果（部分降级），但不静默。
+		slog.WarnContext(ctx, "polaris: tier0 vector scan iteration failed, returning partial", "err", iterErr)
 	}
 	return vectorResults
 }

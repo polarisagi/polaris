@@ -17,8 +17,15 @@ func newPrefDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL, expired_at INTEGER)`); err != nil {
-		t.Fatal(err)
+	for _, ddl := range []string{
+		`CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL, expired_at INTEGER)`,
+		// 最小表结构（照 schema 009 / 003 的列名），供 ADR-0113 决策六的版本戳置空断言。
+		`CREATE TABLE rag_chunks (id TEXT PRIMARY KEY, embed_model_version TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE episodic_events (id TEXT PRIMARY KEY, embed_model_version TEXT NOT NULL DEFAULT '')`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
@@ -65,6 +72,75 @@ func TestEmbedModelSwitchHandler(t *testing.T) {
 	h("") // 未就绪版本：忽略
 	if clears != 2 || activeModel(t, db) != "onnx:bge-small-zh-v1.5-int8@512" {
 		t.Fatal("empty version must be ignored")
+	}
+}
+
+func versionCounts(t *testing.T, db *sql.DB, table string) (stamped int) {
+	t.Helper()
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE embed_model_version != ''`).Scan(&stamped); err != nil {
+		t.Fatal(err)
+	}
+	return stamped
+}
+
+func seedStamps(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, q := range []string{
+		`INSERT INTO rag_chunks (id, embed_model_version) VALUES ('r1','A'),('r2','')`,
+		`INSERT INTO episodic_events (id, embed_model_version) VALUES ('e1','A'),('e2','B')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// ADR-0113 决策六：向量清空成功 ⇒ 两表版本戳置空，且记录新版本。
+func TestEmbedModelSwitchHandler_ResetsVersionStampsAfterClear(t *testing.T) {
+	db := newPrefDB(t)
+	seedStamps(t, db)
+	if _, err := db.Exec(`INSERT INTO preferences (key, value) VALUES (?, 'A')`, prefKeyActiveEmbedModel); err != nil {
+		t.Fatal(err)
+	}
+	h := newEmbedModelSwitchHandler(db, func() error { return nil })
+	h("B")
+	if n := versionCounts(t, db, "rag_chunks") + versionCounts(t, db, "episodic_events"); n != 0 {
+		t.Fatalf("stamps left after clear: %d", n)
+	}
+	if activeModel(t, db) != "B" {
+		t.Fatalf("active = %q, want B", activeModel(t, db))
+	}
+}
+
+// 无 SurrealDB（vecClear==nil）：SQLite 内向量仍有效，不得置空版本戳。
+func TestEmbedModelSwitchHandler_NilClearKeepsStamps(t *testing.T) {
+	db := newPrefDB(t)
+	seedStamps(t, db)
+	if _, err := db.Exec(`INSERT INTO preferences (key, value) VALUES (?, 'A')`, prefKeyActiveEmbedModel); err != nil {
+		t.Fatal(err)
+	}
+	newEmbedModelSwitchHandler(db, nil)("B")
+	if versionCounts(t, db, "rag_chunks") != 1 || versionCounts(t, db, "episodic_events") != 2 {
+		t.Fatal("stamps must be kept when vecClear is nil")
+	}
+	if activeModel(t, db) != "B" {
+		t.Fatalf("active = %q, want B", activeModel(t, db))
+	}
+}
+
+// 置空失败按清空失败处理：不记录新版本。
+func TestEmbedModelSwitchHandler_ResetFailureKeepsOldVersion(t *testing.T) {
+	db := newPrefDB(t)
+	seedStamps(t, db)
+	if _, err := db.Exec(`INSERT INTO preferences (key, value) VALUES (?, 'A')`, prefKeyActiveEmbedModel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE episodic_events`); err != nil {
+		t.Fatal(err)
+	}
+	newEmbedModelSwitchHandler(db, func() error { return nil })("B")
+	if activeModel(t, db) != "A" {
+		t.Fatalf("active = %q, want A (new version must not be recorded)", activeModel(t, db))
 	}
 }
 

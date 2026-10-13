@@ -2,7 +2,7 @@
 # 模块 3: Observability & Telemetry
 
 > OTel-native | slog | Token_Burn_Rate + Surprise_Index 一等公民 | Hardware Probe | [HE-Rule-1] [HE-Rule-4] | Go
-<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:32 四层架构 / 2:62 Metrics / 3:102 TokenBurnRate(CANONICAL) / 4:123 SurpriseIndex / 5:156 HardwareProbe+AutoConfig / 6:221 OSMemoryGuard / 7:237 MonitorMemoryPressure / 8:253 LogLevel / 9:259 TraceContext / 9.1:271 SpanExporter(OpenLLMetry) / 10:281 DecisionLog / 10.1:289 PerformanceDrift / 11:315 368 Langfuse / 14:337 400 (SOFT)降级 / 15:353 417 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:32 四层架构 / 2:62 Metrics / 3:105 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:159 HardwareProbe+AutoConfig / 6:224 OSMemoryGuard / 7:240 MonitorMemoryPressure / 8:256 LogLevel / 9:262 TraceContext / 9.1:274 SpanExporter(OpenLLMetry) / 10:284 DecisionLog / 10.1:292 PerformanceDrift / 11:318 Langfuse / 14:340 400 (SOFT)降级 / 15:356 417 依赖 -->
 ## 0-bis. 职责边界
 
 | M3 **是** | M3 **不是** |
@@ -65,7 +65,7 @@ Session Span → { gen_ai.chat (Perceive/Plan/Reflect) | tool.call | memory.{wri
 
 | 指标名 | 类型 | 标签 / 说明 |
 |--------|------|--------|
-| `polaris.agents_active` | Gauge | — |
+| `polaris.agents.active` | Gauge | — |
 | `polaris.llm.calls_total` | CounterVec | model, tier, status |
 | `polaris.llm.call_latency_ms` | HistogramVec | model (ExponentialBuckets 100ms→51.2s) |
 | `polaris.tokens.consumed_total` | CounterVec | type (input/output/cache_hit/cache_miss) |
@@ -78,16 +78,19 @@ Session Span → { gen_ai.chat (Perceive/Plan/Reflect) | tool.call | memory.{wri
 | `polaris.embedding.batch_size` | HistogramVec | provider（未实现） |
 | `polaris.token_burn_rate.total` | Gauge | 熔断信号 CANONICAL SOURCE；同族另有 `polaris.token_burn_rate.ema5s_tps` / `ema30s_tps` / `throttle_stage` |
 | `polaris.token_burn.extreme_total` | Counter | Stage 3 FULLSTOP 边沿驱动 |
-| `polaris.surprise_index` | Gauge | task_type；路由信号 |
+| `polaris.surprise.index` | Gauge | task_type；路由信号 |
 | `polaris.tool.calls_total` | CounterVec | tool_category, status, sandbox_tier |
 | `polaris.tool.call_latency_ms` | HistogramVec | tool_category |
 | `polaris.memory.ops_total` | CounterVec | layer, operation（未实现；代码现有 `polaris.memory.*_failures_total` 失败计数） |
-| `polaris.task_success_rate` | GaugeVec | task_type |
+| `polaris.task.success_rate` | GaugeVec | task_type |
 | `polaris.sandbox.executions_total` | CounterVec | tier |
 | `polaris.policy.denials_total` | CounterVec | policy（未实现；代码现用 `polaris.cedar.allow_total` / `deny_total` / `degraded_total`） |
-| `polaris.goroutines` / `polaris.memory_alloc_mb` | Gauge | — |
+| `polaris.runtime.goroutines` / `polaris.runtime.memory_alloc_mb` | Gauge | — |
 | `polaris.ffi.memory_estimate_mb` | Gauge | 含 FFI 侧内存估算（未实现；代码现有 `polaris.ffi.call_latency_ms` / `polaris.ffi.errors_total`） |
-| `polaris.surprise_index.stale` | Gauge | 距上次成功计算 |
+| `polaris.surprise.index_stale` | Gauge | 距上次成功计算 |
+| `polaris.dbwriter.panic_total` | Counter | DatabaseWriter.Run 内 panic 被 recover 的次数 |
+| `polaris.goroutine.panic_total` | Counter | `concurrent.SafeGo` recover 的 goroutine panic 总数（boot_substrate 的 panic hook 上报） |
+| `polaris.system1.bypass_total` | Counter | System 1 Bypass 触发次数，标签 matched=true/false |
 | `polaris.surprise_embedding_dropped` | Counter | LoadShedder 丢弃（未实现） |
 | `polaris.surprise_async_failures` | Counter | 异步连续失败（未实现） |
 
@@ -134,13 +137,13 @@ M3 提供两层计算，M4 按优先级消费。
 
 **完整计算器（M9 异步推送）**：`0.4 × embeddingCosineDistance + 0.35 × toolSequenceDivergence + 0.25 × MEMFMatchScore`。公式、BoundedWorkQueue、LoadShedder 权威实现见 M9 §2.0；MEMFMatchScore 为独有扩展。
 
-**M4 消费优先级**: `polaris.surprise_index`（完整版）→ staleness > 60s 回退 `polaris.surprise_index_basic` → 均不可用 0.5 (System 1.5)。
+**M4 消费优先级**: `polaris.surprise.index`（完整版）→ staleness > 60s 回退 `polaris.surprise.index_basic` → 均不可用 0.5 (System 1.5)。
 
 ### 4.1 Prometheus 指标
 
-- `polaris.surprise_index`（Gauge）：完整版，M9 异步推送
-- `polaris.surprise_index_basic`（Gauge）：基础版，M3 本地计算，始终可用
-- `polaris.surprise_index.stale`（Gauge）：距上次成功计算
+- `polaris.surprise.index`（Gauge）：完整版，M9 异步推送
+- `polaris.surprise.index_basic`（Gauge）：基础版，M3 本地计算，始终可用
+- `polaris.surprise.index_stale`（Gauge）：距上次成功计算
 - `polaris.surprise_embedding_dropped` / `polaris.surprise_async_failures`（Counter）：M9 上报（未实现）
 
 ### 4.2 Staleness 监控
@@ -149,7 +152,7 @@ M3 提供两层计算，M4 按优先级消费。
 - 基础版 staleness > 120s → WARN
 - 完整版 staleness > 300s → 路由退化到 task_type 级缓存（最近 24h EMA）→ 无缓存 → 基础版 0.5
 
-M4 读取 `polaris.surprise_index`（fallback `_basic`）做 System 1/1.5/2 路由；M3 负责指标暴露与 staleness 告警。
+M4 读取 `polaris.surprise.index`（fallback `_basic`）做 System 1/1.5/2 路由；M3 负责指标暴露与 staleness 告警。
 
 ---
 
@@ -292,7 +295,7 @@ SQLite decision_log 表 append-only [Storage-SQLite] [HE-Rule-6] [MutationBus]�
 
 **度量**:
 - 滑窗 [Window-Quality-10min]（与连续采样监控共享）；维度 `task_type × tier`
-- `polaris.task_success_rate` Gauge（10min 内 success/total per task_type）
+- `polaris.task.success_rate` Gauge（10min 内 success/total per task_type）
 - `polaris.task_drift_sigma` Gauge（与 RollingBaseline 偏差的 σ 倍数；设计指标，当前代码未导出）
 
 **RollingBaseline**: 24h EMA 基线（α=0.05）；冷启动 (<100 任务) 固定为该 task_type 的 Eval Suite 期望值（M12 §5）；每日 04:00 归档前一日 baseline 至 `decision_log` 供 M12 ShadowExecutor 对比。

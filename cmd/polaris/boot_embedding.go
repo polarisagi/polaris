@@ -568,8 +568,10 @@ const prefKeyActiveEmbedModel = "embed.active_model_version"
 
 // newEmbedModelSwitchHandler 返回模型切换处理器（ADR-0109 P4）：新引擎就绪时与上次生效的
 // 模型版本比较，不同则清空 SurrealDB 向量库（维度相同但语义空间不同的向量不得混检），
-// 随后由重嵌 / 插件回填 / 知识同步按新模型补齐。SQLite 侧 episodic 由 embed_model_version 驱动重嵌。
-// vecClear 为 nil（无 SurrealDB）时只记录版本。
+// 随后由重嵌 / 插件回填 / 知识同步按新模型补齐。
+// ADR-0113 决策六：vecClear 成功后同流程把 rag_chunks 与 episodic_events 的 embed_model_version 全部置空串
+// （向量被清空 ⇒ 版本戳失效，否则 A→B→A 快速切换时仍标 A 的行永不重写）；置空失败按清空失败处理。
+// vecClear 为 nil（无 SurrealDB）时不置空，只记录版本（SQLite 内向量仍有效，由版本比对驱动重嵌）。
 func newEmbedModelSwitchHandler(db *sql.DB, vecClear func() error) func(version string) {
 	return func(version string) {
 		if db == nil || version == "" {
@@ -590,6 +592,14 @@ func newEmbedModelSwitchHandler(db *sql.DB, vecClear func() error) func(version 
 				slog.Error("polaris: embedding model switched but clearing stale vectors failed",
 					"from", prev, "to", version, "err", err)
 				return
+			}
+			for _, tbl := range []string{"rag_chunks", "episodic_events"} {
+				if _, err := db.ExecContext(ctx,
+					"UPDATE "+tbl+" SET embed_model_version = '' WHERE embed_model_version != ''"); err != nil {
+					slog.Error("polaris: vectors cleared but resetting embed_model_version failed",
+						"table", tbl, "from", prev, "to", version, "err", err)
+					return
+				}
 			}
 			slog.Info("polaris: embedding model switched, stale vectors cleared", "from", prev, "to", version)
 		}

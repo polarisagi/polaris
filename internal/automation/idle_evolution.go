@@ -20,7 +20,7 @@ var (
 	//custom-nolint:global-var
 	idleEvolutionTasksTotal = promauto.NewCounterVec( //nolint:gochecknoglobals
 		prometheus.CounterOpts{
-			Name: "idle_evolution_tasks_total",
+			Name: "polaris_idle_evolution_tasks_total",
 			Help: "Total number of idle evolution tasks started.",
 		},
 		[]string{"task_type", "status"},

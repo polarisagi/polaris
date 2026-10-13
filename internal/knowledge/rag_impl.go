@@ -38,6 +38,15 @@ type DefaultIngestionPipeline struct {
 	summaryInferSem    chan struct{}                  // 限制并发摘要 Infer 调用数（H1）
 	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不计算/校验 taint_hmac（inv_M11_02）
 	offPeak            offPeakWaiter                  // 可选；非 nil 时降级 goroutine 路径的摘要树等到错峰窗口再建（ADR-0105 决策七）
+	reindexKick        func()                         // 可选；事务提交后非阻塞唤醒 KnowledgeReindexer（ADR-0113 决策一）
+}
+
+// WithReindexKick 注入摄入提交后的重嵌唤醒回调（KnowledgeReindexer.Kick）。
+// 摄入管线自身不嵌入——向量只由 KnowledgeReindexer 单一路径写入；kick 仅缩短首次可用延迟，
+// 回调必须非阻塞。nil 时不唤醒，向量由重嵌器的定时 tick 兜底收敛。
+func (p *DefaultIngestionPipeline) WithReindexKick(kick func()) *DefaultIngestionPipeline {
+	p.reindexKick = kick
+	return p
 }
 
 // offPeakWaiter 是错峰窗口的消费端接口（由 pkg/offpeak.Gate 满足，nil 指针安全）。
@@ -117,6 +126,9 @@ func (p *DefaultIngestionPipeline) persistChunks(ctx context.Context, tx *sql.Tx
 		hmacHex := sealChunkTaint(p.boundarySerializer, c.ID, c.Content, c.TaintLevel, c.TaintSource)
 		if _, err := stmt.ExecContext(ctx,
 			c.ID, c.DocID, c.Content, c.TaintLevel, c.TaintSource, hmacHex,
+			// embed_model_version 刻意写 ''：表示「待索引」，由 KnowledgeReindexer 嵌入并写入向量索引后
+			// 才回写当前模型版本（ADR-0113）。摄入路径不嵌入，INSERT OR REPLACE 重摄入同 ID 块时
+			// 版本被重置为 ''，向量随之重建。
 			c.SourceURI, c.DocVersion, i, c.ContentHash, "", c.ChunkType, c.ChunkIndex,
 		); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "ingestion: insert chunk", err)
@@ -188,6 +200,9 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: commit", err)
+	}
+	if p.reindexKick != nil {
+		p.reindexKick() // 提交成功后唤醒重嵌器（非阻塞），缩短新块的向量可用延迟
 	}
 
 	if p.outboxWriter != nil {

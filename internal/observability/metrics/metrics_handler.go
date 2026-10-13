@@ -95,9 +95,9 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		ema30sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema30s_tps")
 		totalCounter, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.total")
 		throttleGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.throttle_stage")
-		surpriseGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index")
-		surpriseBasicGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index_basic")
-		surpriseStaleGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index.stale")
+		surpriseGauge, _ := meter.Float64ObservableGauge("polaris.surprise.index")
+		surpriseBasicGauge, _ := meter.Float64ObservableGauge("polaris.surprise.index_basic")
+		surpriseStaleGauge, _ := meter.Float64ObservableGauge("polaris.surprise.index_stale")
 		surrealSizeGauge, _ := meter.Float64ObservableGauge("polaris.surrealdb.index_size_mb")
 		killswitchGauge, _ := meter.Float64ObservableGauge("polaris.killswitch.stage")
 

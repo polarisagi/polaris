@@ -216,7 +216,7 @@ func TestHybridRetrieverImpl_Search(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	pipeline := newTestIngestionPipeline(db, nil)
-	retriever := NewHybridRetrieverWithCognitive(db, nil, nil, 0)
+	retriever := NewHybridRetrieverWithCognitive(db, nil, nil)
 
 	doc := &Document{
 		Ref: DocumentRef{

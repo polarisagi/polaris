@@ -3,7 +3,7 @@
 > 消费 `[Storage-SQLite]` + `[Storage-SurrealDB-Core]`，非独立存储 | Hybrid Search + GraphRAG | 增量索引 | 来源追踪
 > Go 检索流水线 + GraphRAG，Rust SurrealDB-Core FFI 侧车
 > `[Code-Package-Mapping]`: internal/swarm/| `[Module-Topology]`: M10 L2 | `[HE-Rule-5]` `[HE-Rule-6]`
-<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:100 检索 / 3:175 增量索引 / 4:187 来源追踪 / 5:215 Reranking / 6:227 288 检索质量 / 7:233 294 数据流闭环 / 9:239 310 (SOFT)降级 / 10:257 328 跨模块契约 / 11:276 347 实现状态+2026研究对照 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:100 检索 / 3:175 增量索引 / 4:187 来源追踪 / 5:215 Reranking / 6:227 检索质量 / 7:233 294 数据流闭环 / 9:239 310 (SOFT)降级 / 10:258 328 跨模块契约 / 11:277 347 实现状态+2026研究对照 -->
 ## 0-bis. 职责边界
 
 | M10 **是** | M10 **不是** |
@@ -24,7 +24,7 @@
 | inv_M10_01 | M10 不是独立存储——消费 M2 Store 接口，共享 M5 HybridRetriever 底层引擎 | 架构审计 |
 | inv_M10_02 | 知识源拉取内容默认 taint=high——对于受信任的本地文件系统插件，可按策略降为 low | M11 Connector-Taint-Table |
 | inv_M10_03 | 每 chunk 携带 lineage metadata——source_uri + doc_version + chunk_seq + content_hash | DDL（Data Definition Language，数据定义语言） NOT NULL 约束 |
-| inv_M10_04 | 不同嵌入模型版本（`embed_model_version`）的向量不得混检——切模型/切档按版本重嵌（`rag_chunks.embed_model_version`、M5 `OnlineReindexer`），同维换模型亦然（ADR-0109 D5）。**现状**：检索路径（`internal/knowledge/retriever.go` `searchVectorFallback`）目前未按 `embed_model_version` 过滤（仅校验向量维度与查询一致），「不得混检」由重嵌收敛保证，而非检索期过滤 | M10 §1.5 |
+| inv_M10_04 | 不同嵌入模型版本（`embed_model_version`）的向量不得混检——切模型/切档按版本重嵌（`rag_chunks.embed_model_version`、M10 `KnowledgeReindexer`），同维换模型亦然（ADR-0109 D5 / ADR-0113）。**现状**：知识向量只存在于 SurrealDB，由 `KnowledgeReindexer`（`internal/knowledge/knowledge_reindexer.go`）单一路径写入；判据 `embed_model_version != 当前嵌入模型版本`（`''` = 从未索引）。同维换模型时 ADR-0109 清空 SurrealDB 向量，重嵌器按版本不等重建，期间向量路为空 / 部分，由 BM25 / 图谱两路兜底。检索路径本身不做版本过滤，「不得混检」由「清空 + 单一写入路径 + 版本回写」收敛保证；SQLite 线性降级已删除（ADR-0113 决策二）。换模型清空向量库时版本戳同步置空（`rag_chunks` / `episodic_events`，ADR-0113 决策六），防 A→B→A 快速切换后旧戳行永不重写；重嵌器单轮按 rowid 游标推进，毒行不饿死后续批次（决策七） | M10 §1.5 |
 | inv_M10_05 | GraphRAG LLM 取消严苛日预算限制（得益于 DeepSeek 的低成本）——全量生成高质量图谱 | M10 §2.7 预算释放 |
 | inv_M10_06 | 主引擎 M10 彻底剥离出站网络权限——任何第三方 API 调用必须在沙箱化的 Plugin 进程中执行 | 代码审计（M10 内无 HTTP（HyperText Transfer Protocol，超文本传输协议） Client） |
 
@@ -70,12 +70,12 @@ Embedder 模型切换致向量不兼容时，禁止全量同步重嵌（`[Tier-0
 
 | 阶段 | 触发 | 操作 | 延迟 |
 |------|------|------|------|
-| Phase 1: 版本标记切换 | Embedder 模型/档位变更（`embed_model_version` 变化） | 无双索引、无 `vec_dim` 动态维度表：HNSW 维度恒 512 不重建，新写入向量带新 `embed_model_version`；仅当库内旧维度（如旧 2560）≠ 期望维度时启动期删旧向量与索引重建（ADR-0109 D5）。重嵌完成前 FTS/BM25 兜底，**禁止永久降级 BM25** | <1ms |
+| Phase 1: 版本标记切换 | Embedder 模型/档位变更（`embed_model_version` 变化） | 无双索引、无 `vec_dim` 动态维度表：HNSW 维度恒 512 不重建，向量由 `KnowledgeReindexer` 写入并回写新 `embed_model_version`（摄入只写 `''` 待索引并在提交后 `Kick()` 唤醒重嵌器，ADR-0113）；仅当库内旧维度（如旧 2560）≠ 期望维度时启动期删旧向量与索引重建（ADR-0109 D5）。重嵌完成前 FTS/BM25 兜底，**禁止永久降级 BM25**。重嵌器后台循环 = 5min tick（`KnowledgeReindexInterval`）+ 摄入后 `Kick()`，嵌入走 Low 优先级通道（ADR-0099），连续 3 次嵌入失败中止本批并交嵌入退避器 | <1ms |
 | Phase 2: 优先级热恢复 | Phase 1 后 | 优先级队列重嵌 Top 50 Chunk: 0.4×M5 WorkingMemory引用频次 + 0.3×DurativeGroup活跃度 + 0.2×7天查询频率 + 0.1×访问时间倒数；每 Chunk 2s 超时，原子替换 | ~25-75s |
 | Phase 3: 全量回填 | CPU idle>70% + 空闲内存>500MB | 后台单线程，5 文档/批 + 1s 冷却 | ~5.5h (10K docs) |
 | BM25 永久降级 | >30 天未访问 | 不重嵌，永久 BM25 | 0 |
 
-跨模块: M5 OnlineReindexer（`internal/memory/retrieval/online_reindexer.go`，原地 UPDATE `episodic_events.embedding`，无 shadow table）检测变更；M1 Embedder.Init() 暴露 Dimension()；M10 经 `internal/config/runtime.go` embeddingDim atomic 获取；M5 ActiveDocumentTracker 提供文档热度。
+跨模块: M10 `KnowledgeReindexer`（`internal/knowledge/knowledge_reindexer.go`，形态对齐 M5 OnlineReindexer，扫描 `rag_chunks`，向量写 SurrealDB，不存 SQLite）；M5 OnlineReindexer（`internal/memory/retrieval/online_reindexer.go`，原地 UPDATE `episodic_events.embedding`，无 shadow table）检测变更；M1 Embedder.Init() 暴露 Dimension()；M10 经 `internal/config/runtime.go` embeddingDim atomic 获取；M5 ActiveDocumentTracker 提供文档热度。
 
 ### 1.6 多级摘要生成
 
@@ -241,7 +241,8 @@ Knowledge Plugins → Document → 结构解析 → 文档树 + 父子双存 + �
 | 故障场景 | 降级路径 | 恢复策略 |
 |---------|---------|---------|
 | 知识插件不可达 | dead_letter + WARN + metric++ | 下次 doSync 重试 |
-| Embedding 模型/维度变更 | 按 `embed_model_version` 标记切换，后台低速重嵌增量，期间 FTS 兜底（§1.5） | 新索引就绪即切换 |
+| Embedding 模型/维度变更 | 按 `embed_model_version` 标记切换，`KnowledgeReindexer` 后台低速重嵌增量，期间 FTS 兜底（§1.5） | 新索引就绪即切换 |
+| SurrealDB 不可用 / `VecKNN` 失败 | 向量路显式降级为空（Warn + `RecordKnowledgeReadFailure`），BM25 / 图谱两路照常；无 SQLite 线性降级（ADR-0113 决策二）；重嵌器不构造（启动 Info 日志） | SurrealDB 恢复后下一轮重嵌 / 检索自动恢复 |
 | GraphRAG 实体数超 Tier 0 上限 (50K) | 拒绝摄入新文档 + polaris status 提示清理/升级 | 用户删除旧文档或升级 Tier |
 | GraphRAG CPU/内存资源层触发 M9 BackgroundTaskScheduler 异常 | 跳过剩余 graph_build_task + GlobalSearch 降级纯 Leiden 社区检测 | 资源释放后下一窗口期恢复 |
 | Chunk 检索超时 (>200ms) | 仅返回 BM25 结果（跳过重排） | — |
@@ -277,7 +278,7 @@ Knowledge Plugins → Document → 结构解析 → 文档树 + 父子双存 + �
 
 主链路均已实现（`internal/knowledge/`）：ObsidianConnector + SyncScheduler（Tier 0 内置）、HybridRetrieverImpl（Tier 0 纯 FTS5，Tier 1+ 双路 RRF，全 Tier 接入 GraphTraverser，BM25×0.3+Vector×0.6+Graph×0.1）、GraphTraverser（BFS depth=2，每节点≤20边，总节点≤200，关联 chunk 按深度衰减；`TraverseChunksWithOptions(TraverseOptions)` 支持 RelationTypes 白名单 / Direction / MaxDepth）、ConflictArbiter、GraphBuildPipeline Phase 1-5 + ConceptSynthesizer、DefaultChunker（Markdown/Code/PlainText 路由）、StructuredNavigator + QueryPlanner、IncrementalIndexer（Hash 增量）、Outbox handler 注册。
 
-向量检索 ANN：Tier 1+（有 SurrealDB-Core 认知存储）用 HNSW 索引做 `VecKNN`（`rust/substrate/src/surreal_store/mod.rs` + `internal/knowledge/retriever.go`）；仅 Tier 0 或 cognitive store 不可用时降级 `searchVectorFallback` 全表线性扫描（O(N)，5000 行上限）。
+向量检索 ANN：Tier 1+（有 SurrealDB-Core 认知存储）用 HNSW 索引做 `VecKNN`（`rust/substrate/src/surreal_store/mod.rs` + `internal/knowledge/retriever.go`）；向量写入由 `KnowledgeReindexer` 单一路径完成（ADR-0113 决策一）；共享向量索引下知识路径超取 `VecKNN(topK×4，上限 200)`，过滤出 `rag_chunks` 命中后截到 topK（决策三）。Tier 0 或 cognitive store 不可用 / `VecKNN` 失败时向量路为空，BM25 / 图谱照常——`searchVectorFallback` 线性扫描已删除（决策二，SQLite 不存知识向量，该降级从未能工作）。
 
 ### 引入计划
 

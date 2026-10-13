@@ -24,7 +24,7 @@
 | inv_M4_02 | 重放时不重新调 LLM——用 EventLog 录像值（请求全文 + 响应全文） | M4 §8 ReplayMode 物理切断 |
 | inv_M4_03 | PromptFn 为纯函数——同 StateContext → 同 prompt 字节，禁止 wall_clock/random | CI（Continuous Integration，持续集成） `prompt_determinism` 测试 |
 | inv_M4_04 | 见下方 [inv_M4_04 补充](#inv_m4_04-补充) | M4 RouteReasoning 代码审计 |
-| inv_M4_05 | Suspend-on-Idle——空闲 Agent 不轮询，等待 intent channel 唤醒，空载 CPU<1% | M3 `polaris_goroutines` Gauge |
+| inv_M4_05 | Suspend-on-Idle——空闲 Agent 不轮询，等待 intent channel 唤醒，空载 CPU<1% | M3 `polaris_runtime_goroutines` Gauge |
 | inv_M4_06 | 不可逆操作（write_network/privileged）禁止自动回滚——必须显式 HITL（Human-in-the-loop，人机协同） | M7 §5.3 DryRunMode + HITL |
 
 > 进入此模块前必读 `docs/specs/09-LLM-Agent-Production.md`（HE-Rule-5 实例: A-02/A-09/A-11 + P-1/P-6/P-7）

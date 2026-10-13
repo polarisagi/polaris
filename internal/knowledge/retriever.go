@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
-	"math"
-	"sort"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
@@ -42,7 +40,6 @@ type HybridRetrieverImpl struct {
 	cognitive          CognitiveSearcher              // optional，Tier 1+ SurrealDB HNSW
 	graph              *graphrag.GraphTraverser       // optional，Tier 0+ 图遍历（M10 §2.6）
 	reranker           protocol.Reranker              // optional，Cross-encoder reranking
-	vecScanLimit       int                            // Tier0VectorScanLimit
 	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不校验 taint_hmac（inv_M11_02）
 }
 
@@ -90,11 +87,8 @@ func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySer
 // 由 cmd/polaris/boot_knowledge.go 在 SurrealDB 路径上注入。
 
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
-func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, vecScanLimit int) *HybridRetrieverImpl {
-	if vecScanLimit <= 0 {
-		vecScanLimit = 500
-	}
-	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive, vecScanLimit: vecScanLimit}
+func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive}
 }
 
 // Search 执行混合检索。
@@ -274,85 +268,3 @@ func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []ty
 	}
 	return results, nil
 }
-
-// searchVectorFallback 线性扫描降级
-func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEmbed []float32, limit int) ([]Chunk, error) {
-
-	// Tier 0 降级：读取所有有 embedding 的 chunk（线性扫描）
-	rows, err := hr.db.QueryContext(ctx, `
-		SELECT id, doc_id, content, taint_level, taint_source, taint_hmac, embedding, source_uri, doc_version, chunk_seq, content_hash, embed_model_version
-		FROM rag_chunks
-		WHERE embedding IS NOT NULL AND embedding != '' AND deleted_at IS NULL
-		LIMIT ?
-	`, hr.vecScanLimit)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: vector scan failed", err)
-	}
-	defer rows.Close()
-
-	type scored struct {
-		chunk Chunk
-		score float64
-	}
-	var scored_ []scored
-
-	for rows.Next() {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
-		default:
-		}
-		var chunk Chunk
-		var taintSource, taintHMAC sql.NullString
-		var embJSON sql.NullString
-		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC, &embJSON, &chunk.SourceURI, &chunk.DocVersion, &chunk.ChunkSeq, &chunk.ContentHash, &chunk.EmbedModelVersion); err != nil {
-			continue
-		}
-		if taintSource.Valid {
-			chunk.TaintSource = taintSource.String
-		}
-		chunk.TaintLevel = verifyChunkTaint(hr.boundarySerializer, chunk.ID, chunk.Content, chunk.TaintLevel, chunk.TaintSource, taintHMAC.String)
-		if !embJSON.Valid || embJSON.String == "" {
-			continue
-		}
-		chunkEmbed, parseErr := parseEmbedding(embJSON.String)
-		if parseErr != nil || len(chunkEmbed) != len(queryEmbed) {
-			continue
-		}
-		sim := cosine(queryEmbed, chunkEmbed)
-		scored_ = append(scored_, struct {
-			chunk Chunk
-			score float64
-		}{chunk, sim})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to scan rows for fallback vector search", err)
-	}
-
-	sort.Slice(scored_, func(i, j int) bool { return scored_[i].score > scored_[j].score })
-	if len(scored_) > limit {
-		scored_ = scored_[:limit]
-	}
-	results := make([]Chunk, len(scored_))
-	for i, s := range scored_ {
-		results[i] = s.chunk
-	}
-	return results, nil
-}
-
-// cosine 计算两个向量的余弦相似度（[0,1]）。
-func cosine(a, b []float32) float64 {
-	var dot, na, nb float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		na += float64(a[i]) * float64(a[i])
-		nb += float64(b[i]) * float64(b[i])
-	}
-	if na == 0 || nb == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(na) * math.Sqrt(nb))
-}
-
-// 向量降级路径的 JSON/float 轻量解析（parseEmbedding/parseFloat/pf*）与三路 RRF
-// 融合（rrfThreeWay）见 retriever_parsing.go（R7 拆分）。

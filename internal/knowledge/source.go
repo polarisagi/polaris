@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -129,29 +130,46 @@ func (k *knowledgeDocumentSource) macroResults() []types.ScoredFragment {
 	return k.macro
 }
 
+// knowledgeVecKNNMaxK 知识路径向量超取的绝对上限（ADR-0113 决策三）。
+const knowledgeVecKNNMaxK = 200
+
+// knowledgeVecKNNLimit 返回向共享向量索引请求的 k：topK*4，上限 knowledgeVecKNNMaxK，至少为 topK。
+func knowledgeVecKNNLimit(topK int) int {
+	if topK <= 0 {
+		return topK
+	}
+	return min(topK*4, max(knowledgeVecKNNMaxK, topK))
+}
+
 func (k *knowledgeDocumentSource) SearchVector(ctx context.Context, embedding []float32, topK int) ([]types.ScoredFragment, error) {
 	if k.hr.embedder == nil {
 		return nil, nil
 	}
 
-	var vecResults []Chunk
-	var err error
-	if k.hr.cognitive != nil {
-		hits, vecErr := k.hr.cognitive.VecKNN(embedding, topK)
-		if vecErr == nil {
-			vecResults, err = k.hr.fetchCognitiveHits(ctx, hits)
-		} else {
-			slog.WarnContext(ctx, "knowledge: SurrealDB VecKNN failed, degrading to linear scan", "err", vecErr)
-			vecResults, err = k.hr.searchVectorFallback(ctx, embedding, topK)
-		}
-	} else {
-		vecResults, err = k.hr.searchVectorFallback(ctx, embedding, topK)
-	}
-	if err != nil {
-		// 向量路失败只降级（重构前 `if err == nil { vecResults = vr }` 的语义），
-		// 但必须可观测——此前是彻底静默的 `_`。
-		slog.WarnContext(ctx, "knowledge: vector recall failed, degrading to BM25/graph only", "err", err)
+	// ADR-0113 决策二：知识向量只存在于 SurrealDB（由 KnowledgeReindexer 写入），SQLite 无向量列，
+	// 不存在线性降级路径。cognitive 缺席或 VecKNN 失败时本路显式降级为空（BM25/图谱两路照常）。
+	if k.hr.cognitive == nil {
+		slog.WarnContext(ctx, "knowledge: cognitive store unavailable, vector recall disabled (BM25/graph only)")
+		metrics.RecordKnowledgeReadFailure(ctx, "vector_recall_no_cognitive")
 		return nil, nil
+	}
+	// ADR-0113 决策三：SurrealDB 向量索引由记忆 / 插件 / 知识共用，非知识命中会在
+	// fetchCognitiveHits 被丢弃，故超取 topK*4（上限 knowledgeVecKNNMaxK）再截回 topK。
+	hits, vecErr := k.hr.cognitive.VecKNN(embedding, knowledgeVecKNNLimit(topK))
+	if vecErr != nil {
+		slog.WarnContext(ctx, "knowledge: SurrealDB VecKNN failed, vector recall degraded to empty (BM25/graph only)", "err", vecErr)
+		metrics.RecordKnowledgeReadFailure(ctx, "vector_recall_knn")
+		return nil, nil
+	}
+	vecResults, err := k.hr.fetchCognitiveHits(ctx, hits)
+	if err != nil {
+		// 向量路失败只降级，但必须可观测。
+		slog.WarnContext(ctx, "knowledge: vector recall failed, degrading to BM25/graph only", "err", err)
+		metrics.RecordKnowledgeReadFailure(ctx, "vector_recall_fetch")
+		return nil, nil
+	}
+	if topK > 0 && len(vecResults) > topK {
+		vecResults = vecResults[:topK]
 	}
 
 	results := make([]types.ScoredFragment, 0, len(vecResults))

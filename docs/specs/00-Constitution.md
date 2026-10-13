@@ -100,7 +100,7 @@
 
 ### R2.6 指标命名
 
-OTel instrument 名格式 `polaris.<subsystem>.<name>_<unit>`（点号分段）；Prometheus 导出时由 OTel exporter 自动转为下划线（`polaris_<subsystem>_<name>_<unit>`），代码与文档均写点号形态。subsystem 以代码实际出现值为准：`llm/tokens/tool/sandbox/swarm/agent/cognition/retrieval/embedding/rerank/cedar/memory/knowledge/outbox/killswitch/token_burn/ffi/api/mesh/hitl/shadow/updater` 等（新增前 `git grep -ho '"polaris\.[a-z_]*\.' internal` 检查同义）；unit：`total/count/bytes/seconds/ms/mb/ratio/rate`（无单位 Gauge 可省略）。示例：`polaris.llm.input_tokens_total`、`polaris.llm.call_latency_ms`、`polaris.sandbox.executions_total`。直接用 Prometheus 客户端（`promauto`）注册的原生指标（现有 `polaris_background_admission_total` 等）不在此列，自建须经 `internal/observability/metrics` 豁免。
+OTel instrument 名格式 `polaris.<subsystem>.<name>_<unit>`（点号分段）；Prometheus 导出时由 OTel exporter 自动转为下划线（`polaris_<subsystem>_<name>_<unit>`），代码与文档均写点号形态。subsystem 以代码实际出现值为准：`llm/tokens/tool/sandbox/swarm/agent/cognition/retrieval/embedding/rerank/cedar/memory/knowledge/outbox/killswitch/token_burn/ffi/api/mesh/hitl/shadow/updater` 等（新增前 `git grep -ho '"polaris\.[a-z_]*\.' internal` 检查同义）；unit：`total/count/bytes/seconds/ms/mb/ratio/rate`（无单位 Gauge 可省略）。示例：`polaris.llm.input_tokens_total`、`polaris.llm.call_latency_ms`、`polaris.sandbox.executions_total`。OTel instrument 用点号规则，名正则 `^polaris\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`（至少 `polaris.<subsystem>.<name>` 两段）。直接用 Prometheus 客户端（`prometheus.*Opts` / `promauto`）注册的原生指标（现有 `polaris_background_admission_total` 等）`Name` 用 `polaris_<subsystem>_<name>_<unit>`，正则 `^polaris_[a-z0-9_]+$`；自建须经 `internal/observability/metrics` 豁免。两者均由 `Test_inv_MetricNaming` 门控（ADR-0113）
 
 ## R3 HE-Rules 可验证工程量表
 

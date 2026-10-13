@@ -5,6 +5,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-13（ADR-0113 知识库向量收敛 — 含**契约变更**）
+
+- **[修复]** 文档摄入此前从不写向量（知识向量召回恒空）：新增 `knowledge.KnowledgeReindexer`，按 `embed_model_version != 当前版本` 单一路径嵌入 + `VecUpsert`，摄入提交后 `Kick`；单轮按 rowid 游标推进防毒行饿死。
+- **[契约]** `NewHybridRetrieverWithCognitive` 去掉 `vecScanLimit` 参数；删除查询不存在列的 `searchVectorFallback`，SurrealDB 不可用时知识向量路显式降级为空；知识 `VecKNN` 超取 topK×4（上限 200）。
+- **[修复]** 换模型清空向量库后同步置空 `rag_chunks` / `episodic_events` 版本戳；情景记忆 SQLite 降级扫描按当前模型版本过滤。
+- **[门控]** `Test_inv_MetricNaming`（R2.6）；11 个指标改名，`goroutines` / `memory_alloc_mb` / `agents_active` / `system1_bypass` / `dbwriter_panic` 的 Prometheus 导出名变化。
+
 ## 2026-10-12（ADR-0112 决策八 — 含**规范变更**）
 
 - **[改写]** 00 R2.6 指标命名改为 OTel 点号 `polaris.<subsystem>.<name>_<unit>`（Prometheus 导出自动转下划线）；M03 指标名按代码订正，无对应 instrument 者标「未实现」。

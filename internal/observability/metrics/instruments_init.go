@@ -71,10 +71,10 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	ie.capture("polaris.llm.cache_hit_tokens_total", err)
 
 	InstrSystem1BypassTotal, err = meter.Int64Counter(
-		"polaris.system1_bypass_total",
+		"polaris.system1.bypass_total",
 		metric.WithDescription("System 1 Bypass 次数 (label: matched=true/false)"),
 	)
-	ie.capture("polaris.system1_bypass_total", err)
+	ie.capture("polaris.system1.bypass_total", err)
 
 	InstrTurnRouteTotal, err = meter.Int64Counter(
 		"polaris.cognition.turn_route_total",
@@ -110,15 +110,15 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	)
 	ie.capture("polaris.token_burn.extreme_total", err)
 	InstrGoroutinePanicTotal, err = meter.Int64Counter(
-		"polaris.goroutine_panic_total",
+		"polaris.goroutine.panic_total",
 		metric.WithDescription("SafeGo recover 的 panic 总数"),
 	)
-	ie.capture("polaris.goroutine_panic_total", err)
+	ie.capture("polaris.goroutine.panic_total", err)
 	InstrDbWriterPanicTotal, err = meter.Int64Counter(
-		"polaris_dbwriter_panic",
+		"polaris.dbwriter.panic_total",
 		metric.WithDescription("DatabaseWriter Run panic 总数"),
 	)
-	ie.capture("polaris_dbwriter_panic", err)
+	ie.capture("polaris.dbwriter.panic_total", err)
 
 	// 工具调用
 	InstrToolCallsTotal, err = meter.Int64Counter(
@@ -368,19 +368,19 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {
 	goroutinesGauge, _ := meter.Float64ObservableGauge(
-		"polaris.goroutines",
+		"polaris.runtime.goroutines",
 		metric.WithDescription("当前 goroutine 数量"),
 	)
 	memAllocMBGauge, _ := meter.Float64ObservableGauge(
-		"polaris.memory_alloc_mb",
+		"polaris.runtime.memory_alloc_mb",
 		metric.WithDescription("Go 堆已分配内存（MB）"),
 	)
 	agentsActiveGauge, _ := meter.Float64ObservableGauge(
-		"polaris.agents_active",
+		"polaris.agents.active",
 		metric.WithDescription("当前活跃 Agent 数量"),
 	)
 	taskSuccessRateGauge, _ := meter.Float64ObservableGauge(
-		"polaris.task_success_rate",
+		"polaris.task.success_rate",
 		metric.WithDescription("任务成功率（success/total，滑窗近似）"),
 	)
 

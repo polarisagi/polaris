@@ -352,7 +352,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.markInFlight(ctx)
 	defer a.clearInFlight()
 
-	// polaris.agents_active：以 Run() 生命周期计数（GR-1.2-003，此前全仓无写入方，指标恒 0）。
+	// polaris.agents.active：以 Run() 生命周期计数（GR-1.2-003，此前全仓无写入方，指标恒 0）。
 	metrics.ActiveAgentsCount.Add(1)
 	defer metrics.ActiveAgentsCount.Add(-1)
 
