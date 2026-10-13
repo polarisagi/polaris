@@ -98,7 +98,7 @@ func listPackages(args ...string) ([]string, error) {
 	return pkgs, nil
 }
 
-// loadAllowlist 读取白名单。每行一个包相对路径（如 internal/bootstrap），# 开头为注释。
+// loadAllowlist 读取白名单。每行一个包相对路径（如 internal/sysmgr/locale），# 开头为注释。
 func loadAllowlist(path string) (map[string]bool, error) {
 	f, err := os.Open(path)
 	if err != nil {

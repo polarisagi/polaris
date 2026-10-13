@@ -13,7 +13,7 @@
 1.2   internal/observability internal/ffi internal/sysinfo internal/downloader
 2.1   internal/security
 2.2   internal/llm
-3     internal/protocol internal/config internal/lint internal/bootstrap cmd/polaris
+3     internal/protocol internal/config internal/lint cmd/polaris
 4.1   internal/agent
 4.2   internal/action
 5.1   internal/memory

@@ -188,7 +188,7 @@
 | cgroups 做单机 App 内存隔离 | macOS/Windows 无此机制,应用进程内 Governor |
 | 已集成多模态 / M09 自主补全引擎 | M01/M13 已支持图片、视频分析与 TTS;M09 已实现缺失能力自主探测与合成 |
 | A2A 入站发现端点 / Agent Card 缺失 | **已实现**:Agent Card(`/.well-known/agent-card.json`)+ A2A 1.0 入站 `/a2a/v1`(MCP 门面)见 ADR-0111;旧 `POST /v1/a2a/tasks` 仅在 `LegacyEndpoint` 开启时注册(`internal/gateway/server/server_routes.go`)。反复被报为「缺失」,均因未 grep 路由表 |
-| 把生产启动迁移到 `internal/bootstrap.Bootstrapper` | `ARCHITECTURE.md §8.2` + `ADR-0088 §决策七`。四个重评触发条件 2026-08-07 实测全未满足;另有两项契约语义上无法表达(137 处 setter 反向回注、`protocol.ReplayMode` 独占窗口) |
+| 把生产启动迁移到自动装配编排（原 bootstrap.Bootstrapper） | `ARCHITECTURE.md §8.2` + `ADR-0088 §决策七`。该包已于 2026-10-13 删除（ADR-0112 决策八 #1）；重评触发：手工装配链 > 6000 行 |
 | WASI 0.2 Component Model 完整支持 | `ADR-0008 §决策五`。配置开关已开、功能未落地;重评触发条件见该节 |
 
 ---

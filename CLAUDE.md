@@ -1,6 +1,6 @@
 # polaris
 
-> 开源自托管 AI Agent | Go 1.26+ + Rust 1.94+ | 29 internal module / 4 layer | 主形态桌面端 + 浏览器，同一守护进程亦可部署 VPS（核心路径最低 2GB），Tier 0 (8GB) 为开发推荐地板 | provider-agnostic (`configs/defaults.toml` 推荐 DeepSeek V4)
+> 开源自托管 AI Agent | Go 1.26+ + Rust 1.94+ | 28 internal module / 4 layer | 主形态桌面端 + 浏览器，同一守护进程亦可部署 VPS（核心路径最低 2GB），Tier 0 (8GB) 为开发推荐地板 | provider-agnostic (`configs/defaults.toml` 推荐 DeepSeek V4)
 >
 > **本文件及全部 `docs/` 的读者定位：AI 优先**（ADR-0081，原 0092）。人类可读性不是维护目标；`§跳读` 行、`[HE-Rule-x]`/`[Concept]` 标签、`inv_` 编号表、紧凑表格均为一等公民导航结构，不得以"人类阅读噪音"为由删除。
 
@@ -38,7 +38,7 @@ api/proto/       Protobuf 原始定义
 cmd/polaris/     主入口（装配落点 boot_*.go，手工装配；CLI 客户端 cli*.go 一律走 HTTP，不直连内核与数据库，ADR-0096）
 configs/         嵌入式启动配置；threshold-examples/ 阈值覆盖示例（m*.toml）
 
-internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必读，子包细节以其为准
+internal/        28 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必读，子包细节以其为准
   # L1 认知/执行层
   agent/ ★     FSM、生命周期、思考循环、感知上下文（fsm / context / schemavalidate）
   action/ ★    动作执行（codeact / lam / hook；能力令牌）
@@ -66,7 +66,7 @@ internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
   # 通用契约（所有层可引用）
   protocol/      跨模块类型与接口契约；repo/ pb/ schema/（DDL SQL（44 个，SSoT））
   config/        配置加载 + 编译期不变量 + 系统参数单一事实源 (system_params.go)
-  lint/ bootstrap/   CI 静态扫描规则 / 模块生命周期编排（Bootable + Kahn 拓扑）
+  lint/          CI 静态扫描规则
 
 pkg/             无业务逻辑通用工具：apperr/ concurrent/ graph/ offpeak/ types/ util/ version/
 desktop/         桌面外壳（Tauri v2，ADR-0096）：只做进程/窗口/托盘/通知，禁止业务语义的 Tauri command——客户端与内核之间只有 HTTP/SSE

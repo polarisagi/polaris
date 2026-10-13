@@ -15,7 +15,7 @@
 ## 2026-10-12（ADR-0112 决策八 — 含**规范变更**）
 
 - **[改写]** 00 R2.6 指标命名改为 OTel 点号 `polaris.<subsystem>.<name>_<unit>`（Prometheus 导出自动转下划线）；M03 指标名按代码订正，无对应 instrument 者标「未实现」。
-- **[裁决]** `internal/bootstrap` 与 `PhasedStartup` 删除已裁决，待执行（执行后模块 29 → 28）；CI 对抗审查默认模型改 `deepseek-flash`。
+- **[裁决]** `internal/bootstrap` 与 `PhasedStartup` 删除已裁决，已于 2026-10-13 执行（模块 29 → 28）；CI 对抗审查默认模型改 `deepseek-flash`。
 - **[收窄]** M13 §8.9 抽屉规则：仅禁手写 CSS `translateX`，页内侧滑面板允许 Tailwind + Alpine。
 - **[订正]** L3 沙箱现状为 bwrap / Seatbelt（ADR-0008 / M11 D3 / M07 §4.1），microVM 为 Tier2 规划；08 H3 指向 `spec_consistency_test`；M10 inv_M10_04 改按 `embed_model_version`。
 

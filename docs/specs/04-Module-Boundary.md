@@ -18,7 +18,7 @@ L0 基础设施层（不可引用 L1/L2/L3）
 ```
 
 - `internal/execute/`（单/多 Agent 执行引擎，ADR-0046）服务 L1+L2：禁止 import `internal/agent` 具体实现（见其 `CLAUDE.md`）。
-- `internal/bootstrap/` 是跨层初始化编排契约（Bootable + DependencyMap + Kahn 拓扑），**已定义未接线**（`ARCHITECTURE.md §8.2` / ADR-0088 决策七）；生产装配落点是 `cmd/polaris/boot_*.go`。不属 L0~L3，不可被任何 L0~L3 包反向引用。
+- 跨层初始化编排契约 `bootstrap` 与 `PhasedStartup` 已删除（ADR-0112 决策八 #1，2026-10-13）；生产装配落点是 `cmd/polaris/boot_*.go`（`ARCHITECTURE.md §8.2`）。
 
 ## B2 跨模块通信通道
 

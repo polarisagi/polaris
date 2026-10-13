@@ -69,7 +69,7 @@
 
 | # | 问题 | 裁决 |
 |---|---|---|
-| 1 | `internal/bootstrap`（566 行）与 `internal/swarm` `PhasedStartup` 两套启动编排零接线，登记于 `tools/baselines/wiring-allowlist.txt`；`Bootable` 契约无法表达两阶段装配与顺序性副作用 | **删除两者**。决策七 #1 已将手工装配定为规范，未接线的替代编排只剩误导作用（ADR-0062 死代码判定）。ADR-0088 决策七「重评触发条件」改为：装配链 > 6000 行时重新评估装配方案（可从 git 历史取回）。模块计数 29 → 28 |
+| 1 | `internal/bootstrap`（566 行）与 `internal/swarm` `PhasedStartup` 两套启动编排零接线，登记于 `tools/baselines/wiring-allowlist.txt`；`Bootable` 契约无法表达两阶段装配与顺序性副作用 | **删除两者**。决策七 #1 已将手工装配定为规范，未接线的替代编排只剩误导作用（ADR-0062 死代码判定）。ADR-0088 决策七「重评触发条件」改为：装配链 > 6000 行时重新评估装配方案（可从 git 历史取回）。模块计数 29 → 28。**2026-10-13 已执行** |
 | 2 | CI 对抗审查默认 `REVIEWER_MODEL=deepseek-chat` | 改为 `deepseek-flash`（与 `internal/llm/adapter` DeepSeek 默认模型 ID 一致） |
 | 3 | `00 R2.6` 指标名规定下划线，代码 OTel instrument 11/11 用点号（`polaris.llm.input_tokens_total`） | **改规范**：instrument 名用 `polaris.<subsystem>.<name>_<unit>`（OTel 约定），Prometheus 导出时自动转下划线；M03 中的指标名按代码实际订正 |
 | 4 | ADR-0008 决策一 / M11 D3 / M07 §4.1 描述 L3 为 microVM（Firecracker/VZ），代码无 microVM 后端，L3 实际为 bwrap（Linux）/ Seatbelt（macOS），`FeatureL3Sandbox` 注释仍写 microVM | 按代码订正：L3 现状 = bwrap / Seatbelt 容器隔离；microVM 为 Tier2 规划未实现。沿革记录「先改代码后补文档」的偏差 |

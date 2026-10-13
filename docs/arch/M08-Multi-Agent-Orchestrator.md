@@ -84,7 +84,7 @@
 
 ### 1.9 Phased Startup
 
-⚠️ **已定义未接线**（2026-10 复核仍成立）：`internal/swarm/startup.go` 定义 P0→P4 分阶段启动契约（`PhasedStartup`/`Pinger`/`PhaseEntry`，每阶段 30s 健康检查，P0 失败 panic）；全仓零处调用 `NewPhasedStartup`，生产启动走 `cmd/polaris/boot_*.go` 手工装配。它与 `internal/bootstrap` 是仓库里两套未接线的启动编排契约，`ARCHITECTURE.md §8.2` + ADR-0088 决策七已裁决 bootstrap"维持不接线"；收敛时两套须一并裁决。
+已删除（ADR-0112 决策八 #1，2026-10-13）：原 swarm 包的 startup.go 的 P0→P4 分阶段启动契约与 bootstrap 包 均生产零接线；生产启动走 `cmd/polaris/boot_*.go` 手工装配。重评触发：装配链 > 6000 行（ADR-0088 决策七），可从 git 历史取回。
 
 ---
 
@@ -295,7 +295,7 @@ ExecuteDAG 按拓扑分层并发（errgroup），任一层失败即终止并触�
 | 个人知识库连接器调度 | ✅ 见 §2-bis |
 | 背压与 `max_blackboard_pending` | ❌ 无代码（§1.2） |
 | 动态优先级提权 | ❌ 已随 ADR-0062 删除（§1.8） |
-| `swarm/startup.go` PhasedStartup | ❌ 未接线（§1.9） |
+| `swarm/startup.go` PhasedStartup | ❌ 已删除（§1.9，ADR-0112） |
 | Supervisor 重启参数与 state.yaml 不一致 | ⚠️ 见 §2 |
 | Reaper 阶段 2 超时字面量 | ⚠️ 见 §1.7 |
 

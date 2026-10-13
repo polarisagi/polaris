@@ -48,7 +48,7 @@ patch | F-5 | tools/task_state_lint.go | internal/execute/orchestrator/sqlite_bl
 patch | F-8a | tools/route_coverage_check.go | internal/gateway/server/server_routes.go | \tmux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch) | \t// mux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch)
 
 # doc-counts：把 CLAUDE.md 里的模块数写错，模拟"计数漂移"。
-patch | doc-counts | tools/doc_counts_check.go | CLAUDE.md | 29 internal module / 4 layer | 99 internal module / 4 layer
+patch | doc-counts | tools/doc_counts_check.go | CLAUDE.md | 28 internal module / 4 layer | 99 internal module / 4 layer
 
 add | L-01 | tools/safe_dialer_lint.go | internal/channel/adapter/zz_selftest_smtp.go | tools/testdata/selftest/bare_smtp_dialer.go.txt
 patch | L-02 | tools/route_coverage_check.go | internal/gateway/server/server_routes.go | mux.HandleFunc("POST /v1/sessions/{sessionID}/recap", s.chatHandler.HandleSessionRecap) | mux.HandleFunc("POST /v1/sessions/fixed/recap", s.chatHandler.HandleSessionRecap)

@@ -9,7 +9,6 @@
   "internal/action": true,
   "internal/agent": true,
   "internal/automation": true,
-  "internal/bootstrap": true,
   "internal/channel": true,
   "internal/config": true,
   "internal/downloader": true,

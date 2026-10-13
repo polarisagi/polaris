@@ -23,7 +23,7 @@
 
 ## 消费端接口声明位置
 
-`internal/learning/provider.go`：`EvalStore`、`LLMGenerator`、`MemoryWriter`、`SkillWriter`、`SurpriseMetrics`。新增外部依赖先在此声明，由 `bootstrap` 注入。
+`internal/learning/provider.go`：`EvalStore`、`LLMGenerator`、`MemoryWriter`、`SkillWriter`、`SurpriseMetrics`。新增外部依赖先在此声明，由 `cmd/polaris/boot_*.go` 注入。
 
 ## 异步执行约束
 

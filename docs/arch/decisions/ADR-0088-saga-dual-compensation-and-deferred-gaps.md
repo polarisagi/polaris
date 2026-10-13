@@ -45,7 +45,7 @@
 - **errcheck 门控扩至全部 internal 模块**：原仅 8 个模块，其余 20 个"门控看不见"（GR-4-00x outbox/DB 写入吞错即在未接入的 `internal/agent`）。接入后手工修 15 处，其余登记 baseline。**baseline 是待偿债务清单，不是永久许可**，棘轮只挡新增，条目应逐批清零
 - **deadcode 白名单**：逐条核验指向的函数仍存在（陈旧条目静默放宽门控）；分类为测试假阳性、tier1 feature 门控假阳性、ADR-0007 刻意保留的降级器、ADR-0093（原 0069）保留的手动注册入口、白盒测试访问器
 - **行数上限 baseline 随修随退**：降到限内就必须移出 baseline（如 `internal/knowledge/retriever.go` 收敛后退出），否则棘轮在该文件永久失效
-- **`internal/bootstrap` 维持现状，不删不接线**：`Bootable` + Kahn 拓扑 + 四阶关停定义的是目标契约，生产走 `cmd/polaris/boot_*.go` 手工装配链（事实记载于 ARCHITECTURE.md §8.2，不再以"消除文档冲突"为由推动接线）。2026-10 实测该包仍零生产引用；手工链生产代码 5805 行（2026-08 为 4015），接近下述 6000 行触发线
+- **`internal/bootstrap` 已删除**：2026-10-13 删除 `internal/bootstrap` 与 `PhasedStartup`（ADR-0112 决策八 #1）；生产走 `cmd/polaris/boot_*.go` 手工装配链。重评触发：装配链 > 6000 行时重新评估装配方案，可从 git 历史取回。（原结论「维持现状，不删不接线」及下方 2026-08-07 复核记录保留为历史依据；2026-10 实测手工链 5805 行。）
 
 接线可行性复核（2026-08-07）——重评触发条件（任一满足即重议）：启动顺序出现真实缺陷；手工链 > 6000 行；模块数增长到手工排序易错；需按 Tier/FeatureGate 动态增删模块。
 - 两项结构性不匹配（语义上无法在现有 `Bootable` 下表达，非工作量问题）：① 两阶段装配（先构造后回注，`boot_*.go` 中大量 `.Set*`/`.On*`/`.Register*`，含反向回注如 `boot_agent.go` 的 `tb.RecoveryHandler.SetBlackboard`），与拓扑方向冲突；② 顺序性副作用（崩溃恢复依赖进程级 `protocol.ReplayMode` 独占窗口、`Supervisor.Start()` 须在 defer 就位后、`eval --ci-gate` 提前 return）无依赖边，假边无法与真依赖区分
@@ -70,6 +70,7 @@
 | 2026-08-06 | 决策一~四初版（含 Saga 幂等账本止血、HITL 观测）；同日终态裁决：删除 B 路径、工作区信任折中、TrustScorer；新增决策五~七 |
 | 2026-08-07 | bootstrap 接线可行性复核：维持 |
 | 2026-08-13 | bootstrap 关停随机序/Ignite 回滚修复 |
+| 2026-10-13 | 决策七结论改为删除 bootstrap 与 PhasedStartup（ADR-0112 决策八 #1） |
 | 2026-09-20 | Compensation 不在 S_VALIDATE 强制 |
 | 2026-09-29 | TrustScorer 改查 `hitl_requests`（ADR-0104 决策五） |
 | 2026-10-12 | 订正：账本已删、手工链行数 5805、路径更新 |

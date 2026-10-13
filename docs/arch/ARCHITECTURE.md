@@ -4,7 +4,7 @@
 >
 > **代码位置**：根目录
 >
-<!-- §跳读: 0-bis:11 哲学 / 0:19 SSoT / 1:25 定位约束 / 2:70 (SOFT)部署 / 3:83 Staging / 4:109 HT0预算 / 5:138 变更控制 / 6:152 配置层 / 8:167 启动与关停协议 / 7:208 244 当前实现状态 -->
+<!-- §跳读: 0-bis:11 哲学 / 0:19 SSoT / 1:25 定位约束 / 2:70 (SOFT)部署 / 3:83 Staging / 4:109 HT0预算 / 5:138 变更控制 / 6:152 配置层 / 8:167 启动与关停协议 / 7:204 244 当前实现状态 -->
 
 ---
 
@@ -185,15 +185,11 @@ Default 代码常量 < ~/.polaris/config/m*.toml（或 POLARIS_THRESHOLDS_DIR）
 
 **关停序**：`<-ctx.Done()`（`signal.NotifyContext` 捕获 SIGINT/SIGTERM）后走 30s 超时清扫链——`httpSrv.Shutdown`（停流）→ `ab.ReaperStop`（须早于 dbWriter 排空）→ `AuditChain.VerifyChain`（审计链完整性）→ 其余经 `defer` 按 LIFO 逆序释放（`tb.PersistentSandbox.Shutdown` 终止 L4 解释器子进程防孤儿、`sb.Store.Close`、`sb.LogFile.Close`）。另有 `TripleCtrlCGuard`：连续 SIGINT 触发 `KillSwitch.OnSIGINT`。
 
-### 8.2 `internal/bootstrap/`：已定义未接线的自动编排契约
+### 8.2 已删除的自动编排契约（bootstrap）
 
-`internal/bootstrap/`（`bootable.go` + `bootstrapper.go`）定义了更强的自动编排契约：`Bootable` 接口（`Init(deps *DependencyMap)` / `Ready()` / `Dependencies()`）、`DependencyMap` 注入表、`Bootstrapper.Ignite` 的 Kahn 拓扑定序、四阶优雅关停接口（`Stage1Stopper.StopIngress` → `Stage2Drainer.Drain` → `Stage3Flusher.Flush` → `Stage4Closer.Close`）、`ConfigProvider.GetMasterKey` 内存级 KMS 密钥总线（`Ignite` 后立即 memclr）。
+bootstrap 包（`Bootable` + `DependencyMap` + Kahn 拓扑 + 四阶关停）与 `internal/swarm` 的 `PhasedStartup` 两套启动编排因生产零接线，已于 2026-10-13 删除（ADR-0112 决策八 #1，ADR-0088 决策七）。生产装配唯一落点是 `cmd/polaris/boot_*.go`（§8.1）。
 
-> **[未接线]（2026-10 复核仍成立）**：除自身包与单测外，**零处 import `internal/bootstrap`**；生产启动完全走 §8.1。
->
-> 与 `Module-Dependency-Axioms.md §2.4` 不冲突：该节 [MUST]「注入必须且仅能在装配层完成」约束**职责归属**，装配层的物理落点是 `cmd/polaris/boot_*.go`；不要据字面去 `internal/bootstrap` 找注入点。
->
-> 不迁移的理由：6 阶段线性链依赖由函数签名静态可验，换成运行期拓扑排序无正确性增益，反把编译期错误降级为运行期错误；迁移收益出现在"模块数量增长到手工排序易错"或"需按 Tier/FeatureGate 动态增删模块"之后，满足其一再立 ADR。四阶关停接口并非拿来即用：接线可行性复核查出三项契约缺陷（关停四阶按 map 随机序、`Init` 无 ctx、`Ignite` 无失败回滚）与两项契约无法表达的形态（137 处 setter 回注含反向回注、`protocol.ReplayMode` 进程级独占窗口）——详见 `decisions/ADR-0088 §决策七`。
+> 重评触发：手工装配链 > 6000 行时重新评估装配方案；删除前的实现可从 git 历史取回。与 `Module-Dependency-Axioms.md §2.4` 不冲突：该节 [MUST]「注入必须且仅能在装配层完成」约束职责归属，装配层即 `cmd/polaris/boot_*.go`。
 
 ### 8.3 `internal/cli/`：已于 2026-09-21 删除
 

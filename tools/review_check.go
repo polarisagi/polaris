@@ -383,7 +383,7 @@ func (c *checker) checkEntry(file string, e entry) {
 		rule := e.fields["违反规则"] + " " + e.title
 		if strings.Contains(rule, "G-bis") || strings.Contains(rule, "接线断裂") || strings.Contains(rule, "无生产调用") {
 			if !strings.Contains(rebut, "boot_") && !strings.Contains(rebut, "bootstrap") {
-				c.add("C11", file, e.id, "接线断裂类必须在「反证」中写明已核对 cmd/polaris/boot_*.go 与 internal/bootstrap/（历史误报 5/7 全部因跳过此步）")
+				c.add("C11", file, e.id, "接线断裂类必须在「反证」中写明已核对 cmd/polaris/boot_*.go （历史误报 5/7 全部因跳过此步）")
 			}
 		}
 		if sev := e.fields["严重级"]; (sev == "P0" || sev == "P1") && len([]rune(rebut)) < 10 {

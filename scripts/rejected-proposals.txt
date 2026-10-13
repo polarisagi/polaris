@@ -17,7 +17,7 @@
 well-known | 已实现标准 A2A 1.0：Agent Card（JWS 签名）+ /a2a/v1 + /mcp 门面（ADR-0111，2026-10-12）。此前「已实现」的理由不成立——旧端点是私有协议。ROADMAP §5
 agent-card | 同上，ADR-0111 已按 A2A 1.0 实现并签名。ROADMAP §5
 Agent Card | 同上，ADR-0111 已按 A2A 1.0 实现并签名。ROADMAP §5
-bootstrap.Bootstrapper | 维持不接线：ARCHITECTURE.md §8.2 + ADR-0088 §决策七，四个重评触发条件 2026-08-07 实测全未满足。ROADMAP §5
+bootstrap.Bootstrapper | 已删除（2026-10-13，ADR-0112 决策八 #1 / ADR-0088 决策七）：装配见 cmd/polaris/boot_*.go；重评触发=装配链 > 6000 行。ROADMAP §5
 WASI 0.2 | 不实施：ADR-0008 §决策五已记载「配置开关已开、功能未落地」及重评触发条件。ROADMAP §5
 Component Model | 同上，Wasm Component Model 完整支持已被明确拒绝。ROADMAP §5
 Redis | 违反单机硬约束（禁独立进程 DB / 禁 sidecar）。ROADMAP §5

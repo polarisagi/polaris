@@ -23,7 +23,7 @@
 
 ## 消费端接口
 
-就近声明于使用处（如 `codeact.AuditRecorder`）；新增外部依赖时在调用方包内声明接口，由 `bootstrap`/`cmd/polaris/boot_*.go` 注入，禁止直接 import 具体实现。本包不设 `provider.go`（原 ToolExecutor/PolicyStoreReader 全仓零实现零消费，已删）。
+就近声明于使用处（如 `codeact.AuditRecorder`）；新增外部依赖时在调用方包内声明接口，由 `cmd/polaris/boot_*.go` 注入，禁止直接 import 具体实现。本包不设 `provider.go`（原 ToolExecutor/PolicyStoreReader 全仓零实现零消费，已删）。
 
 ## 并发约束
 

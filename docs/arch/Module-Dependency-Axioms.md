@@ -40,7 +40,6 @@ Arch-L4: internal/gateway            ← 接口/治理层
           internal/eval
           internal/channel
           internal/sysmgr            ← 现含 locale / osutils / updater
-Arch-L8: internal/bootstrap          ← 自动装配契约（现为休眠，见 §2.4）
 Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属任意业务层）
 ```
 
@@ -81,7 +80,7 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属任
 - **[MUST]** 所有具体实现与接口的注入，必须且仅能在装配层完成
 - **[MUST NOT]** 其他任何包通过全局变量或 `init()` 做隐式依赖注入
 
-> **装配层当前的物理落点是 `cmd/polaris/boot_*.go`，不是 `internal/bootstrap/`**。后者定义的 `Bootable`/`DependencyMap`/Kahn 拓扑排序/四阶关停自动编排契约，全仓库零 import（2026-10 复核仍然成立）。上述三条 [MUST] 约束的是**职责归属**，对两种装配方式同等有效。详见 `ARCHITECTURE.md §8`。
+> **装配层的物理落点是 `cmd/polaris/boot_*.go`**。曾有的 bootstrap 包（自动装配契约）与 `PhasedStartup` 已删除（ADR-0112 决策八 #1，2026-10-13，可从 git 历史取回）。上述三条 [MUST] 约束的是**职责归属**。详见 `ARCHITECTURE.md §8`。
 
 ### 2.5 `internal/protocol/` 特殊规则
 

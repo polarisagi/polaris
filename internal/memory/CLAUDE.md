@@ -23,7 +23,7 @@
 
 ## 消费端接口声明位置
 
-`internal/memory/provider.go`：`EmbedProvider`、`CognitiveStoreProvider`、`LLMSummarizer`、`WorkspaceProvider`。新增外部依赖先在此声明，由 `bootstrap` 注入。
+`internal/memory/provider.go`：`EmbedProvider`、`CognitiveStoreProvider`、`LLMSummarizer`、`WorkspaceProvider`。新增外部依赖先在此声明，由 `cmd/polaris/boot_*.go` 注入。
 
 ## 大载荷卸载约束
 

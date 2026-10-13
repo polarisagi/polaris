@@ -26,7 +26,7 @@ DAG 执行（拓扑调度/并发/Saga 补偿）与 S_VALIDATE 四层校验在 `i
 
 ## 消费端接口声明位置
 
-`internal/agent/provider.go`：`CodeActEngine`、`ScriptSkillCache`、`LAMPolicyChecker`、`DAGRunner`、`DAGValidator`、`HandoffPoster`、`SkillForker`；世界模型消费端接口 `WorldModel` 声明于 `agent.go`。新增外部依赖先在此声明，由 `bootstrap` 注入。
+`internal/agent/provider.go`：`CodeActEngine`、`ScriptSkillCache`、`LAMPolicyChecker`、`DAGRunner`、`DAGValidator`、`HandoffPoster`、`SkillForker`；世界模型消费端接口 `WorldModel` 声明于 `agent.go`。新增外部依赖先在此声明，由 `cmd/polaris/boot_*.go` 注入。
 
 ## FSM 并发约束
 
