@@ -23,6 +23,32 @@
       "type": "string",
       "description": "标准 5 字段 Cron 表达式（如 '0 * * * *'）"
     },
+    "trigger": {
+      "type": "object",
+      "description": "触发器配置（kind=pipeline 时可选，如 {\"type\":\"cron\",\"cron\":\"0 8 * * *\"}）"
+    },
+    "steps": {
+      "type": "array",
+      "description": "管线执行步骤（kind=pipeline 时必填）",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "步骤唯一标识"
+          },
+          "kind": {
+            "type": "string",
+            "description": "步骤类型：tool, transform, llm, agent, sink"
+          }
+        },
+        "required": ["key", "kind"]
+      }
+    },
+    "sink": {
+      "type": "object",
+      "description": "管线输出目标配置（可选）"
+    },
     "reasoning_effort": {
       "type": "string",
       "enum": ["low", "medium", "high"],
@@ -41,9 +67,8 @@
     },
     "dry_run": {
       "type": "boolean",
-      "description": "预运行占位（目前未启用）"
+      "description": "是否进行同步试运行预览（不落库、不执行外部写操作，返回步骤预览和预计 token 消耗）"
     }
   },
-  "required": ["kind"],
-  "additionalProperties": false
+  "required": ["kind"]
 }

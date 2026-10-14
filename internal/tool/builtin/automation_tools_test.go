@@ -18,15 +18,20 @@ import (
 )
 
 type mockMemoryAutomationService struct {
-	mu          sync.Mutex
-	automations map[string]protocol.PromptAutomationInput
-	runs        map[string]string
-	agentCount  int
+	mu                      sync.Mutex
+	automations             map[string]protocol.PromptAutomationInput
+	pipelines               map[string][]byte
+	runs                    map[string]string
+	agentCount              int
+	mockSavePipelineResult  *protocol.PipelineSaveResult
+	mockDryRunSpecResult    *protocol.PipelineDryRunResult
+	mockDryRunSpecFieldErrs []protocol.FieldError
 }
 
 func newMockMemoryAutomationService() *mockMemoryAutomationService {
 	return &mockMemoryAutomationService{
 		automations: make(map[string]protocol.PromptAutomationInput),
+		pipelines:   make(map[string][]byte),
 		runs:        make(map[string]string),
 	}
 }
@@ -34,7 +39,7 @@ func newMockMemoryAutomationService() *mockMemoryAutomationService {
 func (m *mockMemoryAutomationService) List(ctx context.Context) ([]protocol.AutomationSummary, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	res := make([]protocol.AutomationSummary, 0, len(m.automations))
+	res := make([]protocol.AutomationSummary, 0, len(m.automations)+len(m.pipelines))
 	for id, a := range m.automations {
 		res = append(res, protocol.AutomationSummary{
 			ID:          id,
@@ -44,6 +49,18 @@ func (m *mockMemoryAutomationService) List(ctx context.Context) ([]protocol.Auto
 			Cron:        a.Cron,
 			Source:      "agent",
 			Enabled:     a.Enabled,
+		})
+	}
+	for id := range m.pipelines {
+		res = append(res, protocol.AutomationSummary{
+			ID:          id,
+			Kind:        "pipeline",
+			Name:        "pipeline-" + id,
+			TriggerType: "cron",
+			Cron:        "0 * * * *",
+			Source:      "agent",
+			Enabled:     true,
+			LLMTokens7d: 1234,
 		})
 	}
 	return res, nil
@@ -60,21 +77,75 @@ func (m *mockMemoryAutomationService) SavePrompt(ctx context.Context, in protoco
 	return id, "2026-10-15T00:00:00Z", nil
 }
 
+func (m *mockMemoryAutomationService) SavePipeline(ctx context.Context, specJSON []byte, id string) (protocol.PipelineSaveResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mockSavePipelineResult != nil {
+		return *m.mockSavePipelineResult, nil
+	}
+	if id == "" {
+		id = fmt.Sprintf("wf_%d", len(m.pipelines)+1)
+	}
+	m.pipelines[id] = specJSON
+	return protocol.PipelineSaveResult{
+		OK:        true,
+		ID:        id,
+		NextRunAt: "2026-10-15T00:00:00Z",
+	}, nil
+}
+
+func (m *mockMemoryAutomationService) DryRunSpec(ctx context.Context, specJSON []byte) (protocol.PipelineDryRunResult, []protocol.FieldError, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mockDryRunSpecResult != nil || len(m.mockDryRunSpecFieldErrs) > 0 {
+		res := protocol.PipelineDryRunResult{}
+		if m.mockDryRunSpecResult != nil {
+			res = *m.mockDryRunSpecResult
+		}
+		return res, m.mockDryRunSpecFieldErrs, nil
+	}
+	return protocol.PipelineDryRunResult{
+		Steps: []protocol.PipelineDryRunStep{
+			{Key: "step1", Kind: "tool", Status: "preview", Count: 1, Preview: []string{"test-preview"}},
+		},
+		EstimatedLLMInputTokens: 50,
+	}, nil, nil
+}
+
+func (m *mockMemoryAutomationService) DryRunByID(ctx context.Context, id string) (protocol.PipelineDryRunResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pipelines[id]; !ok {
+		return protocol.PipelineDryRunResult{}, apperr.New(apperr.CodeNotFound, "pipeline not found")
+	}
+	return protocol.PipelineDryRunResult{
+		Steps: []protocol.PipelineDryRunStep{
+			{Key: "step1", Kind: "tool", Status: "preview", Count: 1, Preview: []string{"test-preview"}},
+		},
+	}, nil
+}
+
 func (m *mockMemoryAutomationService) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.automations[id]; !ok {
-		return apperr.New(apperr.CodeNotFound, "automation not found")
+	if _, ok := m.automations[id]; ok {
+		delete(m.automations, id)
+		return nil
 	}
-	delete(m.automations, id)
-	return nil
+	if _, ok := m.pipelines[id]; ok {
+		delete(m.pipelines, id)
+		return nil
+	}
+	return apperr.New(apperr.CodeNotFound, "automation not found")
 }
 
 func (m *mockMemoryAutomationService) RunNow(ctx context.Context, id string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.automations[id]; !ok {
-		return "", apperr.New(apperr.CodeNotFound, "automation not found")
+		if _, okPipe := m.pipelines[id]; !okPipe {
+			return "", apperr.New(apperr.CodeNotFound, "automation not found")
+		}
 	}
 	runID := "run-" + id
 	m.runs[runID] = id
@@ -93,6 +164,7 @@ func (m *mockMemoryAutomationService) CountEnabledBySource(ctx context.Context, 
 			count++
 		}
 	}
+	count += len(m.pipelines)
 	return count, nil
 }
 
@@ -260,19 +332,19 @@ func TestAutomationTools_ValidationAndLimits(t *testing.T) {
 	ctx := context.Background()
 	saveFn := MakeAutomationSaveFn(svc)
 
-	// 1. kind=pipeline 尚未支持
-	pipelineIn, _ := json.Marshal(map[string]any{"kind": "pipeline"})
-	if _, err := saveFn(ctx, pipelineIn); !apperr.IsCode(err, apperr.CodeInvalidInput) {
-		t.Errorf("expected CodeInvalidInput for pipeline, got %v", err)
+	// 1. 无效的 kind
+	invalidKindIn, _ := json.Marshal(map[string]any{"kind": "unknown"})
+	if _, err := saveFn(ctx, invalidKindIn); !apperr.IsCode(err, apperr.CodeInvalidInput) {
+		t.Errorf("expected CodeInvalidInput for unknown kind, got %v", err)
 	}
 
-	// 2. dry_run 尚未支持
+	// 2. prompt 自动化不支持 dry_run
 	dryRunIn, _ := json.Marshal(map[string]any{"kind": "prompt", "dry_run": true})
 	if _, err := saveFn(ctx, dryRunIn); !apperr.IsCode(err, apperr.CodeInvalidInput) {
-		t.Errorf("expected CodeInvalidInput for dry_run, got %v", err)
+		t.Errorf("expected CodeInvalidInput for prompt dry_run, got %v", err)
 	}
 
-	// 3. 间隔 < 60 分钟被拒绝（如每 30 分钟）
+	// 3. prompt 间隔 < 60 分钟被拒绝（如每 30 分钟）
 	interval30In, _ := json.Marshal(map[string]any{
 		"kind":   "prompt",
 		"prompt": "run task",
@@ -282,7 +354,7 @@ func TestAutomationTools_ValidationAndLimits(t *testing.T) {
 		t.Errorf("expected CodeInvalidInput for 30m cron interval, got %v", err)
 	}
 
-	// 4. 间隔 >= 60 分钟通过（如每小时）
+	// 4. prompt 间隔 >= 60 分钟通过（如每小时）
 	interval60In, _ := json.Marshal(map[string]any{
 		"kind":   "prompt",
 		"prompt": "run task",
@@ -292,7 +364,31 @@ func TestAutomationTools_ValidationAndLimits(t *testing.T) {
 		t.Errorf("expected success for 60m cron interval, got %v", err)
 	}
 
-	// 5. Agent 配额达上限
+	// 5. pipeline 间隔 < 15 分钟被拒绝（如每 10 分钟）
+	pipelineInterval10In, _ := json.Marshal(map[string]any{
+		"kind": "pipeline",
+		"cron": "*/10 * * * *",
+		"steps": []map[string]any{
+			{"key": "fetch", "kind": "tool"},
+		},
+	})
+	if _, err := saveFn(ctx, pipelineInterval10In); !apperr.IsCode(err, apperr.CodeInvalidInput) {
+		t.Errorf("expected CodeInvalidInput for pipeline 10m cron interval, got %v", err)
+	}
+
+	// 6. pipeline 间隔 >= 15 分钟通过（如每 15 分钟）
+	pipelineInterval15In, _ := json.Marshal(map[string]any{
+		"kind": "pipeline",
+		"cron": "*/15 * * * *",
+		"steps": []map[string]any{
+			{"key": "fetch", "kind": "tool"},
+		},
+	})
+	if _, err := saveFn(ctx, pipelineInterval15In); err != nil {
+		t.Errorf("expected success for pipeline 15m cron interval, got %v", err)
+	}
+
+	// 7. Agent 配额达上限
 	svc.agentCount = 20
 	limitIn, _ := json.Marshal(map[string]any{
 		"kind":   "prompt",
@@ -303,7 +399,7 @@ func TestAutomationTools_ValidationAndLimits(t *testing.T) {
 		t.Errorf("expected CodeInvalidInput when agent quota reached, got %v", err)
 	}
 
-	// 6. 处于上限时更新已有任务（id != ""）应允许
+	// 8. 处于上限时更新已有任务（id != ""）应允许
 	updateIn, _ := json.Marshal(map[string]any{
 		"id":     "auto-existing",
 		"kind":   "prompt",
@@ -312,5 +408,141 @@ func TestAutomationTools_ValidationAndLimits(t *testing.T) {
 	})
 	if _, err := saveFn(ctx, updateIn); err != nil {
 		t.Errorf("expected updating existing automation to succeed even at quota, got %v", err)
+	}
+}
+
+// TestAutomationTools_PipelineAndDryRun 验证 pipeline 保存、试运行 (dry-run) 与 run_now dry-run 分派。
+func TestAutomationTools_PipelineAndDryRun(t *testing.T) {
+	svc := newMockMemoryAutomationService()
+	ctx := context.Background()
+	saveFn := MakeAutomationSaveFn(svc)
+	listFn := MakeAutomationListFn(svc)
+	runNowFn := MakeAutomationRunNowFn(svc)
+
+	pipelinePayload := map[string]any{
+		"kind": "pipeline",
+		"name": "HN AI 日报",
+		"trigger": map[string]any{
+			"type": "cron",
+			"cron": "0 8 * * *",
+		},
+		"steps": []map[string]any{
+			{"key": "hn", "kind": "tool"},
+		},
+	}
+
+	// 1. dry_run=true 预览测试：不落库、返回 ok=true 与 dry_run 结果
+	pipelinePayload["dry_run"] = true
+	dryIn, _ := json.Marshal(pipelinePayload)
+	rawOut, err := saveFn(ctx, dryIn)
+	if err != nil {
+		t.Fatalf("saveFn dry_run failed: %v", err)
+	}
+	var dryResp struct {
+		OK     bool                          `json:"ok"`
+		DryRun protocol.PipelineDryRunResult `json:"dry_run"`
+		Errors []protocol.FieldError         `json:"errors"`
+	}
+	if err := json.Unmarshal(rawOut, &dryResp); err != nil {
+		t.Fatalf("unmarshal dry_run response: %v", err)
+	}
+	if !dryResp.OK || len(dryResp.DryRun.Steps) == 0 {
+		t.Errorf("unexpected dry_run response: %+v", dryResp)
+	}
+	if len(svc.pipelines) != 0 {
+		t.Errorf("expected 0 pipelines written during dry_run, got %d", len(svc.pipelines))
+	}
+
+	// 2. dry_run=false 正常落库：返回 id (wf_...)
+	delete(pipelinePayload, "dry_run")
+	saveIn, _ := json.Marshal(pipelinePayload)
+	rawOut, err = saveFn(ctx, saveIn)
+	if err != nil {
+		t.Fatalf("saveFn normal save failed: %v", err)
+	}
+	var saveResp struct {
+		OK        bool                  `json:"ok"`
+		ID        string                `json:"id"`
+		NextRunAt string                `json:"next_run_at"`
+		Errors    []protocol.FieldError `json:"errors"`
+	}
+	if err := json.Unmarshal(rawOut, &saveResp); err != nil {
+		t.Fatalf("unmarshal save response: %v", err)
+	}
+	if !saveResp.OK || saveResp.ID != "wf_1" {
+		t.Errorf("unexpected save response: %+v", saveResp)
+	}
+	if len(svc.pipelines) != 1 {
+		t.Errorf("expected 1 pipeline saved, got %d", len(svc.pipelines))
+	}
+
+	// 3. 校验错误返回 ok=false，不返回 apperr
+	svc.mockSavePipelineResult = &protocol.PipelineSaveResult{
+		OK: false,
+		Errors: []protocol.FieldError{
+			{Path: "steps[0].tool", Message: "tool not found"},
+		},
+	}
+	rawOut, err = saveFn(ctx, saveIn)
+	if err != nil {
+		t.Fatalf("saveFn with validation errors should not return error, got: %v", err)
+	}
+	var errResp struct {
+		OK     bool                  `json:"ok"`
+		Errors []protocol.FieldError `json:"errors"`
+	}
+	if err := json.Unmarshal(rawOut, &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if errResp.OK || len(errResp.Errors) != 1 || errResp.Errors[0].Path != "steps[0].tool" {
+		t.Errorf("expected ok=false with field errors, got %+v", errResp)
+	}
+	svc.mockSavePipelineResult = nil
+
+	// 4. list 输出包含 kind=pipeline 与 llm_tokens_7d
+	rawList, err := listFn(ctx, nil)
+	if err != nil {
+		t.Fatalf("listFn failed: %v", err)
+	}
+	var listResp struct {
+		Automations []protocol.AutomationSummary `json:"automations"`
+		Count       int                          `json:"count"`
+	}
+	if err := json.Unmarshal(rawList, &listResp); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	var foundPipeline bool
+	for _, item := range listResp.Automations {
+		if item.Kind == "pipeline" && item.LLMTokens7d == 1234 {
+			foundPipeline = true
+			break
+		}
+	}
+	if !foundPipeline {
+		t.Errorf("expected pipeline summary with tokens in list output, got %+v", listResp)
+	}
+
+	// 5. automation_run_now dry_run 分派
+	// 5a. wf_ id + dry_run=true -> 成功
+	runDryWfIn, _ := json.Marshal(map[string]any{"id": "wf_1", "dry_run": true})
+	rawRunDry, err := runNowFn(ctx, runDryWfIn)
+	if err != nil {
+		t.Fatalf("runNowFn wf_ dry_run failed: %v", err)
+	}
+	var runDryResp struct {
+		OK     bool                          `json:"ok"`
+		DryRun protocol.PipelineDryRunResult `json:"dry_run"`
+	}
+	if err := json.Unmarshal(rawRunDry, &runDryResp); err != nil {
+		t.Fatalf("unmarshal runNow dry_run response: %v", err)
+	}
+	if !runDryResp.OK || len(runDryResp.DryRun.Steps) == 0 {
+		t.Errorf("unexpected runNow dry_run response: %+v", runDryResp)
+	}
+
+	// 5b. prompt (非 wf_) + dry_run=true -> 拒绝
+	runDryPromptIn, _ := json.Marshal(map[string]any{"id": "auto-1", "dry_run": true})
+	if _, err := runNowFn(ctx, runDryPromptIn); !apperr.IsCode(err, apperr.CodeInvalidInput) {
+		t.Errorf("expected CodeInvalidInput for prompt runNow dry_run, got %v", err)
 	}
 }

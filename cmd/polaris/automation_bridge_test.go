@@ -14,6 +14,9 @@ type mockAutoSvc struct {
 	deleteFn               func(ctx context.Context, id string) error
 	runNowFn               func(ctx context.Context, id string) (string, error)
 	countEnabledBySourceFn func(ctx context.Context, source string) (int, error)
+	savePipelineFn         func(ctx context.Context, specJSON []byte, id string) (protocol.PipelineSaveResult, error)
+	dryRunSpecFn           func(ctx context.Context, specJSON []byte) (protocol.PipelineDryRunResult, []protocol.FieldError, error)
+	dryRunByIDFn           func(ctx context.Context, id string) (protocol.PipelineDryRunResult, error)
 }
 
 func (m *mockAutoSvc) List(ctx context.Context) ([]protocol.AutomationSummary, error) {
@@ -28,6 +31,27 @@ func (m *mockAutoSvc) SavePrompt(ctx context.Context, in protocol.PromptAutomati
 		return m.savePromptFn(ctx, in)
 	}
 	return "", "", nil
+}
+
+func (m *mockAutoSvc) SavePipeline(ctx context.Context, specJSON []byte, id string) (protocol.PipelineSaveResult, error) {
+	if m.savePipelineFn != nil {
+		return m.savePipelineFn(ctx, specJSON, id)
+	}
+	return protocol.PipelineSaveResult{}, nil
+}
+
+func (m *mockAutoSvc) DryRunSpec(ctx context.Context, specJSON []byte) (protocol.PipelineDryRunResult, []protocol.FieldError, error) {
+	if m.dryRunSpecFn != nil {
+		return m.dryRunSpecFn(ctx, specJSON)
+	}
+	return protocol.PipelineDryRunResult{}, nil, nil
+}
+
+func (m *mockAutoSvc) DryRunByID(ctx context.Context, id string) (protocol.PipelineDryRunResult, error) {
+	if m.dryRunByIDFn != nil {
+		return m.dryRunByIDFn(ctx, id)
+	}
+	return protocol.PipelineDryRunResult{}, nil
 }
 
 func (m *mockAutoSvc) Delete(ctx context.Context, id string) error {
@@ -61,6 +85,15 @@ func TestAutomationBridge_UnboundReportsError(t *testing.T) {
 	if _, _, err := b.SavePrompt(ctx, protocol.PromptAutomationInput{}); !apperr.IsCode(err, apperr.CodeUnimplemented) {
 		t.Fatalf("expected CodeUnimplemented for SavePrompt when unbound, got %v", err)
 	}
+	if _, err := b.SavePipeline(ctx, []byte(`{}`), ""); !apperr.IsCode(err, apperr.CodeUnimplemented) {
+		t.Fatalf("expected CodeUnimplemented for SavePipeline when unbound, got %v", err)
+	}
+	if _, _, err := b.DryRunSpec(ctx, []byte(`{}`)); !apperr.IsCode(err, apperr.CodeUnimplemented) {
+		t.Fatalf("expected CodeUnimplemented for DryRunSpec when unbound, got %v", err)
+	}
+	if _, err := b.DryRunByID(ctx, "wf_1"); !apperr.IsCode(err, apperr.CodeUnimplemented) {
+		t.Fatalf("expected CodeUnimplemented for DryRunByID when unbound, got %v", err)
+	}
 	if err := b.Delete(ctx, "id1"); !apperr.IsCode(err, apperr.CodeUnimplemented) {
 		t.Fatalf("expected CodeUnimplemented for Delete when unbound, got %v", err)
 	}
@@ -83,6 +116,15 @@ func TestAutomationBridge_BoundDelegates(t *testing.T) {
 		savePromptFn: func(ctx context.Context, in protocol.PromptAutomationInput) (string, string, error) {
 			return "saved-id", "2026-10-15T00:00:00Z", nil
 		},
+		savePipelineFn: func(ctx context.Context, specJSON []byte, id string) (protocol.PipelineSaveResult, error) {
+			return protocol.PipelineSaveResult{OK: true, ID: "wf_123"}, nil
+		},
+		dryRunSpecFn: func(ctx context.Context, specJSON []byte) (protocol.PipelineDryRunResult, []protocol.FieldError, error) {
+			return protocol.PipelineDryRunResult{EstimatedLLMInputTokens: 42}, nil, nil
+		},
+		dryRunByIDFn: func(ctx context.Context, id string) (protocol.PipelineDryRunResult, error) {
+			return protocol.PipelineDryRunResult{EstimatedLLMInputTokens: 99}, nil
+		},
 		deleteFn: func(ctx context.Context, id string) error {
 			return nil
 		},
@@ -102,6 +144,18 @@ func TestAutomationBridge_BoundDelegates(t *testing.T) {
 	id, nextRun, err := b.SavePrompt(ctx, protocol.PromptAutomationInput{Prompt: "p"})
 	if err != nil || id != "saved-id" || nextRun != "2026-10-15T00:00:00Z" {
 		t.Fatalf("SavePrompt delegation failed: id=%q nextRun=%q err=%v", id, nextRun, err)
+	}
+	pipeRes, err := b.SavePipeline(ctx, []byte(`{}`), "")
+	if err != nil || !pipeRes.OK || pipeRes.ID != "wf_123" {
+		t.Fatalf("SavePipeline delegation failed: got %v, err=%v", pipeRes, err)
+	}
+	drySpecRes, _, err := b.DryRunSpec(ctx, []byte(`{}`))
+	if err != nil || drySpecRes.EstimatedLLMInputTokens != 42 {
+		t.Fatalf("DryRunSpec delegation failed: got %v, err=%v", drySpecRes, err)
+	}
+	dryIDRes, err := b.DryRunByID(ctx, "wf_123")
+	if err != nil || dryIDRes.EstimatedLLMInputTokens != 99 {
+		t.Fatalf("DryRunByID delegation failed: got %v, err=%v", dryIDRes, err)
 	}
 	if err := b.Delete(ctx, "auto-1"); err != nil {
 		t.Fatalf("Delete delegation failed: %v", err)

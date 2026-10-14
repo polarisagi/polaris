@@ -55,6 +55,42 @@ func (b *automationBridge) SavePrompt(ctx context.Context, in protocol.PromptAut
 	return id, nextRun, nil
 }
 
+func (b *automationBridge) SavePipeline(ctx context.Context, specJSON []byte, id string) (protocol.PipelineSaveResult, error) {
+	svc, err := b.get()
+	if err != nil {
+		return protocol.PipelineSaveResult{}, err
+	}
+	res, err := svc.SavePipeline(ctx, specJSON, id)
+	if err != nil {
+		return protocol.PipelineSaveResult{}, apperr.Wrap(apperr.CodeOf(err), "automationBridge.SavePipeline", err)
+	}
+	return res, nil
+}
+
+func (b *automationBridge) DryRunSpec(ctx context.Context, specJSON []byte) (protocol.PipelineDryRunResult, []protocol.FieldError, error) {
+	svc, err := b.get()
+	if err != nil {
+		return protocol.PipelineDryRunResult{}, nil, err
+	}
+	res, fErrs, err := svc.DryRunSpec(ctx, specJSON)
+	if err != nil {
+		return protocol.PipelineDryRunResult{}, nil, apperr.Wrap(apperr.CodeOf(err), "automationBridge.DryRunSpec", err)
+	}
+	return res, fErrs, nil
+}
+
+func (b *automationBridge) DryRunByID(ctx context.Context, id string) (protocol.PipelineDryRunResult, error) {
+	svc, err := b.get()
+	if err != nil {
+		return protocol.PipelineDryRunResult{}, err
+	}
+	res, err := svc.DryRunByID(ctx, id)
+	if err != nil {
+		return protocol.PipelineDryRunResult{}, apperr.Wrap(apperr.CodeOf(err), "automationBridge.DryRunByID", err)
+	}
+	return res, nil
+}
+
 func (b *automationBridge) Delete(ctx context.Context, id string) error {
 	svc, err := b.get()
 	if err != nil {
