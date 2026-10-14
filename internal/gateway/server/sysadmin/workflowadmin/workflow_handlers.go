@@ -19,16 +19,45 @@ import (
 
 // ─── GET /v1/workflows ────────────────────────────────────────────────────────
 
+func (h *WorkflowAdmin) populateWorkflowLastRunMetrics(ctx context.Context, wf *workflow, runID, stepOutputs string, skippedInt int) {
+	wf.LastRunSkipped = skippedInt == 1
+	if runID == "" || h.WorkflowRepo == nil {
+		return
+	}
+	sessionIDs := []string{runID}
+	var outputs []stepOutput
+	if err := json.Unmarshal([]byte(stepOutputs), &outputs); err == nil {
+		for _, so := range outputs {
+			if so.SessionID != "" {
+				sessionIDs = append(sessionIDs, so.SessionID)
+			}
+		}
+	}
+	if inTok, outTok, cost, err := h.WorkflowRepo.RunLLMUsage(ctx, sessionIDs); err == nil {
+		wf.LastRunTokens = int(inTok + outTok)
+		wf.LastRunCost = cost
+	}
+}
+
 func (h *WorkflowAdmin) HandleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(), `
 		SELECT w.id, w.type, w.name, w.description, w.trigger_type, w.cron_schedule, w.enabled,
 		       COALESCE(sc.cnt, 0),
 		       w.last_run_at, w.next_run_at, w.run_count,
 		       w.last_run_status, w.last_run_error, w.created_at, w.updated_at,
-		       COALESCE(w.result_action, 'silent'), COALESCE(w.deliver_from, ''), COALESCE(w.source, 'user')
+		       COALESCE(w.result_action, 'silent'), COALESCE(w.deliver_from, ''), COALESCE(w.source, 'user'),
+		       COALESCE(lr.skipped, 0), COALESCE(lr.id, ''), COALESCE(lr.step_outputs, '[]')
 		FROM workflows w
 		LEFT JOIN (SELECT workflow_id, COUNT(*) cnt FROM workflow_steps GROUP BY workflow_id) sc
 		       ON sc.workflow_id = w.id
+		LEFT JOIN (
+		    SELECT id, workflow_id, skipped, step_outputs
+		    FROM (
+		        SELECT id, workflow_id, skipped, step_outputs,
+		               ROW_NUMBER() OVER (PARTITION BY workflow_id ORDER BY started_at DESC) as rn
+		        FROM workflow_runs
+		    ) WHERE rn = 1
+		) lr ON lr.workflow_id = w.id
 		ORDER BY w.created_at DESC`)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
@@ -39,17 +68,20 @@ func (h *WorkflowAdmin) HandleListWorkflows(w http.ResponseWriter, r *http.Reque
 	var list []workflow
 	for rows.Next() {
 		var wf workflow
-		var enabledInt int
+		var enabledInt, skippedInt int
+		var runID, stepOutputs string
 		if err := rows.Scan(
 			&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 			&wf.StepsCount,
 			&wf.LastRunAt, &wf.NextRunAt, &wf.RunCount,
 			&wf.LastRunStatus, &wf.LastRunError, &wf.CreatedAt, &wf.UpdatedAt,
 			&wf.ResultAction, &wf.DeliverFrom, &wf.Source,
+			&skippedInt, &runID, &stepOutputs,
 		); err != nil {
 			continue
 		}
 		wf.Enabled = enabledInt == 1
+		h.populateWorkflowLastRunMetrics(r.Context(), &wf, runID, stepOutputs, skippedInt)
 		list = append(list, wf)
 	}
 	if err := rows.Err(); err != nil {
@@ -86,6 +118,13 @@ func (h *WorkflowAdmin) HandleGetWorkflow(w http.ResponseWriter, r *http.Request
 		return
 	}
 	wf.Enabled = enabledInt == 1
+
+	var skippedInt int
+	var runID, stepOutputs string
+	_ = h.DB.QueryRowContext(r.Context(), `
+		SELECT COALESCE(skipped, 0), id, COALESCE(step_outputs, '[]')
+		FROM workflow_runs WHERE workflow_id=? ORDER BY started_at DESC LIMIT 1`, wfID).Scan(&skippedInt, &runID, &stepOutputs)
+	h.populateWorkflowLastRunMetrics(r.Context(), &wf, runID, stepOutputs, skippedInt)
 
 	steps := h.loadWorkflowSteps(r.Context(), wfID)
 	if steps == nil {

@@ -53,7 +53,13 @@
           <div class="card bg-base-200 border border-base-300 shadow-sm transition-all" :class="job.enabled ? 'hover:border-primary' : 'opacity-60'">
             <div class="card-body p-5">
               <div class="flex justify-between items-start mb-2">
-                <div class="text-2xl">🤖</div>
+                <div class="flex items-center gap-2">
+                  <div class="text-2xl">🤖</div>
+                  <div class="badge badge-sm"
+                    :class="job.source === 'agent' ? 'badge-info badge-outline' : job.source === 'plugin' ? 'badge-accent badge-outline' : 'badge-ghost'"
+                    x-text="$store.i18n.t('source_' + (job.source || 'user'))">
+                  </div>
+                </div>
                 <input id="form-field-2" name="form-field-2" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="job.enabled" @change="$store.cron.toggle(job)" @click.stop>
               </div>
               <h3 class="card-title text-base" x-text="job.name || job.id.slice(0,12)"></h3>
@@ -199,27 +205,44 @@
           :class="wf.enabled ? 'hover:border-primary' : 'opacity-60'">
           <div class="card-body p-5">
             <div class="flex justify-between items-start mb-2">
-              <div class="text-2xl">⛓</div>
+              <div class="flex items-center gap-2">
+                <div class="text-2xl">⛓</div>
+                <div class="badge badge-sm"
+                  :class="wf.source === 'agent' ? 'badge-info badge-outline' : wf.source === 'plugin' ? 'badge-accent badge-outline' : 'badge-ghost'"
+                  x-text="$store.i18n.t('source_' + (wf.source || 'user'))">
+                </div>
+                <div class="badge badge-sm badge-outline font-mono uppercase"
+                  x-text="wf.type || 'chain'">
+                </div>
+              </div>
               <input :name="'wf-enabled-toggle-' + wf.id" type="checkbox" class="toggle toggle-primary toggle-sm"
                 :checked="wf.enabled" @change="$store.workflow.toggle(wf)" @click.stop>
             </div>
             <h3 class="card-title text-base" x-text="wf.name"></h3>
             <p class="text-xs text-base-content/60 line-clamp-2 min-h-[2rem]" x-text="wf.description || ''"></p>
 
-            <div class="flex flex-wrap gap-2 mt-3">
+            <div class="flex flex-wrap gap-2 mt-3 items-center">
               <div class="badge badge-ghost badge-sm font-mono"
                 x-text="$store.workflow.cronLabel(wf.cron_schedule) || (wf.trigger_type === 'manual' ? $store.i18n.t('wf_trigger_manual') : wf.trigger_type)">
               </div>
               <div class="badge badge-outline badge-sm"
                 x-text="`${wf.steps_count} ${$store.i18n.t('wf_steps_count')}`"></div>
+              <template x-if="wf.last_run_tokens || wf.last_run_cost">
+                <div class="flex items-center gap-1.5 text-xs text-base-content/60 font-mono">
+                  <span class="badge badge-xs badge-ghost" x-text="`${wf.last_run_tokens || 0} tok`"></span>
+                  <span x-show="wf.last_run_cost > 0" class="badge badge-xs badge-ghost" x-text="`$${(wf.last_run_cost || 0).toFixed(4)}`"></span>
+                </div>
+              </template>
             </div>
 
             <div class="mt-4 pt-4 border-t border-base-300 text-xs text-base-content/70 flex items-center gap-2">
               <template x-if="wf.last_run_at">
                 <div class="flex items-center gap-1.5 w-full">
                   <div class="w-2 h-2 rounded-full"
-                    :class="wf.last_run_status === 'ok' ? 'bg-success' : wf.last_run_status === 'error' ? 'bg-error' : 'bg-warning'">
+                    :class="wf.last_run_skipped ? 'bg-info' : wf.last_run_status === 'ok' ? 'bg-success' : wf.last_run_status === 'error' ? 'bg-error' : 'bg-warning'">
                   </div>
+                  <span x-text="wf.last_run_skipped ? $store.i18n.t('wf_status_skipped') : $store.i18n.t('wf_status_' + (wf.last_run_status || 'ok'))"></span>
+                  <span class="text-base-content/40">·</span>
                   <span x-text="new Date(wf.last_run_at).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})"></span>
                   <span class="ml-auto" x-show="wf.run_count > 0"
                     x-text="`${$store.i18n.t('automation_run_count').replace('{0}', wf.run_count)}`"></span>
@@ -317,8 +340,18 @@
             <template x-for="(step, idx) in $store.workflow.form.steps" :key="idx">
               <div class="bg-base-200 border border-base-300 rounded-box p-4">
                 <div class="flex justify-between items-center mb-3">
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-center gap-2 flex-wrap">
                     <span class="badge badge-neutral badge-sm font-mono" x-text="`步骤 ${idx + 1}`"></span>
+                    <span class="badge badge-sm font-bold uppercase font-mono"
+                      :class="$store.workflow.kindBadgeClass(step.kind)"
+                      x-text="step.kind || 'agent'"></span>
+                    <select class="select select-xs select-bordered font-mono" x-model="step.kind">
+                      <template x-for="k in $store.workflow.stepKinds" :key="k.value">
+                        <option :value="k.value" :selected="step.kind === k.value" x-text="k.label"></option>
+                      </template>
+                    </select>
+                    <input type="text" class="input input-xs input-bordered font-mono w-28"
+                      x-model="step.step_key" :placeholder="$store.i18n.t('wf_step_key')">
                     <div class="flex gap-1">
                       <button class="btn btn-xs btn-ghost" @click="$store.workflow.moveStep(idx, -1)"
                         :disabled="idx === 0" title="上移">↑</button>
@@ -334,13 +367,13 @@
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                   <div class="form-control">
-                    <label for="auto-id-automation-5" class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_name')"></span></label>
-                    <input id="auto-id-automation-5" type="text" class="input input-sm input-bordered" x-model="step.name"
+                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_name')"></span></label>
+                    <input type="text" class="input input-sm input-bordered" x-model="step.name"
                       :placeholder="$store.i18n.t('wf_step_ph_name')">
                   </div>
-                  <div class="form-control">
-                    <label for="auto-id-automation-6" class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_reasoning')"></span></label>
-                    <select id="auto-id-automation-6" class="select select-sm select-bordered" x-model="step.reasoning_effort">
+                  <div class="form-control" x-show="step.kind === 'agent' || step.kind === 'llm'">
+                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_reasoning')"></span></label>
+                    <select class="select select-sm select-bordered" x-model="step.reasoning_effort">
                       <template x-for="r in $store.workflow.reasoningLevels" :key="r.value">
                         <option :value="r.value" x-text="r.label"></option>
                       </template>
@@ -348,19 +381,33 @@
                   </div>
                 </div>
 
-                <div class="form-control mb-3">
-                  <label for="auto-id-automation-7" class="label pb-1">
+                <div class="form-control mb-3" x-show="step.kind === 'agent' || step.kind === 'llm'">
+                  <label class="label pb-1">
                     <span class="label-text text-xs" x-text="$store.i18n.t('wf_step_prompt')"></span>
                   </label>
-                  <textarea id="auto-id-automation-7" class="textarea textarea-bordered text-sm min-h-[80px]"
+                  <textarea class="textarea textarea-bordered text-sm min-h-[80px]"
                     x-model="step.prompt"
                     :placeholder="$store.i18n.t('wf_step_ph_prompt')"></textarea>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <!-- Config JSON 编辑器 (针对非 agent 步骤) -->
+                <div class="form-control mb-3" x-show="step.kind !== 'agent'">
+                  <label class="label pb-1 flex justify-between">
+                    <span class="label-text text-xs font-mono font-medium" x-text="$store.i18n.t('wf_step_config_json')"></span>
+                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'tool'">{"tool":"feed_fetch","args":{...}}</span>
+                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'transform'">{"needs":["..."],"ops":[...]}</span>
+                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'llm'">{"needs":["..."],"input":"...","fields":[...]}</span>
+                  </label>
+                  <textarea class="textarea textarea-bordered font-mono text-xs min-h-[100px] leading-relaxed"
+                    x-model="step.config_text"
+                    :placeholder="$store.i18n.t('wf_step_config_json')"></textarea>
+                  <div class="text-xs text-error mt-1 font-mono" x-show="step.config_error" x-text="step.config_error"></div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" x-show="step.kind === 'agent'">
                   <div class="form-control">
-                    <label for="auto-id-automation-8" class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_workdir')"></span></label>
-                    <input id="auto-id-automation-8" type="text" class="input input-sm input-bordered font-mono" x-model="step.working_dir"
+                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_workdir')"></span></label>
+                    <input type="text" class="input input-sm input-bordered font-mono" x-model="step.working_dir"
                       placeholder="/Users/me/project">
                   </div>
                   <div class="form-control flex-row items-end gap-2 pb-1">
@@ -385,7 +432,7 @@
                         <input type="checkbox" class="hidden"
                           :checked="(step.depends_on || []).includes(String(oIdx))"
                           @change="$store.workflow.toggleDepend(step, oIdx)">
-                        <span x-text="other.name || ('步骤 ' + (oIdx + 1))"></span>
+                        <span x-text="other.step_key || other.name || ('步骤 ' + (oIdx + 1))"></span>
                       </label>
                     </template>
                     <span class="text-xs text-base-content/50 self-center" x-show="!(step.depends_on || []).length" x-text="$store.i18n.t('wf_step_depends_on_none')"></span>
@@ -443,11 +490,20 @@
         <div class="card bg-base-200 border border-base-300">
           <div class="card-body p-4">
             <div class="flex justify-between items-start">
-              <div class="flex items-center gap-2">
-                <div class="w-2.5 h-2.5 rounded-full"
-                  :class="run.status === 'ok' ? 'bg-success' : run.status === 'error' ? 'bg-error' : run.status === 'running' ? 'bg-warning animate-pulse' : 'bg-base-content/30'">
+              <div>
+                <div class="flex items-center gap-2">
+                  <div class="w-2.5 h-2.5 rounded-full"
+                    :class="run.skipped ? 'bg-info' : run.status === 'ok' ? 'bg-success' : run.status === 'error' ? 'bg-error' : run.status === 'running' ? 'bg-warning animate-pulse' : 'bg-base-content/30'">
+                  </div>
+                  <span class="text-sm font-medium capitalize" x-text="run.skipped ? $store.i18n.t('wf_status_skipped') : run.status"></span>
                 </div>
-                <span class="text-sm font-medium capitalize" x-text="run.status"></span>
+                <div class="flex items-center gap-1.5 mt-1 text-xs text-base-content/60 font-mono">
+                  <span class="badge badge-xs badge-ghost" x-text="$store.workflow.formatDuration(run.started_at, run.finished_at)"></span>
+                  <span class="badge badge-xs badge-ghost" x-show="(run.llm_tokens_in || 0) + (run.llm_tokens_out || 0) > 0"
+                    x-text="`${(run.llm_tokens_in || 0) + (run.llm_tokens_out || 0)} tok`"></span>
+                  <span class="badge badge-xs badge-ghost" x-show="run.cost_usd > 0"
+                    x-text="`$${(run.cost_usd || 0).toFixed(4)}`"></span>
+                </div>
               </div>
               <div class="text-xs text-base-content/50 font-mono"
                 x-text="new Date(run.started_at).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})">
@@ -457,14 +513,21 @@
             <!-- 步骤进度 -->
             <div class="mt-3 space-y-1.5">
               <template x-for="so in run.stepOutputs" :key="so.seq">
-                <div class="flex items-start gap-2 text-xs">
-                  <span class="font-mono font-bold mt-0.5 w-4 shrink-0"
-                    :class="$store.workflow.stepStatusClass(so.status)"
-                    x-text="$store.workflow.stepStatusIcon(so.status)"></span>
-                  <div class="min-w-0">
-                    <span class="text-base-content/50" x-text="`步骤 ${so.seq + 1}：`"></span>
-                    <span class="text-base-content/80 line-clamp-2" x-text="so.output_preview || '（无输出）'"></span>
+                <div class="flex items-center justify-between gap-2 text-xs py-1 px-1.5 rounded hover:bg-base-300/40 transition-colors">
+                  <div class="flex items-center gap-1.5 min-w-0">
+                    <span class="font-mono font-bold w-4 shrink-0"
+                      :class="$store.workflow.stepStatusClass(so.status)"
+                      x-text="$store.workflow.stepStatusIcon(so.status)"></span>
+                    <span class="badge badge-xs uppercase font-mono shrink-0"
+                      :class="$store.workflow.kindBadgeClass(so.kind)"
+                      x-show="so.kind" x-text="so.kind"></span>
+                    <span class="font-mono text-base-content/70 shrink-0" x-text="(so.step_key || `步骤 ${so.seq + 1}`) + ':'"></span>
+                    <span class="text-base-content/80 truncate" x-text="so.output_preview || (so.status === 'skipped' ? $store.i18n.t('wf_status_skipped') : '（无输出）')"></span>
                   </div>
+                  <button class="btn btn-xs btn-ghost btn-outline shrink-0 ml-auto"
+                    @click="$store.workflow.openStepData(run.id, so.step_key || `step_${so.seq}`, so.name || so.step_key || `步骤 ${so.seq + 1}`)">
+                    <span x-text="$store.i18n.t('wf_btn_view_data')"></span>
+                  </button>
                 </div>
               </template>
               <div x-show="run.status === 'running'" class="flex items-center gap-2 text-xs text-warning">
@@ -480,5 +543,82 @@
     </div>
   </div>
 
-  <!-- TODO: Port modals and sidebars from original if needed -->
+  <!-- ═══════════════════════════════════════════════ Step Data Preview Modal -->
+  <dialog id="step_data_modal" class="modal"
+    x-effect="$store.workflow.showStepDataModal ? (!$el.open && $el.showModal()) : $el.close()"
+    @close="$store.workflow.showStepDataModal = false" x-cloak>
+    <div class="modal-box w-11/12 max-w-4xl max-h-[85vh] overflow-y-auto">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('wf_run_step_data_title') + ': ' + $store.workflow.stepDataTitle"></h3>
+          <template x-if="$store.workflow.stepData">
+            <div class="flex items-center gap-2 mt-1">
+              <div class="badge badge-sm" :class="$store.workflow.stepData.status === 'ok' ? 'badge-success' : 'badge-ghost'" x-text="$store.workflow.stepData.status"></div>
+              <div class="badge badge-sm badge-outline font-mono" x-text="`${$store.workflow.stepData.count || 0} 条`"></div>
+              <div class="badge badge-sm badge-warning" x-show="$store.workflow.stepData.truncated" x-text="$store.i18n.t('wf_run_data_truncated')"></div>
+            </div>
+          </template>
+        </div>
+        <button class="btn btn-sm btn-ghost" @click="$store.workflow.showStepDataModal = false">✕</button>
+      </div>
+
+      <!-- Loading -->
+      <div x-show="$store.workflow.stepDataLoading" class="flex justify-center py-12">
+        <span class="loading loading-spinner loading-md text-primary"></span>
+      </div>
+
+      <!-- Content -->
+      <div x-show="!$store.workflow.stepDataLoading && $store.workflow.stepData">
+        <!-- Items Table -->
+        <template x-if="$store.workflow.stepData?.items && $store.workflow.stepData.items.length > 0">
+          <div class="overflow-x-auto border border-base-300 rounded-box">
+            <table class="table table-xs table-zebra w-full">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th x-text="$store.i18n.t('wf_table_title')"></th>
+                  <th x-text="$store.i18n.t('wf_table_url')"></th>
+                  <th x-text="$store.i18n.t('wf_table_published_at')"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(item, i) in $store.workflow.stepData.items" :key="i">
+                  <tr>
+                    <td class="font-mono text-xs" x-text="i + 1"></td>
+                    <td class="max-w-xs truncate" :title="item.title || item.name || ''" x-text="item.title || item.name || '-'"></td>
+                    <td class="max-w-xs truncate font-mono text-[11px]">
+                      <a x-show="item.url" :href="item.url" target="_blank" rel="noopener noreferrer" class="link link-primary" x-text="item.url"></a>
+                      <span x-show="!item.url">-</span>
+                    </td>
+                    <td class="text-xs text-base-content/60" x-text="item.published_at || item.pub_date || item.date || '-'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <!-- Text Output -->
+        <template x-if="$store.workflow.stepData?.text">
+          <div class="mt-4">
+            <h4 class="text-xs font-bold text-base-content/70 mb-1" x-text="$store.i18n.t('wf_run_data_text')"></h4>
+            <div class="bg-base-200 p-3 rounded-box text-xs font-mono whitespace-pre-wrap max-h-60 overflow-y-auto border border-base-300" x-text="$store.workflow.stepData.text"></div>
+          </div>
+        </template>
+
+        <!-- Empty State -->
+        <div class="py-12 text-center text-sm text-base-content/50"
+          x-show="(!$store.workflow.stepData?.items || $store.workflow.stepData.items.length === 0) && !$store.workflow.stepData?.text">
+          <span x-text="$store.i18n.t('wf_run_data_empty')"></span>
+        </div>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm btn-ghost" @click="$store.workflow.showStepDataModal = false" x-text="$store.i18n.t('close')"></button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>close</button>
+    </form>
+  </dialog>
 </div>

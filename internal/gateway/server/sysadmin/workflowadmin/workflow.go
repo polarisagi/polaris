@@ -17,23 +17,26 @@ import (
 type workflow struct {
 	ID string `json:"id"`
 	// Type 'chain'（默认）| 'dag'，见 repo.WorkflowRow.Type 注释。
-	Type          string `json:"type"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	TriggerType   string `json:"trigger_type"`
-	CronSchedule  string `json:"cron_schedule"`
-	Enabled       bool   `json:"enabled"`
-	StepsCount    int    `json:"steps_count"`
-	LastRunAt     string `json:"last_run_at"`
-	NextRunAt     string `json:"next_run_at"`
-	RunCount      int    `json:"run_count"`
-	LastRunStatus string `json:"last_run_status"`
-	LastRunError  string `json:"last_run_error"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
-	ResultAction  string `json:"result_action,omitempty"`
-	DeliverFrom   string `json:"deliver_from,omitempty"`
-	Source        string `json:"source,omitempty"`
+	Type           string  `json:"type"`
+	Name           string  `json:"name"`
+	Description    string  `json:"description"`
+	TriggerType    string  `json:"trigger_type"`
+	CronSchedule   string  `json:"cron_schedule"`
+	Enabled        bool    `json:"enabled"`
+	StepsCount     int     `json:"steps_count"`
+	LastRunAt      string  `json:"last_run_at"`
+	NextRunAt      string  `json:"next_run_at"`
+	RunCount       int     `json:"run_count"`
+	LastRunStatus  string  `json:"last_run_status"`
+	LastRunError   string  `json:"last_run_error"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	ResultAction   string  `json:"result_action,omitempty"`
+	DeliverFrom    string  `json:"deliver_from,omitempty"`
+	Source         string  `json:"source,omitempty"`
+	LastRunSkipped bool    `json:"last_run_skipped,omitempty"`
+	LastRunTokens  int     `json:"last_run_tokens,omitempty"`
+	LastRunCost    float64 `json:"last_run_cost,omitempty"`
 }
 
 type workflowStep struct {

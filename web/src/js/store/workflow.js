@@ -20,10 +20,23 @@ const SCHEDULE_PRESETS = [
   { label: '每天 18:00',    value: '0 18 * * *'  },
 ]
 
+const STEP_KINDS = [
+  { value: 'agent',     label: 'Agent' },
+  { value: 'tool',      label: '工具' },
+  { value: 'transform', label: '转换' },
+  { value: 'llm',       label: 'LLM' },
+  { value: 'sink',      label: '输出' },
+]
+
 function emptyStep() {
   return {
     id: '',
     name: '',
+    step_key: '',
+    kind: 'agent',
+    config_json: '{}',
+    config_text: '{}',
+    config_error: '',
     automation_id: '',
     prompt: '',
     reasoning_effort: 'medium',
@@ -66,14 +79,32 @@ Alpine.store('workflow', {
   runs: [],
   runsLoading: false,
 
+  // 步骤数据预览 Modal 状态
+  showStepDataModal: false,
+  stepDataTitle: '',
+  stepDataLoading: false,
+  stepData: null,
+
   form: emptyForm(),
 
   schedulePresets: SCHEDULE_PRESETS,
   reasoningLevels: REASONING_LEVELS,
+  stepKinds: STEP_KINDS,
 
   cronLabel(expr) {
     const p = SCHEDULE_PRESETS.find(p => p.value === expr)
     return p ? p.label : (expr || '手动触发')
+  },
+
+  formatDuration(start, finish) {
+    if (!start) return '-'
+    const s = new Date(start).getTime()
+    const e = finish ? new Date(finish).getTime() : Date.now()
+    const sec = Math.max(0, Math.floor((e - s) / 1000))
+    if (sec < 60) return `${sec}s`
+    const min = Math.floor(sec / 60)
+    const remainSec = sec % 60
+    return `${min}m ${remainSec}s`
   },
 
   async load() {
@@ -105,17 +136,32 @@ Alpine.store('workflow', {
         trigger_type: d.workflow.trigger_type,
         cron_schedule:d.workflow.cron_schedule,
         enabled:      d.workflow.enabled,
-        steps: (d.steps || []).map(st => ({
-          id:               st.id,
-          name:             st.name,
-          automation_id:    st.automation_id,
-          prompt:           st.prompt,
-          reasoning_effort: st.reasoning_effort || 'medium',
-          working_dir:      st.working_dir,
-          input_from_prev:  st.input_from_prev,
-          depends_on:       st.depends_on || [],
-          max_retries:      st.max_retries || 0,
-        })),
+        steps: (d.steps || []).map(st => {
+          let cfgText = '{}'
+          try {
+            if (st.config_json && st.config_json.trim()) {
+              cfgText = JSON.stringify(JSON.parse(st.config_json), null, 2)
+            }
+          } catch {
+            cfgText = st.config_json || '{}'
+          }
+          return {
+            id:               st.id,
+            name:             st.name,
+            step_key:         st.step_key || '',
+            kind:             st.kind || 'agent',
+            config_json:      st.config_json || '{}',
+            config_text:      cfgText,
+            config_error:     '',
+            automation_id:    st.automation_id,
+            prompt:           st.prompt || '',
+            reasoning_effort: st.reasoning_effort || 'medium',
+            working_dir:      st.working_dir || '',
+            input_from_prev:  st.input_from_prev,
+            depends_on:       st.depends_on || [],
+            max_retries:      st.max_retries || 0,
+          }
+        }),
       }
       if (this.form.steps.length === 0) this.form.steps.push(emptyStep())
     } catch (e) {
@@ -169,11 +215,37 @@ Alpine.store('workflow', {
       Alpine.store('toast').show('error', '请填写工作流名称')
       return
     }
-    const hasContent = this.form.steps.every(st => st.prompt.trim() || st.automation_id.trim())
-    if (!hasContent) {
-      Alpine.store('toast').show('error', '每个步骤需填写执行内容或绑定自动化任务')
+
+    // 清除所有步骤错误
+    this.form.steps.forEach(st => { st.config_error = '' })
+
+    // 校验每个非 agent 步骤的 config_text JSON 合法性
+    let hasJSONError = false
+    this.form.steps.forEach(st => {
+      if (st.kind !== 'agent') {
+        try {
+          const parsed = JSON.parse(st.config_text || '{}')
+          st.config_json = JSON.stringify(parsed)
+        } catch (e) {
+          st.config_error = 'JSON 格式错误: ' + e.message
+          hasJSONError = true
+        }
+      }
+    })
+    if (hasJSONError) {
+      Alpine.store('toast').show('error', '步骤配置 JSON 格式不合法，请检查')
       return
     }
+
+    const hasContent = this.form.steps.every(st => {
+      if (st.kind !== 'agent') return true
+      return (st.prompt && st.prompt.trim()) || (st.automation_id && st.automation_id.trim())
+    })
+    if (!hasContent) {
+      Alpine.store('toast').show('error', '每个 Agent 步骤需填写执行内容或绑定自动化任务')
+      return
+    }
+
     const body = {
       type:          this.form.type,
       name:          this.form.name,
@@ -181,8 +253,15 @@ Alpine.store('workflow', {
       trigger_type:  this.form.trigger_type,
       cron_schedule: this.form.cron_schedule,
       enabled:       this.form.enabled,
-      steps:         this.form.steps.map((st, i) => ({ ...st, seq: i })),
+      steps:         this.form.steps.map((st, i) => ({
+        ...st,
+        seq: i,
+        kind: st.kind || 'agent',
+        step_key: st.step_key || `step_${i}`,
+        config_json: st.config_json || '{}',
+      })),
     }
+
     try {
       let r
       if (this.editMode === 'create') {
@@ -194,7 +273,30 @@ Alpine.store('workflow', {
           method: 'PUT', headers: authHeaders(), body: JSON.stringify(body),
         })
       }
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+
+      if (!r.ok) {
+        if (r.status === 400) {
+          try {
+            const errData = await r.json()
+            if (errData.errors && Array.isArray(errData.errors)) {
+              errData.errors.forEach(fe => {
+                const m = (fe.path || '').match(/steps\[(\d+)\]/)
+                if (m && m[1]) {
+                  const stepIdx = parseInt(m[1], 10)
+                  if (this.form.steps[stepIdx]) {
+                    this.form.steps[stepIdx].config_error = (fe.path || '') + ': ' + (fe.message || '')
+                  }
+                }
+              })
+              throw new Error(`校验失败: ${errData.errors.map(e => e.message).join('; ')}`)
+            }
+          } catch (jsonErr) {
+            if (jsonErr.message.startsWith('校验失败:')) throw jsonErr
+          }
+        }
+        throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+      }
+
       this.showModal = false
       await this.load()
       Alpine.store('toast').show('ok', '保存成功')
@@ -256,15 +358,44 @@ Alpine.store('workflow', {
     } catch { } finally { this.runsLoading = false }
   },
 
+  async openStepData(runID, stepKey, stepName) {
+    if (!runID || !stepKey) return
+    this.stepDataTitle = stepName || stepKey
+    this.stepData = null
+    this.stepDataLoading = true
+    this.showStepDataModal = true
+    try {
+      const r = await fetch(`/v1/workflows/runs/${runID}/data/${stepKey}`, { headers: authHeaders() })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      this.stepData = await r.json()
+    } catch (e) {
+      this.stepData = { status: 'error', count: 0, items: [], text: '加载数据失败: ' + e.message }
+    } finally {
+      this.stepDataLoading = false
+    }
+  },
+
   stepStatusIcon(status) {
     if (status === 'ok') return '✓'
     if (status === 'error') return '✗'
+    if (status === 'skipped') return '−'
     return '○'
   },
 
   stepStatusClass(status) {
     if (status === 'ok') return 'text-success'
     if (status === 'error') return 'text-error'
+    if (status === 'skipped') return 'text-info'
     return 'text-base-content/50'
+  },
+
+  kindBadgeClass(kind) {
+    switch (kind) {
+      case 'tool': return 'badge-primary'
+      case 'transform': return 'badge-secondary'
+      case 'llm': return 'badge-accent'
+      case 'sink': return 'badge-warning'
+      default: return 'badge-neutral'
+    }
   },
 })
