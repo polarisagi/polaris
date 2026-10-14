@@ -104,25 +104,6 @@ ProviderModelRow struct {
 
 type
 
-// CronJobRow 对应 cron_jobs 表一行。
-CronJobRow struct {
-	ID              string
-	Name            string
-	Prompt          string
-	Schedule        string
-	SessionID       string
-	Enabled         bool
-	LastRunAt       string
-	NextRunAt       string
-	FailureCount    int
-	CircuitOpen     bool
-	LastError       string
-	CircuitOpenedAt string
-	CreatedAt       string
-}
-
-type
-
 // ExtInstanceRow 对应 extension_instances 表一行。
 ExtInstanceRow struct {
 	ID               string

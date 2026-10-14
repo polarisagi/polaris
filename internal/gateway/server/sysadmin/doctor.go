@@ -69,8 +69,8 @@ func (h *SysAdminHandler) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 
 	// ── Cron 任务 ─────────────────────────────────────────────────────
 	var cronEnabled, cronTotal int
-	h.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs WHERE enabled=1`).Scan(&cronEnabled) //nolint:errcheck
-	h.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs`).Scan(&cronTotal)                   //nolint:errcheck
+	h.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM automations WHERE enabled=1`).Scan(&cronEnabled) //nolint:errcheck
+	h.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM automations`).Scan(&cronTotal)                   //nolint:errcheck
 	add("cron", true, fmt.Sprintf("%d/%d jobs enabled", cronEnabled, cronTotal))
 
 	// ── 内存 ──────────────────────────────────────────────────────────

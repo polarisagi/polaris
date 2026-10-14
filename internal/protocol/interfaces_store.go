@@ -177,23 +177,6 @@ ProviderRepository interface {
 
 type
 
-// CronRepository 定时任务读写契约。
-// @consumer: internal/tool/builtin/, internal/gateway/server/sysadmin/
-// @producer: internal/store/repo/repo_cron.go
-CronRepository interface {
-	ListCronJobs(ctx context.Context) ([]types.CronJobRow, error)
-	GetCronJob(ctx context.Context, id string) (*types.CronJobRow, error)
-	CreateCronJob(ctx context.Context, row types.CronJobRow) error
-	UpdateCronJob(ctx context.Context, row types.CronJobRow) error
-	DeleteCronJob(ctx context.Context, id string) error
-	// UpdateCircuitBreaker 更新断路器状态（failure_count / circuit_open / last_error）。
-	UpdateCircuitBreaker(ctx context.Context, id string, failureCount int, circuitOpen bool, lastError, circuitOpenedAt string) error
-	// UpdateLastRun 更新最近执行时间与下次执行时间。
-	UpdateLastRun(ctx context.Context, id, lastRunAt, nextRunAt string) error
-}
-
-type
-
 // ExtensionRepository 扩展安装与目录读写契约。
 // @consumer: internal/extension/native/, internal/extension/marketplace/, internal/extension/mcp/
 // @producer: internal/store/repo/repo_extension.go

@@ -32,7 +32,7 @@ func Test_inv_SchemaFileNamingConvention(t *testing.T) {
 		}
 
 		numStr := matches[1]
-		if numStr == "025" || numStr == "026" || numStr == "027" {
+		if numStr == "014" || numStr == "025" || numStr == "026" || numStr == "027" || numStr == "028" {
 			t.Errorf("inv_SchemaFileNamingConvention VIOLATED: 编号 %s 被预留，禁止使用 (%s)", numStr, file.Name())
 		}
 

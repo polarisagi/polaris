@@ -57,6 +57,5 @@ func simpleCounters() []counterSpec {
 		{"polaris.learning.skill_register_failures_total", "Synthetic skill registration failures", &GlobalLearningSkillRegisterFailuresTotal},
 		{"polaris.gateway.preference_write_failures_total", "Gateway preference/prompt template write failures", &GlobalGatewayPreferenceWriteFailuresTotal},
 		{"polaris.store.schema_migration_diag_write_failures_total", "SchemaManager migration_version diagnostic field write failures", &GlobalSchemaMigrationDiagWriteFailuresTotal},
-		{"polaris.tool.cron_next_run_write_failures_total", "cron_create next_run_at backfill failures", &GlobalCronNextRunWriteFailuresTotal},
 	}
 }

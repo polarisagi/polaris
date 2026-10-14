@@ -98,12 +98,6 @@
 - **根因类别**：测试触发异步后台协程（如 `Install()`）但提前退出，协程仍向 `t.TempDir()` 写文件，与清理并发争用；且未注入测试用 `HTTPClient` 致下载组件空指针。
 - **排查起点**：检查测试是否通过 channel/轮询等待后台协程终态（如 `installing.Load() == false`）；检查 service 构造是否注入模拟离线客户端与可取消 context。
 
-### 症状 16：Agent 用 cron_create 建的定时任务从不执行
-- **症状特征**：Agent 会话中通过 `cron_create` 创建了定时任务，但到期从不触发执行。
-- **归类模块**：M13 / M07
-- **根因类别**：`cron_jobs`（014）无调度器消费（调度器 `cronTick` 仅扫 `automations` 表）；ADR-0114：cron_jobs 无调度器消费，已改为 automation_* 写 automations/workflows。
-- **排查起点**：`docs/arch/decisions/ADR-0114-info-acquisition-automation-pipeline.md`、`docs/arch/M13-Interface-Scheduler.md §8.7`。
-
 **维护规范**：
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。
 - 相似症状合并成一项（用"/"列举变体）。

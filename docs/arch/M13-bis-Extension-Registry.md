@@ -354,7 +354,7 @@ M9 promote 候选技能时：
 | `plugins` / `plugin_user_config` / `plugin_channels` / `plugin_app_bindings` | 021 | bundle 元数据 / userConfig / channels / 应用绑定；`mcp_policy` 仅存附加策略 |
 | `automations` / `automation_runs` | 017 | M13 Scheduler |
 | `workflows` / `workflow_steps` / `workflow_runs` | 029 | M13 工作流 |
-| `cron_jobs` | 014 | 旧版定时任务表，由 017 接管，逐步废弃 |
+| （014 永久留空） | 014 | 原定时任务表已彻底废弃删除（ADR-0114） |
 
 `skill_sources` 已删除，职责归入 `extension_instances`。
 

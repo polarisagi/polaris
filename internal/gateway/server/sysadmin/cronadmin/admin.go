@@ -47,7 +47,6 @@ type CronAdmin struct {
 	AutomationRepo   repo.AutomationRepository
 	ChannelRepo      repo.ChannelRepository
 	EventRepo        repo.EventRepository
-	CronRepo         protocol.CronRepository
 	Chat             ChatDispatcher
 	ChannelMgr       ChannelMgr
 	HITLGateway      HITLGateway
@@ -72,7 +71,6 @@ func NewCronAdmin(
 	automationRepo repo.AutomationRepository,
 	channelRepo repo.ChannelRepository,
 	eventRepo repo.EventRepository,
-	cronRepo protocol.CronRepository,
 	chat ChatDispatcher,
 	channelMgr ChannelMgr,
 	hitlGateway HITLGateway,
@@ -91,7 +89,6 @@ func NewCronAdmin(
 		AutomationRepo:     automationRepo,
 		ChannelRepo:        channelRepo,
 		EventRepo:          eventRepo,
-		CronRepo:           cronRepo,
 		Chat:               chat,
 		ChannelMgr:         channelMgr,
 		HITLGateway:        hitlGateway,

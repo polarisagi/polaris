@@ -47,7 +47,6 @@ type SysAdminHandler struct {
 	nowFn          func() time.Time // 测试注入时钟；nil = time.Now
 	ChannelRepo    repo.ChannelRepository
 	EventRepo      repo.EventRepository
-	CronRepo       protocol.CronRepository
 	WorkflowRepo   repo.WorkflowRepository
 	Agent          protocol.AgentController
 	MCPMgr         MCPManager
@@ -117,7 +116,6 @@ type Dependencies struct {
 	BudgetRepo     repo.BudgetRepository
 	UsageRepo      repo.LLMUsageQueryRepository
 	ChannelRepo    repo.ChannelRepository
-	CronRepo       protocol.CronRepository
 	EventRepo      repo.EventRepository
 	WorkflowRepo   repo.WorkflowRepository
 	AgentPool      protocol.AgentPool
@@ -179,7 +177,6 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		UsageRepo:            deps.UsageRepo,
 		ChannelRepo:          deps.ChannelRepo,
 		EventRepo:            deps.EventRepo,
-		CronRepo:             deps.CronRepo,
 		WorkflowRepo:         deps.WorkflowRepo,
 		MCPMgr:               deps.MCPMgr,
 		DataDir:              deps.DataDir,
@@ -240,7 +237,6 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.AutomationRepo,
 		deps.ChannelRepo,
 		deps.EventRepo,
-		deps.CronRepo,
 		deps.Chat,
 		deps.ChannelMgr,
 		deps.HITLGateway,

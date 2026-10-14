@@ -98,7 +98,6 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 	s.channelRepo = repo.NewSQLiteChannelRepository(rwDB)
 	s.automationRepo = repo.NewSQLiteAutomationRepository(rwDB)
 	s.eventRepo = repo.NewSQLiteEventRepository(rwDB)
-	s.cronRepo = repo.NewSQLiteCronRepository(rwDB)
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(rwDB)
 	s.projectRepo = repo.NewSQLiteProjectRepository(rwDB)
 
@@ -186,7 +185,6 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		ChannelRepo:    s.channelRepo,
 		AutomationRepo: s.automationRepo,
 		EventRepo:      s.eventRepo,
-		CronRepo:       s.cronRepo,
 		Registry:       s.registry,
 		HTTPClient:     httpClient,
 		DataDir:        s.dataDir,
