@@ -245,7 +245,10 @@ func (s *Server) AutomationFacade() *sysadmin.AutomationFacade {
 	if s.sysadminHandler == nil {
 		return &sysadmin.AutomationFacade{}
 	}
-	return &sysadmin.AutomationFacade{Cron: s.sysadminHandler.Cron}
+	return &sysadmin.AutomationFacade{
+		Cron:     s.sysadminHandler.Cron,
+		Workflow: s.sysadminHandler.Workflow,
+	}
 }
 
 // SetOutboxWriter 注入 Outbox 写入器。此前该 setter 在 cmd/polaris 启动流程中

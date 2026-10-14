@@ -207,6 +207,9 @@ func (r *Runner) RunStep(ctx context.Context, rc RunContext, s StepSpec) (res St
 			stepData = StepData{Count: count, Text: customPreview}
 			break
 		}
+		if rc.DryRun {
+			outArgs = clampToolArgs(outArgs)
+		}
 
 		rawOutput, err := r.Tools.Call(ctx, s.Tool, outArgs, refsUsed)
 		if err != nil {
@@ -563,4 +566,39 @@ func truncateRunes(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes])
+}
+
+// clampToolArgs 在 dry-run 模式下将顶层 max_items/max_results/limit 数值限制为 min(原值, 5)。
+func clampToolArgs(args []byte) []byte {
+	if len(args) == 0 {
+		return args
+	}
+	var m map[string]any
+	if err := json.Unmarshal(args, &m); err != nil {
+		return args
+	}
+	modified := false
+	for _, k := range []string{"max_items", "max_results", "limit"} {
+		if v, ok := m[k]; ok {
+			switch val := v.(type) {
+			case float64:
+				if val > 5 {
+					m[k] = 5
+					modified = true
+				}
+			case int:
+				if val > 5 {
+					m[k] = 5
+					modified = true
+				}
+			}
+		}
+	}
+	if modified {
+		clamped, err := json.Marshal(m)
+		if err == nil {
+			return clamped
+		}
+	}
+	return args
 }

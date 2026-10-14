@@ -46,6 +46,7 @@ type AutomationSummary struct {
 	NextRunAt     string `json:"next_run_at"`
 	Enabled       bool   `json:"enabled"`
 	CircuitOpen   bool   `json:"circuit_open"`
+	LLMTokens7d   int    `json:"llm_tokens_7d"`
 }
 
 // PromptAutomationInput 创建/更新 prompt 型自动化的输入参数（供 automation_save 工具使用）。
@@ -57,4 +58,35 @@ type PromptAutomationInput struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	ResultAction    string `json:"result_action,omitempty"`
 	Enabled         bool   `json:"enabled"`
+}
+
+// FieldError 表示管线/自动化校验错误（路径 + 错误信息）。
+type FieldError struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// PipelineDryRunStep 描述管线试运行单步概况。
+type PipelineDryRunStep struct {
+	Key     string   `json:"key"`
+	Kind    string   `json:"kind"`
+	Status  string   `json:"status"`
+	Note    string   `json:"note,omitempty"`
+	Count   int      `json:"count"`
+	Preview []string `json:"preview,omitempty"`
+}
+
+// PipelineDryRunResult 管线同步试跑结果（DTO）。
+type PipelineDryRunResult struct {
+	Steps                       []PipelineDryRunStep `json:"steps"`
+	EstimatedLLMInputTokens     int                  `json:"estimated_llm_input_tokens"`
+	EstimatedLLMOutputTokensMax int                  `json:"estimated_llm_output_tokens_max"`
+}
+
+// PipelineSaveResult 管线保存结果（DTO）。
+type PipelineSaveResult struct {
+	OK        bool         `json:"ok"`
+	ID        string       `json:"id,omitempty"`
+	NextRunAt string       `json:"next_run_at,omitempty"`
+	Errors    []FieldError `json:"errors,omitempty"`
 }
