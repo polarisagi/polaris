@@ -355,6 +355,9 @@ type M7ToolThresholds struct {
 	SandboxL4MaxSessions         int    `toml:"sandbox.l4_max_sessions"`            // 8（D4：单进程内并发存活会话上限，超限淘汰最久未用）
 	SandboxL4ExecTimeoutSeconds  int    `toml:"sandbox.l4_exec_timeout_seconds"`    // 30（D4：单次调用超时，超时判定会话协议不可信并终止）
 	SandboxL4ReapIntervalSeconds int    `toml:"sandbox.l4_reap_interval_seconds"`   // 30（D4：空闲回收扫描周期）
+	WebFetchDefaultMaxChars      int    `toml:"web_fetch.default_max_chars"`        // 12000
+	WebFetchCacheMaxRows         int    `toml:"web_fetch.cache_max_rows"`           // 5000
+	WebFetchHostMinIntervalMs    int    `toml:"web_fetch.host_min_interval_ms"`     // 1000
 }
 
 type M8OrchestratorThresholds struct {
@@ -630,6 +633,9 @@ func DefaultThresholds() Thresholds {
 			SandboxL4MaxSessions:         8,
 			SandboxL4ExecTimeoutSeconds:  30,
 			SandboxL4ReapIntervalSeconds: 30,
+			WebFetchDefaultMaxChars:      12000,
+			WebFetchCacheMaxRows:         5000,
+			WebFetchHostMinIntervalMs:    1000,
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,

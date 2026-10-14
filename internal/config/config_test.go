@@ -106,4 +106,13 @@ func TestDefaultThresholds_NonZero(t *testing.T) {
 	if def.M3Observability.MemCautionMB == 0 {
 		t.Error("expected non-zero M3Observability.MemCautionMB")
 	}
+	if def.M7Tool.WebFetchDefaultMaxChars != 12000 {
+		t.Errorf("expected M7Tool.WebFetchDefaultMaxChars == 12000, got %d", def.M7Tool.WebFetchDefaultMaxChars)
+	}
+	if def.M7Tool.WebFetchCacheMaxRows != 5000 {
+		t.Errorf("expected M7Tool.WebFetchCacheMaxRows == 5000, got %d", def.M7Tool.WebFetchCacheMaxRows)
+	}
+	if def.M7Tool.WebFetchHostMinIntervalMs != 1000 {
+		t.Errorf("expected M7Tool.WebFetchHostMinIntervalMs == 1000, got %d", def.M7Tool.WebFetchHostMinIntervalMs)
+	}
 }
