@@ -133,3 +133,55 @@ func (cs *CronSchedule) NextAfter(from time.Time) time.Time {
 	}
 	return time.Time{}
 }
+
+// MinInterval 计算 cron 表达式在 from 之后的连续 samples 次触发时间的相邻差最小值。
+// 若 samples <= 1，默认取 50 次采样。
+func MinInterval(expr string, from time.Time, samples int) (time.Duration, error) {
+	if samples <= 1 {
+		samples = 50
+	}
+	switch strings.TrimSpace(expr) {
+	case "@hourly":
+		expr = "0 * * * *"
+	case "@daily", "@midnight":
+		expr = "0 0 * * *"
+	case "@weekly":
+		expr = "0 0 * * 0"
+	case "@monthly":
+		expr = "0 0 1 * *"
+	}
+
+	parts := strings.Fields(expr)
+	if len(parts) == 6 {
+		parts = parts[1:]
+	}
+	if len(parts) != 5 {
+		return 0, apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("cron: need 5 fields, got %d: %q", len(parts), expr))
+	}
+
+	cs, err := ParseCron(strings.Join(parts, " "))
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeInvalidInput, "cron: invalid expr for MinInterval", err)
+	}
+
+	cur := from
+	var minDiff time.Duration = -1
+	for i := 0; i < samples; i++ {
+		next := cs.NextAfter(cur)
+		if next.IsZero() {
+			break
+		}
+		if i > 0 {
+			diff := next.Sub(cur)
+			if minDiff < 0 || diff < minDiff {
+				minDiff = diff
+			}
+		}
+		cur = next
+	}
+
+	if minDiff <= 0 {
+		return 0, apperr.New(apperr.CodeInvalidInput, "cron: cannot determine minimum interval")
+	}
+	return minDiff, nil
+}

@@ -75,16 +75,17 @@ func (r *SQLiteAutomationRepository) DeleteAutomation(ctx context.Context, id st
 func (r *SQLiteAutomationRepository) GetAutomation(ctx context.Context, id string) (*repo.AutomationRow, error) {
 	var row repo.AutomationRow
 	var enabledInt, hitlInt int
+	var circuitOpenInt sql.NullInt64
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source, circuit_open,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
 		       created_at, updated_at, event_filter
 		FROM automations WHERE id=?`, id).Scan(
 		&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 		&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-		&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source,
+		&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source, &circuitOpenInt,
 		&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
 		&row.CreatedAt, &row.UpdatedAt, &row.EventFilter)
 	if err == sql.ErrNoRows {
@@ -95,6 +96,7 @@ func (r *SQLiteAutomationRepository) GetAutomation(ctx context.Context, id strin
 	}
 	row.Enabled = enabledInt == 1
 	row.RequiresHITL = hitlInt == 1
+	row.CircuitOpen = circuitOpenInt.Valid && circuitOpenInt.Int64 == 1
 	return &row, nil
 }
 
@@ -102,7 +104,7 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source, circuit_open,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
 		       created_at, updated_at, event_filter
 		FROM automations ORDER BY created_at DESC`)
@@ -115,16 +117,18 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 	for rows.Next() {
 		var row repo.AutomationRow
 		var enabledInt, hitlInt int
+		var circuitOpenInt sql.NullInt64
 		if err := rows.Scan(
 			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source, &circuitOpenInt,
 			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
 			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListAutomations scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		row.RequiresHITL = hitlInt == 1
+		row.CircuitOpen = circuitOpenInt.Valid && circuitOpenInt.Int64 == 1
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -137,7 +141,7 @@ func (r *SQLiteAutomationRepository) ListDueAutomations(ctx context.Context, now
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source, circuit_open,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
 		       created_at, updated_at, event_filter
 		FROM automations
@@ -156,16 +160,18 @@ func (r *SQLiteAutomationRepository) ListDueAutomations(ctx context.Context, now
 	for rows.Next() {
 		var row repo.AutomationRow
 		var enabledInt, hitlInt int
+		var circuitOpenInt sql.NullInt64
 		if err := rows.Scan(
 			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source, &circuitOpenInt,
 			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
 			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListDueAutomations scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		row.RequiresHITL = hitlInt == 1
+		row.CircuitOpen = circuitOpenInt.Valid && circuitOpenInt.Int64 == 1
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -178,7 +184,7 @@ func (r *SQLiteAutomationRepository) ListEventAutomations(ctx context.Context) (
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source, circuit_open,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
 		       created_at, updated_at, event_filter
 		FROM automations
@@ -196,16 +202,18 @@ func (r *SQLiteAutomationRepository) ListEventAutomations(ctx context.Context) (
 	for rows.Next() {
 		var row repo.AutomationRow
 		var enabledInt, hitlInt int
+		var circuitOpenInt sql.NullInt64
 		if err := rows.Scan(
 			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source, &circuitOpenInt,
 			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
 			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListEventAutomations scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		row.RequiresHITL = hitlInt == 1
+		row.CircuitOpen = circuitOpenInt.Valid && circuitOpenInt.Int64 == 1
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -221,7 +229,7 @@ func (r *SQLiteAutomationRepository) ListWebhookAutomations(ctx context.Context,
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, source, circuit_open,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
 		       created_at, updated_at, event_filter
 		FROM automations
@@ -238,16 +246,18 @@ func (r *SQLiteAutomationRepository) ListWebhookAutomations(ctx context.Context,
 	for rows.Next() {
 		var row repo.AutomationRow
 		var enabledInt, hitlInt int
+		var circuitOpenInt sql.NullInt64
 		if err := rows.Scan(
 			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel, &row.Source, &circuitOpenInt,
 			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
 			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListWebhookAutomations scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		row.RequiresHITL = hitlInt == 1
+		row.CircuitOpen = circuitOpenInt.Valid && circuitOpenInt.Int64 == 1
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {

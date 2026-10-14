@@ -19,6 +19,7 @@ type AutomationRow struct {
 	RequiresHITL    bool
 	RiskLevel       int
 	Source          string
+	CircuitOpen     bool
 	LastRunAt       string
 	NextRunAt       string
 	RunCount        int

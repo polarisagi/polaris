@@ -32,3 +32,29 @@ type AutomationFacade interface {
 	// HITLPending 返回当前所有待审批请求（供 UI 展示）。
 	HITLPending(ctx context.Context) ([]types.HITLPrompt, error)
 }
+
+// AutomationSummary 定时自动化任务摘要（ADR-0114，供 automation_list 工具与网关管理列表共用）。
+type AutomationSummary struct {
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	Name          string `json:"name"`
+	TriggerType   string `json:"trigger_type"`
+	Cron          string `json:"cron"`
+	Source        string `json:"source"`
+	LastRunStatus string `json:"last_run_status"`
+	LastRunAt     string `json:"last_run_at"`
+	NextRunAt     string `json:"next_run_at"`
+	Enabled       bool   `json:"enabled"`
+	CircuitOpen   bool   `json:"circuit_open"`
+}
+
+// PromptAutomationInput 创建/更新 prompt 型自动化的输入参数（供 automation_save 工具使用）。
+type PromptAutomationInput struct {
+	ID              string `json:"id,omitempty"`
+	Name            string `json:"name"`
+	Prompt          string `json:"prompt"`
+	Cron            string `json:"cron"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ResultAction    string `json:"result_action,omitempty"`
+	Enabled         bool   `json:"enabled"`
+}

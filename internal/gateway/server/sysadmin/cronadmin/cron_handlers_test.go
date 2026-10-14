@@ -70,8 +70,8 @@ func TestCronHandlers(t *testing.T) {
 			prompt_snapshot TEXT,
 			logs TEXT
 		);
-		INSERT INTO automations (id, name, description, enabled, trigger_type, cron_schedule, schedule, event_filter, events, prompt, script, sandbox_level, model, channel_id, env_type, working_dir, result_action, cedar_rules_json, requires_hitl, risk_level, system_prompt_version, reasoning_effort, next_run_at, last_run_at, run_count, last_run_status, last_run_error, circuit_open, created_at, updated_at)
-		VALUES ('auto-1', 'test-auto', 'Desc', 1, 'cron', '0 * * * *', '* * * * *', '{}', '[]', 'prompt', '', 1, 'model', 'chan1', 'system', '.', 'log', '{}', 0, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, '', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+		INSERT INTO automations (id, name, description, enabled, trigger_type, cron_schedule, schedule, event_filter, events, prompt, script, sandbox_level, model, channel_id, env_type, working_dir, result_action, cedar_rules_json, requires_hitl, risk_level, source, system_prompt_version, reasoning_effort, next_run_at, last_run_at, run_count, last_run_status, last_run_error, circuit_open, created_at, updated_at)
+		VALUES ('auto-1', 'test-auto', 'Desc', 1, 'cron', '0 * * * *', '* * * * *', '{}', '[]', 'prompt', '', 1, 'model', 'chan1', 'system', '.', 'session', '{}', 0, 1, 'user', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, '', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 	`)
 	if err != nil {
 		t.Fatal(err)
