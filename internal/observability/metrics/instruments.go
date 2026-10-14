@@ -223,4 +223,9 @@ var (
 
 	// automation_* 工具防失控可观测性（ADR-0114）
 	InstrAutomationAgentWriteDeniedTotal metric.Int64Counter // label: reason
+
+	// workflow pipeline 可观测性（ADR-0114）
+	InstrWorkflowStepDurationMs   metric.Float64Histogram
+	InstrWorkflowStepsTotal       metric.Int64Counter
+	InstrWorkflowRunsSkippedTotal metric.Int64Counter
 )

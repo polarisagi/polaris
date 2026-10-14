@@ -71,6 +71,7 @@ const (
 
 	// ── 其他 ──
 	PurposeBackgroundLLMInfer = "background_llm_infer" // boot_tools llmInfer 的兜底用途，调用方可覆盖
+	PurposeWorkflowLLMStep    = "workflow_llm_step"    // 工作流管线中 llm 步骤的调用归因（ADR-0114）
 	PurposeUnspecified        = "unspecified"          // llm_calls 对空 purpose 的记账值
 )
 

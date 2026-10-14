@@ -466,6 +466,13 @@ type M13InterfaceThresholds struct {
 	AmbientSkillMaxChars           int `toml:"ambient_skill_max_chars"`            // 4000
 	PromptAutomationMinIntervalMin int `toml:"automation.prompt_min_interval_min"` // 60
 	AgentAutomationMax             int `toml:"automation.agent_max"`               // 20
+	PipelineMinIntervalMin         int `toml:"pipeline.min_interval_min"`          // 15
+	PipelineMaxSteps               int `toml:"pipeline.max_steps"`                 // 20
+	PipelineStepDataMaxBytes       int `toml:"pipeline.step_data_max_bytes"`       // 1048576
+	PipelineRunDataKeepRuns        int `toml:"pipeline.run_data_keep_runs"`        // 20
+	PipelineSeenItemsTTLDays       int `toml:"pipeline.seen_items_ttl_days"`       // 90
+	PipelineLLMMaxInputChars       int `toml:"pipeline.llm_max_input_chars"`       // 24000
+	PipelineLLMMaxOutputTokens     int `toml:"pipeline.llm_max_output_tokens"`     // 2000
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
@@ -712,6 +719,13 @@ func DefaultThresholds() Thresholds {
 			AmbientSkillMaxChars:           4000,
 			PromptAutomationMinIntervalMin: 60,
 			AgentAutomationMax:             20,
+			PipelineMinIntervalMin:         15,
+			PipelineMaxSteps:               20,
+			PipelineStepDataMaxBytes:       1048576,
+			PipelineRunDataKeepRuns:        20,
+			PipelineSeenItemsTTLDays:       90,
+			PipelineLLMMaxInputChars:       24000,
+			PipelineLLMMaxOutputTokens:     2000,
 		},
 		Session: SessionThresholds{
 			// 取系统提示词中通常的最长特征串长度（例如 "PolarisAGI" 10 字节），并 ×2 留作冗余

@@ -386,6 +386,26 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Agent 尝试创建/修改自动化被拒绝次数 (label: reason)"),
 	)
 	ie.capture("polaris.automation.agent_write_denied_total", err)
+
+	// 工作流管线可观测性（ADR-0114）
+	InstrWorkflowStepDurationMs, err = meter.Float64Histogram(
+		"polaris.workflow.step_duration_ms",
+		metric.WithDescription("工作流管线单步耗时（ms）(label: kind, status)"),
+		metric.WithExplicitBucketBoundaries(10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000),
+	)
+	ie.capture("polaris.workflow.step_duration_ms", err)
+
+	InstrWorkflowStepsTotal, err = meter.Int64Counter(
+		"polaris.workflow.steps_total",
+		metric.WithDescription("工作流管线步骤执行次数 (label: kind, status)"),
+	)
+	ie.capture("polaris.workflow.steps_total", err)
+
+	InstrWorkflowRunsSkippedTotal, err = meter.Int64Counter(
+		"polaris.workflow.runs_skipped_total",
+		metric.WithDescription("工作流管线运行被整次跳过次数 (label: reason)"),
+	)
+	ie.capture("polaris.workflow.runs_skipped_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {

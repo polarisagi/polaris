@@ -373,3 +373,27 @@ func RecordAutomationAgentWriteDenied(ctx context.Context, reason string) {
 		))
 	}
 }
+
+// RecordWorkflowStep 记录工作流单步执行耗时与次数（ADR-0114）。
+func RecordWorkflowStep(ctx context.Context, kind, status string, durMs float64) {
+	attrs := metric.WithAttributes(
+		attribute.String("kind", kind),
+		attribute.String("status", status),
+	)
+	if InstrWorkflowStepsTotal != nil {
+		InstrWorkflowStepsTotal.Add(ctx, 1, attrs)
+	}
+	if InstrWorkflowStepDurationMs != nil {
+		InstrWorkflowStepDurationMs.Record(ctx, durMs, attrs)
+	}
+}
+
+// RecordWorkflowRunSkipped 记录工作流运行跳过次数（ADR-0114）。
+func RecordWorkflowRunSkipped(ctx context.Context, reason string) {
+	if InstrWorkflowRunsSkippedTotal != nil {
+		InstrWorkflowRunsSkippedTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("reason", reason),
+		))
+	}
+}
+
