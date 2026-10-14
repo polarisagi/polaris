@@ -35,6 +35,13 @@
 6. **插件伴生任务**：读 `extensions["ai.polarisagi"].scheduledTasks`，安装只注册为自动化模板，用户启用才生效；卸载删除模板并停用由其实例化的自动化。
 7. **删除** `014_cron_jobs.sql`、`CronRepository`、`types.CronJobRow`、`cron_*` 工具；编号 014 永久留空。官方插件清单迁移到 `.codex-plugin/plugin.json`。
 
+8. **插件分层（2026-10-14 复核追加，取代决策四中「采集能力并入 `browser_use`」）**：
+   - `browser_use`：只做通用浏览器能力（打开、正文读取、快照、交互）与浏览器连接（BrowserHub、扩展桥接与中继），不含任何平台知识。
+   - `social_poster` 更名为 `social`（MCP 服务器 `polaris-social`）：各平台的**读与写**同处一个插件——站点配方、登录检查、风控信号、按平台共享限速（读取与发帖计入同一账号的同一限速）。读工具 `social_search/social_hot/social_feed/social_read/social_platforms/social_selftest` 声明 `readOnlyHint`；发帖等写工具保持原名。
+   - `knowledge_base` 升级为资料库：`kb_save` 把内容落成带 YAML 元信息头的 Markdown（默认 `~/Polaris/Vault`，Obsidian 兼容，按 URL 去重），另有 `kb_list/kb_search/kb_read/kb_tag/kb_move`，写入严格限定在资料库目录内。内核以 `ObsidianConnector` 同步资料库目录入 RAG，不另写入库逻辑。
+   - 「提炼」仍只在管线 `llm` 步骤中进行（统一记账与预算），插件不调用模型。
+   - 管线写入白名单改为阈值 `m13_interface.pipeline_write_allowlist`（默认 `knowledge_ingest`、`mcp__polaris-knowledge-base__kb_save`），取代代码内写死的单一名称。
+
 阈值 SSoT：`docs/arch/spec/state.yaml §thresholds.m13_interface`（pipeline.* / automation.*）与 `§thresholds.m7_tool`（web_fetch.*）；代码只经 `config.CurrentThresholds()` 读取，不得写死。
 
 ## 后果
@@ -84,3 +91,4 @@
 | 2026-10-14 | 正文抽取选型：`github.com/markusmobius/go-trafilatura@v1.12.2` + `github.com/JohannesKaufmann/html-to-markdown/v2@v2.5.2`，fixtures 8/8 通过 |
 | 2026-10-14 | 全部任务落地（core 32c73bb..38ebd22；plugins 3fb4c30..4ef4d53） |
 | 2026-10-14 | 设计复核修订：写工具步骤运行时强制 HITL 审批且 fail-closed（3f7b39b、44f6aa6）；管线阈值改读配置（f06e50c）；浏览器自建页按标记 URL 识别、非聚焦窗口（plugins ae5f44d）。上下文补入调研订正表 F1~F5；决策五的拦截落点按代码订正为工具层 `IsBackgroundWork` 检查（原文写作 PolicyGate 拦截）；负向后果中「需在专用浏览器登录」随决策四改为扩展配对/cdp 首连允许 |
+| 2026-10-14 | 追加决策八（插件分层）：采集从 `browser_use` 移入更名后的 `social`（读写同插件、共享限速），资料库插件落地 Markdown 并经 ObsidianConnector 入 RAG，写入白名单配置化。推翻决策四「采集并入 browser_use」的理由：读与写使用同一账号，限速与平台知识必须同处一处，否则一边采集一边发帖时频率叠加、风控特征需维护两份；browser_use 保持平台无关。实测补充：macOS 下非 Polaris 进程（如外部代理工具）可能无权读取 Chrome 数据目录中的 `DevToolsActivePort`，cdp 后端须由 Polaris 进程或用户终端运行；`chrome://inspect` 开关模式下 9222 端口不提供 HTTP 发现接口 |
