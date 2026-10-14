@@ -206,16 +206,18 @@ func parseCronField(part string) (int, int) {
 
 // automationTemplate 对应 configs/automations/templates/*.yaml 或远程 index.json 中的单条记录。
 type automationTemplate struct {
-	Icon            string   `yaml:"icon"             json:"icon"`
-	Name            string   `yaml:"name"             json:"name"`
-	Description     string   `yaml:"description"      json:"description"`
-	Prompt          string   `yaml:"prompt"           json:"prompt"`
-	TriggerType     string   `yaml:"trigger_type"     json:"trigger_type"`
-	CronSchedule    string   `yaml:"cron_schedule"    json:"cron_schedule"`
-	ReasoningEffort string   `yaml:"reasoning_effort" json:"reasoning_effort"`
-	Tags            []string `yaml:"tags"             json:"tags,omitempty"`
-	Source          string   `yaml:"source"           json:"source,omitempty"`
-	Author          string   `yaml:"author"           json:"author,omitempty"`
+	Icon            string          `yaml:"icon"             json:"icon"`
+	Name            string          `yaml:"name"             json:"name"`
+	Description     string          `yaml:"description"      json:"description"`
+	Prompt          string          `yaml:"prompt"           json:"prompt"`
+	TriggerType     string          `yaml:"trigger_type"     json:"trigger_type"`
+	CronSchedule    string          `yaml:"cron_schedule"    json:"cron_schedule"`
+	ReasoningEffort string          `yaml:"reasoning_effort" json:"reasoning_effort"`
+	Tags            []string        `yaml:"tags"             json:"tags,omitempty"`
+	Source          string          `yaml:"source"           json:"source,omitempty"`
+	Author          string          `yaml:"author"           json:"author,omitempty"`
+	Kind            string          `yaml:"kind"             json:"kind,omitempty"`
+	Pipeline        json.RawMessage `yaml:"pipeline"         json:"pipeline,omitempty"`
 }
 
 // automationSource 对应 configs/extensions/automation_sources.yaml 中的单条来源配置。

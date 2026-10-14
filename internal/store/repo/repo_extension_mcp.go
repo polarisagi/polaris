@@ -271,6 +271,14 @@ func uninstallCleanupPlugin(ctx context.Context, tx *sql.Tx, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM hook_trust WHERE source_key LIKE ?`, "plugin:"+id+":%"); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup hook_trust", err)
 	}
+	// 停用由该插件伴生任务模板实例化的 automations 与 workflows（保留用户数据，不删除行；T10 要求）
+	sourceVal := "plugin:" + id
+	if _, err := tx.ExecContext(ctx, `UPDATE automations SET enabled=0, last_run_error='来源插件已卸载' WHERE source=?`, sourceVal); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup automations disable", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflows SET enabled=0, last_run_error='来源插件已卸载' WHERE source=?`, sourceVal); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup workflows disable", err)
+	}
 	return nil
 }
 

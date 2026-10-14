@@ -58,6 +58,7 @@ type CronAdmin struct {
 	// 经此驱动 Headless 轮次，收敛此前与 workflowadmin/channelsadmin 三处几乎
 	// 相同又不完全一致的编排实现，见 cron_runner.go executeAutomation 注释。
 	SessionOrch session.Orchestrator
+	ExtRepo     protocol.ExtensionRepository
 
 	ToolExec           func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	NewWorktreeManager func(workingDir, worktreeRoot string) WorktreeManager

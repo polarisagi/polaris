@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/automation/pipeline"
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
@@ -164,7 +165,8 @@ func validateCreateWorkflowRequest(w http.ResponseWriter, reqType *string, name 
 
 func (h *WorkflowAdmin) handlePipelineCreate(w http.ResponseWriter, r *http.Request, bodyBytes []byte) bool {
 	var probe struct {
-		Kind string `json:"kind"`
+		Kind   string `json:"kind"`
+		Source string `json:"source"`
 	}
 	_ = json.Unmarshal(bodyBytes, &probe)
 	if probe.Kind != "pipeline" {
@@ -175,7 +177,11 @@ func (h *WorkflowAdmin) handlePipelineCreate(w http.ResponseWriter, r *http.Requ
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return true
 	}
-	wfID, _, fieldErrs, err := h.SavePipeline(r.Context(), spec, "", "user")
+	source := probe.Source
+	if source == "" {
+		source = "user"
+	}
+	wfID, _, fieldErrs, err := h.SavePipeline(r.Context(), spec, "", source)
 	if len(fieldErrs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -370,6 +376,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 		Enabled      *bool          `json:"enabled"`
 		ResultAction string         `json:"result_action"`
 		DeliverFrom  string         `json:"deliver_from"`
+		Source       string         `json:"source"`
 		Steps        []workflowStep `json:"steps"`
 	}
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -404,6 +411,11 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 		resultAction = "silent"
 	}
 
+	source := req.Source
+	if source == "" {
+		source = "user"
+	}
+
 	wfRow := repo.WorkflowRow{
 		ID:           id,
 		Type:         req.Type,
@@ -417,7 +429,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 		UpdatedAt:    now,
 		ResultAction: resultAction,
 		DeliverFrom:  req.DeliverFrom,
-		Source:       "user",
+		Source:       source,
 	}
 
 	if err := validateStepRetryCompensation(req.Steps); err != nil {
@@ -764,17 +776,58 @@ func (h *WorkflowAdmin) checkWorkflowExists(ctx context.Context, id string) bool
 	return h.DB.QueryRowContext(ctx, `SELECT id FROM workflows WHERE id=?`, id).Scan(&existsID) == nil
 }
 
+func (h *WorkflowAdmin) resolvePipelineMCPPlaceholders(ctx context.Context, spec pipeline.Spec, source string) pipeline.Spec {
+	pluginID := ""
+	if strings.HasPrefix(source, "plugin:") {
+		pluginID = strings.TrimPrefix(source, "plugin:")
+	}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return spec
+	}
+	resolved := pluginspec.ResolveMCPPlaceholders(raw, func(server string) string {
+		if pluginID != "" && h.DB != nil {
+			var name string
+			err := h.DB.QueryRowContext(ctx, `
+				SELECT name FROM mcp_servers 
+				WHERE plugin_id = ? AND (name = ? OR name LIKE ? OR id = ?)
+				LIMIT 1`, pluginID, server, "%-"+server, "plugin_"+pluginID+"_"+server).Scan(&name)
+			if err == nil && name != "" {
+				return name
+			}
+		}
+		if pluginID != "" {
+			pName := strings.TrimPrefix(pluginID, "pl_")
+			if pName == server || strings.HasSuffix(pName, "-"+server) {
+				return pName
+			}
+			return pName + "-" + server
+		}
+		return server
+	})
+	var out pipeline.Spec
+	if err := json.Unmarshal(resolved, &out); err == nil {
+		return out
+	}
+	return spec
+}
+
+// ResolvePipelineMCPPlaceholders 解析管线中引用的伴生 MCP 工具占位符（供外部包与测试使用）。
+func (h *WorkflowAdmin) ResolvePipelineMCPPlaceholders(ctx context.Context, spec pipeline.Spec, source string) pipeline.Spec {
+	return h.resolvePipelineMCPPlaceholders(ctx, spec, source)
+}
+
 // SavePipeline 提供管线保存入口（供 HTTP 接口及 T6 automation_save 复用）。
 // needs 自动转换为 depends_on（seq 索引字符串）；type 固定为 'dag'；
 // agent 步骤 prompt/reasoning_effort 存入对应列，其余步骤配置存入 config_json。
 func (h *WorkflowAdmin) SavePipeline(ctx context.Context, spec pipeline.Spec, id, source string) (wfID, nextRun string, errs []pipeline.FieldError, err error) {
+	if source == "" {
+		source = "user"
+	}
+	spec = h.resolvePipelineMCPPlaceholders(ctx, spec, source)
 	errs = h.validateSpec(spec)
 	if len(errs) > 0 {
 		return "", "", errs, nil
-	}
-
-	if source == "" {
-		source = "user"
 	}
 	resultAction := spec.ResultAction
 	if resultAction == "" {

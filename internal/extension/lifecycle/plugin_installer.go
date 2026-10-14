@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -94,6 +97,10 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (InstallR
 	if err := p.savePlugin(ctx, req, pluginID, plug, enabled); err != nil {
 		return InstallResult{}, err
 	}
+	// 伴生任务生成模板文件（存储方式：清单入库并落盘模板文件；T10 要求）
+	if err := p.savePluginTemplatesFile(req.LocalPath, pluginID, plug); err != nil {
+		slog.Warn("plugin_installer: save plugin templates file failed", "plugin", plug.Name, "err", err)
+	}
 	// 应用绑定解析失败不阻断安装：绑定是引用元数据，可在 UI 中重新绑定（ADR-0103 决策四）。
 	if err := ResolveAppBindings(ctx, p.extRepo, pluginID, plug.Apps); err != nil {
 		slog.Warn("plugin_installer: resolve app bindings failed", "plugin", plug.Name, "err", err)
@@ -112,11 +119,15 @@ func (p *PluginInstaller) Uninstall(ctx context.Context, req UninstallReq) error
 	if pluginID == "" {
 		pluginID = PluginRuntimeID(req.InstID) // runtime_id 回写修复前安装的实例
 	}
+	installPath, _ := p.extRepo.GetPluginInstallPath(ctx, pluginID)
 	if err := p.resetPreviousComponents(ctx, pluginID); err != nil {
 		return apperr.Wrap(apperr.CodeOf(err), "plugin_installer.Uninstall", err)
 	}
 	if err := p.extRepo.UninstallCleanup(ctx, pluginID, "", string(types.TypePlugin)); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "plugin_installer.Uninstall", err)
+	}
+	if installPath != "" {
+		_ = os.Remove(filepath.Join(installPath, "automation_templates.yaml"))
 	}
 	// 依赖方随之停用（Claude：依赖缺失的插件不加载）。
 	var stopper ServerStopper
@@ -288,4 +299,43 @@ func (p *PluginInstaller) authorizeBundleMCP(ctx context.Context, req InstallReq
 		return false
 	}
 	return true
+}
+
+type pluginAutomationTemplateDoc struct {
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	Source       string   `yaml:"source"`
+	TriggerType  string   `yaml:"trigger_type"`
+	CronSchedule string   `yaml:"cron_schedule"`
+	Kind         string   `yaml:"kind"`
+	Prompt       string   `yaml:"prompt,omitempty"`
+	Tags         []string `yaml:"tags,omitempty"`
+}
+
+func (p *PluginInstaller) savePluginTemplatesFile(dir, pluginID string, plug *pluginspec.Plugin) error {
+	if len(plug.ScheduledTasks) == 0 || dir == "" {
+		return nil
+	}
+	var docs []pluginAutomationTemplateDoc
+	for _, task := range plug.ScheduledTasks {
+		docs = append(docs, pluginAutomationTemplateDoc{
+			Name:         task.Name,
+			Description:  task.Description,
+			Source:       "plugin:" + pluginID,
+			TriggerType:  "cron",
+			CronSchedule: task.Schedule,
+			Kind:         task.Kind,
+			Prompt:       task.Prompt,
+			Tags:         []string{"plugin", plug.Name},
+		})
+	}
+	b, err := yaml.Marshal(docs)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "savePluginTemplatesFile: marshal yaml", err)
+	}
+	path := filepath.Join(dir, "automation_templates.yaml")
+	if err := os.WriteFile(path, b, 0644); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "savePluginTemplatesFile: write file", err)
+	}
+	return nil
 }

@@ -248,6 +248,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		h.BuildToolSchemas,
 		h.Workflow.CronTickWorkflows,
 	)
+	h.Cron.ExtRepo = deps.ExtRepo
 	h.Workflow.Deliverer = h.Cron
 	// 2026-07-07 R7 瘦身：channels.go（原 579 行）拆为独立 channelsadmin 子包。
 	// Channels.Cron 接的是 h.Cron 本身（而非回调），用于 webhook 收到消息后顺带

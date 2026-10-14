@@ -79,6 +79,7 @@ func (h *WorkflowAdmin) DryRunPipeline(ctx context.Context, spec pipeline.Spec) 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
+	spec = h.resolvePipelineMCPPlaceholders(ctx, spec, "")
 	errs := h.validateSpec(spec)
 	if len(errs) > 0 {
 		return protocol.PipelineDryRunResult{}, errs, nil

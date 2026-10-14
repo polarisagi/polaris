@@ -3,8 +3,11 @@ package cronadmin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"slices"
+
+	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 )
 
 // ─── GET /v1/automation-templates ─────────────────────────────────────────────
@@ -38,6 +41,11 @@ func (ca *CronAdmin) HandleListAutomationTemplates(w http.ResponseWriter, r *htt
 		all = append(all, tpls...)
 	}
 
+	// 加载已启用插件声明的伴生任务模板（T10：安装 ≠ 启用）
+	if ca.ExtRepo != nil {
+		all = append(all, ca.loadPluginTemplates(r.Context(), filterSource)...)
+	}
+
 	// 无有效来源时 fallback 到内置模板（从 embed.FS 读取，不依赖工作目录）
 	if len(all) == 0 && filterSource == "" {
 		all = loadEmbeddedTemplates("automations/templates")
@@ -59,6 +67,49 @@ func (ca *CronAdmin) HandleListAutomationTemplates(w http.ResponseWriter, r *htt
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"templates": all}) //nolint:errcheck
+}
+
+func (ca *CronAdmin) loadPluginTemplates(ctx context.Context, filterSource string) []automationTemplate {
+	if ca.ExtRepo == nil {
+		return nil
+	}
+	plugins, err := ca.ExtRepo.ListPlugins(ctx)
+	if err != nil {
+		slog.Warn("automation-templates: list plugins failed", "err", err)
+		return nil
+	}
+	var tpls []automationTemplate
+	for _, p := range plugins {
+		if !p.Enabled {
+			continue
+		}
+		sourceID := "plugin:" + p.ID
+		if filterSource != "" && filterSource != sourceID {
+			continue
+		}
+		if p.Manifest == "" {
+			continue
+		}
+		var plug pluginspec.Plugin
+		if err := json.Unmarshal([]byte(p.Manifest), &plug); err != nil {
+			continue
+		}
+		for _, task := range plug.ScheduledTasks {
+			t := automationTemplate{
+				Name:         task.Name,
+				Description:  task.Description,
+				Prompt:       task.Prompt,
+				TriggerType:  "cron",
+				CronSchedule: task.Schedule,
+				Source:       sourceID,
+				Tags:         []string{"plugin", plug.Name},
+				Kind:         task.Kind,
+				Pipeline:     task.Pipeline,
+			}
+			tpls = append(tpls, t)
+		}
+	}
+	return tpls
 }
 
 // ─── Webhook 触发 ──────────────────────────────────────────────────────────────

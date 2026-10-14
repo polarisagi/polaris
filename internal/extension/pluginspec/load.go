@@ -30,15 +30,16 @@ type Plugin struct {
 	DefaultEnabled bool            `json:"default_enabled"`
 	Interface      *CodexInterface `json:"interface,omitempty"`
 
-	Skills       []*Skill               `json:"skills,omitempty"` // 含由 commands 转换的技能
-	Agents       []AgentFile            `json:"agents,omitempty"`
-	Hooks        []HookSource           `json:"hooks,omitempty"`
-	MCPServers   []MCPServer            `json:"mcp_servers,omitempty"`
-	Apps         []AppBinding           `json:"apps,omitempty"`
-	UserConfig   []UserConfigOption     `json:"user_config,omitempty"`
-	Channels     []Channel              `json:"channels,omitempty"`
-	Dependencies []Dependency           `json:"dependencies,omitempty"`
-	Unsupported  []UnsupportedComponent `json:"unsupported,omitempty"`
+	Skills         []*Skill               `json:"skills,omitempty"` // 含由 commands 转换的技能
+	Agents         []AgentFile            `json:"agents,omitempty"`
+	Hooks          []HookSource           `json:"hooks,omitempty"`
+	MCPServers     []MCPServer            `json:"mcp_servers,omitempty"`
+	Apps           []AppBinding           `json:"apps,omitempty"`
+	UserConfig     []UserConfigOption     `json:"user_config,omitempty"`
+	Channels       []Channel              `json:"channels,omitempty"`
+	Dependencies   []Dependency           `json:"dependencies,omitempty"`
+	Unsupported    []UnsupportedComponent `json:"unsupported,omitempty"`
+	ScheduledTasks []ScheduledTask        `json:"scheduled_tasks,omitempty"`
 
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
@@ -105,10 +106,11 @@ func loadComponents(p *Plugin, docs []manifestDoc, opts LoadOptions, ds *diagnos
 	validateChannels(p, ds)
 	p.Dependencies = loadDependencies(docs, ds)
 	p.Unsupported = detectUnsupported(p.Root, docs)
+	p.ScheduledTasks = loadScheduledTasks(docs, ds)
 }
 
 func (p *Plugin) isEmpty() bool {
-	return len(p.Skills) == 0 && len(p.Agents) == 0 && len(p.Hooks) == 0 && len(p.MCPServers) == 0 && len(p.Apps) == 0
+	return len(p.Skills) == 0 && len(p.Agents) == 0 && len(p.Hooks) == 0 && len(p.MCPServers) == 0 && len(p.Apps) == 0 && len(p.ScheduledTasks) == 0
 }
 
 // HasErrors 是否存在组件级错误（UI 展示用；不影响其余组件的加载）。
