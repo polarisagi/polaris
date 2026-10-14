@@ -41,7 +41,7 @@ func opsToCapabilities(ops []TokenOperation) []token.CapabilityType {
 		switch op.ToolName {
 		case "run-sh", "bash":
 			caps = append(caps, token.CapShell)
-		case "fetch_url":
+		case "web_fetch", "feed_fetch":
 			caps = append(caps, token.CapNetwork)
 		default:
 			caps = append(caps, token.CapProcess)

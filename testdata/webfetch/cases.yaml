@@ -1,0 +1,56 @@
+cases:
+  - file: "news_en.html"
+    base_url: "https://go.dev/blog/race-detector"
+    must_contain:
+      - "most insidious and elusive programming errors"
+    must_not_contain:
+      - "go.dev uses cookies from Google"
+
+  - file: "news_zh.html"
+    base_url: "https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html"
+    must_contain:
+      - "这里记录每周值得分享的科技内容，周五发布"
+    must_not_contain:
+      - "您使用了广告拦截器"
+
+  - file: "tech_blog.html"
+    base_url: "https://go.dev/blog/go1.22"
+    must_contain:
+      - "Today the Go team is thrilled to release Go 1.22"
+    must_not_contain:
+      - "go.dev uses cookies from Google"
+
+  - file: "doc_page.html"
+    base_url: "https://go.dev/doc/effective_go"
+    must_contain:
+      - "Formatting issues are the most contentious"
+    must_not_contain:
+      - "go.dev uses cookies from Google"
+
+  - file: "github_readme.html"
+    base_url: "https://github.com/golang/go"
+    must_contain:
+      - "Go is an open source programming language that makes it easy"
+    must_not_contain:
+      - "Skip to content"
+
+  - file: "forum_post.html"
+    base_url: "https://news.ycombinator.com/item?id=39374000"
+    must_contain:
+      - "Any EU resident that has lived anywhere in Vienna for two years"
+    must_not_contain:
+      - "Consider applying for YC"
+
+  - file: "table_page.html"
+    base_url: "https://www.w3schools.com/html/html_tables.asp"
+    must_contain:
+      - "Alfreds Futterkiste"
+    must_not_contain:
+      - "W3Schools is optimized for learning and training"
+
+  - file: "spa_shell.html"
+    base_url: "https://example.com/app"
+    must_contain:
+      - "Loading application data"
+    must_not_contain:
+      - "You need to enable JavaScript to run this app"

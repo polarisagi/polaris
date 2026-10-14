@@ -38,7 +38,7 @@ func networkTool(name string) types.Tool {
 
 func TestCheckTaintEgress_SkipsWhenCheckerNotInjected(t *testing.T) {
 	reg, _ := newAllowRegistry()
-	err := reg.checkTaintEgress(context.Background(), networkTool("fetch_url"), types.TaintHigh, []byte("data"))
+	err := reg.checkTaintEgress(context.Background(), networkTool("web_fetch"), types.TaintHigh, []byte("data"))
 	if err != nil {
 		t.Fatalf("expected nil error when taintEgressChecker not injected, got %v", err)
 	}
@@ -63,7 +63,7 @@ func TestCheckTaintEgress_SkipsBelowTaintMedium(t *testing.T) {
 	checker := &mockTaintEgressChecker{blocked: true}
 	reg.WithTaintEgressChecker(checker)
 
-	err := reg.checkTaintEgress(context.Background(), networkTool("fetch_url"), types.TaintLow, []byte("data"))
+	err := reg.checkTaintEgress(context.Background(), networkTool("web_fetch"), types.TaintLow, []byte("data"))
 	if err != nil {
 		t.Fatalf("expected nil error below TaintMedium, got %v", err)
 	}
@@ -74,7 +74,7 @@ func TestCheckTaintEgress_BlocksAtTaintMediumWithoutExemption(t *testing.T) {
 	checker := &mockTaintEgressChecker{blocked: true}
 	reg.WithTaintEgressChecker(checker)
 
-	err := reg.checkTaintEgress(context.Background(), networkTool("fetch_url"), types.TaintMedium, []byte("secret"))
+	err := reg.checkTaintEgress(context.Background(), networkTool("web_fetch"), types.TaintMedium, []byte("secret"))
 	if err == nil {
 		t.Fatal("expected blocking error at TaintMedium with no exemption vault/token")
 	}
@@ -95,7 +95,7 @@ func TestCheckTaintEgress_AllowsWithValidExemptionToken(t *testing.T) {
 	reg.WithExemptionVault(vault)
 
 	ctx := context.WithValue(context.Background(), protocol.CtxAgentIDKey{}, "agent-42")
-	err := reg.checkTaintEgress(ctx, networkTool("fetch_url"), types.TaintMedium, data)
+	err := reg.checkTaintEgress(ctx, networkTool("web_fetch"), types.TaintMedium, data)
 	if err != nil {
 		t.Fatalf("expected exemption token to allow egress, got %v", err)
 	}
@@ -114,7 +114,7 @@ func TestCheckTaintEgress_WrappedErrorPreservesErrorsIs(t *testing.T) {
 	reg, _ := newAllowRegistry()
 	reg.WithTaintEgressChecker(&sentinelReturningChecker{err: sentinel})
 
-	err := reg.checkTaintEgress(context.Background(), networkTool("fetch_url"), types.TaintMedium, []byte("x"))
+	err := reg.checkTaintEgress(context.Background(), networkTool("web_fetch"), types.TaintMedium, []byte("x"))
 	if !errors.Is(err, sentinel) {
 		t.Errorf("expected wrapped error chain to preserve errors.Is match on sentinel, got %v", err)
 	}

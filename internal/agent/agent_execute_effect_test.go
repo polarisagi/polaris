@@ -16,7 +16,7 @@ import (
 // json.Marshal 对 nil slice 会产出 null，触发 schemas.json 里 edges 的 type:"array" 校验失败）。
 func TestToolCallsToDAGJSON_ValidatesAgainstPlanDagSchema(t *testing.T) {
 	calls := []types.InferToolCall{
-		{ID: "call_1", Name: "fetch_url", Input: []byte(`{"url":"https://example.com"}`)},
+		{ID: "call_1", Name: "web_fetch", Input: []byte(`{"url":"https://example.com"}`)},
 		{ID: "", Name: "no_args_tool", Input: nil},
 	}
 
@@ -36,7 +36,7 @@ func TestToolCallsToDAGJSON_ValidatesAgainstPlanDagSchema(t *testing.T) {
 	if len(plan.Nodes) != 2 {
 		t.Fatalf("expected 2 nodes, got %d", len(plan.Nodes))
 	}
-	if plan.Nodes[0].ID != "call_1" || plan.Nodes[0].Action != "fetch_url" {
+	if plan.Nodes[0].ID != "call_1" || plan.Nodes[0].Action != "web_fetch" {
 		t.Errorf("node[0] mismatch: %+v", plan.Nodes[0])
 	}
 	if plan.Nodes[0].Params["url"] != "https://example.com" {
@@ -60,7 +60,7 @@ func TestDoStreamInfer_StreamToolCall(t *testing.T) {
 	ch := make(chan types.StreamEvent, 2)
 	ch <- types.StreamEvent{
 		Type:    types.StreamToolCall,
-		Content: `{"id":"call_1","name":"fetch_url","input":{"url":"https://example.com"}}`,
+		Content: `{"id":"call_1","name":"web_fetch","input":{"url":"https://example.com"}}`,
 	}
 	ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: ""}
 	close(ch)
@@ -72,7 +72,7 @@ func TestDoStreamInfer_StreamToolCall(t *testing.T) {
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("expected 1 accumulated tool call, got %d", len(resp.ToolCalls))
 	}
-	if resp.ToolCalls[0].Name != "fetch_url" || resp.ToolCalls[0].ID != "call_1" {
+	if resp.ToolCalls[0].Name != "web_fetch" || resp.ToolCalls[0].ID != "call_1" {
 		t.Errorf("tool call mismatch: %+v", resp.ToolCalls[0])
 	}
 }

@@ -20,7 +20,7 @@ func (s *stubRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // TestCheckCapability_ReadOnlyBlocksWriteMethods 验证 CapNetworkRead 只放行
 // GET/HEAD/OPTIONS，其余方法（POST/PUT/DELETE/PATCH）一律拒绝——这是 web_search/
-// fetch_url 等只读工具的纵深防御层，不依赖工具实现本身"恰好硬编码 GET"。
+// web_fetch 等只读工具的纵深防御层，不依赖工具实现本身"恰好硬编码 GET"。
 func TestCheckCapability_ReadOnlyBlocksWriteMethods(t *testing.T) {
 	readOnlyAllowed := []string{"GET", "HEAD", "OPTIONS", "get", "Head"}
 	for _, m := range readOnlyAllowed {

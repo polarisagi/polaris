@@ -18,8 +18,10 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_tool_ref"
+	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -47,7 +49,7 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool) // 无 PolicyGate，只测工具逻辑
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -76,7 +78,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -98,7 +100,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -134,7 +136,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -162,11 +164,12 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	}
 }
 
-// TestBuiltinTools_FetchURL_SSRFGuard 验证 fetch_url 阻断私有地址。
-func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
+// TestBuiltinTools_WebFetch_SSRFGuard 验证 web_fetch 阻断私有地址（由 SafeDialer 拦截）。
+func TestBuiltinTools_WebFetch_SSRFGuard(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	sd := network.NewSafeDialer(0, nil, config.M11PolicyThresholds{})
+	if err := RegisterBuiltinTools(sbx, toolReg, nil, sd, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{Dialer: sd}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -179,22 +182,22 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	for _, url := range blocked {
 		args, _ := json.Marshal(map[string]string{"url": url})
 		ctx := context.Background()
-		result, err := toolReg.ExecuteTool(ctx, "fetch_url", args, types.TaintNone)
+		result, err := toolReg.ExecuteTool(ctx, "web_fetch", args, types.TaintNone)
 		if err != nil {
 			t.Fatalf("ExecuteTool should not return err: %v", err)
 		}
 		t.Logf("res=%+v", result)
 		if result.Success {
-			t.Errorf("fetch_url should block private URL %q", url)
+			t.Errorf("web_fetch should block private URL %q", url)
 		}
 	}
 }
 
-// TestBuiltinTools_FetchURL_PublicURL 验证 fetch_url 放行公共 URL（MVP stub 模式）。
-func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
+// TestBuiltinTools_WebFetch_PublicURL 验证 web_fetch 放行公共 URL（MVP stub 模式）。
+func TestBuiltinTools_WebFetch_PublicURL(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -225,7 +228,7 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
@@ -316,7 +319,7 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 func TestBuiltinTools_TemplateRender(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 	ctx := context.Background()

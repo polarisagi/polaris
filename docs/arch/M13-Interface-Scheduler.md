@@ -97,7 +97,7 @@ CLI 是**薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调�
 
 HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `http.RoundTripper`，白名单原子更新，注入点 `cmd/polaris/boot_substrate.go`），委托 M11 SafeDialer（M11 §6）执行完整 SSRF 防护（DNS 解析、CIDR 校验、TOCTOU 消除、IP 锁定）。本层仅做 Provider 域名白名单预检（api.deepseek.com, api.anthropic.com, api.openai.com, api.github.com），不在白名单提前拒绝以省 DNS 开销。**默认白名单不含 `localhost`/`127.0.0.1`**（ADR-0066 决策三，纵深防御）；本地调试经 `/config network allow example.com:443` 动态追加，仍需过 SafeDialer；用户自托管的可观测导出端点（LangSmith/Braintrust/Phoenix，M03 §9.1）同样走此白名单，默认不放行。Downloader 的公网出站豁免见 ADR-0066 决策六。
 
-**方法级能力防护**：出站请求还经 `internal/security/network/safe_dialer_capability.go` 的 `WrapCapability(inner, cap)` 封装，按 `CapabilityType`（如 `CapNetworkRead`）在 RoundTripper 层终检，拦截非 GET/HEAD/OPTIONS 方法；已接入 `fetch_url` / `web_search` 出站路径。
+**方法级能力防护**：出站请求还经 `internal/security/network/safe_dialer_capability.go` 的 `WrapCapability(inner, cap)` 封装，按 `CapabilityType`（如 `CapNetworkRead`）在 RoundTripper 层终检，拦截非 GET/HEAD/OPTIONS 方法；已接入 `web_fetch` / `web_search` 出站路径。
 
 #### 1.2.3 Sealed 状态
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/tool"
 
@@ -18,7 +19,6 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/data_query"
 	"github.com/polarisagi/polaris/internal/tool/builtin/diff_text"
 	"github.com/polarisagi/polaris/internal/tool/builtin/execute_wasm"
-	"github.com/polarisagi/polaris/internal/tool/builtin/fetch_url"
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_datetime"
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_task_result"
 	"github.com/polarisagi/polaris/internal/tool/builtin/glob"
@@ -36,6 +36,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/todo_write"
 	ttstool "github.com/polarisagi/polaris/internal/tool/builtin/tts"
 	"github.com/polarisagi/polaris/internal/tool/builtin/video_analysis"
+	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
 	"github.com/polarisagi/polaris/internal/tool/builtin/web_search"
 	"github.com/polarisagi/polaris/internal/tool/builtin/write_file"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -61,7 +62,17 @@ func RegisterBuiltinTools(
 	hitlGateway HITLGateway,
 	todoRepo repo.TodoRepository, // todo_write/todo_read 按会话落库（ADR-0104 决策三）；nil 时两工具调用即报错
 	ttsSynth ttstool.Synthesizer, // tts 工具依赖的本地 TTS 引擎（ADR-0107）；nil 时该工具调用即报错，不回出假音频
+	webDeps web_fetch.Deps, // web_fetch 工具依赖（ADR-0114 决策三）
 ) error {
+	if webDeps.Dialer == nil {
+		webDeps.Dialer = dialer
+	}
+	if webDeps.Limiter == nil {
+		webDeps.Limiter = web_fetch.NewHostLimiter(func() time.Duration {
+			return time.Duration(config.CurrentThresholds().M7Tool.WebFetchHostMinIntervalMs) * time.Millisecond
+		})
+	}
+
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
 	defs := []struct {
@@ -71,7 +82,7 @@ func RegisterBuiltinTools(
 		{"read_file", read_file.MakeReadFileFn(allowedPaths)},
 		{"list_dir", list_dir.MakeListDirFn(allowedPaths)},
 		{"write_file", write_file.MakeWriteFileFn(allowedPaths)},
-		{"fetch_url", fetch_url.MakeFetchURLFn(dialer)},
+		{"web_fetch", web_fetch.MakeWebFetchFn(webDeps)},
 		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
 		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
 		{"get_datetime", get_datetime.GetDatetimeFn},

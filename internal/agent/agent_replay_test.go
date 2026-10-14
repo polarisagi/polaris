@@ -35,7 +35,7 @@ func TestReconstructReplayResponse_RoundTripsFields(t *testing.T) {
 			"OutputTokens": float64(20),
 		},
 		"tool_calls": []any{
-			map[string]any{"ID": "call_1", "Name": "fetch_url"},
+			map[string]any{"ID": "call_1", "Name": "web_fetch"},
 		},
 	}
 	resp := reconstructReplayResponse(m)
@@ -48,7 +48,7 @@ func TestReconstructReplayResponse_RoundTripsFields(t *testing.T) {
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 20 {
 		t.Errorf("Usage mismatch: %+v", resp.Usage)
 	}
-	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "fetch_url" {
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "web_fetch" {
 		t.Errorf("ToolCalls mismatch: %+v", resp.ToolCalls)
 	}
 }

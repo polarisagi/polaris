@@ -133,7 +133,7 @@ func isWriteNetworkTool(toolName string, registry protocol.AgentToolExecutor) bo
 	case "read_file", "list_dir", "write_file", "get_datetime", "diff_text", "csv_parse",
 		"str_replace_editor", "multi_edit", "glob", "grep", "notebook_read", "notebook_edit",
 		"todo_read", "todo_write", "git_diff", "template_render", "sys_probe",
-		"search_web", "fetch_url": // 纯读网络工具，不向外写入，与 isReadOnlyTool 保持一致
+		"web_search", "web_fetch", "feed_fetch": // 纯读网络工具，不向外写入，与 isReadOnlyTool 保持一致
 		return false
 	}
 	return true // 未知工具默认视为网络写，fail-closed
@@ -150,7 +150,7 @@ func isReadOnlyTool(toolName string, registry protocol.AgentToolExecutor) bool {
 	}
 	// 内置白名单兜底（仅对已知工具适用，未知工具默认 fail-closed）
 	switch toolName {
-	case "read_file", "list_dir", "search_web", "fetch_url":
+	case "read_file", "list_dir", "web_search", "web_fetch", "feed_fetch":
 		return true
 	}
 	return false

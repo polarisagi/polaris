@@ -414,7 +414,7 @@ blockedCIDRs（`init()` 预编译）：0.0.0.0/8 / 127.0.0.0/8 / 10.0.0.0/8 / 10
 - M7/M10/M13 所有出站必经此入口；CI `safe_dialer_lint` 扫描裸 `net.Dial` / `grpc.Dial` / `http.Get` → ERROR
 - **认知存储不是出口，不走 TaintEgressCheck**：写入 `[Storage-SurrealDB-Core]` 是进程内本地落盘，不产生出站连接；`SurrealDBCoreStore.Put/VecUpsert/FTSIndex` 签名无污点等级可校验。认知存储侧污点完整性由 **inv_M11_02 跨边界 HMAC** 承担：`taint.TaintBoundarySerializer`（密钥由 `Vault.DeriveKey` 派生，装配点 `cmd/polaris/boot_substrate.go`）在 `rag_chunks` 写入时 Seal 出 `taint_hmac`，检索侧 `internal/knowledge/retriever.go` Unseal 校验，不匹配强制升到 TaintHigh。真正的出口拦截发生在数据离开进程时（HTTP/gRPC/WebSocket 出站）。
 
-**读写能力分级出口检查**（`internal/security/network/safe_dialer_capability.go`）：Phase 0 声明层之外，另有 HTTP 方法级校验——Phase 0 拦在 Capability Token 声明侧，本层拦在实际出站 `http.RoundTripper` 侧，纵深防御互不替代。三级：`CapNetworkRead`（仅放行 GET/HEAD/OPTIONS，其余 → `ErrCapabilityWriteBlocked`）/ `CapNetworkWriteLocal`（放行，内网 IP 校验由调用方在 DialContext 中执行）/ `CapNetworkWrite`（放行，交 Phase 1-4）。经 `WrapCapability(inner, cap)` 包装现有 `http.RoundTripper`（`CapabilityRoundTripper.RoundTrip` 转发前调 `CheckCapability`）；消费方：`internal/tool/builtin/fetch_url/`、`internal/tool/builtin/web_search/`（二者不得使用裸 `http.Transport`，否则绕过该层）。
+**读写能力分级出口检查**（`internal/security/network/safe_dialer_capability.go`）：Phase 0 声明层之外，另有 HTTP 方法级校验——Phase 0 拦在 Capability Token 声明侧，本层拦在实际出站 `http.RoundTripper` 侧，纵深防御互不替代。三级：`CapNetworkRead`（仅放行 GET/HEAD/OPTIONS，其余 → `ErrCapabilityWriteBlocked`）/ `CapNetworkWriteLocal`（放行，内网 IP 校验由调用方在 DialContext 中执行）/ `CapNetworkWrite`（放行，交 Phase 1-4）。经 `WrapCapability(inner, cap)` 包装现有 `http.RoundTripper`（`CapabilityRoundTripper.RoundTrip` 转发前调 `CheckCapability`）；消费方：`internal/tool/builtin/web_fetch/`、`internal/tool/builtin/web_search/`（二者不得使用裸 `http.Transport`，否则绕过该层）。
 
 ---
 

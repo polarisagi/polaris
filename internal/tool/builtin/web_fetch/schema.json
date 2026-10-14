@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "web_fetch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["url"],
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "http(s) URL"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["markdown", "text", "links", "raw"],
+      "default": "markdown"
+    },
+    "max_chars": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 50000
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "selector": {
+      "type": "string",
+      "description": "可选：tag / .class / #id，先裁剪再抽取"
+    }
+  }
+}

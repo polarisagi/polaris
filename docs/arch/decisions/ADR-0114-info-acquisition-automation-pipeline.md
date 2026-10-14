@@ -51,7 +51,7 @@
 - `internal/gateway/server/sysadmin/workflowadmin/workflow_step_worker.go`（步骤分派点）
 - `internal/automation/pipeline/`（新增）
 - `internal/tool/builtin/web_fetch/`、`feed_fetch/`、`web_search/`、`automation_tools*.go`、`knowledge_ingest/`
-- `internal/protocol/schema/017_automations.sql`、`029_workflows.sql`、`0NN_web_fetch_cache.sql`
+- `internal/protocol/schema/017_automations.sql`、`029_workflows.sql`、`049_web_fetch_cache.sql`
 - 官方插件 `plugins/browser_use/src/browser_hub.py`、`recipes/`
 - `docs/arch/M13-Interface-Scheduler.md §8.7`、`docs/arch/M07-Tool-Action-Layer.md`
 
@@ -66,3 +66,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-10-14 | 初稿（设计依据：`local_playground/upgrade/web-info-automation/00-DESIGN.md`；正文抽取库选型数据待 T1 追记） |
+| 2026-10-14 | 正文抽取选型：`github.com/markusmobius/go-trafilatura@v1.12.2` + `github.com/JohannesKaufmann/html-to-markdown/v2@v2.5.2`，fixtures 结果 8/8 全通 |

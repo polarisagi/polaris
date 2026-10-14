@@ -48,6 +48,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
+	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
 	"github.com/polarisagi/polaris/internal/vfs"
@@ -350,6 +351,15 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// tts 工具在此注册，而承载 TTS 引擎的 Server 到 bootServer 才创建：经晚绑定桥接，
 	// bootServer 里 Bind 之前调用工具会如实报"未接线"，不会回出假音频。
 	ttsBr := &ttsBridge{}
+	webLimiter := web_fetch.NewHostLimiter(func() time.Duration {
+		return time.Duration(config.CurrentThresholds().M7Tool.WebFetchHostMinIntervalMs) * time.Millisecond
+	})
+	webCache := repo.NewSQLiteWebCacheRepository(sb.Store.DB())
+	webDeps := web_fetch.Deps{
+		Dialer:  sb.Dialer,
+		Cache:   webCache,
+		Limiter: webLimiter,
+	}
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,
 		sb.Cfg.Sandbox.Enabled,
 		sb.Cfg.Sandbox.NetworkPolicy,
@@ -361,6 +371,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		hitlGateway,
 		repo.NewSQLiteTodoRepository(sb.Store.DB()),
 		ttsBr.Synthesize,
+		webDeps,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

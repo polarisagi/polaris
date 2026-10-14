@@ -20,7 +20,7 @@ func claudeToolAliases() map[string][]string {
 		"Grep":         {"grep"},
 		"LS":           {"list_dir"},
 		"Bash":         {"bash", "run_command"},
-		"WebFetch":     {"fetch_url"},
+		"WebFetch":     {"web_fetch"},
 		"WebSearch":    {"web_search"},
 		"NotebookEdit": {"notebook_edit"},
 		"NotebookRead": {"notebook_read"},
