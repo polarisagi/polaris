@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -429,8 +430,12 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// recordWebFetchMetric 记录抓取调用（在提交 ④ 接通可观测指标）。
-func recordWebFetchMetric(_ context.Context, _, _, _ string) {}
+// recordWebFetchMetric 记录抓取调用（接入可观测指标，ADR-0114）。
+func recordWebFetchMetric(ctx context.Context, tool, status, cache string) {
+	metrics.RecordWebFetch(ctx, tool, status, cache)
+}
 
-// recordWebFetchMetricExtractedRatio 记录正文抽取字符压缩比（在提交 ④ 接通可观测指标）。
-func recordWebFetchMetricExtractedRatio(_ context.Context, _ float64) {}
+// recordWebFetchMetricExtractedRatio 记录正文抽取字符压缩比（接入可观测指标，ADR-0114）。
+func recordWebFetchMetricExtractedRatio(ctx context.Context, ratio float64) {
+	metrics.RecordWebFetchExtractedRatio(ctx, ratio)
+}

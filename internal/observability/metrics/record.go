@@ -346,3 +346,21 @@ func RecordDownloaderResumeRestart(ctx context.Context) {
 		InstrDownloaderResumeRestarts.Add(ctx, 1)
 	}
 }
+
+// RecordWebFetch 记录网页/Feed 抓取调用次数（ADR-0114）。
+func RecordWebFetch(ctx context.Context, tool, status, cache string) {
+	if InstrWebFetchesTotal != nil {
+		InstrWebFetchesTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("tool", tool),
+			attribute.String("status", status),
+			attribute.String("cache", cache),
+		))
+	}
+}
+
+// RecordWebFetchExtractedRatio 记录正文抽取字符压缩比（ADR-0114）。
+func RecordWebFetchExtractedRatio(ctx context.Context, ratio float64) {
+	if InstrWebFetchExtractedRatio != nil {
+		InstrWebFetchExtractedRatio.Record(ctx, ratio)
+	}
+}

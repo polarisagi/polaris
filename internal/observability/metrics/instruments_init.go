@@ -364,6 +364,22 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("MCP Apps View 发起的工具调用次数 (label: mcp_server, outcome: success/error)"),
 	)
 	ie.capture("polaris.mcp_apps.tool_calls_total", err)
+
+	// 网页抓取可观测性（ADR-0114）
+	InstrWebFetchesTotal, err = meter.Int64Counter(
+		"polaris.web.fetches_total",
+		metric.WithDescription("网页抓取调用次数 (label: tool, status, cache)"),
+	)
+	ie.capture("polaris.web.fetches_total", err)
+
+	InstrWebFetchExtractedRatio, err = meter.Float64Histogram(
+		"polaris.web.fetch_extracted_ratio",
+		metric.WithDescription("网页抓取正文抽取字符压缩率 (label: tool)"),
+		metric.WithExplicitBucketBoundaries(
+			0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0,
+		),
+	)
+	ie.capture("polaris.web.fetch_extracted_ratio", err)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {

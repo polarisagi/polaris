@@ -216,4 +216,8 @@ var (
 	InstrRAGTaintDrops            metric.Int64Counter
 	InstrRetrievalRouteTimeouts   metric.Int64Counter
 	InstrDownloaderResumeRestarts metric.Int64Counter
+
+	// web_fetch / feed_fetch 可观测性（ADR-0114）
+	InstrWebFetchesTotal        metric.Int64Counter
+	InstrWebFetchExtractedRatio metric.Float64Histogram
 )
