@@ -278,3 +278,6 @@ func buildSandboxedMCPCmd(cfg MCPClientConfig) (*exec.Cmd, error) {
 		"requires_network", cfg.RequiresNetwork, "network_approved", cfg.NetworkApproved)
 	return cmd, nil
 }
+
+// MCPToolAnnotations protocol.MCPToolAnnotations 本地别名。
+type MCPToolAnnotations = protocol.MCPToolAnnotations

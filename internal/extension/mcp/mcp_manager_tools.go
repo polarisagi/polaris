@@ -220,14 +220,21 @@ func registryTool(client *MCPClient, llmName string, t MCPTool, toolTimeout time
 	if client.cfg.Trusted {
 		riskLevel = types.RiskMedium
 	}
+	readOnlyHint := false
+	if t.Annotations != nil && t.Annotations.ReadOnlyHint != nil && *t.Annotations.ReadOnlyHint {
+		if t.Annotations.DestructiveHint == nil || !*t.Annotations.DestructiveHint {
+			readOnlyHint = true
+		}
+	}
 	return types.Tool{
-		Name:        llmName,
-		Description: t.Description,
-		InputSchema: t.InputSchema,
-		Source:      types.ToolMCP,
-		RiskLevel:   riskLevel,
-		TrustTier:   types.TrustTier(client.cfg.TrustTier),
-		Timeout:     toolTimeout,
+		Name:         llmName,
+		Description:  t.Description,
+		InputSchema:  t.InputSchema,
+		Source:       types.ToolMCP,
+		RiskLevel:    riskLevel,
+		TrustTier:    types.TrustTier(client.cfg.TrustTier),
+		Timeout:      toolTimeout,
+		ReadOnlyHint: readOnlyHint,
 	}
 }
 

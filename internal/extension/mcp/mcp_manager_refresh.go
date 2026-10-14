@@ -181,9 +181,37 @@ func diffTools(old, latest []MCPTool) (toRegister, toUnregister []MCPTool, chang
 	return toRegister, toUnregister, changed
 }
 
-// toolEqual 判断两个同名工具的定义是否一致（描述 + inputSchema + _meta 字节相等）。
+// toolEqual 判断两个同名工具的定义是否一致（描述 + inputSchema + _meta + annotations 相等）。
 // _meta 纳入比较：MCP Apps UI 元数据变化（如 visibility 从 app-only 改为 model 可见）
 // 必须触发 toRegister 重新走 registerTools，否则 app-only 工具集合会与最新声明脱节。
+// annotations 纳入比较：只读等提示变化时同样触发重新注册。
 func toolEqual(a, b MCPTool) bool {
-	return a.Description == b.Description && bytes.Equal(a.InputSchema, b.InputSchema) && bytes.Equal(a.Meta, b.Meta)
+	return a.Description == b.Description &&
+		bytes.Equal(a.InputSchema, b.InputSchema) &&
+		bytes.Equal(a.Meta, b.Meta) &&
+		annotationsEqual(a.Annotations, b.Annotations)
+}
+
+func annotationsEqual(a, b *MCPToolAnnotations) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Title == b.Title &&
+		boolPtrEqual(a.ReadOnlyHint, b.ReadOnlyHint) &&
+		boolPtrEqual(a.DestructiveHint, b.DestructiveHint) &&
+		boolPtrEqual(a.IdempotentHint, b.IdempotentHint) &&
+		boolPtrEqual(a.OpenWorldHint, b.OpenWorldHint)
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }

@@ -28,10 +28,23 @@ type MCPTool struct {
 	// 仅用于承载 tools/list 响应原文，解析结果落 UI 字段；toolEqual 据此判定
 	// 刷新前后定义是否变化（含 UI 元数据变化）。
 	Meta json.RawMessage `json:"_meta,omitempty"`
+	// Annotations MCP 规范 ToolAnnotations（tools/list 原文）。只用于管线允许集等「提示性」判定，
+	// 不参与 PolicyGate/TrustTier 授权（规范明确 annotations 不可信，不能作安全边界，HE-2）。
+	Annotations *MCPToolAnnotations `json:"annotations,omitempty"`
 	// UI 解析后的 MCP Apps 工具级 UI 元数据；nil 表示该工具无 UI 关联
 	// （既非声明 resourceUri，也未偏离默认可见性）。解析逻辑见
 	// extension/mcp.ParseToolUI（标准/废弃别名/ChatGPT 别名归一化）。
 	UI *ToolUI `json:"-"`
+}
+
+// MCPToolAnnotations MCP 规范 ToolAnnotations（tools/list 规范字段）。
+// 用于提示性元数据，如只读提示、破坏性提示等。
+type MCPToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
 }
 
 // ToolUI MCP Apps 工具级 UI 元数据（_meta.ui，apps_spec.mdx §Resource Discovery）。

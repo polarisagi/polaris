@@ -80,6 +80,8 @@ type Tool struct {
 	TrustTier    TrustTier
 	Source       ToolSource
 	SourceURI    string
+	// ReadOnlyHint 仅 Source==ToolMCP 时有意义：服务器声明 readOnlyHint=true 且未声明 destructiveHint=true。
+	ReadOnlyHint bool
 	// UndoFn 已删除（ADR-0088 决策一）：全仓从未被赋值（tool.yaml 加载器无对应
 	// 字段映射），且工具定义层拿不到本次调用的实参，无法表达"撤销刚才那次具体
 	// 操作"。Saga 补偿改由 protocol.ExecNode.Compensation 单一承载——它携带
