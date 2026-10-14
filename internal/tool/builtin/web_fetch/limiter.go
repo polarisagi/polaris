@@ -10,6 +10,9 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+// maxTrackedHosts 触发过期条目清扫的 host 数量阈值。
+const maxTrackedHosts = 1024
+
 // HostLimiter 同主机请求限速器，防止爬取过频（ADR-0114 决策三）。
 type HostLimiter struct {
 	mu          sync.Mutex
@@ -52,6 +55,15 @@ func (l *HostLimiter) Wait(ctx context.Context, host string) error {
 		elapsed := now.Sub(lastTime)
 		if elapsed < interval {
 			waitDur = interval - elapsed
+		}
+	}
+	// 长期运行的定时采集会不断遇到新 host；超过 maxTrackedHosts 时清掉已过间隔的
+	// 条目（它们对限速已无影响），摊销 O(n) 可接受。
+	if len(l.last) > maxTrackedHosts {
+		for k, t := range l.last {
+			if now.Sub(t) > interval {
+				delete(l.last, k)
+			}
 		}
 	}
 	// 预先占位本次访问的预计完成时点
