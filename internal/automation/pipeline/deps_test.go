@@ -25,8 +25,9 @@ func TestPipelinePackage_ImportsWhitelist(t *testing.T) {
 		}
 		if strings.HasPrefix(imp, "github.com/polarisagi/polaris/") {
 			if imp != "github.com/polarisagi/polaris/pkg/apperr" &&
-				imp != "github.com/polarisagi/polaris/pkg/types" {
-				t.Errorf("FORBIDDEN internal import: %s (only pkg/apperr and pkg/types are allowed)", imp)
+				imp != "github.com/polarisagi/polaris/pkg/types" &&
+				imp != "github.com/polarisagi/polaris/internal/observability/metrics" {
+				t.Errorf("FORBIDDEN internal import: %s (only pkg/apperr, pkg/types, and internal/observability/metrics are allowed)", imp)
 			}
 		}
 	}

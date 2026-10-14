@@ -396,4 +396,3 @@ func RecordWorkflowRunSkipped(ctx context.Context, reason string) {
 		))
 	}
 }
-

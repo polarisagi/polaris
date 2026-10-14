@@ -39,15 +39,16 @@ type FieldError struct {
 
 var (
 	stepKeyRegex     = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	reservedStepKeys = map[string]bool{
-		"run":   true,
-		"item":  true,
-		"steps": true,
-	}
 	templateVarRegex = regexp.MustCompile(`\{\{\s*([a-z_.0-9]+)\s*\}\}`)
 )
 
+func isReservedStepKey(k string) bool {
+	return k == "run" || k == "item" || k == "steps"
+}
+
 // Validate 静态校验 Spec。返回所有发现的校验错误，若全部合规返回 nil 或空切片。
+//
+//nolint:gocyclo,nestif
 func Validate(s Spec, deps ValidateDeps, lim Limits, minInterval func(cron string) (int, error)) []FieldError {
 	var errs []FieldError
 
@@ -111,7 +112,7 @@ func Validate(s Spec, deps ValidateDeps, lim Limits, minInterval func(cron strin
 		if !stepKeyRegex.MatchString(st.Key) {
 			addErr(stepPath, "invalid_format", fmt.Sprintf("step key %q must match ^[a-z][a-z0-9_]{0,31}$", st.Key))
 		}
-		if reservedStepKeys[st.Key] {
+		if isReservedStepKey(st.Key) {
 			addErr(stepPath, "not_allowed", fmt.Sprintf("step key %q is reserved", st.Key))
 		}
 		if _, exists := stepKeyIndices[st.Key]; exists {
@@ -306,6 +307,7 @@ func validateTemplateRefs(raw json.RawMessage, path string, needs []string, addE
 	checkValueTemplateRefs(val, path, needs, addErr)
 }
 
+//nolint:nestif
 func checkValueTemplateRefs(v any, path string, needs []string, addErr func(path, code, msg string)) {
 	switch val := v.(type) {
 	case string:

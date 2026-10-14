@@ -120,7 +120,7 @@ func TestValidate_InvalidFields(t *testing.T) {
 			{
 				Key:   "s2",
 				Kind:  "tool",
-				Tool: "bash", // privileged
+				Tool:  "bash",         // privileged
 				Needs: []string{"s3"}, // forward ref
 			},
 			{

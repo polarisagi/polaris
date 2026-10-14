@@ -6,7 +6,7 @@ import "encoding/json"
 type Spec struct {
 	Kind         string     `json:"kind"`                    // 固定 "pipeline"
 	Name         string     `json:"name"`                    // 必填，1..60 字符
-	Description  string     `json:"description,omitempty"`  // 可选描述
+	Description  string     `json:"description,omitempty"`   // 可选描述
 	Trigger      Trigger    `json:"trigger"`                 // 触发器配置
 	ResultAction string     `json:"result_action,omitempty"` // 默认 "session"
 	DeliverFrom  string     `json:"deliver_from,omitempty"`  // 投递步骤 key
@@ -21,11 +21,11 @@ type Trigger struct {
 
 // StepSpec 管线步骤规格。
 type StepSpec struct {
-	Key         string   `json:"key"`                    // 步骤唯一引用标识，^[a-z][a-z0-9_]{0,31}$
-	Kind        string   `json:"kind"`                   // "tool" | "transform" | "llm" | "agent"
+	Key         string   `json:"key"`                     // 步骤唯一引用标识，^[a-z][a-z0-9_]{0,31}$
+	Kind        string   `json:"kind"`                    // "tool" | "transform" | "llm" | "agent"
 	Needs       []string `json:"needs,omitempty"`         // 依赖的前置步骤 key 列表
 	SkipIfEmpty bool     `json:"skip_if_empty,omitempty"` // 输出 count==0 时是否标记并传播 skipped
-	MaxRetries  int      `json:"max_retries,omitempty"`  // 步骤失败重试次数
+	MaxRetries  int      `json:"max_retries,omitempty"`   // 步骤失败重试次数
 
 	// tool 步骤参数
 	Tool      string          `json:"tool,omitempty"`       // 工具名称

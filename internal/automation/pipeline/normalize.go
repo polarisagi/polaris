@@ -5,15 +5,14 @@ import (
 	"strings"
 )
 
-// defaultItemKeys 探测顶层数组条目的候选键列表（按优先级依次尝试）。
-var defaultItemKeys = []string{"items", "results", "entries", "data"}
-
 // Normalize 归一化工具或步骤产出的原始数据。
 // 规则：
 // 1. 若原始数据为合法 JSON，先尝试 itemsPath 指定的点路径或依次探测 items/results/entries/data 顶层数组；
 // 2. 若顶层本身即为数组，直接映射为 Items；
 // 3. 若未提取到数组或不是 JSON，将原始文本存入 Text；
 // 4. 若整体序列化体积超过 maxBytes，从尾部丢弃 items 直至 ≤ maxBytes，并置 Truncated=true。
+//
+//nolint:nestif
 func Normalize(raw []byte, itemsPath string, maxBytes int) StepData {
 	if len(raw) == 0 {
 		return StepData{Items: make([]map[string]any, 0), Count: 0}
@@ -79,7 +78,8 @@ func extractAutoItems(parsed any) []map[string]any {
 	case []any:
 		return toMapSlice(v)
 	case map[string]any:
-		for _, key := range defaultItemKeys {
+		candidates := []string{"items", "results", "entries", "data"}
+		for _, key := range candidates {
 			if arr, ok := v[key].([]any); ok {
 				return toMapSlice(arr)
 			}

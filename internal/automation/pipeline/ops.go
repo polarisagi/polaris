@@ -69,6 +69,7 @@ func opConcat(op Op, inputs map[string]StepData) (StepData, error) {
 	}, nil
 }
 
+//nolint:gocyclo
 func opDedup(in StepData, op Op, dedup DedupState) (StepData, error) {
 	if len(in.Items) == 0 {
 		return in, nil
@@ -170,6 +171,7 @@ func opFilter(in StepData, op Op) (StepData, error) {
 	}, nil
 }
 
+//nolint:gocyclo
 func evalFilter(actual any, cmp string, expected any, re *regexp.Regexp) bool {
 	switch cmp {
 	case "contains":

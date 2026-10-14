@@ -53,8 +53,8 @@ func TestApplyOps_Dedup(t *testing.T) {
 			{"url": "https://a.com", "title": "A1"},
 			{"url": "https://a.com", "title": "A2"}, // 重复
 			{"url": "https://b.com", "title": "B"},
-			{"title": "No URL 1"},                   // 缺字段
-			{"title": "No URL 2"},                   // 缺字段
+			{"title": "No URL 1"}, // 缺字段
+			{"title": "No URL 2"}, // 缺字段
 		},
 	}
 

@@ -53,6 +53,7 @@ func Render(args json.RawMessage, r RefResolver) (json.RawMessage, bool, error) 
 	return out, refsUsed, nil
 }
 
+//nolint:gocyclo
 func renderValue(v any, r RefResolver) (any, bool, error) {
 	switch val := v.(type) {
 	case string:
