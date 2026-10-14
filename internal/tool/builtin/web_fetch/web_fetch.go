@@ -337,7 +337,7 @@ func extractHTMLByMode(body []byte, finalURL, selector, mode string) (title, con
 		links, extErr := extractLinks(body, finalURL)
 		return extractHTMLTitle(body), links, extErr
 	case "text":
-		return extractHTMLTitle(body), htmlToText(body), nil
+		return extractHTMLTitle(body), HTMLToText(body), nil
 	default: // "raw"
 		return extractHTMLTitle(body), string(body), nil
 	}

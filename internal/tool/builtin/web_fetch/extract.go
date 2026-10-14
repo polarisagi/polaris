@@ -287,8 +287,8 @@ func extractNodeText(n *html.Node) string {
 	return sb.String()
 }
 
-// htmlToText 将 HTML 标签清洗为纯文本。
-func htmlToText(htmlBytes []byte) string {
+// HTMLToText 将 HTML 标签清洗为纯文本。
+func HTMLToText(htmlBytes []byte) string {
 	str := string(htmlBytes)
 	str = tagRe.ReplaceAllString(str, " ")
 	return strings.TrimSpace(spaceRe.ReplaceAllString(str, " "))

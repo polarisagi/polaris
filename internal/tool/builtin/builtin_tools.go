@@ -19,6 +19,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/data_query"
 	"github.com/polarisagi/polaris/internal/tool/builtin/diff_text"
 	"github.com/polarisagi/polaris/internal/tool/builtin/execute_wasm"
+	"github.com/polarisagi/polaris/internal/tool/builtin/feed_fetch"
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_datetime"
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_task_result"
 	"github.com/polarisagi/polaris/internal/tool/builtin/glob"
@@ -83,6 +84,7 @@ func RegisterBuiltinTools(
 		{"list_dir", list_dir.MakeListDirFn(allowedPaths)},
 		{"write_file", write_file.MakeWriteFileFn(allowedPaths)},
 		{"web_fetch", web_fetch.MakeWebFetchFn(webDeps)},
+		{"feed_fetch", feed_fetch.MakeFeedFetchFn(webDeps)},
 		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
 		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
 		{"get_datetime", get_datetime.GetDatetimeFn},
