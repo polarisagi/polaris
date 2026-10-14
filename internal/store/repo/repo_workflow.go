@@ -1,12 +1,15 @@
 package repo
 
 import (
-	"github.com/polarisagi/polaris/internal/protocol/repo"
-	"github.com/polarisagi/polaris/pkg/apperr"
-
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 type SQLiteWorkflowRepository struct {
@@ -50,27 +53,47 @@ func (r *SQLiteWorkflowRepository) CreateWorkflowWithSteps(ctx context.Context, 
 	if wfType == "" {
 		wfType = "chain"
 	}
+	resultAction := wf.ResultAction
+	if resultAction == "" {
+		resultAction = "session"
+	}
+	source := wf.Source
+	if source == "" {
+		source = "user"
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO workflows(id, type, name, description, trigger_type, cron_schedule, enabled,
+		                      result_action, deliver_from, source,
 		                      next_run_at, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		wf.ID, wfType, wf.Name, wf.Description, wf.TriggerType, wf.CronSchedule,
-		boolToInt(wf.Enabled), wf.NextRunAt, wf.CreatedAt, wf.UpdatedAt,
+		boolToInt(wf.Enabled), resultAction, wf.DeliverFrom, source,
+		wf.NextRunAt, wf.CreatedAt, wf.UpdatedAt,
 	); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 
 	for _, st := range steps {
+		kind := st.Kind
+		if kind == "" {
+			kind = "agent"
+		}
+		configJSON := st.ConfigJSON
+		if configJSON == "" {
+			configJSON = "{}"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO workflow_steps(id, workflow_id, seq, name, automation_id, prompt,
 									   reasoning_effort, working_dir, input_from_prev,
 									   depends_on, capability_type, compensation_tool,
-									   compensation_args, max_retries)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+									   compensation_args, max_retries,
+									   step_key, kind, config_json)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			st.ID, st.WorkflowID, st.Seq, st.Name, st.AutomationID, st.Prompt,
 			st.ReasoningEffort, st.WorkingDir, boolToInt(st.InputFromPrev),
 			marshalDependsOn(st.DependsOn), st.CapabilityType, st.CompensationTool,
 			st.CompensationArgs, st.MaxRetries,
+			st.StepKey, kind, configJSON,
 		); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
@@ -93,12 +116,21 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, 
 	if wfType == "" {
 		wfType = "chain"
 	}
+	resultAction := wf.ResultAction
+	if resultAction == "" {
+		resultAction = "session"
+	}
+	source := wf.Source
+	if source == "" {
+		source = "user"
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE workflows SET type=?, name=?, description=?, trigger_type=?, cron_schedule=?,
-		       enabled=?, next_run_at=?, updated_at=?
+		       enabled=?, result_action=?, deliver_from=?, source=?, next_run_at=?, updated_at=?
 		WHERE id=?`,
 		wfType, wf.Name, wf.Description, wf.TriggerType, wf.CronSchedule,
-		boolToInt(wf.Enabled), wf.NextRunAt, wf.UpdatedAt, wf.ID,
+		boolToInt(wf.Enabled), resultAction, wf.DeliverFrom, source,
+		wf.NextRunAt, wf.UpdatedAt, wf.ID,
 	); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
@@ -109,16 +141,26 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, 
 			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 		for _, st := range steps {
+			kind := st.Kind
+			if kind == "" {
+				kind = "agent"
+			}
+			configJSON := st.ConfigJSON
+			if configJSON == "" {
+				configJSON = "{}"
+			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO workflow_steps(id, workflow_id, seq, name, automation_id, prompt,
 										   reasoning_effort, working_dir, input_from_prev,
 										   depends_on, capability_type, compensation_tool,
-										   compensation_args, max_retries)
-				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+										   compensation_args, max_retries,
+										   step_key, kind, config_json)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				st.ID, st.WorkflowID, st.Seq, st.Name, st.AutomationID, st.Prompt,
 				st.ReasoningEffort, st.WorkingDir, boolToInt(st.InputFromPrev),
 				marshalDependsOn(st.DependsOn), st.CapabilityType, st.CompensationTool,
 				st.CompensationArgs, st.MaxRetries,
+				st.StepKey, kind, configJSON,
 			); err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "db error", err)
 			}
@@ -286,4 +328,203 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowStats(ctx context.Context, wfID
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
+}
+
+func (r *SQLiteWorkflowRepository) SaveRunData(ctx context.Context, runID, stepKey, status string, dataJSON []byte, itemCount int) error {
+	dj := string(dataJSON)
+	if dj == "" {
+		dj = "{}"
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO workflow_run_data (run_id, step_key, status, data_json, item_count, created_at)
+		VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
+		runID, stepKey, status, dj, itemCount,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SaveRunData failed", err)
+	}
+	return nil
+}
+
+func (r *SQLiteWorkflowRepository) LoadRunData(ctx context.Context, runID, stepKey string) (status string, dataJSON []byte, err error) {
+	var dj string
+	err = r.db.QueryRowContext(ctx, `
+		SELECT status, data_json FROM workflow_run_data WHERE run_id=? AND step_key=?`,
+		runID, stepKey,
+	).Scan(&status, &dj)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil, nil
+		}
+		return "", nil, apperr.Wrap(apperr.CodeInternal, "LoadRunData failed", err)
+	}
+	return status, []byte(dj), nil
+}
+
+func (r *SQLiteWorkflowRepository) SeenKeys(ctx context.Context, workflowID string, keys []string) (map[string]bool, error) {
+	res := make(map[string]bool)
+	if len(keys) == 0 {
+		return res, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(keys); i += batchSize {
+		end := i + batchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batch := keys[i:end]
+
+		query := `SELECT item_key FROM workflow_seen_items WHERE workflow_id=? AND item_key IN (` +
+			strings.Repeat("?,", len(batch)-1) + `?)`
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, workflowID)
+		for _, k := range batch {
+			args = append(args, k)
+		}
+
+		rows, err := r.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SeenKeys query failed", err)
+		}
+		for rows.Next() {
+			var k string
+			if err := rows.Scan(&k); err != nil {
+				rows.Close()
+				return nil, apperr.Wrap(apperr.CodeInternal, "SeenKeys scan failed", err)
+			}
+			res[k] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, apperr.Wrap(apperr.CodeInternal, "SeenKeys rows failed", err)
+		}
+		rows.Close()
+	}
+	return res, nil
+}
+
+func (r *SQLiteWorkflowRepository) MarkSeen(ctx context.Context, workflowID string, keys []string, at string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if at == "" {
+		at = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "MarkSeen begin tx", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR IGNORE INTO workflow_seen_items (workflow_id, item_key, first_seen_at)
+		VALUES (?, ?, ?)`)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "MarkSeen prepare stmt", err)
+	}
+	defer stmt.Close()
+
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, workflowID, k, at); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "MarkSeen insert", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "MarkSeen commit", err)
+	}
+	return nil
+}
+
+func (r *SQLiteWorkflowRepository) LastSuccessfulRunStart(ctx context.Context, workflowID string) (string, error) {
+	var startedAt string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT started_at FROM workflow_runs
+		WHERE workflow_id=? AND status='ok' AND skipped=0
+		ORDER BY started_at DESC LIMIT 1`,
+		workflowID,
+	).Scan(&startedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", apperr.Wrap(apperr.CodeInternal, "LastSuccessfulRunStart failed", err)
+	}
+	return startedAt, nil
+}
+
+func (r *SQLiteWorkflowRepository) SetRunSkipped(ctx context.Context, runID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE workflow_runs SET skipped=1 WHERE id=?`, runID)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SetRunSkipped failed", err)
+	}
+	return nil
+}
+
+func (r *SQLiteWorkflowRepository) PruneRunData(ctx context.Context, workflowID string, keepRuns int) error {
+	if keepRuns <= 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		DELETE FROM workflow_run_data
+		WHERE run_id IN (
+			SELECT id FROM workflow_runs
+			WHERE workflow_id=?
+			ORDER BY started_at DESC
+			LIMIT -1 OFFSET ?
+		)`,
+		workflowID, keepRuns,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "PruneRunData failed", err)
+	}
+	return nil
+}
+
+func (r *SQLiteWorkflowRepository) PruneSeen(ctx context.Context, olderThan string) error {
+	if olderThan == "" {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `DELETE FROM workflow_seen_items WHERE first_seen_at < ?`, olderThan)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "PruneSeen failed", err)
+	}
+	return nil
+}
+
+func (r *SQLiteWorkflowRepository) RunLLMUsage(ctx context.Context, sessionIDs []string) (inTok, outTok int64, costUSD float64, err error) {
+	if len(sessionIDs) == 0 {
+		return 0, 0, 0, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(sessionIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(sessionIDs) {
+			end = len(sessionIDs)
+		}
+		batch := sessionIDs[i:end]
+
+		query := `SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost_usd), 0)
+			FROM llm_calls WHERE session_id IN (` + strings.Repeat("?,", len(batch)-1) + `?)`
+		args := make([]any, len(batch))
+		for j, id := range batch {
+			args[j] = id
+		}
+
+		var bIn, bOut int64
+		var bCost float64
+		if err := r.db.QueryRowContext(ctx, query, args...).Scan(&bIn, &bOut, &bCost); err != nil {
+			return 0, 0, 0, apperr.Wrap(apperr.CodeInternal, "RunLLMUsage query failed", err)
+		}
+		inTok += bIn
+		outTok += bOut
+		costUSD += bCost
+	}
+	return inTok, outTok, costUSD, nil
 }

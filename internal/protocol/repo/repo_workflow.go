@@ -23,6 +23,9 @@ type WorkflowStepRow struct {
 	// Value=error）+ MaxVisits=1+MaxRetries；与 CompensationTool 非空互斥（Saga
 	// 逆序补偿语义在多次执行节点上未定义，StateGraphExecutor 校验阶段拒绝）。
 	MaxRetries int
+	StepKey    string
+	Kind       string
+	ConfigJSON string
 }
 
 type WorkflowRow struct {
@@ -38,7 +41,10 @@ type WorkflowRow struct {
 	// Type 'chain'（默认，忽略 WorkflowStepRow.DependsOn，按 Seq 合成顺序链，完全
 	// 向后兼容既有语义）| 'dag'（如实按 DependsOn 构造并行边，支持多前驱 AND-Join，
 	// 空 DependsOn 视为真实并行入口）。决定 workflow_graph.go buildGraphSpec 的分支。
-	Type string
+	Type         string
+	ResultAction string
+	DeliverFrom  string
+	Source       string
 }
 
 type WorkflowRepository interface {
@@ -67,4 +73,15 @@ type WorkflowRepository interface {
 	// "已完成步骤数"而非某个具体的顺序位置，语义随 buildGraphSpec 接入而调整，
 	// 见 workflow_engine.go executeWorkflow 注释）。
 	IncrementWorkflowRunCurrentStep(ctx context.Context, runID string) error
+
+	// T4 Pipeline 状态与数据管理方法
+	SaveRunData(ctx context.Context, runID, stepKey, status string, dataJSON []byte, itemCount int) error
+	LoadRunData(ctx context.Context, runID, stepKey string) (status string, dataJSON []byte, err error)
+	SeenKeys(ctx context.Context, workflowID string, keys []string) (map[string]bool, error)
+	MarkSeen(ctx context.Context, workflowID string, keys []string, at string) error
+	LastSuccessfulRunStart(ctx context.Context, workflowID string) (string, error)
+	SetRunSkipped(ctx context.Context, runID string) error
+	PruneRunData(ctx context.Context, workflowID string, keepRuns int) error
+	PruneSeen(ctx context.Context, olderThan string) error
+	RunLLMUsage(ctx context.Context, sessionIDs []string) (inTok, outTok int64, costUSD float64, err error)
 }
