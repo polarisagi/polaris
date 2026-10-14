@@ -1,0 +1,116 @@
+[
+  {
+    "id": "adr0114_case_1_hn_digest",
+    "name": "每天收集 Hacker News AI Agent 帖子并总结",
+    "description": "验证周期性信息获取编译为 pipeline 并在 dry-run 验证后正式保存",
+    "input": {
+      "user_input": "每天早上 8 点帮我收集 Hacker News 上 AI agent 相关的高分帖子并总结发给我",
+      "cron": "0 8 * * *"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "automation_save",
+        "automation_save"
+      ],
+      "first_call_params": {
+        "kind": "pipeline",
+        "dry_run": true,
+        "required_step_types": ["feed_fetch", "llm"]
+      },
+      "second_call_params": {
+        "kind": "pipeline",
+        "dry_run": false
+      }
+    },
+    "level": 2,
+    "severity": "P0",
+    "behavior_type": "tool_call_sequence",
+    "tags": ["adr0114", "pipeline", "automation"]
+  },
+  {
+    "id": "adr0114_case_2_readme_check",
+    "name": "每周一检查项目 README 更新建议",
+    "description": "验证普通周期提示词任务编译为 prompt 类型自动化任务",
+    "input": {
+      "user_input": "每周一早上帮我检查项目 README 是否需要更新并给出建议",
+      "cron": "0 9 * * 1"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "automation_save"
+      ],
+      "call_params": {
+        "kind": "prompt"
+      }
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": ["adr0114", "prompt", "automation"]
+  },
+  {
+    "id": "adr0114_case_3_web_fetch_article",
+    "name": "HTTP 数据面快速阅读文章",
+    "description": "验证普通文章阅读直接调用 web_fetch 而非拉起重型浏览器",
+    "input": {
+      "user_input": "读一下这篇文章 https://example.com/post 并总结"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "web_fetch"
+      ],
+      "prohibited_tools": [
+        "browser_open",
+        "browser_snapshot",
+        "browser_act",
+        "mcp__polaris-browser-use__browser_open",
+        "mcp__polaris-browser-use__browser_snapshot",
+        "mcp__polaris-browser-use__browser_act"
+      ],
+      "allowed_modes": ["", "markdown"]
+    },
+    "level": 2,
+    "severity": "P0",
+    "behavior_type": "tool_call_sequence",
+    "tags": ["adr0114", "web_fetch", "token_control"]
+  },
+  {
+    "id": "adr0114_case_4_zhihu_harvest",
+    "name": "已知社交平台优先调用结构化配方",
+    "description": "验证针对已知站点调用 harvest 配方且绝不触发多余的 browser_snapshot",
+    "input": {
+      "user_input": "看看知乎上大家怎么讨论「AI Agent 落地」（已安装 browser_use）"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "mcp__polaris-browser-use__harvest"
+      ],
+      "prohibited_tools": [
+        "browser_snapshot",
+        "mcp__polaris-browser-use__browser_snapshot"
+      ]
+    },
+    "level": 2,
+    "severity": "P0",
+    "behavior_type": "tool_call_sequence",
+    "tags": ["adr0114", "harvest", "recipe"]
+  },
+  {
+    "id": "adr0114_case_5_automation_list_delete",
+    "name": "任务列表查询与删除",
+    "description": "验证任务查询与目标任务删除的确定性编排",
+    "input": {
+      "user_input": "我有哪些定时任务？把每小时那个删掉"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "automation_list",
+        "automation_delete"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": ["adr0114", "automation_manage"]
+  }
+]
