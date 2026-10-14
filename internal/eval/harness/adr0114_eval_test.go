@@ -146,20 +146,20 @@ func Test_ADR0114_TrajectoryCases(t *testing.T) {
 		assert.Contains(t, reason, "used prohibited tool")
 	})
 
-	// 用例 4: 社交站点结构化采集 (harvest，禁止调用 browser_snapshot)
+	// 用例 4: 社交站点结构化采集 (social_search，禁止调用 browser_snapshot)
 	t.Run("Case4_ZhihuHarvest", func(t *testing.T) {
 		c := cases[3]
 		assert.Equal(t, "adr0114_case_4_zhihu_harvest", c.ID)
 
 		rules, err := ParseRules(c.Expected)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"mcp__polaris-browser-use__harvest"}, rules.ExpectedToolSequence)
+		assert.Equal(t, []string{"mcp__polaris-social__social_search"}, rules.ExpectedToolSequence)
 
-		// 正向轨迹：直接使用 harvest 配方
+		// 正向轨迹：直接使用 social_search 配方
 		compliantTrace := &TrajectoryTrace{
 			ToolCalls: []ToolCallRecord{
 				{
-					Name: "mcp__polaris-browser-use__harvest",
+					Name: "mcp__polaris-social__social_search",
 					Input: map[string]any{
 						"site":   "zhihu",
 						"action": "search",
@@ -175,7 +175,7 @@ func Test_ADR0114_TrajectoryCases(t *testing.T) {
 		wastefulTrace := &TrajectoryTrace{
 			ToolCalls: []ToolCallRecord{
 				{Name: "browser_snapshot"},
-				{Name: "mcp__polaris-browser-use__harvest"},
+				{Name: "mcp__polaris-social__social_search"},
 			},
 		}
 		passed, reason = judge.Evaluate(ctx, wastefulTrace, rules)

@@ -77,13 +77,13 @@
   {
     "id": "adr0114_case_4_zhihu_harvest",
     "name": "已知社交平台优先调用结构化配方",
-    "description": "验证针对已知站点调用 harvest 配方且绝不触发多余的 browser_snapshot",
+    "description": "验证针对已知站点调用 social_search 配方且绝不触发多余的 browser_snapshot",
     "input": {
-      "user_input": "看看知乎上大家怎么讨论「AI Agent 落地」（已安装 browser_use）"
+      "user_input": "看看知乎上大家怎么讨论「AI Agent 落地」（已安装 social）"
     },
     "expected": {
       "expected_tool_sequence": [
-        "mcp__polaris-browser-use__harvest"
+        "mcp__polaris-social__social_search"
       ],
       "prohibited_tools": [
         "browser_snapshot",
@@ -93,7 +93,7 @@
     "level": 2,
     "severity": "P0",
     "behavior_type": "tool_call_sequence",
-    "tags": ["adr0114", "harvest", "recipe"]
+    "tags": ["adr0114", "social_search", "recipe"]
   },
   {
     "id": "adr0114_case_5_automation_list_delete",

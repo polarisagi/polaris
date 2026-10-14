@@ -10,6 +10,7 @@
 - **[决策]** ADR-0114：确定性步骤管线（0-Token 数据步骤）、Web 双通道（内核 HTTP / 插件浏览器）、Agent 自建自动化。
 - **[契约]** `cron_*` 工具删除替换为 `automation_list/save/run_now/delete`；`fetch_url` 改名 `web_fetch`；新增 `feed_fetch`、`knowledge_ingest`。
 - **[DDL]** `029_workflows.sql` 扩充 `step_key`/`kind`/`config_json` 与 `result_action`/`source`；`017_automations.sql` 扩充 `source`；`014_cron_jobs.sql` 物理删除；新增 `049_web_fetch_cache.sql`（Schema SSoT 保持 44 个）。
+- **[决策]** ADR-0114 决策八：采集移入 `social` 插件（读写同插件共享限速）；资料库插件落地 Markdown 并经 `knowledge.vault_dirs` 入 RAG；管线写入白名单配置化为 `thresholds.m13_interface.pipeline_write_allowlist`。
 - **[订正]** ADR-0114 复核修订：写工具管线步骤运行时 HITL 审批 fail-closed；无头拦截落点订正为工具层；上下文补入调研订正表 F1~F5。
 
 ## 2026-10-13（ADR-0113 知识库向量收敛 — 含**契约变更**）

@@ -726,7 +726,7 @@ automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线�
 
 1. **`tool`（确定性工具执行，0 token）**：
    - 经 `AgentToolExecutor.ExecuteWithTaint` 调用内置工具或 MCP 工具（唯一入口，HE-3）。
-   - **允许集**：只读内置工具（`capability=read-only`）；读取类网络白名单（`web_fetch`、`feed_fetch`）；声明只读提示的 MCP 工具（`annotations.readOnlyHint=true`）；写入类白名单（`knowledge_ingest`）。
+   - **允许集**：只读内置工具（`capability=read-only`）；读取类网络白名单（`web_fetch`、`feed_fetch`）；声明只读提示的 MCP 工具（`annotations.readOnlyHint=true`）；写入类白名单由 `thresholds.m13_interface.pipeline_write_allowlist` 配置（默认 `knowledge_ingest` 与资料库 `kb_save`）；白名单外写工具须声明 `approval=hitl`。
    - 其余有副作用工具（发帖、bash、write_file、未声明只读的 MCP 工具）默认拒绝，除非显式配置 `"approval": "hitl"`；运行时由 `pipeline.Runner` 在调用前经 `Approver`（workflowadmin 适配 HITL 网关）审批，未声明 hitl 或无审批通道一律拒绝（fail-closed，不依赖保存时校验）；`privileged` 与 `automation_*` 工具永远禁止在步骤中调用。
    - 参数含 `{{steps.*}}` 上游数据引用时以 `TaintHigh` 调用。
 2. **`transform`（确定性数据变换，纯 Go，0 token）**：
