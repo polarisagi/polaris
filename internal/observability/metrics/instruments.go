@@ -220,4 +220,7 @@ var (
 	// web_fetch / feed_fetch 可观测性（ADR-0114）
 	InstrWebFetchesTotal        metric.Int64Counter
 	InstrWebFetchExtractedRatio metric.Float64Histogram
+
+	// automation_* 工具防失控可观测性（ADR-0114）
+	InstrAutomationAgentWriteDeniedTotal metric.Int64Counter // label: reason
 )

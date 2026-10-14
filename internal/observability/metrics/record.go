@@ -364,3 +364,12 @@ func RecordWebFetchExtractedRatio(ctx context.Context, ratio float64) {
 		InstrWebFetchExtractedRatio.Record(ctx, ratio)
 	}
 }
+
+// RecordAutomationAgentWriteDenied 记录 Agent 尝试创建/修改自动化被拒绝次数（ADR-0114）。
+func RecordAutomationAgentWriteDenied(ctx context.Context, reason string) {
+	if InstrAutomationAgentWriteDeniedTotal != nil {
+		InstrAutomationAgentWriteDeniedTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("reason", reason),
+		))
+	}
+}

@@ -240,6 +240,14 @@ func (s *Server) ChannelsAdmin() *channelsadmin.ChannelsAdmin {
 	return nil
 }
 
+// AutomationFacade 返回自动化管理门面（当前汇聚 CronAdmin，供 automationBridge 晚绑定）。
+func (s *Server) AutomationFacade() *sysadmin.AutomationFacade {
+	if s.sysadminHandler == nil {
+		return &sysadmin.AutomationFacade{}
+	}
+	return &sysadmin.AutomationFacade{Cron: s.sysadminHandler.Cron}
+}
+
 // SetOutboxWriter 注入 Outbox 写入器。此前该 setter 在 cmd/polaris 启动流程中
 // 从未被调用过——s.outboxWriter 恒为 nil，导致 handleAgentInterrupt 的
 // Interrupt 异步路由（server_handlers_hitl.go）永远退化为"outboxWriter 未注入，

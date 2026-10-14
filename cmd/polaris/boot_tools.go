@@ -57,6 +57,7 @@ import (
 // ToolBundle 持有 §6~§6.8 所有工具层产物。
 type ToolBundle struct {
 	TTSBridge             *ttsBridge                // tts 内置工具 ↔ TTS 引擎的晚绑定（bootServer 里 Bind）
+	AutomationBridge      *automationBridge         // automation_* 内置工具 ↔ 自动化管理服务门面的晚绑定（bootServer 里 Bind）
 	ContainerSandbox      *sandbox.ContainerSandbox // 可 nil（<Tier1 或 FeatureL3Sandbox 未启用）
 	InProcSandbox         *sandbox.InProcessSandbox
 	SandboxRouter         *sandbox.SandboxRouter
@@ -347,10 +348,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	catalogInstaller := marketplace.NewCatalogInstaller(installMgr, extRepo, sourceFetcher, catalogSync, sb.Layout.Extensions)
 	installMgr.WithOutbox(sb.Outbox)
 
-	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
 	// tts 工具在此注册，而承载 TTS 引擎的 Server 到 bootServer 才创建：经晚绑定桥接，
 	// bootServer 里 Bind 之前调用工具会如实报"未接线"，不会回出假音频。
 	ttsBr := &ttsBridge{}
+	autoBr := &automationBridge{}
 	webLimiter := web_fetch.NewHostLimiter(func() time.Duration {
 		return time.Duration(config.CurrentThresholds().M7Tool.WebFetchHostMinIntervalMs) * time.Millisecond
 	})
@@ -365,7 +366,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		sb.Cfg.Sandbox.NetworkPolicy,
 		sb.Cfg.Sandbox.BwrapPath,
 		sb.Cfg,
-		cronRepo,
+		autoBr,
 		sb.Layout.Workspace,
 		&mcpAsyncTaskAdapter{inner: mcpMgr},
 		hitlGateway,
@@ -734,6 +735,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	return &ToolBundle{
 		TTSBridge:             ttsBr,
+		AutomationBridge:      autoBr,
 		ContainerSandbox:      containerSandbox,
 		InProcSandbox:         inProcSandbox,
 		SandboxRouter:         sandboxRouter,

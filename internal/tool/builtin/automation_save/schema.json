@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["prompt", "pipeline"],
+      "description": "自动化类型：prompt 或 pipeline"
+    },
+    "id": {
+      "type": "string",
+      "description": "可选。已有任务 ID，传入时表示更新，不传表示新建"
+    },
+    "name": {
+      "type": "string",
+      "description": "自动化任务名称"
+    },
+    "prompt": {
+      "type": "string",
+      "description": "自动化执行时发送给 Agent 的提示词（kind=prompt 时必填）"
+    },
+    "cron": {
+      "type": "string",
+      "description": "标准 5 字段 Cron 表达式（如 '0 * * * *'）"
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "default": "low",
+      "description": "推理强度：low、medium 或 high，默认 low"
+    },
+    "result_action": {
+      "type": "string",
+      "default": "session",
+      "description": "执行结果处理方式：session（默认）、silent 或 channel:<id>"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否启用，默认 true"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "预运行占位（目前未启用）"
+    }
+  },
+  "required": ["kind"],
+  "additionalProperties": false
+}

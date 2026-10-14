@@ -369,6 +369,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	})
 	// tts 内置工具与 Provider 同源：工具调用与 /v1/audio/speech 走同一套懒加载/不支持/未安装语义。
 	tb.TTSBridge.Bind(httpServer.SynthesizeSpeech)
+	// automation_* 内置工具晚绑定到网关 Server 的自动化门面（ADR-0114）
+	tb.AutomationBridge.Bind(httpServer.AutomationFacade())
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
 	triggerPluginVectorBackfill(sb, httpServer.PluginHandler())

@@ -57,7 +57,7 @@ func RegisterBuiltinTools(
 	netPolicy protocol.SandboxNetworkPolicy, // bash/run_command 网络访问策略
 	bwrapPath string, // Linux: bwrap 路径（空=自动查找）
 	cfg *config.Config,
-	cronRepo protocol.CronRepository, // cron_* 工具依赖；nil 时不注册这三个工具
+	autoSvc AutomationService, // automation_* 工具依赖；nil 时不注册这四个工具
 	vfsRoot string, // WorkspaceManager 的根目录
 	asyncTaskProvider get_task_result.AsyncTaskProvider, // get_task_result 工具依赖（GD-08-001）；nil 时该工具始终降级返回 expired_or_not_found
 	hitlGateway HITLGateway,
@@ -117,15 +117,16 @@ func RegisterBuiltinTools(
 		{"template_render", TemplateRenderFn},
 	}
 
-	// cron_* 工具依赖，仅在 cronRepo != nil 时注册（单元测试无 Repo 时不报错）
-	if cronRepo != nil {
+	// automation_* 工具依赖，仅在 autoSvc != nil 时注册（单元测试无 Service 时不报错）
+	if autoSvc != nil {
 		defs = append(defs, []struct {
 			name string
 			fn   sandbox.InProcessFn
 		}{
-			{"cron_list", MakeCronListFn(cronRepo)},
-			{"cron_create", MakeCronCreateFn(cronRepo)},
-			{"cron_delete", MakeCronDeleteFn(cronRepo)},
+			{"automation_list", MakeAutomationListFn(autoSvc)},
+			{"automation_save", MakeAutomationSaveFn(autoSvc)},
+			{"automation_run_now", MakeAutomationRunNowFn(autoSvc)},
+			{"automation_delete", MakeAutomationDeleteFn(autoSvc)},
 		}...)
 	}
 

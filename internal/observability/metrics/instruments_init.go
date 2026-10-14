@@ -380,6 +380,12 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		),
 	)
 	ie.capture("polaris.web.fetch_extracted_ratio", err)
+
+	InstrAutomationAgentWriteDeniedTotal, err = meter.Int64Counter(
+		"polaris.automation.agent_write_denied_total",
+		metric.WithDescription("Agent 尝试创建/修改自动化被拒绝次数 (label: reason)"),
+	)
+	ie.capture("polaris.automation.agent_write_denied_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {
