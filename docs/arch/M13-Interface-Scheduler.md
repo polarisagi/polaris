@@ -3,7 +3,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI + 桌面外壳; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:360 对内调度 / 3:449 MCP / 6:457 (SOFT)降级 / 6-bis:470 已知Bug修复记录 / 7:482 跨模块契约 / 8:499 Web UI 规约 / 8.6:613 834 插件聚合市场DB+流 / 8.7:644 870 自动化中心DB+流+工作流 / 8.8:748 987 电脑操控权限+Preferences / 8.9:765 1027 前端组件规范 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:361 对内调度 / 3:450 MCP / 6:458 (SOFT)降级 / 6-bis:471 已知Bug修复记录 / 7:483 跨模块契约 / 8:500 Web UI 规约 / 8.6:614 834 插件聚合市场DB+流 / 8.7:645 870 自动化中心DB+流+工作流 / 8.8:750 987 电脑操控权限+Preferences / 8.9:767 1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -727,7 +727,8 @@ automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线�
 1. **`tool`（确定性工具执行，0 token）**：
    - 经 `AgentToolExecutor.ExecuteWithTaint` 调用内置工具或 MCP 工具（唯一入口，HE-3）。
    - **允许集**：只读内置工具（`capability=read-only`）；读取类网络白名单（`web_fetch`、`feed_fetch`）；声明只读提示的 MCP 工具（`annotations.readOnlyHint=true`）；写入类白名单（`knowledge_ingest`）。
-   - 其余有副作用工具（发帖、bash、write_file、未声明只读的 MCP 工具）默认拒绝，除非显式配置 `"approval": "hitl"`（挂起走 HITL 审批网关）；`privileged` 与 `automation_*` 工具永远禁止在步骤中调用。
+   - 其余有副作用工具（发帖、bash、write_file、未声明只读的 MCP 工具）默认拒绝，除非显式配置 `"approval": "hitl"`；运行时由 `pipeline.Runner` 在调用前经 `Approver`（workflowadmin 适配 HITL 网关）审批，未声明 hitl 或无审批通道一律拒绝（fail-closed，不依赖保存时校验）；`privileged` 与 `automation_*` 工具永远禁止在步骤中调用。
+   - 参数含 `{{steps.*}}` 上游数据引用时以 `TaintHigh` 调用。
 2. **`transform`（确定性数据变换，纯 Go，0 token）**：
    - 固定算子集（零表达式语言）：`concat`、`dedup`（可按 run 或跨 workflow 跨轮去重，走 `workflow_seen_items`）、`filter`、`sort`、`limit`、`pick`、`rename`、`truncate`。
    - 依赖均在调用方定义，纯逻辑位于 internal/automation/pipeline/（ADR-0114）。
@@ -741,7 +742,7 @@ automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线�
 步骤若配置 `skip_if_empty: true`，当其输出数据条目为 0 时，本步骤及所有下游传递依赖步骤自动标记为 `skipped`；若整个管线所有终点步骤均 skipped，则运行整体状态为 `ok` 且 `skipped=1`，不发起 LLM 调用，不执行任何投递通知（0 token 消耗且不打扰用户）。
 
 **无头来源禁止自建（防失控，HE-7）**：
-调用上下文若来源于自动化运行、工作流运行或插件 channel 的无头会话，`automation_save`、`automation_delete`、`automation_run_now` 被 PolicyGate 强制拦截，杜绝自繁殖及外部网页内容通过自动化篡改持久化配置。单 Agent 来源活跃自动化上限由 `thresholds.m13_interface.agent_automation_max` 控制。
+调用上下文若来源于自动化运行、工作流运行或插件 channel 的无头会话（`protocol.IsBackgroundWork(ctx)` 为真），`automation_save`、`automation_delete`、`automation_run_now` 在工具层直接返回 `CodeForbidden`（`internal/tool/builtin/automation_tools.go`），杜绝自繁殖及外部网页内容通过自动化篡改持久化配置。单 Agent 来源活跃自动化上限由 `thresholds.m13_interface.agent_automation_max` 控制。
 
 
 ---
