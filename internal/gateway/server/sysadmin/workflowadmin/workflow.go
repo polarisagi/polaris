@@ -7,6 +7,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ─── 数据模型 ─────────────────────────────────────────────────────────────────
@@ -59,18 +62,52 @@ type workflowStep struct {
 	ConfigJSON string `json:"config_json,omitempty"`
 }
 
+func (s *workflowStep) UnmarshalJSON(data []byte) error {
+	type Alias workflowStep
+	aux := struct {
+		*Alias
+		ConfigRaw json.RawMessage `json:"config_json"`
+	}{
+		Alias: (*Alias)(s),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "unmarshal workflow step", err)
+	}
+	if len(aux.ConfigRaw) > 0 {
+		s.ConfigJSON = normalizeConfigJSON(aux.ConfigRaw)
+	}
+	return nil
+}
+
+func normalizeConfigJSON(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return "{}"
+	}
+	if strings.HasPrefix(s, `"`) {
+		var unquoted string
+		if err := json.Unmarshal(raw, &unquoted); err == nil {
+			return unquoted
+		}
+	}
+	return s
+}
+
 type workflowRun struct {
-	ID          string          `json:"id"`
-	WorkflowID  string          `json:"workflow_id"`
-	Trigger     string          `json:"trigger"`
-	Status      string          `json:"status"`
-	CurrentStep int             `json:"current_step"`
-	TotalSteps  int             `json:"total_steps"`
-	StartedAt   string          `json:"started_at"`
-	FinishedAt  string          `json:"finished_at"`
-	ErrorMsg    string          `json:"error_msg"`
-	StepOutputs json.RawMessage `json:"step_outputs"`
-	Skipped     bool            `json:"skipped,omitempty"`
+	ID           string          `json:"id"`
+	WorkflowID   string          `json:"workflow_id"`
+	Trigger      string          `json:"trigger"`
+	Status       string          `json:"status"`
+	CurrentStep  int             `json:"current_step"`
+	TotalSteps   int             `json:"total_steps"`
+	StartedAt    string          `json:"started_at"`
+	FinishedAt   string          `json:"finished_at"`
+	ErrorMsg     string          `json:"error_msg"`
+	StepOutputs  json.RawMessage `json:"step_outputs"`
+	Skipped      int             `json:"skipped"`
+	LLMTokensIn  int64           `json:"llm_tokens_in"`
+	LLMTokensOut int64           `json:"llm_tokens_out"`
+	CostUSD      float64         `json:"cost_usd"`
 }
 
 type stepOutput struct {

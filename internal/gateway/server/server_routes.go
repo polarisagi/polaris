@@ -190,6 +190,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/workflows/{id}/runs", s.sysadminHandler.Workflow.HandleListWorkflowRuns)
 	mux.HandleFunc("POST /v1/workflows/{id}/trigger", s.sysadminHandler.Workflow.HandleTriggerWorkflow)
 	mux.HandleFunc("POST /v1/workflows/runs/{id}/resume", s.sysadminHandler.Workflow.HandleResumeWorkflowRun)
+	mux.HandleFunc("GET /v1/workflows/runs/{id}/data/{step_key}", s.sysadminHandler.Workflow.HandleGetRunStepData)
 
 	// 聊天平台集成 API
 	mux.HandleFunc("GET /v1/channels", s.sysadminHandler.Channels.HandleListChannels)
