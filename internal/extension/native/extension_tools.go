@@ -38,6 +38,7 @@ func RegisterExtensionTools(
 	cognitive CognitiveSearcher,
 	embedFn EmbedFn,
 	knowledgeSearcher KnowledgeSearcher,
+	knowledgeIngester KnowledgeIngester,
 ) error {
 	defs := []struct {
 		name string
@@ -53,6 +54,14 @@ func RegisterExtensionTools(
 			name string
 			fn   sandbox.InProcessFn
 		}{"knowledge_search", MakeKnowledgeSearchFn(knowledgeSearcher)})
+	}
+
+	// knowledge_ingest：knowledgeIngester 非 nil 时注册
+	if knowledgeIngester != nil {
+		defs = append(defs, struct {
+			name string
+			fn   sandbox.InProcessFn
+		}{"knowledge_ingest", MakeKnowledgeIngestFn(knowledgeIngester)})
 	}
 
 	for _, d := range defs {

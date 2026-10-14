@@ -251,6 +251,15 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		slog.Info("polaris: knowledge_search tool registered (three-phase DeepRAG)")
 	}
 
+	// 将 ingester 注册为 "knowledge_ingest" builtin 工具（ADR-0114 决策六）
+	if ingester != nil {
+		if err := native.RegisterExtensionTool(tb.InProcSandbox, tb.ToolReg, "knowledge_ingest", native.MakeKnowledgeIngestFn(ingester)); err != nil {
+			slog.Warn("polaris: knowledge_ingest tool registration failed", "err", err)
+		} else {
+			slog.Info("polaris: knowledge_ingest tool registered (bulk ingestion pipeline)")
+		}
+	}
+
 	// ctx 仅供将来异步初始化路径使用，当前同步完成
 	_ = ctx
 
