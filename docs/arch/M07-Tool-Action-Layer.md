@@ -82,19 +82,20 @@
 
 ### 3.1 核心内置工具层 (Built-in Tools)
 
-L1 层生存套件以 Go 原生代码执行，受原生沙箱策略约束。核心内置工具共 **45 个**、6 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配，严禁在外部或扩展层绕过：
+L1 层生存套件以 Go 原生代码执行，受原生沙箱策略约束。核心内置工具共 **48 个**、6 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配，严禁在外部或扩展层绕过：
 
-**入口 1 — `builtin.RegisterBuiltinTools`（31 个，元数据来自 `internal/tool/builtin/<name>/tool.yaml` + `schema.json`）**
+**入口 1 — `builtin.RegisterBuiltinTools`（34 个，元数据来自 `internal/tool/builtin/<name>/tool.yaml` + `schema.json`，ADR-0114）**
 
 - 文件：`read_file`、`write_file`、`list_dir`、`str_replace_editor`（防漂移，含 undo 缓冲）、`multi_edit`（单文件多处原子修改）、`glob`；搜索：`grep`
-- 网络：`fetch_url`（SafeDialer 出站）、`web_search`
+- 网络：`web_fetch`（原 `fetch_url` 升级改名，SafeDialer 出站）、`feed_fetch`（RSS/Atom/JSON Feed，ADR-0114）、`web_search`
 - 执行：`bash`（平台原生沙箱）、`run_command`（受限构建，如 `go test`）、`data_query`
 - 数据/文本：`csv_parse`、`diff_text`、`template_render`
+- 知识：`knowledge_ingest`（批量摄入，URI 去重，ADR-0114）
 - 多媒体：`video_analysis`、`tts`（本地 MeloTTS，经网关 `Synthesize`，ADR-0110）
 - 系统：`get_datetime`、`sys_probe`（M03 §5）
 - 辅助：`todo_read`/`todo_write`（按会话持久化于 `session_todos` 表，会话 ID 取 `CtxTaskIDKey`，缺失即报错；ADR-0104）、`notebook_read`/`notebook_edit`、`read_tool_ref`
 - Git：`git_diff`、`git_commit`（`git_text_tools.go`，原生内置，无需 MCP 扩展；rebase/branch 等高级操作走 L3 MCP 扩展）
-- Cron（`cronRepo != nil` 时才注册）：`cron_list`、`cron_create`、`cron_delete`
+- 自动化（替换原 `cron_*`，ADR-0114）：`automation_list`、`automation_save`、`automation_run_now`、`automation_delete`
 - Rich 工具（`RegisterRich`，默认 `TaintHigh`）：`execute_wasm`、`get_task_result`（异步任务结果回取）
 
 **入口 2 — `builtin.RegisterMemoryTools`（8 个，`internal/tool/builtin/memory_tools.go`，元数据内联）**：`memory_write`/`memory_search`/`memory_append`/`memory_expire`/`memory_reflect`、`core_memory_edit`（编辑 ZoneCoreMemory 块）、`memory_page_out`/`memory_page_in`。详见 M05 §5-bis 与 ADR-0033。

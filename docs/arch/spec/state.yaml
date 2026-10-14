@@ -1105,6 +1105,9 @@ thresholds:
     sbx_l4_persistent_max_sessions: 8
     sbx_l4_persistent_exec_timeout_seconds: 30
     sbx_l4_persistent_reap_interval_seconds: 30
+    web_fetch_default_max_chars: 12000 # toml:"web_fetch.default_max_chars" — 网页正文抽取默认最大字符数/字符（ADR-0114）
+    web_fetch_cache_max_rows: 5000 # toml:"web_fetch.cache_max_rows" — 网页条件请求缓存最大行数/行（ADR-0114）
+    web_fetch_host_min_interval_ms: 1000 # toml:"web_fetch.host_min_interval_ms" — 同主机访问礼貌最小间隔/毫秒（ADR-0114）
     output_taint_defaults:
       builtin_fs_read: low
       mcp_any: high
@@ -1316,6 +1319,15 @@ thresholds:
     hitl_default_deadline_min_urgent: 5
     hitl_default_deadline_min_normal: 60
     hitl_default_deadline_min_long: 1440
+    pipeline_min_interval_min: 15 # toml:"pipeline.min_interval_min" — 管线最小触发间隔/分钟（ADR-0114）
+    prompt_automation_min_interval_min: 60 # toml:"automation.prompt_min_interval_min" — Prompt 型自动化最小触发间隔/分钟（ADR-0114）
+    agent_automation_max: 20 # toml:"automation.agent_max" — 单 Agent 最大活跃自动化任务数/个（ADR-0114）
+    pipeline_max_steps: 20 # toml:"pipeline.max_steps" — 单管线最大步骤数/步（ADR-0114）
+    pipeline_step_data_max_bytes: 1048576 # toml:"pipeline.step_data_max_bytes" — 单步骤输出数据上限/字节（ADR-0114）
+    pipeline_run_data_keep_runs: 20 # toml:"pipeline.run_data_keep_runs" — 管线运行历史数据保留轮数/轮（ADR-0114）
+    pipeline_seen_items_ttl_days: 90 # toml:"pipeline.seen_items_ttl_days" — 去重条目保留期限/天（ADR-0114）
+    pipeline_llm_max_input_chars: 24000 # toml:"pipeline.llm_max_input_chars" — LLM 步骤输入字符上限/字符（ADR-0114）
+    pipeline_llm_max_output_tokens: 2000 # toml:"pipeline.llm_max_output_tokens" — LLM 步骤输出 token 上限/token（ADR-0114）
     re_eval_when:
       - worker_*: ["pool_saturation_freq"]
       - hitl_default_deadline_*: ["expire_rate"]

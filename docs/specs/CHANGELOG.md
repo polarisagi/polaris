@@ -5,6 +5,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-14（ADR-0114 信息获取与自动化管线 — 含**规范/契约变更**）
+
+- **[决策]** ADR-0114：确定性步骤管线（0-Token 数据步骤）、Web 双通道（内核 HTTP / 插件浏览器）、Agent 自建自动化。
+- **[契约]** `cron_*` 工具删除替换为 `automation_list/save/run_now/delete`；`fetch_url` 改名 `web_fetch`；新增 `feed_fetch`、`knowledge_ingest`。
+- **[DDL]** `029_workflows.sql` 扩充 `step_key`/`kind`/`config_json` 与 `result_action`/`source`；`017_automations.sql` 扩充 `source`；`014` 规划删除预留；新增 `web_fetch_cache`。
+
 ## 2026-10-13（ADR-0113 知识库向量收敛 — 含**契约变更**）
 
 - **[修复]** 文档摄入此前从不写向量（知识向量召回恒空）：新增 `knowledge.KnowledgeReindexer`，按 `embed_model_version != 当前版本` 单一路径嵌入 + `VecUpsert`，摄入提交后 `Kick`；单轮按 rowid 游标推进防毒行饿死。

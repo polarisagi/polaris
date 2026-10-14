@@ -643,14 +643,18 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 
 ## 8.7 自动化中心（`/automation` 页）
 
+> **调度 SSoT 声明**：`cron_jobs`（原 014 表）已彻底废弃删除，调度 SSoT 为 `automations` + `workflows`（ADR-0114）。
+
 ### DB 表
 
 | 表 | 用途 | 迁移 |
 |----|------|------|
-| `automations` / `automation_runs` | 自动化配置（SSoT）/ 执行历史（每次触发一条） | 017 |
+| `automations` / `automation_runs` | 自动化配置（SSoT）/ 执行历史（每次触发一条；含 `source` 列区分来源） | 017 |
 | `channels` | Webhook 入站接入（trigger_type=webhook 时关联） | 012 |
 | `chat_sessions` | 每次执行独立 session（打 `automation_id` 标签，`source='automation'`） | 013 |
-| `workflows` / `workflow_steps` / `workflow_runs` | 工作流定义 / 步骤 / 执行历史（含步骤级产出摘要） | 029 |
+| `workflows` / `workflow_steps` / `workflow_runs` | 工作流定义（含 `result_action`、`source` 列）/ 步骤（含 `step_key`、`kind`、`config_json` 列）/ 执行历史（含步骤级产出摘要） | 029 |
+| `workflow_run_data` | 管线步骤级输出数据持久化（State-in-DB，单步 ≤1MiB，保留最近 20 轮，ADR-0114 规划，未落地） | 029 |
+| `workflow_seen_items` | 管线跨运行条目去重记录（TTL 90天，by url/id，ADR-0114 规划，未落地） | 029 |
 
 **automations 关键字段**:
 
@@ -663,6 +667,7 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | `working_dir` | 单一工作目录路径 |
 | `reasoning_effort` | `low/medium/high/ultra`，自动映射 model_roles |
 | `result_action` | `session`=追加到自动 session / `channel:{id}`=接入推送 / `silent` |
+| `source` | `user`=用户创建 / `agent`=Agent 会话通过 `automation_save` 自建 / `plugin`=插件伴生模板实例化 |
 | `next_run_at` | 预计算下次触发时间，cronTick 按此列索引 |
 | `last_run_status` | `ok/error/running`（防重入） |
 
@@ -705,13 +710,38 @@ Agent 触发危险操作（`write_network` / Privileged / 超预算）→ M11 Ce
 
 ### 工作流（Workflows）
 
-automations 的**有序链式/DAG 扩展**：将多个 Agent 任务编排为流水线（`workflows.type = chain | dag`）。API 见 §1.2（`/v1/workflows`）。
+automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线（`workflows.type = chain | dag`）。API 见 §1.2（`/v1/workflows`）。
 
+- 关键字段：`result_action`（`session` / `channel:{id}` / `silent`，同 automations 语义）；`source`（`user` / `agent` / `plugin`）。
 - 触发：`cron`（`cronTickWorkflows` 与 cronTick 同批）/ `manual`（`POST /v1/workflows/{id}/trigger`），均调 `executeWorkflow`。
 - `chain`（默认）：忽略 `depends_on`，按 `seq` 顺序执行；上一步 reply 截断至 2000 字符后注入下一步 prompt 前缀（`[前一步骤输出]...`，`input_from_prev`）。
 - `dag`：`workflow_steps.depends_on` 非空构造真实 DAG 并行边（AND-Join，元素为 0-based seq 索引字符串）；空则为并行入口；步骤失败重试 `max_retries`（`StateGraphExecutor` 自环边）。图构造 `internal/gateway/server/sysadmin/workflowadmin/workflow_graph.go`，设计 → ADR-0046 决策三、M08 §3-quinquies。
 - 每步独立 chat_session，执行历史写 `workflow_runs.step_outputs`（JSON 数组）；电路断路器同 automations（连续 5 次 error → `circuit_open=1`）；步骤可选绑定已有 `automation_id` 或内联 prompt（二选一）。
 - 续跑：`POST /v1/workflows/runs/{id}/resume` 续跑 interrupted/error 的运行（202；404/409 语义见 ADR-0104 决策二）。
+
+### 管线步骤类型（Pipeline Steps，ADR-0114）
+
+工作流（`workflows.type = 'dag'`）步骤 `workflow_steps` 支持四种 `kind`（`step_key`、`kind`、`config_json`）：
+
+1. **`tool`（确定性工具执行，0 token）**：
+   - 经 `AgentToolExecutor.ExecuteWithTaint` 调用内置工具或 MCP 工具（唯一入口，HE-3）。
+   - **允许集**：只读内置工具（`capability=read-only`）；读取类网络白名单（`web_fetch`、`feed_fetch`）；声明只读提示的 MCP 工具（`annotations.readOnlyHint=true`）；写入类白名单（`knowledge_ingest`）。
+   - 其余有副作用工具（发帖、bash、write_file、未声明只读的 MCP 工具）默认拒绝，除非显式配置 `"approval": "hitl"`（挂起走 HITL 审批网关）；`privileged` 与 `automation_*` 工具永远禁止在步骤中调用。
+2. **`transform`（确定性数据变换，纯 Go，0 token）**：
+   - 固定算子集（零表达式语言）：`concat`、`dedup`（可按 run 或跨 workflow 跨轮去重，走 `workflow_seen_items`）、`filter`、`sort`、`limit`、`pick`、`rename`、`truncate`。
+   - 依赖均在调用方定义，纯逻辑位于 internal/automation/pipeline/（ADR-0114 规划，未落地）。
+3. **`llm`（单次提炼推理）**：
+   - 单次调用 `Provider.Infer`（default 便宜模型池，默认关闭思考，purpose=`workflow_llm_step`），输入字符上限 24000、输出 token 上限 2000。
+   - 前缀稳定（ADR-0105 决策三）：系统提示词为固定模板，数据仅置于 user 消息并加反注入外部数据定界标记（HE-2）。
+4. **`agent`（多轮认知循环）**：
+   - 既有行为：拉起 Headless Agent 会话执行完整思考循环。仅在必须依赖自主规划时使用；若管线全部由 agent 步骤组成，校验器会给出 Warning 建议改为 tool/transform。
+
+**`skip_if_empty` 机制**：
+步骤若配置 `skip_if_empty: true`，当其输出数据条目为 0 时，本步骤及所有下游传递依赖步骤自动标记为 `skipped`；若整个管线所有终点步骤均 skipped，则运行整体状态为 `ok` 且 `skipped=1`，不发起 LLM 调用，不执行任何投递通知（0 token 消耗且不打扰用户）。
+
+**无头来源禁止自建（防失控，HE-7）**：
+调用上下文若来源于自动化运行、工作流运行或插件 channel 的无头会话，`automation_save`、`automation_delete`、`automation_run_now` 被 PolicyGate 强制拦截，杜绝自繁殖及外部网页内容通过自动化篡改持久化配置。单 Agent 来源活跃自动化上限由 `thresholds.m13_interface.agent_automation_max` 控制。
+
 
 ---
 
