@@ -37,6 +37,7 @@ type automation struct {
 	Enabled         bool   `json:"enabled"`
 	RequiresHITL    bool   `json:"requires_hitl"`
 	RiskLevel       int    `json:"risk_level"`
+	Source          string `json:"source"`
 	LastRunAt       string `json:"last_run_at"`
 	NextRunAt       string `json:"next_run_at"`
 	RunCount        int    `json:"run_count"`

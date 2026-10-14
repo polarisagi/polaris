@@ -43,6 +43,7 @@ func TestCronHandlers(t *testing.T) {
 			cedar_rules_json TEXT,
 			requires_hitl INTEGER,
 			risk_level INTEGER,
+			source TEXT DEFAULT 'user',
 			system_prompt_version INTEGER,
 			reasoning_effort INTEGER,
 			next_run_at DATETIME,

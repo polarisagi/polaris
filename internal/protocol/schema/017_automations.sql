@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS automations (
     enabled           INTEGER NOT NULL DEFAULT 1,
     requires_hitl     BOOLEAN NOT NULL DEFAULT FALSE,    -- 是否需人工审批
     risk_level        INTEGER NOT NULL DEFAULT 1,        -- 风险等级
+    -- 来源（ADR-0114）：'user'=界面/API 创建 | 'agent'=Agent 经 automation_save 创建 | 'plugin:<plugin_id>'=插件模板实例化
+    source            TEXT    NOT NULL DEFAULT 'user',
     -- 执行状态（cronTick 更新）
     last_run_at       TEXT    NOT NULL DEFAULT '',
     next_run_at       TEXT    NOT NULL DEFAULT '',       -- cronTick 预计算下次触发时间
@@ -48,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_auto_enabled     ON automations(enabled);
 CREATE INDEX IF NOT EXISTS idx_auto_trigger     ON automations(trigger_type);
 CREATE INDEX IF NOT EXISTS idx_auto_next_run    ON automations(next_run_at) WHERE next_run_at != '';
 CREATE INDEX IF NOT EXISTS idx_auto_channel     ON automations(channel_id)  WHERE channel_id != '';
+CREATE INDEX IF NOT EXISTS idx_auto_source      ON automations(source);
 
 -- ─── 执行历史 ──────────────────────────────────────────────────────────────
 -- 每次触发（定时/webhook/手动）产生一条 run 记录。

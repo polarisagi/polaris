@@ -39,6 +39,7 @@ func TestCronRunnerExtra(t *testing.T) {
 			enabled INTEGER,
 			requires_hitl INTEGER,
 			risk_level INTEGER,
+			source TEXT DEFAULT 'user',
 			last_run_at TEXT,
 			next_run_at TEXT,
 			run_count INTEGER,

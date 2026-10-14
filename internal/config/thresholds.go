@@ -463,7 +463,9 @@ type M13InterfaceThresholds struct {
 	// AmbientSkillMaxChars ambient skill instructions 全文注入的总字符预算
 	// （M13-bis §3：不得占用超过 ~10% 上下文窗口）。超预算的 skill 降级为 index-only。
 	// 大上下文模型可调高；<=0 时回落到 DefaultThresholds 的 4000。
-	AmbientSkillMaxChars int `toml:"ambient_skill_max_chars"` // 4000
+	AmbientSkillMaxChars           int `toml:"ambient_skill_max_chars"`            // 4000
+	PromptAutomationMinIntervalMin int `toml:"automation.prompt_min_interval_min"` // 60
+	AgentAutomationMax             int `toml:"automation.agent_max"`               // 20
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
@@ -708,6 +710,8 @@ func DefaultThresholds() Thresholds {
 			MaxConcurrentLLMCalls:          4,
 			LazyLoadToolThreshold:          40,
 			AmbientSkillMaxChars:           4000,
+			PromptAutomationMinIntervalMin: 60,
+			AgentAutomationMax:             20,
 		},
 		Session: SessionThresholds{
 			// 取系统提示词中通常的最长特征串长度（例如 "PolarisAGI" 10 字节），并 ×2 留作冗余

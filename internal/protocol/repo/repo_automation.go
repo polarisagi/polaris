@@ -18,6 +18,7 @@ type AutomationRow struct {
 	Enabled         bool
 	RequiresHITL    bool
 	RiskLevel       int
+	Source          string
 	LastRunAt       string
 	NextRunAt       string
 	RunCount        int
@@ -52,6 +53,7 @@ type AutomationRepository interface {
 	// （GD-9-001 复核修复：cron_templates_handlers.go TriggerWebhookAutomations
 	// 此前直连 SQL，收敛到本方法）。
 	ListWebhookAutomations(ctx context.Context, channelID string) ([]AutomationRow, error)
+	CountEnabledBySource(ctx context.Context, source string) (int, error)
 
 	UpdateAutomationStatus(ctx context.Context, id, lastRunStatus string) error
 	UpdateAutomationStatusAndSchedule(ctx context.Context, id, lastRunStatus, lastRunAt, nextRunAt string) error

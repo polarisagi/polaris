@@ -98,7 +98,7 @@ func TestTriggerWebhookAutomations(t *testing.T) {
 		id TEXT PRIMARY KEY, name TEXT, prompt TEXT, trigger_type TEXT, cron_schedule TEXT,
 		event_filter TEXT, channel_id TEXT, working_dir TEXT, env_type TEXT,
 		reasoning_effort TEXT, result_action TEXT, sandbox_level INTEGER, cedar_rules_json TEXT,
-		enabled INTEGER, requires_hitl INTEGER, risk_level INTEGER,
+		enabled INTEGER, requires_hitl INTEGER, risk_level INTEGER, source TEXT DEFAULT 'user',
 		last_run_at TEXT, next_run_at TEXT, run_count INTEGER, last_run_status TEXT, last_run_error TEXT,
 		failure_count INTEGER, circuit_open INTEGER, circuit_opened_at TEXT,
 		created_at TEXT, updated_at TEXT

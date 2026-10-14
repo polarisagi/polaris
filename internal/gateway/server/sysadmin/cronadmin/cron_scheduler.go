@@ -28,6 +28,7 @@ func automationFromRow(row repo.AutomationRow) automation {
 		Enabled:         row.Enabled,
 		RequiresHITL:    row.RequiresHITL,
 		RiskLevel:       row.RiskLevel,
+		Source:          row.Source,
 		LastRunAt:       row.LastRunAt,
 		NextRunAt:       row.NextRunAt,
 		RunCount:        row.RunCount,
