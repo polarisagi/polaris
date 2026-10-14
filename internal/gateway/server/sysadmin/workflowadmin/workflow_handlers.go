@@ -313,13 +313,7 @@ func (h *WorkflowAdmin) validatePipelineSteps(name, desc, triggerType, cronSched
 
 func (h *WorkflowAdmin) validateSpec(spec pipeline.Spec) []pipeline.FieldError {
 	valDeps := toolMetaAdapter{exec: h.ToolExecutor}
-	limits := pipeline.Limits{
-		MaxSteps:           20,
-		MinIntervalMin:     15,
-		LLMMaxInputChars:   24000,
-		LLMMaxOutputTokens: 2000,
-		StepDataMaxBytes:   1048576,
-	}
+	limits := pipelineLimitsFromConfig()
 	minIntervalFn := func(cronExpr string) (int, error) {
 		return cronadmin.MinIntervalMinutes(cronExpr, time.Now().UTC())
 	}

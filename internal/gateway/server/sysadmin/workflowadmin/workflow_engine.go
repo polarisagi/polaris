@@ -105,6 +105,10 @@ func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []wor
 			h.updateWorkflowStats(wf.ID, status, errMsg, finishedAt)
 		}()
 
+		// （后注册先执行，保证 run 终态对外可见时条目已清）任何路径退出都要清掉本 run 的去重状态；失败运行只删除不 Commit，
+		// 避免未成功投递的条目被记为已见。
+		defer h.dedupStates.Delete(runID)
+
 		if total == 0 {
 			status = "error"
 			errMsg = "workflow has no steps"
@@ -135,15 +139,17 @@ func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []wor
 		// 1. 终端步骤全为 skipped 判定与结果投递
 		terminalSteps := findTerminalSteps(wf.Type, steps)
 		allTerminalSkipped := h.isAllTerminalSkipped(context.Background(), runID, terminalSteps)
+		// 成功路径先取出用于 Commit；失败/提前 return 由上方 defer 兜底删除，防止泄漏。
 		dedupVal, hasDedup := h.dedupStates.LoadAndDelete(runID)
 
 		h.handleWorkflowDeliveryAndCleanup(context.Background(), wf, runID, steps, terminalSteps, allTerminalSkipped, dedupVal, hasDedup)
 
 		// 2. 运行数据与去重记录清理
-		if err := h.WorkflowRepo.PruneRunData(context.Background(), wf.ID, 20); err != nil {
+		keepRuns, seenTTLDays := pipelineRetentionFromConfig()
+		if err := h.WorkflowRepo.PruneRunData(context.Background(), wf.ID, keepRuns); err != nil {
 			slog.Debug("workflow: prune run data failed", "workflow_id", wf.ID, "err", err)
 		}
-		ttlCutoff := time.Now().AddDate(0, 0, -90).UTC().Format(time.RFC3339)
+		ttlCutoff := time.Now().AddDate(0, 0, -seenTTLDays).UTC().Format(time.RFC3339)
 		if err := h.WorkflowRepo.PruneSeen(context.Background(), ttlCutoff); err != nil {
 			slog.Debug("workflow: prune seen failed", "err", err)
 		}

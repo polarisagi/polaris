@@ -77,6 +77,12 @@ func (m *memoryRunDataStore) Load(ctx context.Context, runID, key string) (strin
 
 // DryRunPipeline 同步试跑（不落库、不调 LLM、不执行写入类工具、不写 seen），供 Agent 保存前给用户预览。
 func (h *WorkflowAdmin) DryRunPipeline(ctx context.Context, spec pipeline.Spec) (protocol.PipelineDryRunResult, []pipeline.FieldError, error) {
+	return h.dryRunSpec(ctx, spec, "")
+}
+
+// dryRunSpec 试跑内核；wfID 非空时 dedup 预览基于该工作流真实的已见条目，
+// 未保存的 spec 没有 ID，只能传空（此时不查 seen）。
+func (h *WorkflowAdmin) dryRunSpec(ctx context.Context, spec pipeline.Spec, wfID string) (protocol.PipelineDryRunResult, []pipeline.FieldError, error) {
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
@@ -89,20 +95,14 @@ func (h *WorkflowAdmin) DryRunPipeline(ctx context.Context, spec pipeline.Spec) 
 	sortedSteps := kahnTopologicalSort(spec.Steps)
 	memStore := newMemoryRunDataStore()
 	valDeps := toolMetaAdapter{exec: h.ToolExecutor}
-	limits := pipeline.Limits{
-		MaxSteps:           20,
-		MinIntervalMin:     15,
-		LLMMaxInputChars:   24000,
-		LLMMaxOutputTokens: 2000,
-		StepDataMaxBytes:   1048576,
-	}
+	limits := pipelineLimitsFromConfig()
 
 	rc := pipeline.RunContext{
 		RunID:      "dry_" + newWorkflowRunID(),
 		WorkflowID: "dry_wf",
 		Date:       time.Now().UTC().Format("2006-01-02"),
 		Since:      time.Now().UTC().AddDate(0, 0, -1).Format(time.RFC3339),
-		Dedup:      &dryDedupState{repo: h.WorkflowRepo, wfID: ""},
+		Dedup:      &dryDedupState{repo: h.WorkflowRepo, wfID: wfID},
 		DryRun:     true,
 	}
 
@@ -209,7 +209,7 @@ func (h *WorkflowAdmin) DryRunWorkflow(ctx context.Context, wfID string) (protoc
 		spec.Steps = append(spec.Steps, convertWorkflowStepToPipelineStep(st, i, steps))
 	}
 
-	res, errs, err := h.DryRunPipeline(ctx, spec)
+	res, errs, err := h.dryRunSpec(ctx, spec, wfID)
 	if err != nil {
 		return protocol.PipelineDryRunResult{}, err
 	}

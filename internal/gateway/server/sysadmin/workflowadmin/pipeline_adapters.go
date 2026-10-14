@@ -3,6 +3,7 @@ package workflowadmin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,6 +22,38 @@ type BackgroundAdmitter interface {
 // ResultDeliverer 结果投递接口。
 type ResultDeliverer interface {
 	DeliverResult(ctx context.Context, resultAction, sessionID, title, text string) error
+}
+
+// HITLPrompter 写入类管线工具步骤审批所需的最小 HITL 能力（protocol.HITL 的子集）。
+type HITLPrompter interface {
+	Prompt(ctx context.Context, p types.HITLPrompt) (*types.HITLResponse, error)
+}
+
+// hitlApprover 把 pipeline.Approver 适配到 HITL 网关；沿用 RequestApproval 的
+// tool_execution checkpoint 类型，避免新增需要登记超时策略的类型。
+type hitlApprover struct {
+	gw HITLPrompter
+}
+
+func (a hitlApprover) Approve(ctx context.Context, req pipeline.ApprovalRequest) error {
+	if a.gw == nil {
+		return apperr.New(apperr.CodeForbidden, "hitl gateway is not configured")
+	}
+	resp, err := a.gw.Prompt(ctx, types.HITLPrompt{
+		ID:             "pipeline_tool_step:" + req.RunID + ":" + req.StepKey,
+		CheckpointType: "tool_execution",
+		PromptText: fmt.Sprintf("Request action: pipeline_tool_step\nworkflow=%s run=%s step=%s tool=%s\nargs=%s",
+			req.WorkflowID, req.RunID, req.StepKey, req.Tool, req.ArgsPreview),
+		RiskLevel: int(types.RiskHigh),
+		Options:   []types.HITLOption{{Key: "approve", Label: "Approve"}, {Key: "deny", Label: "Deny"}},
+	})
+	if err != nil {
+		return apperr.Wrap(apperr.CodeForbidden, "hitl prompt", err)
+	}
+	if resp == nil || !resp.Approved {
+		return apperr.New(apperr.CodeForbidden, "hitl: request rejected")
+	}
+	return nil
 }
 
 // toolCallerAdapter 管线 tool 步骤唯一出口：Dispatcher.ExecuteWithTaint（含审计拦截器、PolicyGate、污点出口），HE-3。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -301,6 +302,18 @@ func TestPipelineIntegration_WorkflowLifecycle(t *testing.T) {
 
 	runID3 := h.executeWorkflow(context.Background(), wfFail, "manual")
 	waitRunStatus(t, db, runID3, "error")
+
+	// C3：失败运行不得残留去重状态；C4：失败原因必须落到 error_msg 与 step_outputs。
+	if _, ok := h.dedupStates.Load(runID3); ok {
+		t.Errorf("dedupStates leaked entry for failed run %s", runID3)
+	}
+	var errMsg3, stepOutputs3 string
+	if err := db.QueryRow(`SELECT error_msg, step_outputs FROM workflow_runs WHERE id=?`, runID3).Scan(&errMsg3, &stepOutputs3); err != nil {
+		t.Fatalf("query run3: %v", err)
+	}
+	if !strings.Contains(errMsg3, "network connection reset") || !strings.Contains(stepOutputs3, "network connection reset") {
+		t.Errorf("failure reason lost: error_msg=%q step_outputs=%q", errMsg3, stepOutputs3)
+	}
 
 	var seenFailCount int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM workflow_seen_items WHERE workflow_id='wf-fail'`).Scan(&seenFailCount)

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/automation/pipeline"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -53,7 +54,9 @@ type WorkflowAdmin struct {
 	LLMInfer     func(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error)
 	Admitter     BackgroundAdmitter
 	Deliverer    ResultDeliverer
-	dedupStates  sync.Map // runID -> *dedupState
+	// HITL 写入类管线工具步骤的人工审批网关；nil 时需审批的写工具 fail-closed 拒绝。
+	HITL        HITLPrompter
+	dedupStates sync.Map // runID -> *dedupState
 }
 
 // NewWorkflowAdmin 构造 WorkflowAdmin。
@@ -82,19 +85,13 @@ func NewWorkflowAdmin(
 
 // pipelineRunner 构造步骤执行器实例。
 func (h *WorkflowAdmin) pipelineRunner() *pipeline.Runner {
-	limits := pipeline.Limits{
-		MaxSteps:           20,
-		MinIntervalMin:     15,
-		LLMMaxInputChars:   24000,
-		LLMMaxOutputTokens: 2000,
-		StepDataMaxBytes:   1048576,
-	}
 	return &pipeline.Runner{
-		Tools:  toolCallerAdapter{exec: h.ToolExecutor},
-		LLM:    llmCallerAdapter{infer: h.LLMInfer},
-		Data:   runDataAdapter{repo: h.WorkflowRepo},
-		Limits: limits,
-		Deps:   toolMetaAdapter{exec: h.ToolExecutor},
+		Tools:    toolCallerAdapter{exec: h.ToolExecutor},
+		LLM:      llmCallerAdapter{infer: h.LLMInfer},
+		Data:     runDataAdapter{repo: h.WorkflowRepo},
+		Limits:   pipelineLimitsFromConfig(),
+		Deps:     toolMetaAdapter{exec: h.ToolExecutor},
+		Approver: hitlApprover{gw: h.HITL},
 	}
 }
 
@@ -107,4 +104,33 @@ func (h *WorkflowAdmin) getOrCreateDedupState(runID, wfID string) *dedupState {
 	st := &dedupState{repo: h.WorkflowRepo, wfID: wfID}
 	actual, _ := h.dedupStates.LoadOrStore(runID, st)
 	return actual.(*dedupState)
+}
+
+// positiveOr 配置值非正（未配置/误配）时回落到编译期默认值，避免 0 值把限制变成"无限制"。
+func positiveOr(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+// pipelineLimitsFromConfig 从阈值配置读取管线限制，是 workflowadmin 内唯一的取值点。
+func pipelineLimitsFromConfig() pipeline.Limits {
+	cur := config.CurrentThresholds().M13Interface
+	def := config.DefaultThresholds().M13Interface
+	return pipeline.Limits{
+		MaxSteps:           positiveOr(cur.PipelineMaxSteps, def.PipelineMaxSteps),
+		MinIntervalMin:     positiveOr(cur.PipelineMinIntervalMin, def.PipelineMinIntervalMin),
+		LLMMaxInputChars:   positiveOr(cur.PipelineLLMMaxInputChars, def.PipelineLLMMaxInputChars),
+		LLMMaxOutputTokens: positiveOr(cur.PipelineLLMMaxOutputTokens, def.PipelineLLMMaxOutputTokens),
+		StepDataMaxBytes:   positiveOr(cur.PipelineStepDataMaxBytes, def.PipelineStepDataMaxBytes),
+	}
+}
+
+// pipelineRetentionFromConfig 返回运行数据保留份数与去重记录 TTL（天）。
+func pipelineRetentionFromConfig() (keepRuns, seenTTLDays int) {
+	cur := config.CurrentThresholds().M13Interface
+	def := config.DefaultThresholds().M13Interface
+	return positiveOr(cur.PipelineRunDataKeepRuns, def.PipelineRunDataKeepRuns),
+		positiveOr(cur.PipelineSeenItemsTTLDays, def.PipelineSeenItemsTTLDays)
 }

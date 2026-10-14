@@ -320,3 +320,48 @@ func TestWorkflowAdmin_DryRunWorkflow(t *testing.T) {
 		t.Errorf("unexpected step result: %+v", dryRes.Steps[0])
 	}
 }
+
+type seenSpyRepo struct {
+	repoProto.WorkflowRepository
+	seenWF []string
+}
+
+func (s *seenSpyRepo) SeenKeys(ctx context.Context, wfID string, keys []string) (map[string]bool, error) {
+	s.seenWF = append(s.seenWF, wfID)
+	return s.WorkflowRepository.SeenKeys(ctx, wfID, keys)
+}
+
+// 已保存工作流的试运行 dedup 预览必须按真实 workflowID 查 seen，否则永远显示"全是新条目"。
+func TestWorkflowAdmin_DryRunWorkflow_DedupUsesRealWorkflowID(t *testing.T) {
+	db, r := setupDryRunTestDB(t)
+	defer db.Close()
+	spy := &seenSpyRepo{WorkflowRepository: r}
+	h := &WorkflowAdmin{DB: db, WorkflowRepo: spy, ToolExecutor: &dryRunMockToolExecutor{}}
+
+	spec := pipeline.Spec{
+		Kind:    "pipeline",
+		Name:    "Dedup WF",
+		Trigger: pipeline.Trigger{Type: "cron", Cron: "0 10 * * *"},
+		Steps: []pipeline.StepSpec{
+			{Key: "fetch", Kind: "tool", Tool: "feed_fetch", Args: json.RawMessage(`{"url":"https://example.com/rss"}`)},
+			{Key: "merged", Kind: "transform", Needs: []string{"fetch"},
+				Ops: []pipeline.Op{{Op: "dedup", By: "url", Scope: "workflow"}}},
+		},
+	}
+	ctx := context.Background()
+	wfID, _, errs, err := h.SavePipeline(ctx, spec, "", "agent")
+	if err != nil || len(errs) > 0 {
+		t.Fatalf("SavePipeline failed: err=%v, errs=%+v", err, errs)
+	}
+	if _, err := h.DryRunWorkflow(ctx, wfID); err != nil {
+		t.Fatalf("DryRunWorkflow: %v", err)
+	}
+	if len(spy.seenWF) == 0 {
+		t.Fatal("dedup never consulted seen keys")
+	}
+	for _, id := range spy.seenWF {
+		if id != wfID {
+			t.Fatalf("SeenKeys called with workflowID %q, want %q", id, wfID)
+		}
+	}
+}

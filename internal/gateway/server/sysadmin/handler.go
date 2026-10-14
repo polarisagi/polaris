@@ -250,6 +250,10 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 	)
 	h.Cron.ExtRepo = deps.ExtRepo
 	h.Workflow.Deliverer = h.Cron
+	// 管线写入类工具步骤的人工审批出口；缺省时写工具 fail-closed。
+	if deps.HITLGateway != nil {
+		h.Workflow.HITL = deps.HITLGateway
+	}
 	// 2026-07-07 R7 瘦身：channels.go（原 579 行）拆为独立 channelsadmin 子包。
 	// Channels.Cron 接的是 h.Cron 本身（而非回调），用于 webhook 收到消息后顺带
 	// 触发绑定该频道的 automation（见 channelsadmin/webhook_receive.go）。

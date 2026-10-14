@@ -245,16 +245,26 @@ func (h *WorkflowAdmin) executePipelineStep(ctx context.Context, taskID string, 
 	}
 
 	res := h.pipelineRunner().RunStep(ctx, rc, spec)
+	// 失败时 Preview 恒为空，直接落盘会让 step_outputs 与 scanStepOutputErrors
+	// 的 firstErr 都丢失失败原因，故以错误文本代替。
+	preview := res.Preview
+	if res.Err != nil {
+		if r := []rune(res.Err.Error()); len(r) > 500 {
+			preview = string(r[:500])
+		} else {
+			preview = string(r)
+		}
+	}
 	payload := stepCompletionPayload{
 		StepID: step.ID,
 		Status: res.Status,
-		Reply:  res.Preview,
+		Reply:  preview,
 	}
 	if res.Err != nil {
 		payload.Error = res.Err.Error()
 	}
 
-	h.recordStepOutput(ctx, envelope.RunID, step, "", res.Status, res.Preview)
+	h.recordStepOutput(ctx, envelope.RunID, step, "", res.Status, preview)
 
 	payloadJSON, _ := json.Marshal(payload)
 	if err := h.Blackboard.CompleteTask(context.Background(), taskID, workflowStepWorkerAgentID, payloadJSON); err != nil {
