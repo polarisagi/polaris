@@ -236,7 +236,13 @@ func (r *Runner) RunStep(ctx context.Context, rc RunContext, s StepSpec) (res St
 
 		// validate 只校验了 approval:"hitl" 的声明，运行时必须真正过审批，否则
 		// 无人值守的定时运行会直接执行写入类工具。
-		if !rc.DryRun && s.Approval == "hitl" && r.needsApproval(s.Tool) {
+		if !rc.DryRun && r.needsApproval(s.Tool) {
+			// 不信任声明：绕过 validate 的旧数据/新保存路径可能没带 approval，
+			// 运行时缺声明同样拒绝，纵深防御。
+			if s.Approval != "hitl" {
+				res = StepResult{Status: "error", Err: apperr.New(apperr.CodeForbidden, "write tool "+s.Tool+" requires approval=hitl")}
+				return res
+			}
 			if r.Approver == nil {
 				res = StepResult{Status: "error", Err: apperr.New(apperr.CodeForbidden, "write tool "+s.Tool+" requires approval but no approver is configured")}
 				return res

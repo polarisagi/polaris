@@ -770,3 +770,19 @@ func TestRunner_HITLApproval(t *testing.T) {
 		}
 	})
 }
+
+// 写工具缺少 approval 声明（绕过 validate 的数据）时，运行时也必须拒绝且不调用工具。
+func TestRunner_WriteToolWithoutApprovalDeclRejected(t *testing.T) {
+	deps := &fakeValidateDeps{metas: map[string]pipeline.ToolMeta{"post_tool": {Name: "post_tool", Exists: true}}}
+	tc := &fakeToolCaller{}
+	ap := &fakeApprover{}
+	r := &pipeline.Runner{Tools: tc, Data: newFakeDataStore(), Deps: deps, Approver: ap}
+	res := r.RunStep(context.Background(), pipeline.RunContext{RunID: "r"},
+		pipeline.StepSpec{Key: "s", Kind: "tool", Tool: "post_tool", Args: json.RawMessage(`{}`)})
+	if res.Status != "error" || len(tc.calls) != 0 || len(ap.reqs) != 0 {
+		t.Fatalf("status=%s calls=%d approvals=%d", res.Status, len(tc.calls), len(ap.reqs))
+	}
+	if apperr.CodeOf(res.Err) != apperr.CodeForbidden {
+		t.Fatalf("want CodeForbidden, got %v", res.Err)
+	}
+}
