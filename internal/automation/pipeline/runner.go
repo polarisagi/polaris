@@ -43,6 +43,22 @@ type LLMRequest struct {
 	RunID           string          `json:"run_id,omitempty"`
 }
 
+// ApprovalRequest 描述一次写入类工具步骤的审批请求。
+type ApprovalRequest struct {
+	WorkflowID string
+	RunID      string
+	StepKey    string
+	Tool       string
+	// ArgsPreview 渲染后的参数，截断到 500 rune，供审批人判断。
+	ArgsPreview string
+}
+
+// Approver 写入类工具步骤执行前的人工审批出口（消费方接口，由 workflowadmin 适配 HITL 网关）。
+// 返回 nil 才放行；任何错误（含拒绝、超时）都视为不放行。
+type Approver interface {
+	Approve(ctx context.Context, req ApprovalRequest) error
+}
+
 // RunDataStore 存取步骤间传递的数据（外部仓储适配器提供）。
 type RunDataStore interface {
 	Save(ctx context.Context, runID, key, status string, d StepData) error
@@ -74,7 +90,9 @@ type Runner struct {
 	Data   RunDataStore
 	Limits Limits
 	Deps   ValidateDeps
-	Now    func() time.Time
+	// Approver 为 nil 时，需审批的写工具一律拒绝执行（fail-closed，HE-2）。
+	Approver Approver
+	Now      func() time.Time
 }
 
 type stepRefResolver struct {
@@ -216,6 +234,26 @@ func (r *Runner) RunStep(ctx context.Context, rc RunContext, s StepSpec) (res St
 			outArgs = clampToolArgs(outArgs)
 		}
 
+		// validate 只校验了 approval:"hitl" 的声明，运行时必须真正过审批，否则
+		// 无人值守的定时运行会直接执行写入类工具。
+		if !rc.DryRun && s.Approval == "hitl" && r.needsApproval(s.Tool) {
+			if r.Approver == nil {
+				res = StepResult{Status: "error", Err: apperr.New(apperr.CodeForbidden, "write tool "+s.Tool+" requires approval but no approver is configured")}
+				return res
+			}
+			preview := []rune(string(outArgs))
+			if len(preview) > 500 {
+				preview = preview[:500]
+			}
+			if err := r.Approver.Approve(ctx, ApprovalRequest{
+				WorkflowID: rc.WorkflowID, RunID: rc.RunID, StepKey: s.Key, Tool: s.Tool,
+				ArgsPreview: string(preview),
+			}); err != nil {
+				res = StepResult{Status: "error", Err: apperr.Wrap(apperr.CodeForbidden, "approval not granted for tool "+s.Tool, err)}
+				return res
+			}
+		}
+
 		rawOutput, err := r.Tools.Call(ctx, s.Tool, outArgs, refsUsed)
 		if err != nil {
 			res = StepResult{Status: "error", Err: apperr.Wrap(apperr.CodeInternal, "tool call: "+s.Tool, err)}
@@ -349,6 +387,16 @@ func (r *Runner) isWriteTool(name string) bool {
 		}
 	}
 	return name == "knowledge_ingest"
+}
+
+// needsApproval 判断工具是否属于必须人工审批的写工具：非只读且非内置放行写工具。
+// 元数据不可得（Deps 为 nil）时不触发，与 validate 阶段的判定口径保持一致。
+func (r *Runner) needsApproval(name string) bool {
+	if r.Deps == nil {
+		return false
+	}
+	meta := r.Deps.ToolMeta(name)
+	return !meta.ReadOnly && !meta.WriteAllowed
 }
 
 // extractWriteItemCount 从写入工具参数 JSON 中解析 docs 或 items 字段条数。

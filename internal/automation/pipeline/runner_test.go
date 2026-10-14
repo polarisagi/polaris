@@ -714,3 +714,59 @@ func TestRunner_ItemWithoutTitleOrURLPreview(t *testing.T) {
 		t.Errorf("expected count=1 in preview, got: %s", res.Preview)
 	}
 }
+
+type fakeApprover struct {
+	err  error
+	reqs []pipeline.ApprovalRequest
+}
+
+func (a *fakeApprover) Approve(_ context.Context, req pipeline.ApprovalRequest) error {
+	a.reqs = append(a.reqs, req)
+	return a.err
+}
+
+// TestRunner_HITLApproval 写工具 + approval=hitl 必须先过审批，fail-closed。
+func TestRunner_HITLApproval(t *testing.T) {
+	deps := &fakeValidateDeps{metas: map[string]pipeline.ToolMeta{
+		"post_tool": {Name: "post_tool", Exists: true},
+		"read_tool": {Name: "read_tool", ReadOnly: true, Exists: true},
+	}}
+	step := func(tool string) pipeline.StepSpec {
+		return pipeline.StepSpec{Key: "s", Kind: "tool", Tool: tool, Approval: "hitl", Args: json.RawMessage(`{"text":"hi"}`)}
+	}
+	run := func(ap pipeline.Approver, tool string) (pipeline.StepResult, *fakeToolCaller) {
+		tc := &fakeToolCaller{}
+		r := &pipeline.Runner{Tools: tc, Data: newFakeDataStore(), Deps: deps, Approver: ap}
+		return r.RunStep(context.Background(), pipeline.RunContext{RunID: "r", WorkflowID: "w"}, step(tool)), tc
+	}
+
+	t.Run("rejected", func(t *testing.T) {
+		ap := &fakeApprover{err: apperr.New(apperr.CodeForbidden, "no")}
+		res, tc := run(ap, "post_tool")
+		if res.Status != "error" || len(tc.calls) != 0 {
+			t.Fatalf("status=%s calls=%d", res.Status, len(tc.calls))
+		}
+		if len(ap.reqs) != 1 || ap.reqs[0].Tool != "post_tool" || ap.reqs[0].WorkflowID != "w" || ap.reqs[0].StepKey != "s" {
+			t.Fatalf("bad request: %+v", ap.reqs)
+		}
+	})
+	t.Run("nil approver", func(t *testing.T) {
+		res, tc := run(nil, "post_tool")
+		if res.Status != "error" || len(tc.calls) != 0 {
+			t.Fatalf("status=%s calls=%d", res.Status, len(tc.calls))
+		}
+	})
+	t.Run("approved", func(t *testing.T) {
+		res, tc := run(&fakeApprover{}, "post_tool")
+		if res.Status != "ok" || len(tc.calls) != 1 {
+			t.Fatalf("status=%s calls=%d err=%v", res.Status, len(tc.calls), res.Err)
+		}
+	})
+	t.Run("read only skips approval", func(t *testing.T) {
+		ap := &fakeApprover{err: apperr.New(apperr.CodeForbidden, "no")}
+		res, tc := run(ap, "read_tool")
+		if res.Status != "ok" || len(tc.calls) != 1 || len(ap.reqs) != 0 {
+			t.Fatalf("status=%s calls=%d reqs=%d", res.Status, len(tc.calls), len(ap.reqs))
+		}
+	})
+}
