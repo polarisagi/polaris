@@ -346,7 +346,7 @@ func (r *SQLiteWorkflowRepository) SaveRunData(ctx context.Context, runID, stepK
 	return nil
 }
 
-func (r *SQLiteWorkflowRepository) LoadRunData(ctx context.Context, runID, stepKey string) (status string, dataJSON []byte, err error) {
+func (r *SQLiteWorkflowRepository) GetRunData(ctx context.Context, runID, stepKey string) (status string, dataJSON []byte, err error) {
 	var dj string
 	err = r.db.QueryRowContext(ctx, `
 		SELECT status, data_json FROM workflow_run_data WHERE run_id=? AND step_key=?`,
@@ -356,7 +356,7 @@ func (r *SQLiteWorkflowRepository) LoadRunData(ctx context.Context, runID, stepK
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil, nil
 		}
-		return "", nil, apperr.Wrap(apperr.CodeInternal, "LoadRunData failed", err)
+		return "", nil, apperr.Wrap(apperr.CodeInternal, "GetRunData failed", err)
 	}
 	return status, []byte(dj), nil
 }

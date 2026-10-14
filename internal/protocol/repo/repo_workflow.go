@@ -76,7 +76,7 @@ type WorkflowRepository interface {
 
 	// T4 Pipeline 状态与数据管理方法
 	SaveRunData(ctx context.Context, runID, stepKey, status string, dataJSON []byte, itemCount int) error
-	LoadRunData(ctx context.Context, runID, stepKey string) (status string, dataJSON []byte, err error)
+	GetRunData(ctx context.Context, runID, stepKey string) (status string, dataJSON []byte, err error)
 	SeenKeys(ctx context.Context, workflowID string, keys []string) (map[string]bool, error)
 	MarkSeen(ctx context.Context, workflowID string, keys []string, at string) error
 	LastSuccessfulRunStart(ctx context.Context, workflowID string) (string, error)

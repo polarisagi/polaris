@@ -133,7 +133,7 @@ func (a runDataAdapter) Load(ctx context.Context, runID, key string) (status str
 	if a.repo == nil {
 		return "", pipeline.StepData{}, false, apperr.New(apperr.CodeInternal, "workflow repository is nil")
 	}
-	st, dataJSON, err := a.repo.LoadRunData(ctx, runID, key)
+	st, dataJSON, err := a.repo.GetRunData(ctx, runID, key)
 	if err != nil {
 		return "", pipeline.StepData{}, false, apperr.Wrap(apperr.CodeInternal, "load run data", err)
 	}

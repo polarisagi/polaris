@@ -45,12 +45,7 @@ func (h *WorkflowAdmin) executeWorkflow(ctx context.Context, wf *workflow, trigg
 		var ok bool
 		release, ok = h.Admitter.AdmitBackground("workflow")
 		if !ok {
-			if err := h.WorkflowRepo.CreateWorkflowRun(ctx, runID, wf.ID, trigger, "ok", 0, total, now); err != nil {
-				slog.Warn("workflow: insert run failed", "run", runID, "err", err)
-			}
-			_ = h.WorkflowRepo.SetRunSkipped(ctx, runID)
-			_ = h.WorkflowRepo.UpdateWorkflowRunStatus(ctx, runID, "ok", now, "resource_pressure", "[]", 0)
-			metrics.RecordWorkflowRunSkipped(ctx, "resource_pressure")
+			h.recordResourcePressureSkip(ctx, runID, wf.ID, trigger, now, total)
 			return runID
 		}
 	}
@@ -69,6 +64,19 @@ func (h *WorkflowAdmin) executeWorkflow(ctx context.Context, wf *workflow, trigg
 
 	h.runWorkflowGraph(wf, runID, steps, release, date, since)
 	return runID
+}
+
+func (h *WorkflowAdmin) recordResourcePressureSkip(ctx context.Context, runID, wfID, trigger, now string, total int) {
+	if err := h.WorkflowRepo.CreateWorkflowRun(ctx, runID, wfID, trigger, "ok", 0, total, now); err != nil {
+		slog.Warn("workflow: insert run failed", "run", runID, "err", err)
+	}
+	if err := h.WorkflowRepo.SetRunSkipped(ctx, runID); err != nil {
+		slog.Warn("workflow: set run skipped failed", "run", runID, "err", err)
+	}
+	if err := h.WorkflowRepo.UpdateWorkflowRunStatus(ctx, runID, "ok", now, "resource_pressure", "[]", 0); err != nil {
+		slog.Warn("workflow: update run status failed", "run", runID, "err", err)
+	}
+	metrics.RecordWorkflowRunSkipped(ctx, "resource_pressure")
 }
 
 // runWorkflowGraph 后台执行状态图并收尾（run/workflows 状态与统计）。新建运行与
@@ -132,9 +140,13 @@ func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []wor
 		h.handleWorkflowDeliveryAndCleanup(context.Background(), wf, runID, steps, terminalSteps, allTerminalSkipped, dedupVal, hasDedup)
 
 		// 2. 运行数据与去重记录清理
-		_ = h.WorkflowRepo.PruneRunData(context.Background(), wf.ID, 20)
+		if err := h.WorkflowRepo.PruneRunData(context.Background(), wf.ID, 20); err != nil {
+			slog.Debug("workflow: prune run data failed", "workflow_id", wf.ID, "err", err)
+		}
 		ttlCutoff := time.Now().AddDate(0, 0, -90).UTC().Format(time.RFC3339)
-		_ = h.WorkflowRepo.PruneSeen(context.Background(), ttlCutoff)
+		if err := h.WorkflowRepo.PruneSeen(context.Background(), ttlCutoff); err != nil {
+			slog.Debug("workflow: prune seen failed", "err", err)
+		}
 	})
 }
 
@@ -149,7 +161,9 @@ func (h *WorkflowAdmin) isAllTerminalSkipped(ctx context.Context, runID string, 
 
 func (h *WorkflowAdmin) handleWorkflowDeliveryAndCleanup(ctx context.Context, wf *workflow, runID string, steps, terminalSteps []workflowStep, allTerminalSkipped bool, dedupVal any, hasDedup bool) {
 	if allTerminalSkipped && len(terminalSteps) > 0 {
-		_ = h.WorkflowRepo.SetRunSkipped(ctx, runID)
+		if err := h.WorkflowRepo.SetRunSkipped(ctx, runID); err != nil {
+			slog.Warn("workflow: set run skipped failed", "run", runID, "err", err)
+		}
 		metrics.RecordWorkflowRunSkipped(ctx, "empty")
 		return
 	}
@@ -207,7 +221,7 @@ func (h *WorkflowAdmin) getStepStatus(ctx context.Context, runID string, step wo
 	if stepKey == "" {
 		stepKey = fmt.Sprintf("step_%d", step.Seq)
 	}
-	if st, _, err := h.WorkflowRepo.LoadRunData(ctx, runID, stepKey); err == nil && st != "" {
+	if st, _, err := h.WorkflowRepo.GetRunData(ctx, runID, stepKey); err == nil && st != "" {
 		return st
 	}
 	outputs := h.loadRunStepOutputs(ctx, runID)
@@ -226,12 +240,14 @@ func (h *WorkflowAdmin) loadRunStepOutputs(ctx context.Context, runID string) []
 		return nil
 	}
 	var outputs []stepOutput
-	_ = json.Unmarshal(raw, &outputs)
+	if err := json.Unmarshal(raw, &outputs); err != nil {
+		return nil
+	}
 	return outputs
 }
 
 func (h *WorkflowAdmin) loadStepText(ctx context.Context, runID, stepKey string) string {
-	status, dataJSON, err := h.WorkflowRepo.LoadRunData(ctx, runID, stepKey)
+	status, dataJSON, err := h.WorkflowRepo.GetRunData(ctx, runID, stepKey)
 	if err != nil || len(dataJSON) == 0 {
 		return ""
 	}

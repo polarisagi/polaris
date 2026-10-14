@@ -198,7 +198,9 @@ func (h *WorkflowAdmin) executeStepTask(ctx context.Context, taskID string, enve
 
 	// agent 步骤完成后额外落库 SaveRunData，以便下游 llm/transform 步骤引用
 	stepDataJSON, _ := json.Marshal(pipeline.StepData{Text: reply, Count: 1})
-	_ = h.WorkflowRepo.SaveRunData(bgCtx, envelope.RunID, stepKey, recordStatus, stepDataJSON, 1)
+	if err := h.WorkflowRepo.SaveRunData(bgCtx, envelope.RunID, stepKey, recordStatus, stepDataJSON, 1); err != nil {
+		slog.Warn("workflow step worker: SaveRunData failed", "run", envelope.RunID, "step", stepKey, "err", err)
+	}
 
 	payloadJSON, _ := json.Marshal(payload)
 	if err := h.Blackboard.CompleteTask(context.Background(), taskID, workflowStepWorkerAgentID, payloadJSON); err != nil {

@@ -7,13 +7,12 @@ import (
 	"strings"
 	"time"
 
-	cronauto "github.com/polarisagi/polaris/internal/automation"
-	"github.com/polarisagi/polaris/internal/automation/pipeline"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // AutomationService automation_* 工具的消费方接口（HE-3：接口在调用方定义）。
@@ -55,17 +54,22 @@ func MakeAutomationListFn(svc AutomationService) sandbox.InProcessFn {
 
 // ─── automation_save ──────────────────────────────────────────────────────────
 
+type automationTriggerInput struct {
+	Type string `json:"type"`
+	Cron string `json:"cron,omitempty"`
+}
+
 type automationSaveInput struct {
-	Kind            string            `json:"kind"`
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Prompt          string            `json:"prompt"`
-	Cron            string            `json:"cron"`
-	Trigger         *pipeline.Trigger `json:"trigger"`
-	ReasoningEffort string            `json:"reasoning_effort"`
-	ResultAction    string            `json:"result_action"`
-	Enabled         *bool             `json:"enabled"`
-	DryRun          bool              `json:"dry_run"`
+	Kind            string                  `json:"kind"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Prompt          string                  `json:"prompt"`
+	Cron            string                  `json:"cron"`
+	Trigger         *automationTriggerInput `json:"trigger"`
+	ReasoningEffort string                  `json:"reasoning_effort"`
+	ResultAction    string                  `json:"result_action"`
+	Enabled         *bool                   `json:"enabled"`
+	DryRun          bool                    `json:"dry_run"`
 }
 
 func validateSaveKindAndArgs(in *automationSaveInput) error {
@@ -147,7 +151,7 @@ func checkPipelineMinInterval(ctx context.Context, in *automationSaveInput) erro
 		return nil
 	}
 
-	minIntervalDuration, err := cronauto.MinInterval(cronExpr, time.Now().UTC(), 50)
+	minIntervalDuration, err := util.MinInterval(cronExpr, time.Now().UTC(), 50)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInvalidInput, "automation_save: invalid cron schedule", err)
 	}
@@ -161,7 +165,7 @@ func checkPipelineMinInterval(ctx context.Context, in *automationSaveInput) erro
 }
 
 func checkPromptMinInterval(ctx context.Context, in *automationSaveInput) error {
-	minIntervalDuration, err := cronauto.MinInterval(in.Cron, time.Now().UTC(), 50)
+	minIntervalDuration, err := util.MinInterval(in.Cron, time.Now().UTC(), 50)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInvalidInput, "automation_save: invalid cron schedule", err)
 	}

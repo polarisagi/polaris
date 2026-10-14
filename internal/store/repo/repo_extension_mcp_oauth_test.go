@@ -235,6 +235,12 @@ func TestSQLiteExtensionRepository_UninstallCleanup_PluginCascadesToken(t *testi
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS plugin_app_bindings (plugin_id TEXT)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS automations (id TEXT PRIMARY KEY, enabled INTEGER, last_run_error TEXT, source TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS workflows (id TEXT PRIMARY KEY, enabled INTEGER, last_run_error TEXT, source TEXT)`); err != nil {
+		t.Fatal(err)
+	}
 	r := NewSQLiteExtensionRepository(db)
 	ctx := context.Background()
 

@@ -315,7 +315,9 @@ func (ca *CronAdmin) deliverToSession(ctx context.Context, sessionID, title, tex
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("ensure session %s", sessionID), err)
 	}
 	if title != "" {
-		_ = ca.Chat.UpdateSessionTitle(ctx, sessionID, title)
+		if err := ca.Chat.UpdateSessionTitle(ctx, sessionID, title); err != nil {
+			slog.DebugContext(ctx, "cron: update session title failed", "session_id", sessionID, "err", err)
+		}
 	}
 	if err := ca.Chat.SaveMessage(ctx, sessionID, "assistant", text, "", "", 0); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("save assistant message to session %s", sessionID), err)

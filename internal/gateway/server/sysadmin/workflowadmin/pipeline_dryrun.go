@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -126,7 +127,9 @@ func (h *WorkflowAdmin) DryRunPipeline(ctx context.Context, spec pipeline.Spec) 
 
 func (h *WorkflowAdmin) executeDryRunStep(ctx context.Context, runner pipeline.Runner, memStore *memoryRunDataStore, rc pipeline.RunContext, step pipeline.StepSpec) (protocol.PipelineDryRunStep, int, int) {
 	if step.Kind == "agent" {
-		_ = memStore.Save(ctx, rc.RunID, step.Key, "ok", pipeline.StepData{Count: 0})
+		if err := memStore.Save(ctx, rc.RunID, step.Key, "ok", pipeline.StepData{Count: 0}); err != nil {
+			slog.DebugContext(ctx, "pipeline_dryrun: save agent placeholder failed", "err", err)
+		}
 		estIn := int(math.Ceil(float64(len([]rune(step.Prompt))) / 2.2))
 		return protocol.PipelineDryRunStep{
 			Key:    step.Key,

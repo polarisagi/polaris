@@ -127,9 +127,9 @@ func TestWorkflowRepository_RunData(t *testing.T) {
 	r := storerepo.NewSQLiteWorkflowRepository(db)
 
 	// 1. 读取不存在的数据返回空
-	status, data, err := r.LoadRunData(ctx, "wfr_nonexistent", "step_01")
+	status, data, err := r.GetRunData(ctx, "wfr_nonexistent", "step_01")
 	if err != nil {
-		t.Fatalf("LoadRunData nonexistent: %v", err)
+		t.Fatalf("GetRunData nonexistent: %v", err)
 	}
 	if status != "" || data != nil {
 		t.Fatalf("expected empty status and nil data, got status=%q data=%v", status, data)
@@ -141,9 +141,9 @@ func TestWorkflowRepository_RunData(t *testing.T) {
 		t.Fatalf("SaveRunData: %v", err)
 	}
 
-	status, data, err = r.LoadRunData(ctx, "wfr_01", "step_01")
+	status, data, err = r.GetRunData(ctx, "wfr_01", "step_01")
 	if err != nil {
-		t.Fatalf("LoadRunData: %v", err)
+		t.Fatalf("GetRunData: %v", err)
 	}
 	if status != "ok" || string(data) != string(dataJSON) {
 		t.Fatalf("unexpected loaded run data: status=%s data=%s", status, string(data))
@@ -154,7 +154,7 @@ func TestWorkflowRepository_RunData(t *testing.T) {
 	if err := r.SaveRunData(ctx, "wfr_01", "step_01", "skipped", updatedJSON, 0); err != nil {
 		t.Fatalf("SaveRunData overwrite: %v", err)
 	}
-	status, data, _ = r.LoadRunData(ctx, "wfr_01", "step_01")
+	status, data, _ = r.GetRunData(ctx, "wfr_01", "step_01")
 	if status != "skipped" || string(data) != string(updatedJSON) {
 		t.Fatalf("expected overwritten status skipped, got %s", status)
 	}
@@ -265,11 +265,11 @@ func TestWorkflowRepository_PruneRunDataAndSeen(t *testing.T) {
 		t.Fatalf("PruneRunData: %v", err)
 	}
 
-	status1, _, _ := r.LoadRunData(ctx, "wfr_p1", "step")
+	status1, _, _ := r.GetRunData(ctx, "wfr_p1", "step")
 	if status1 != "" {
 		t.Fatalf("expected wfr_p1 data to be pruned, got status=%q", status1)
 	}
-	status2, _, _ := r.LoadRunData(ctx, "wfr_p2", "step")
+	status2, _, _ := r.GetRunData(ctx, "wfr_p2", "step")
 	if status2 != "ok" {
 		t.Fatalf("expected wfr_p2 data to remain")
 	}

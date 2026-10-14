@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -169,7 +170,11 @@ func (r *Runner) RunStep(ctx context.Context, rc RunContext, s StepSpec) (res St
 				Data:    StepData{Items: []map[string]any{}},
 				Preview: fmt.Sprintf("skipped (dependency %s was skipped)", need),
 			}
-			_ = r.Data.Save(ctx, rc.RunID, s.Key, "skipped", res.Data)
+			if r.Data != nil {
+				if err := r.Data.Save(ctx, rc.RunID, s.Key, "skipped", res.Data); err != nil {
+					slog.WarnContext(ctx, "pipeline: save skipped step data failed", "run_id", rc.RunID, "step", s.Key, "err", err)
+				}
+			}
 			return res
 		}
 		if st != "ok" {
@@ -302,7 +307,9 @@ func (r *Runner) RunStep(ctx context.Context, rc RunContext, s StepSpec) (res St
 			Preview: "skipped (empty items)",
 		}
 		if r.Data != nil {
-			_ = r.Data.Save(ctx, rc.RunID, s.Key, "skipped", stepData)
+			if err := r.Data.Save(ctx, rc.RunID, s.Key, "skipped", stepData); err != nil {
+				slog.WarnContext(ctx, "pipeline: save skipped step data failed", "run_id", rc.RunID, "step", s.Key, "err", err)
+			}
 		}
 		return res
 	}
@@ -350,7 +357,9 @@ func extractWriteItemCount(raw []byte) int {
 		Docs  []any `json:"docs"`
 		Items []any `json:"items"`
 	}
-	_ = json.Unmarshal(raw, &m)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return 0
+	}
 	if len(m.Docs) > 0 {
 		return len(m.Docs)
 	}

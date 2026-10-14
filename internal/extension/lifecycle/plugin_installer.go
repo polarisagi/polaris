@@ -127,7 +127,9 @@ func (p *PluginInstaller) Uninstall(ctx context.Context, req UninstallReq) error
 		return apperr.Wrap(apperr.CodeInternal, "plugin_installer.Uninstall", err)
 	}
 	if installPath != "" {
-		_ = os.Remove(filepath.Join(installPath, "automation_templates.yaml"))
+		if err := os.Remove(filepath.Join(installPath, "automation_templates.yaml")); err != nil && !os.IsNotExist(err) {
+			slog.Debug("plugin_installer: remove automation_templates.yaml failed", "path", installPath, "err", err)
+		}
 	}
 	// 依赖方随之停用（Claude：依赖缺失的插件不加载）。
 	var stopper ServerStopper
