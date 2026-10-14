@@ -63,7 +63,7 @@ T0 ─┬─ A: T1 → T2 → T3 → T5 ─┐
 - [x] T6 pipeline 保存 + dry-run — 54a8def, b0bef73, 2ab5a3f
 - [x] T7 前端 — fb696d3
 - [x] T8 browser_use v2 + 清单迁移 — 3fb4c30, c182a63, bb0a817, 0ec6701, 4eca192, c19398b, 1daebea
-- [ ] T8b 浏览器桥接扩展 + CDP 中继 —
+- [x] T8b 浏览器桥接扩展 + CDP 中继 — 8d8ac94, 98d6ca2, 6c7e391
 - [ ] T9 站点配方 —
 - [x] T10 插件伴生任务模板 — 0b65c90
 - [ ] T11 eval + 收尾门控 —
