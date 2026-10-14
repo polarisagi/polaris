@@ -3,7 +3,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI + 桌面外壳; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:360 对内调度 / 3:449 MCP / 6:457 (SOFT)降级 / 6-bis:470 已知Bug修复记录 / 7:482 跨模块契约 / 8:499 Web UI 规约 / 8.6:613 834 插件聚合市场DB+流 / 8.7:644 870 自动化中心DB+流+工作流 / 8.8:718 987 电脑操控权限+Preferences / 8.9:735 1027 前端组件规范 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:360 对内调度 / 3:449 MCP / 6:457 (SOFT)降级 / 6-bis:470 已知Bug修复记录 / 7:482 跨模块契约 / 8:499 Web UI 规约 / 8.6:613 834 插件聚合市场DB+流 / 8.7:644 870 自动化中心DB+流+工作流 / 8.8:748 987 电脑操控权限+Preferences / 8.9:765 1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -68,7 +68,7 @@ CLI 是**薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调�
 | 工具/技能 | `GET /v1/tools`、`POST /v1/tools/{name}/execute`；`/v1/skills`（list/install/create/commands/injections）；`/v1/hooks`（含 `hooks/trust`） | |
 | MCP/插件/市场 | `/v1/mcp-servers`（CRUD + test + network-access + oauth*）`/v1/mcp/create` `/v1/mcp-apps/*` `/v1/elicitations`；`/v1/plugins/*`（catalog/sync/install/create/marketplaces/channels/prune，`/{id}` 的 config/apps/dependencies/upgrade/`mcp/{serverName}/toggle`）；`/oauth/mcp/callback` `/oauth/client-metadata.json` | 扩展体系见 ADR-0103 与 M13-bis；DB 与流程见 §8.6 |
 | 接入（Channel） | `/v1/channels`（CRUD）；`/v1/webhooks/{channelType}/{channelID}`（入站） | §8.7 外部触发器 |
-| 自动化/工作流 | `/v1/automations`（CRUD + `/runs` + `/trigger`）`/v1/automation-templates` `/v1/workflows`（CRUD + `/runs` + `/trigger` + `runs/{id}/resume`） | §8.7 |
+| 自动化/工作流 | `/v1/automations`（CRUD + `/runs` + `/trigger`）`/v1/automation-templates` `/v1/workflows`（CRUD + `/runs` + `/trigger` + `runs/{id}/resume` + `runs/{id}/data/{step_key}`） | §8.7 |
 | 编排管理 | `POST /v1/admin/tasks/{pattern-mapreduce,pattern-parallel,pattern-sequential,pattern-swarm,pattern-dag,pipeline,csv-fanout}`；`GET /v1/agents` | |
 | HITL | `GET /v1/approvals/pending`；`POST /v1/approvals/{id}/resolve`（approve/deny） | §2.4 |
 | 多节点 | `/v1/mesh/{self,peers,invites,tokens,settings}`（含 `PUT /v1/mesh/settings`，设置页「多节点」Tab）；`GET /.well-known/agent-card.json`；`/v1/a2a/tasks`；对外 A2A 1.0 门面 `/a2a/v1` | ADR-0111；实现 `internal/gateway/mesh/` 与 `internal/gateway/server/meshapi/` |
@@ -323,6 +323,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |
 | GET | `/v1/workflows` | `sysadminHandler.Workflow.HandleListWorkflows` |
 | POST | `/v1/workflows` | `sysadminHandler.Workflow.HandleCreateWorkflow` |
+| GET | `/v1/workflows/runs/{id}/data/{step_key}` | `sysadminHandler.Workflow.HandleGetRunStepData` |
 | POST | `/v1/workflows/runs/{id}/resume` | `sysadminHandler.Workflow.HandleResumeWorkflowRun` |
 | DELETE | `/v1/workflows/{id}` | `sysadminHandler.Workflow.HandleDeleteWorkflow` |
 | GET | `/v1/workflows/{id}` | `sysadminHandler.Workflow.HandleGetWorkflow` |
@@ -331,7 +332,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 162 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 163 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
@@ -653,8 +654,8 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | `channels` | Webhook 入站接入（trigger_type=webhook 时关联） | 012 |
 | `chat_sessions` | 每次执行独立 session（打 `automation_id` 标签，`source='automation'`） | 013 |
 | `workflows` / `workflow_steps` / `workflow_runs` | 工作流定义（含 `result_action`、`source` 列）/ 步骤（含 `step_key`、`kind`、`config_json` 列）/ 执行历史（含步骤级产出摘要） | 029 |
-| `workflow_run_data` | 管线步骤级输出数据持久化（State-in-DB，单步 ≤1MiB，保留最近 20 轮，ADR-0114 规划，未落地） | 029 |
-| `workflow_seen_items` | 管线跨运行条目去重记录（TTL 90天，by url/id，ADR-0114 规划，未落地） | 029 |
+| `workflow_run_data` | 管线步骤级输出数据持久化（State-in-DB，单步 ≤1MiB，保留最近 20 轮，ADR-0114） | 029 |
+| `workflow_seen_items` | 管线跨运行条目去重记录（TTL 90天，by url/id，ADR-0114） | 029 |
 
 **automations 关键字段**:
 
@@ -729,7 +730,7 @@ automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线�
    - 其余有副作用工具（发帖、bash、write_file、未声明只读的 MCP 工具）默认拒绝，除非显式配置 `"approval": "hitl"`（挂起走 HITL 审批网关）；`privileged` 与 `automation_*` 工具永远禁止在步骤中调用。
 2. **`transform`（确定性数据变换，纯 Go，0 token）**：
    - 固定算子集（零表达式语言）：`concat`、`dedup`（可按 run 或跨 workflow 跨轮去重，走 `workflow_seen_items`）、`filter`、`sort`、`limit`、`pick`、`rename`、`truncate`。
-   - 依赖均在调用方定义，纯逻辑位于 internal/automation/pipeline/（ADR-0114 规划，未落地）。
+   - 依赖均在调用方定义，纯逻辑位于 internal/automation/pipeline/（ADR-0114）。
 3. **`llm`（单次提炼推理）**：
    - 单次调用 `Provider.Infer`（default 便宜模型池，默认关闭思考，purpose=`workflow_llm_step`），输入字符上限 24000、输出 token 上限 2000。
    - 前缀稳定（ADR-0105 决策三）：系统提示词为固定模板，数据仅置于 user 消息并加反注入外部数据定界标记（HE-2）。

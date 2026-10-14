@@ -98,6 +98,12 @@
 - **根因类别**：测试触发异步后台协程（如 `Install()`）但提前退出，协程仍向 `t.TempDir()` 写文件，与清理并发争用；且未注入测试用 `HTTPClient` 致下载组件空指针。
 - **排查起点**：检查测试是否通过 channel/轮询等待后台协程终态（如 `installing.Load() == false`）；检查 service 构造是否注入模拟离线客户端与可取消 context。
 
+### 症状 16：Agent 用 cron_create 建的定时任务从不执行
+- **症状特征**：通过聊天让 Agent 创建定时任务，返回成功且在数据库有记录，但到达指定时间从未被触发执行。
+- **归类模块**：M13
+- **根因类别**：原 `cron_jobs`（014 表）仅作为数据沉淀表，系统内无定时调度器轮询消费；已通过 ADR-0114 彻底废弃删除 `cron_*`，改为 `automation_*` 工具统一写入由 `cronTick` 驱动的 `automations` 与 `workflows` 表。
+- **排查起点**：`docs/arch/decisions/ADR-0114-info-acquisition-automation-pipeline.md` 与 `docs/arch/M13-Interface-Scheduler.md §8.7`。
+
 **维护规范**：
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。
 - 相似症状合并成一项（用"/"列举变体）。
@@ -109,12 +115,12 @@
 <!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `M13-Interface-Scheduler.md` | L3 接口 | 31K | 见下方 [M13 补充](#m13-补充) |
+| `M13-Interface-Scheduler.md` | L3 接口 | 33K | 见下方 [M13 补充](#m13-补充) |
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 27K | 状态机 + 全模块阈值（唯一权威） |
+| `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
 | `M04-Agent-Kernel.md` | L1 内核 | 24K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M11-Policy-Safety.md` | L0 策略 | 23K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
-| `M07-Tool-Action-Layer.md` | L1 工具 | 23K | 见下方 [M07 补充](#m07-补充) |
 | `M05-Memory-System.md` | L1 记忆 | 22K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
 | `M13-bis-Extension-Registry.md` | L3 扩展 | 15K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 14K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |

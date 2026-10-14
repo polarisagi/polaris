@@ -67,3 +67,4 @@
 |------|------|
 | 2026-10-14 | 初稿（设计依据：`local_playground/upgrade/web-info-automation/00-DESIGN.md`；正文抽取库选型数据待 T1 追记） |
 | 2026-10-14 | 正文抽取选型：`github.com/markusmobius/go-trafilatura@v1.12.2` + `github.com/JohannesKaufmann/html-to-markdown/v2@v2.5.2`，fixtures 结果 8/8 全通 |
+| 2026-10-14 | 全部任务落地：core 交付 T0~T7, T10, T11 (32c73bb..main)；plugins 交付 T8, T8b, T9 (3fb4c30..2d0cfc3) |

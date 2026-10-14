@@ -16,3 +16,12 @@
 max_concurrent_llm_calls = 4
 lazy_load_tool_threshold = 40
 ambient_skill_max_chars = 4000
+'automation.prompt_min_interval_min' = 60
+'automation.agent_max' = 20
+'pipeline.min_interval_min' = 15
+'pipeline.max_steps' = 20
+'pipeline.step_data_max_bytes' = 1048576
+'pipeline.run_data_keep_runs' = 20
+'pipeline.seen_items_ttl_days' = 90
+'pipeline.llm_max_input_chars' = 24000
+'pipeline.llm_max_output_tokens' = 2000

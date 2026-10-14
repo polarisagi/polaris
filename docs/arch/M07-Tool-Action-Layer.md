@@ -2,7 +2,7 @@
 
 > MCP（Model Context Protocol，模型上下文协议） 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:33 MCP双向 / 2:66 A2A（Agent-to-Agent，智能体间通信） / 3:74 注册 / 4:130 三级沙箱(CANONICAL) / 5:282 PolicyGate / 6:343 Capability / 7:355 动作扩展 / 8:434 616 Usage演化 / 12:468 658 (SOFT)降级 / 13:485 676 跨模块契约 / 14:505 696 Plugin / 15:521 738 Hook -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:33 MCP双向 / 2:66 A2A（Agent-to-Agent，智能体间通信） / 3:74 注册 / 4:131 三级沙箱(CANONICAL) / 5:283 PolicyGate / 6:344 Capability / 7:356 动作扩展 / 8:435 616 Usage演化 / 12:469 658 (SOFT)降级 / 13:486 676 跨模块契约 / 14:506 696 Plugin / 15:522 738 Hook -->
 ## 0-bis. 职责边界
 
 | M7 是 | M7 不是 |
