@@ -90,7 +90,7 @@ func (h *WorkflowAdmin) pipelineRunner() *pipeline.Runner {
 		LLM:      llmCallerAdapter{infer: h.LLMInfer},
 		Data:     runDataAdapter{repo: h.WorkflowRepo},
 		Limits:   pipelineLimitsFromConfig(),
-		Deps:     toolMetaAdapter{exec: h.ToolExecutor},
+		Deps:     newToolMetaAdapter(h.ToolExecutor),
 		Approver: hitlApprover{gw: h.HITL},
 	}
 }

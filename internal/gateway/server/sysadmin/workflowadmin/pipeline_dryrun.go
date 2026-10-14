@@ -94,7 +94,7 @@ func (h *WorkflowAdmin) dryRunSpec(ctx context.Context, spec pipeline.Spec, wfID
 
 	sortedSteps := kahnTopologicalSort(spec.Steps)
 	memStore := newMemoryRunDataStore()
-	valDeps := toolMetaAdapter{exec: h.ToolExecutor}
+	valDeps := newToolMetaAdapter(h.ToolExecutor)
 	limits := pipelineLimitsFromConfig()
 
 	rc := pipeline.RunContext{

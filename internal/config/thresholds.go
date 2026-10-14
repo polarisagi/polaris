@@ -473,6 +473,8 @@ type M13InterfaceThresholds struct {
 	PipelineSeenItemsTTLDays       int `toml:"pipeline.seen_items_ttl_days"`       // 90
 	PipelineLLMMaxInputChars       int `toml:"pipeline.llm_max_input_chars"`       // 24000
 	PipelineLLMMaxOutputTokens     int `toml:"pipeline.llm_max_output_tokens"`     // 2000
+	// PipelineWriteAllowlist 管线免审批写工具白名单（ADR-0114 决策八）；空列表表示所有写工具都需 hitl 审批。
+	PipelineWriteAllowlist []string `toml:"pipeline.write_allowlist"` // [knowledge_ingest, mcp__polaris-knowledge-base__kb_save]
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
@@ -726,6 +728,7 @@ func DefaultThresholds() Thresholds {
 			PipelineSeenItemsTTLDays:       90,
 			PipelineLLMMaxInputChars:       24000,
 			PipelineLLMMaxOutputTokens:     2000,
+			PipelineWriteAllowlist:         []string{"knowledge_ingest", "mcp__polaris-knowledge-base__kb_save"},
 		},
 		Session: SessionThresholds{
 			// 取系统提示词中通常的最长特征串长度（例如 "PolarisAGI" 10 字节），并 ×2 留作冗余

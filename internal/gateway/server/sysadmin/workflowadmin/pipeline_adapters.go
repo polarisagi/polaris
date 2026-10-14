@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/automation/pipeline"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -225,6 +227,13 @@ func (s *dedupState) Commit(ctx context.Context) error {
 // toolMetaAdapter 适配 AgentToolExecutor 至 pipeline.ValidateDeps。
 type toolMetaAdapter struct {
 	exec protocol.AgentToolExecutor
+	// writeAllowlist 免审批写工具白名单，来自 thresholds.m13_interface.pipeline_write_allowlist（ADR-0114 决策八）。
+	writeAllowlist []string
+}
+
+// newToolMetaAdapter 构造适配器并从阈值配置读取写入白名单；pipeline 包本身不读 config。
+func newToolMetaAdapter(exec protocol.AgentToolExecutor) toolMetaAdapter {
+	return toolMetaAdapter{exec: exec, writeAllowlist: config.CurrentThresholds().M13Interface.PipelineWriteAllowlist}
 }
 
 func (a toolMetaAdapter) ToolMeta(name string) pipeline.ToolMeta {
@@ -246,7 +255,7 @@ func (a toolMetaAdapter) ToolMeta(name string) pipeline.ToolMeta {
 	} else {
 		isReadOnly = tool.Capability == types.CapReadOnly || name == "web_fetch" || name == "feed_fetch"
 	}
-	isWriteAllowed := name == "knowledge_ingest"
+	isWriteAllowed := slices.Contains(a.writeAllowlist, name)
 	isPrivileged := tool.Capability >= types.CapPrivileged
 
 	return pipeline.ToolMeta{

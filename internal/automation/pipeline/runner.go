@@ -385,14 +385,14 @@ func (r *Runner) RunStep(ctx context.Context, rc RunContext, s StepSpec) (res St
 }
 
 // isWriteTool 判断工具是否为写入类工具。
+// 免审批白名单由 Deps 适配器按 thresholds.m13_interface.pipeline_write_allowlist 填入
+// ToolMeta.WriteAllowed（ADR-0114 决策八），此处不再写死工具名；Deps 为 nil 时无元数据可判，按非写入处理。
 func (r *Runner) isWriteTool(name string) bool {
-	if r.Deps != nil {
-		meta := r.Deps.ToolMeta(name)
-		if meta.WriteAllowed || !meta.ReadOnly {
-			return true
-		}
+	if r.Deps == nil {
+		return false
 	}
-	return name == "knowledge_ingest"
+	meta := r.Deps.ToolMeta(name)
+	return meta.WriteAllowed || !meta.ReadOnly
 }
 
 // needsApproval 判断工具是否属于必须人工审批的写工具：非只读且非内置放行写工具。

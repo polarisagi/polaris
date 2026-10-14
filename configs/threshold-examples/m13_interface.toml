@@ -25,3 +25,4 @@ ambient_skill_max_chars = 4000
 'pipeline.seen_items_ttl_days' = 90
 'pipeline.llm_max_input_chars' = 24000
 'pipeline.llm_max_output_tokens' = 2000
+'pipeline.write_allowlist' = ['knowledge_ingest', 'mcp__polaris-knowledge-base__kb_save']
