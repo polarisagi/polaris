@@ -155,8 +155,10 @@ consolidation = "manual"
 [agent.skill]
 builtin_path = "skills/"
 max_logic_collapse_concurrent = 1
+# web_search 引擎：duckduckgo（默认，免 key）| searxng（需 web_search_base_url，如 http://127.0.0.1:8888）| brave（需 web_search_api_key）
 web_search_engine = "duckduckgo"
 web_search_api_key = ""
+web_search_base_url = ""
 
 [orchestrator]
 mode = "blackboard"

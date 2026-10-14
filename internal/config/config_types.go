@@ -220,6 +220,7 @@ type SkillConfig struct {
 	MaxLogicCollapseConcurrent int    `toml:"max_logic_collapse_concurrent"`
 	WebSearchEngine            string `toml:"web_search_engine"`
 	WebSearchAPIKey            string `toml:"web_search_api_key"`
+	WebSearchBaseURL           string `toml:"web_search_base_url"`
 }
 
 type OrchestratorConfig struct {

@@ -1,0 +1,319 @@
+package web_search
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+type dummyDialer struct {
+	net.Dialer
+}
+
+func readDDGFixture(t *testing.T) []byte {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "..", "testdata", "websearch", "ddg.html")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read ddg fixture: %v", err)
+	}
+	return data
+}
+
+func TestWebSearch_DDG(t *testing.T) {
+	fixtureData := readDDGFixture(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(fixtureData)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{}
+	cfg.Agent.Skill.WebSearchEngine = "duckduckgo"
+	cfg.Agent.Skill.WebSearchBaseURL = ts.URL
+
+	fn := MakeWebSearchFn(cfg, &dummyDialer{})
+	input, _ := json.Marshal(map[string]any{"query": "golang", "max_results": 5})
+
+	out, err := fn(context.Background(), input)
+	if err != nil {
+		t.Fatalf("web_search ddg failed: %v", err)
+	}
+
+	var res struct {
+		Engine  string   `json:"engine"`
+		Results []result `json:"results"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if res.Engine != "duckduckgo" {
+		t.Errorf("expected engine duckduckgo, got %q", res.Engine)
+	}
+	// 期望 2 个结果（广告块已被跳过）
+	if len(res.Results) != 2 {
+		t.Fatalf("expected 2 results (ad skipped), got %d", len(res.Results))
+	}
+
+	r0 := res.Results[0]
+	if r0.Title != "Go 1.23 is released!" {
+		t.Errorf("expected title 'Go 1.23 is released!', got %q", r0.Title)
+	}
+	if r0.URL != "https://go.dev/blog/go1.23" {
+		t.Errorf("expected uddg link unquoted to 'https://go.dev/blog/go1.23', got %q", r0.URL)
+	}
+	if !strings.Contains(r0.Snippet, "Go 1.23") || !strings.Contains(r0.Snippet, "& more details.") {
+		t.Errorf("expected snippet HTML tags removed and entities unescaped, got %q", r0.Snippet)
+	}
+
+	r1 := res.Results[1]
+	if r1.Title != "Documentation - The Go Programming Language" {
+		t.Errorf("expected title 'Documentation - The Go Programming Language', got %q", r1.Title)
+	}
+	if r1.URL != "https://golang.org/doc/" {
+		t.Errorf("expected direct url 'https://golang.org/doc/', got %q", r1.URL)
+	}
+}
+
+func TestWebSearch_SearXNG(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/search") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.URL.Query().Get("format") != "json" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{
+			"results": []map[string]any{
+				{
+					"title":   "SearXNG Item 1",
+					"url":     "https://searx.example.org/1",
+					"content": "Content of item 1",
+				},
+				{
+					"title":   "SearXNG Item 2",
+					"url":     "https://searx.example.org/2",
+					"content": "Content of item 2",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{}
+	cfg.Agent.Skill.WebSearchEngine = "searxng"
+	cfg.Agent.Skill.WebSearchBaseURL = ts.URL
+
+	fn := MakeWebSearchFn(cfg, &dummyDialer{})
+	// max_results 限制为 1
+	input, _ := json.Marshal(map[string]any{"query": "search query", "max_results": 1})
+
+	out, err := fn(context.Background(), input)
+	if err != nil {
+		t.Fatalf("web_search searxng failed: %v", err)
+	}
+
+	var res struct {
+		Engine  string   `json:"engine"`
+		Results []result `json:"results"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if res.Engine != "searxng" {
+		t.Errorf("expected engine searxng, got %q", res.Engine)
+	}
+	if len(res.Results) != 1 {
+		t.Fatalf("expected 1 result due to max_results=1, got %d", len(res.Results))
+	}
+	if res.Results[0].Title != "SearXNG Item 1" || res.Results[0].URL != "https://searx.example.org/1" {
+		t.Errorf("unexpected item: %+v", res.Results[0])
+	}
+}
+
+func TestWebSearch_Brave(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Subscription-Token") != "test-brave-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		resp := map[string]any{
+			"web": map[string]any{
+				"results": []map[string]any{
+					{
+						"title":       "Brave Search 1",
+						"url":         "https://brave.example.com/1",
+						"description": "Brave snippet <b>highlighted</b> &amp; cleaned",
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{}
+	cfg.Agent.Skill.WebSearchEngine = "brave"
+	cfg.Agent.Skill.WebSearchAPIKey = "test-brave-key"
+	cfg.Agent.Skill.WebSearchBaseURL = ts.URL
+
+	fn := MakeWebSearchFn(cfg, &dummyDialer{})
+	input, _ := json.Marshal(map[string]any{"query": "brave query"})
+
+	out, err := fn(context.Background(), input)
+	if err != nil {
+		t.Fatalf("web_search brave failed: %v", err)
+	}
+
+	var res struct {
+		Engine  string   `json:"engine"`
+		Results []result `json:"results"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if res.Engine != "brave" {
+		t.Errorf("expected engine brave, got %q", res.Engine)
+	}
+	if len(res.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(res.Results))
+	}
+	if res.Results[0].Snippet != "Brave snippet highlighted & cleaned" {
+		t.Errorf("expected snippet HTML stripped and entity decoded, got %q", res.Results[0].Snippet)
+	}
+}
+
+func TestWebSearch_Fallback(t *testing.T) {
+	fixtureData := readDDGFixture(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(fixtureData)
+	}))
+	defer ts.Close()
+
+	t.Run("unknown engine falls back to duckduckgo", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Agent.Skill.WebSearchEngine = "google_nonexistent"
+		cfg.Agent.Skill.WebSearchBaseURL = ts.URL
+
+		fn := MakeWebSearchFn(cfg, &dummyDialer{})
+		input, _ := json.Marshal(map[string]any{"query": "test"})
+		out, err := fn(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res struct {
+			Engine string `json:"engine"`
+		}
+		json.Unmarshal(out, &res)
+		if res.Engine != "duckduckgo" {
+			t.Errorf("expected fallback to duckduckgo, got %q", res.Engine)
+		}
+	})
+
+	t.Run("brave missing key falls back to duckduckgo", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Agent.Skill.WebSearchEngine = "brave"
+		cfg.Agent.Skill.WebSearchAPIKey = ""
+		cfg.Agent.Skill.WebSearchBaseURL = ts.URL
+
+		fn := MakeWebSearchFn(cfg, &dummyDialer{})
+		input, _ := json.Marshal(map[string]any{"query": "test"})
+		out, err := fn(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res struct {
+			Engine string `json:"engine"`
+		}
+		json.Unmarshal(out, &res)
+		if res.Engine != "duckduckgo" {
+			t.Errorf("expected fallback to duckduckgo, got %q", res.Engine)
+		}
+	})
+
+	t.Run("searxng missing base url falls back to duckduckgo", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Agent.Skill.WebSearchEngine = "searxng"
+		cfg.Agent.Skill.WebSearchBaseURL = ""
+
+		eng, engName := pickEngine(cfg)
+		if engName != "duckduckgo" {
+			t.Errorf("expected duckduckgo fallback, got %q", engName)
+		}
+		if _, ok := eng.(*ddg); !ok {
+			t.Errorf("expected *ddg instance, got %T", eng)
+		}
+	})
+}
+
+func TestWebSearch_Validation(t *testing.T) {
+	fn := MakeWebSearchFn(&config.Config{}, &dummyDialer{})
+	ctx := context.Background()
+
+	// empty query -> CodeInvalidInput
+	inputEmpty, _ := json.Marshal(map[string]any{"query": "   "})
+	_, errEmpty := fn(ctx, inputEmpty)
+	if errEmpty == nil || !apperr.IsCode(errEmpty, apperr.CodeInvalidInput) {
+		t.Errorf("expected CodeInvalidInput for empty query, got %v", errEmpty)
+	}
+
+	// query > 500 chars -> CodeInvalidInput
+	longQuery := strings.Repeat("a", 501)
+	inputLong, _ := json.Marshal(map[string]any{"query": longQuery})
+	_, errLong := fn(ctx, inputLong)
+	if errLong == nil || !apperr.IsCode(errLong, apperr.CodeInvalidInput) {
+		t.Errorf("expected CodeInvalidInput for query > 500 chars, got %v", errLong)
+	}
+}
+
+func TestWebSearch_HostLimiter(t *testing.T) {
+	fixtureData := readDDGFixture(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(fixtureData)
+	}))
+	defer ts.Close()
+
+	var limiterCalls int32
+	limiter := web_fetch.NewHostLimiter(func() time.Duration {
+		atomic.AddInt32(&limiterCalls, 1)
+		return 10 * time.Millisecond
+	})
+
+	cfg := &config.Config{}
+	cfg.Agent.Skill.WebSearchEngine = "duckduckgo"
+	cfg.Agent.Skill.WebSearchBaseURL = ts.URL
+
+	fn := MakeWebSearchFn(cfg, &dummyDialer{}, limiter)
+	input, _ := json.Marshal(map[string]any{"query": "test query"})
+
+	_, err := fn(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if atomic.LoadInt32(&limiterCalls) == 0 {
+		t.Errorf("expected limiter interval provider to be called, got 0")
+	}
+}

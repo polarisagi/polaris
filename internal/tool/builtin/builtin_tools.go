@@ -96,7 +96,7 @@ func RegisterBuiltinTools(
 		{"str_replace_editor", str_replace_editor.MakeStrReplaceEditorFn(allowedPaths)},
 		{"read_tool_ref", read_tool_ref.MakeReadToolRefFn(vfsRoot)},
 		{"glob", glob.MakeGlobFn(allowedPaths)},
-		{"web_search", web_search.MakeWebSearchFn(cfg, dialer)},
+		{"web_search", web_search.MakeWebSearchFn(cfg, dialer, webDeps.Limiter)},
 		{"todo_write", todo_write.MakeTodoWriteFn(todoRepo)},
 		{"todo_read", todo_read.MakeTodoReadFn(todoRepo)},
 		{"multi_edit", multi_edit.MakeMultiEditFn(allowedPaths)},
