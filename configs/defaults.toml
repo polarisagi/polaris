@@ -175,6 +175,11 @@ auto_curriculum = false
 enabled = true
 min_success_for_trigger = 50
 
+[knowledge]
+# 额外同步进 RAG 的 Markdown 目录（Obsidian 兼容；~ 展开，目录不存在则跳过）。
+# ~/Polaris/Vault 是 Polaris 资料库插件的默认落盘目录，Obsidian 可直接打开同一目录。
+vault_dirs = ["~/Polaris/Vault"]
+
 [knowledge.rag]
 mode = "hybrid"
 graphrag = "microsoft"

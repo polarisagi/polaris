@@ -252,6 +252,9 @@ type LogicCollapseConfig struct {
 
 type KnowledgeConfig struct {
 	RAG RAGConfig `toml:"rag"`
+	// VaultDirs 额外同步进 RAG 的 Markdown 目录（Obsidian 兼容，~ 展开；不存在则跳过）。
+	// 默认 ~/Polaris/Vault 为资料库插件的落盘目录（ADR-0114 决策八）。
+	VaultDirs []string `toml:"vault_dirs"`
 }
 
 type RAGConfig struct {

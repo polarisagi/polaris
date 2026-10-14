@@ -1179,6 +1179,18 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			slog.Info("polaris: ObsidianConnector registered to MemoryAgent")
 		}
 
+		// 资料库目录（ADR-0114 决策八）：每个目录独立连接器，ID 与 URI 按路径区分。
+		for _, vaultDir := range resolveVaultDirs(sb.Cfg.Knowledge.VaultDirs, sb.Layout.Workspace) {
+			vaultConn, vErr := connector.NewObsidianVaultConnector(vaultDir)
+			if vErr != nil {
+				slog.Error("polaris: failed to init vault connector", "dir", vaultDir, "err", vErr)
+				continue
+			}
+			vaultSched := connector.NewSyncScheduler(vaultConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
+			memoryAgent.RegisterSyncScheduler(vaultSched)
+			slog.Info("polaris: vault connector registered to MemoryAgent", "dir", vaultDir, "id", vaultConn.ID())
+		}
+
 		// Notion Connector — token 优先从 vault 加密存储（复用 preferences 表，
 		// 与 Provider API Key 同一套 credential.Vault AES-256-GCM 方案）读取；
 		// 首次运行时回退 NOTION_TOKEN 环境变量并将其加密落盘（seed-once，

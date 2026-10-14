@@ -65,3 +65,65 @@ func TestObsidianConnector(t *testing.T) {
 		t.Logf("obsidian watch returned non-nil channel")
 	}
 }
+
+func TestObsidianConnector_SkipsHiddenDirs(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.md"), []byte("a"), 0644)
+	hidden := filepath.Join(dir, ".polaris")
+	os.Mkdir(hidden, 0755)
+	os.WriteFile(filepath.Join(hidden, "notes.md"), []byte("index side file"), 0644)
+
+	conn, err := NewObsidianConnector(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, err := conn.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || docs[0].URI != "file://a.md" {
+		t.Fatalf("hidden dir must be skipped, got %+v", docs)
+	}
+}
+
+func TestObsidianConnector_BaseUnderHiddenDirStillSynced(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".config", "vault")
+	os.MkdirAll(root, 0755)
+	os.WriteFile(filepath.Join(root, "a.md"), []byte("a"), 0644)
+	conn, err := NewObsidianConnector(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, err := conn.List(context.Background())
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("base under hidden dir must still list, docs=%d err=%v", len(docs), err)
+	}
+}
+
+func TestObsidianVaultConnector_DistinctIDAndURI(t *testing.T) {
+	d1, d2 := t.TempDir(), t.TempDir()
+	for _, d := range []string{d1, d2} {
+		os.WriteFile(filepath.Join(d, "README.md"), []byte("x"+d), 0644)
+	}
+	c1, err := NewObsidianVaultConnector(d1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := NewObsidianVaultConnector(d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _ := NewObsidianConnector(d1)
+	if c1.ID() == c2.ID() || c1.ID() == legacy.ID() {
+		t.Fatalf("connector IDs must differ: %s %s %s", c1.ID(), c2.ID(), legacy.ID())
+	}
+	r1, _ := c1.List(context.Background())
+	r2, _ := c2.List(context.Background())
+	if len(r1) != 1 || len(r2) != 1 || r1[0].URI == r2[0].URI {
+		t.Fatalf("same relative path must yield distinct URIs: %+v %+v", r1, r2)
+	}
+	doc, err := c1.Fetch(context.Background(), r1[0])
+	if err != nil || string(doc.Content) != "x"+d1 {
+		t.Fatalf("fetch via namespaced URI failed: %v %+v", err, doc)
+	}
+}

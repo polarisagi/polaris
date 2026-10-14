@@ -26,6 +26,11 @@ type ObsidianConnector struct {
 	basePath string
 	exclude  []string
 	watcher  *fsnotify.Watcher
+	// uriNS 非空时作为 URI 的目录前缀（含结尾斜杠）。多个 Obsidian 目录共用同一知识库时，
+	// 相对路径相同的文件（如 README.md）URI 会相撞并互相覆盖，故额外目录按路径区分命名空间；
+	// 工作区连接器保持空值，沿用既有 URI 不使已入库文档失配。
+	uriNS string
+	id    string
 }
 
 // NewObsidianConnector 创建一个新的 Obsidian/Local Folder 连接器。
@@ -44,8 +49,29 @@ func NewObsidianConnector(basePath string) (*ObsidianConnector, error) {
 	return c, nil
 }
 
+// NewObsidianVaultConnector 创建额外资料库目录的连接器：ID 与 URI 按目录路径区分，
+// 可与工作区连接器及其它资料库连接器并存而不互相覆盖。
+func NewObsidianVaultConnector(basePath string) (*ObsidianConnector, error) {
+	c, err := NewObsidianConnector(basePath)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(basePath)))
+	tag := hex.EncodeToString(sum[:4])
+	c.id = "obsidian-vault-" + tag
+	c.uriNS = "vault-" + tag + "/"
+	return c, nil
+}
+
 func (c *ObsidianConnector) ID() string {
+	if c.id != "" {
+		return c.id
+	}
 	return "obsidian-local-connector"
+}
+
+func (c *ObsidianConnector) uriFor(relPath string) string {
+	return "file://" + c.uriNS + relPath
 }
 
 func (c *ObsidianConnector) Name() string {
@@ -61,6 +87,15 @@ func (c *ObsidianConnector) SyncConfig() types.SyncConfig {
 }
 
 func (c *ObsidianConnector) isExcluded(path string) bool {
+	// 相对 basePath 的任一层以 "." 开头即视为隐藏（如 .polaris/index.sqlite 的索引目录）。
+	// 只看相对部分，避免 basePath 自身位于隐藏目录（~/.config/...）时整库被排除。
+	if rel, err := filepath.Rel(c.basePath, path); err == nil && rel != "." {
+		for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+			if strings.HasPrefix(part, ".") && part != ".." {
+				return true
+			}
+		}
+	}
 	// 判断是否被隐藏目录包裹
 	parts := strings.Split(path, string(os.PathSeparator))
 	for _, part := range parts {
@@ -113,7 +148,7 @@ func (c *ObsidianConnector) List(ctx context.Context) ([]*types.DocumentRef, err
 		relPath, _ := filepath.Rel(c.basePath, path)
 
 		refs = append(refs, &types.DocumentRef{
-			URI:         "file://" + relPath,
+			URI:         c.uriFor(relPath),
 			Title:       strings.TrimSuffix(filepath.Base(path), ".md"),
 			SourceType:  "markdown",
 			ContentHash: hashStr,
@@ -132,7 +167,7 @@ func (c *ObsidianConnector) List(ctx context.Context) ([]*types.DocumentRef, err
 
 // Fetch 读取单个文件的内容，并分离出 YAML frontmatter 作为元数据。
 func (c *ObsidianConnector) Fetch(ctx context.Context, ref *types.DocumentRef) (*types.SyncDocument, error) {
-	relPath := filepath.Clean(strings.TrimPrefix(ref.URI, "file://"))
+	relPath := filepath.Clean(strings.TrimPrefix(strings.TrimPrefix(ref.URI, "file://"), c.uriNS))
 	fullPath := filepath.Join(c.basePath, relPath)
 
 	base := filepath.Clean(c.basePath)
@@ -240,7 +275,7 @@ func (c *ObsidianConnector) Watch(ctx context.Context) (<-chan types.ChangeEvent
 				}
 
 				relPath, _ := filepath.Rel(c.basePath, event.Name)
-				uri := "file://" + relPath
+				uri := c.uriFor(relPath)
 
 				var hashStr string
 				var modTime int64
