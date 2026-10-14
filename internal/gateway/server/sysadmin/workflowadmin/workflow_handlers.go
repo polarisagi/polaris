@@ -430,7 +430,10 @@ func (h *WorkflowAdmin) HandleResumeWorkflowRun(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	h.runWorkflowGraph(&wf, runID, h.loadWorkflowSteps(ctx, wf.ID))
+	// 进程重启续跑（ResumeWorkflowRun）丢失 pending 可接受（只会导致少记 seen → 下次可能重复一次，无安全性副作用）。
+	date := time.Now().Format("2006-01-02")
+	since, _ := h.WorkflowRepo.LastSuccessfulRunStart(ctx, wf.ID)
+	h.runWorkflowGraph(&wf, runID, h.loadWorkflowSteps(ctx, wf.ID), nil, date, since)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

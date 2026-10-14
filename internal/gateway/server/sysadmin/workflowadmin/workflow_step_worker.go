@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/automation/pipeline"
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -146,6 +147,17 @@ func (h *WorkflowAdmin) executeStepTask(ctx context.Context, taskID string, enve
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
+	stepKey := step.StepKey
+	if stepKey == "" {
+		stepKey = fmt.Sprintf("step_%d", step.Seq)
+	}
+
+	// 针对非 agent 步骤（tool/transform/llm），统一交由 pipelineRunner 执行
+	if step.Kind != "" && step.Kind != "agent" {
+		h.executePipelineStep(bgCtx, taskID, envelope, step, stepKey)
+		return
+	}
+
 	effectivePrompt := step.Prompt
 	effectiveWorkingDir := step.WorkingDir
 	effectiveEffort := step.ReasoningEffort
@@ -184,6 +196,10 @@ func (h *WorkflowAdmin) executeStepTask(ctx context.Context, taskID string, enve
 
 	h.recordStepOutput(bgCtx, envelope.RunID, step, sessionID, recordStatus, recordPreview)
 
+	// agent 步骤完成后额外落库 SaveRunData，以便下游 llm/transform 步骤引用
+	stepDataJSON, _ := json.Marshal(pipeline.StepData{Text: reply, Count: 1})
+	_ = h.WorkflowRepo.SaveRunData(bgCtx, envelope.RunID, stepKey, recordStatus, stepDataJSON, 1)
+
 	payloadJSON, _ := json.Marshal(payload)
 	if err := h.Blackboard.CompleteTask(context.Background(), taskID, workflowStepWorkerAgentID, payloadJSON); err != nil {
 		slog.Warn("workflow step worker: CompleteTask failed", "task_id", taskID, "err", err)
@@ -201,6 +217,46 @@ func (h *WorkflowAdmin) recordStepOutput(ctx context.Context, runID string, step
 	}
 	if err := h.WorkflowRepo.IncrementWorkflowRunCurrentStep(ctx, runID); err != nil {
 		slog.Warn("workflow step worker: increment current_step failed", "run", runID, "err", err)
+	}
+}
+
+func (h *WorkflowAdmin) executePipelineStep(ctx context.Context, taskID string, envelope stepIntentEnvelope, step workflowStep, stepKey string) {
+	var spec pipeline.StepSpec
+	if err := json.Unmarshal([]byte(step.ConfigJSON), &spec); err != nil {
+		h.failStepTaskInfra(ctx, taskID, fmt.Sprintf("unmarshal config_json failed: %v", err))
+		return
+	}
+	if spec.Key == "" {
+		spec.Key = stepKey
+	}
+	if spec.Kind == "" {
+		spec.Kind = step.Kind
+	}
+	dedup := h.getOrCreateDedupState(envelope.RunID, envelope.WorkflowID)
+	rc := pipeline.RunContext{
+		RunID:      envelope.RunID,
+		WorkflowID: envelope.WorkflowID,
+		Date:       envelope.Date,
+		Since:      envelope.Since,
+		Dedup:      dedup,
+		DryRun:     false,
+	}
+
+	res := h.pipelineRunner().RunStep(ctx, rc, spec)
+	payload := stepCompletionPayload{
+		StepID: step.ID,
+		Status: res.Status,
+		Reply:  res.Preview,
+	}
+	if res.Err != nil {
+		payload.Error = res.Err.Error()
+	}
+
+	h.recordStepOutput(ctx, envelope.RunID, step, "", res.Status, res.Preview)
+
+	payloadJSON, _ := json.Marshal(payload)
+	if err := h.Blackboard.CompleteTask(context.Background(), taskID, workflowStepWorkerAgentID, payloadJSON); err != nil {
+		slog.Warn("workflow step worker: CompleteTask failed", "task_id", taskID, "err", err)
 	}
 }
 

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/automation/pipeline"
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -31,11 +34,26 @@ import (
 // 只在 Execute 返回后读回判定整体成功/失败并推进 status/finished_at。
 // 异步启动，返回 runID。
 func (h *WorkflowAdmin) executeWorkflow(ctx context.Context, wf *workflow, trigger string) string {
+	steps := h.loadWorkflowSteps(ctx, wf.ID)
+	total := len(steps)
 	runID := newWorkflowRunID()
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	steps := h.loadWorkflowSteps(ctx, wf.ID)
-	total := len(steps)
+	// 1. 后台资源准入判定（Admitter）
+	var release func()
+	if h.Admitter != nil {
+		var ok bool
+		release, ok = h.Admitter.AdmitBackground("workflow")
+		if !ok {
+			if err := h.WorkflowRepo.CreateWorkflowRun(ctx, runID, wf.ID, trigger, "ok", 0, total, now); err != nil {
+				slog.Warn("workflow: insert run failed", "run", runID, "err", err)
+			}
+			_ = h.WorkflowRepo.SetRunSkipped(ctx, runID)
+			_ = h.WorkflowRepo.UpdateWorkflowRunStatus(ctx, runID, "ok", now, "resource_pressure", "[]", 0)
+			metrics.RecordWorkflowRunSkipped(ctx, "resource_pressure")
+			return runID
+		}
+	}
 
 	if err := h.WorkflowRepo.CreateWorkflowRun(ctx, runID, wf.ID, trigger, "running", 0, total, now); err != nil {
 		slog.Warn("workflow: insert run failed", "run", runID, "err", err)
@@ -46,16 +64,22 @@ func (h *WorkflowAdmin) executeWorkflow(ctx context.Context, wf *workflow, trigg
 		slog.Warn("workflow: update status failed", "id", wf.ID, "err", err)
 	}
 
-	h.runWorkflowGraph(wf, runID, steps)
+	date := time.Now().Format("2006-01-02")
+	since, _ := h.WorkflowRepo.LastSuccessfulRunStart(ctx, wf.ID)
+
+	h.runWorkflowGraph(wf, runID, steps, release, date, since)
 	return runID
 }
 
 // runWorkflowGraph 后台执行状态图并收尾（run/workflows 状态与统计）。新建运行与
 // 续跑（ResumeWorkflowRun，ADR-0104 决策二）共用：续跑以同一 runID 作为
 // StateGraphExecutor 的 parentTaskID，task_checkpoints 中 done 节点被复用而不重投任务。
-func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []workflowStep) {
+func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []workflowStep, release func(), date, since string) {
 	total := len(steps)
 	concurrent.SafeGo(context.Background(), "gateway.sysadmin.execute_workflow", func(context.Context) {
+		if release != nil {
+			defer release()
+		}
 		bgCtx, cancel := context.WithTimeout(context.Background(), 120*time.Minute)
 		defer cancel()
 
@@ -79,16 +103,13 @@ func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []wor
 			return
 		}
 		if h.Blackboard == nil {
-			// fail-closed：宁可显式报错，也不让 StateGraphExecutor 在 nil Blackboard
-			// 上调用 Subscribe 触发 nil pointer panic（虽会被 SafeGo 兜底恢复，但
-			// 会把这次 run 误标记为进行中/无明确错误原因）。
 			status = "error"
 			errMsg = "workflow: blackboard not configured, cannot execute"
 			slog.Error("workflow: Blackboard is nil, cannot execute state graph", "workflow", wf.ID, "run", runID)
 			return
 		}
 
-		spec := buildGraphSpec(wf.Type, wf.ID, runID, steps)
+		spec := buildGraphSpec(wf.Type, wf.ID, runID, date, since, steps)
 		executor := orchestrator.NewStateGraphExecutor(h.Blackboard)
 		if err := executor.Execute(bgCtx, runID, spec); err != nil {
 			status = "error"
@@ -97,15 +118,154 @@ func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []wor
 			return
 		}
 
-		// Execute 返回 nil 不等于全部成功：重试自环耗尽 MaxVisits 后仍可能停在
-		// status=error 的终态节点而不产生任何"错误"（见 pattern_state_graph_test.go
-		// TestStateGraphExecutor_LoopExhaustsMaxVisitsWithoutPassing）。读回 Worker
-		// 已增量落盘的 step_outputs 判定整体结果。
 		if failCount, firstErr := h.scanStepOutputErrors(context.Background(), runID); failCount > 0 {
 			status = "error"
 			errMsg = fmt.Sprintf("%d step(s) failed: %s", failCount, firstErr)
+			return
 		}
+
+		// 1. 终端步骤全为 skipped 判定与结果投递
+		terminalSteps := findTerminalSteps(wf.Type, steps)
+		allTerminalSkipped := h.isAllTerminalSkipped(context.Background(), runID, terminalSteps)
+		dedupVal, hasDedup := h.dedupStates.LoadAndDelete(runID)
+
+		h.handleWorkflowDeliveryAndCleanup(context.Background(), wf, runID, steps, terminalSteps, allTerminalSkipped, dedupVal, hasDedup)
+
+		// 2. 运行数据与去重记录清理
+		_ = h.WorkflowRepo.PruneRunData(context.Background(), wf.ID, 20)
+		ttlCutoff := time.Now().AddDate(0, 0, -90).UTC().Format(time.RFC3339)
+		_ = h.WorkflowRepo.PruneSeen(context.Background(), ttlCutoff)
 	})
+}
+
+func (h *WorkflowAdmin) isAllTerminalSkipped(ctx context.Context, runID string, terminalSteps []workflowStep) bool {
+	for _, ts := range terminalSteps {
+		if h.getStepStatus(ctx, runID, ts) != "skipped" {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *WorkflowAdmin) handleWorkflowDeliveryAndCleanup(ctx context.Context, wf *workflow, runID string, steps, terminalSteps []workflowStep, allTerminalSkipped bool, dedupVal any, hasDedup bool) {
+	if allTerminalSkipped && len(terminalSteps) > 0 {
+		_ = h.WorkflowRepo.SetRunSkipped(ctx, runID)
+		metrics.RecordWorkflowRunSkipped(ctx, "empty")
+		return
+	}
+
+	h.deliverWorkflowResult(ctx, wf, runID, steps)
+
+	if hasDedup && dedupVal != nil {
+		if err := dedupVal.(*dedupState).Commit(ctx); err != nil {
+			slog.Warn("workflow: commit dedup seen failed", "workflow", wf.ID, "run", runID, "err", err)
+		}
+	}
+}
+
+func (h *WorkflowAdmin) deliverWorkflowResult(ctx context.Context, wf *workflow, runID string, steps []workflowStep) {
+	if h.Deliverer == nil || wf.ResultAction == "" || wf.ResultAction == "silent" || wf.ResultAction == "none" {
+		return
+	}
+	deliverText := h.findDeliverText(ctx, runID, wf.DeliverFrom, steps)
+	if err := h.Deliverer.DeliverResult(ctx, wf.ResultAction, "", wf.Name, deliverText); err != nil {
+		slog.Warn("workflow: deliver result failed", "workflow", wf.ID, "run", runID, "err", err)
+	}
+}
+
+// findTerminalSteps 找出没有下游后继的终端步骤。
+func findTerminalSteps(wfType string, steps []workflowStep) []workflowStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	if wfType != "dag" {
+		return []workflowStep{steps[len(steps)-1]}
+	}
+	depSet := make(map[int]bool)
+	for _, st := range steps {
+		for _, d := range st.DependsOn {
+			if idx, err := strconv.Atoi(d); err == nil && idx >= 0 && idx < len(steps) {
+				depSet[idx] = true
+			}
+		}
+	}
+	var terminal []workflowStep
+	for i, st := range steps {
+		if !depSet[i] {
+			terminal = append(terminal, st)
+		}
+	}
+	if len(terminal) == 0 {
+		return []workflowStep{steps[len(steps)-1]}
+	}
+	return terminal
+}
+
+// getStepStatus 获取步骤执行状态（优先查 run_data，回退查 step_outputs）。
+func (h *WorkflowAdmin) getStepStatus(ctx context.Context, runID string, step workflowStep) string {
+	stepKey := step.StepKey
+	if stepKey == "" {
+		stepKey = fmt.Sprintf("step_%d", step.Seq)
+	}
+	if st, _, err := h.WorkflowRepo.LoadRunData(ctx, runID, stepKey); err == nil && st != "" {
+		return st
+	}
+	outputs := h.loadRunStepOutputs(ctx, runID)
+	for _, o := range outputs {
+		if o.Seq == step.Seq {
+			return o.Status
+		}
+	}
+	return ""
+}
+
+// loadRunStepOutputs 读取当前 run 的步骤输出列表。
+func (h *WorkflowAdmin) loadRunStepOutputs(ctx context.Context, runID string) []stepOutput {
+	var raw []byte
+	if err := h.DB.QueryRowContext(ctx, `SELECT step_outputs FROM workflow_runs WHERE id=?`, runID).Scan(&raw); err != nil {
+		return nil
+	}
+	var outputs []stepOutput
+	_ = json.Unmarshal(raw, &outputs)
+	return outputs
+}
+
+func (h *WorkflowAdmin) loadStepText(ctx context.Context, runID, stepKey string) string {
+	status, dataJSON, err := h.WorkflowRepo.LoadRunData(ctx, runID, stepKey)
+	if err != nil || len(dataJSON) == 0 {
+		return ""
+	}
+	if status != "" && status != "ok" {
+		return ""
+	}
+	var data pipeline.StepData
+	if err := json.Unmarshal(dataJSON, &data); err == nil && data.Text != "" {
+		return data.Text
+	}
+	return string(dataJSON)
+}
+
+// findDeliverText 寻找待投递的文本结果。
+func (h *WorkflowAdmin) findDeliverText(ctx context.Context, runID, deliverFrom string, steps []workflowStep) string {
+	if deliverFrom != "" {
+		if text := h.loadStepText(ctx, runID, deliverFrom); text != "" {
+			return text
+		}
+	}
+	for i := len(steps) - 1; i >= 0; i-- {
+		st := steps[i]
+		if st.Kind != "llm" && st.Kind != "agent" && st.Kind != "" {
+			continue
+		}
+		stepKey := st.StepKey
+		if stepKey == "" {
+			stepKey = fmt.Sprintf("step_%d", st.Seq)
+		}
+		if text := h.loadStepText(ctx, runID, stepKey); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // readRunCurrentStep 读回 RunStepWorkerLoop 已增量自增的 current_step，避免

@@ -19,6 +19,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/workflowadmin"
 	"github.com/polarisagi/polaris/internal/gateway/session"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
@@ -502,6 +503,19 @@ func (s *Server) SetToolExecutor(fn func(ctx context.Context, name string, args 
 		// channelsadmin/webhook_receive.go 的 h.ToolExec nil check）。
 		s.sysadminHandler.Workflow.ToolExec = fn
 		s.sysadminHandler.Channels.ToolExec = fn
+	}
+}
+
+// SetPipelineDeps 注入管线引擎所需的工具执行器、LLM 推理函数及后台资源准入闸门（ADR-0114）。
+func (s *Server) SetPipelineDeps(
+	exec protocol.AgentToolExecutor,
+	infer func(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error),
+	admitter workflowadmin.BackgroundAdmitter,
+) {
+	if s.sysadminHandler != nil && s.sysadminHandler.Workflow != nil {
+		s.sysadminHandler.Workflow.ToolExecutor = exec
+		s.sysadminHandler.Workflow.LLMInfer = infer
+		s.sysadminHandler.Workflow.Admitter = admitter
 	}
 }
 

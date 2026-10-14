@@ -336,6 +336,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
 	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
 	httpServer.SetToolExecutor(tb.Dispatcher.Execute)
+	//llmopts:exempt 作为依赖注入传入 HttpServer.SetPipelineDeps，实际调用在 workflowadmin.llmCallerAdapter 并已显式声明 PurposeWorkflowLLMStep 与 ThinkingMode
+	httpServer.SetPipelineDeps(tb.Dispatcher, sb.Router.Infer, sb.ResourceGov)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)
 	// V8-S2 Meta-Eval Sentinel 运维接口（POST /v1/eval/meta-holdout/cases,

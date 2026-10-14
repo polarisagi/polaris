@@ -9,6 +9,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/automation/pipeline"
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -46,6 +47,13 @@ type WorkflowAdmin struct {
 
 	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	BuildToolSchemas func() []types.ToolSchema
+
+	// ADR-0114: 管线步骤执行依赖注入
+	ToolExecutor protocol.AgentToolExecutor
+	LLMInfer     func(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error)
+	Admitter     BackgroundAdmitter
+	Deliverer    ResultDeliverer
+	dedupStates  sync.Map // runID -> *dedupState
 }
 
 // NewWorkflowAdmin 构造 WorkflowAdmin。
@@ -70,4 +78,33 @@ func NewWorkflowAdmin(
 		ToolExec:         toolExec,
 		BuildToolSchemas: buildToolSchemas,
 	}
+}
+
+// pipelineRunner 构造步骤执行器实例。
+func (h *WorkflowAdmin) pipelineRunner() *pipeline.Runner {
+	limits := pipeline.Limits{
+		MaxSteps:           20,
+		MinIntervalMin:     15,
+		LLMMaxInputChars:   24000,
+		LLMMaxOutputTokens: 2000,
+		StepDataMaxBytes:   1048576,
+	}
+	return &pipeline.Runner{
+		Tools:  toolCallerAdapter{exec: h.ToolExecutor},
+		LLM:    llmCallerAdapter{infer: h.LLMInfer},
+		Data:   runDataAdapter{repo: h.WorkflowRepo},
+		Limits: limits,
+		Deps:   toolMetaAdapter{exec: h.ToolExecutor},
+	}
+}
+
+// getOrCreateDedupState 跨步骤共享同一个 run 的去重状态。
+func (h *WorkflowAdmin) getOrCreateDedupState(runID, wfID string) *dedupState {
+	val, ok := h.dedupStates.Load(runID)
+	if ok {
+		return val.(*dedupState)
+	}
+	st := &dedupState{repo: h.WorkflowRepo, wfID: wfID}
+	actual, _ := h.dedupStates.LoadOrStore(runID, st)
+	return actual.(*dedupState)
 }

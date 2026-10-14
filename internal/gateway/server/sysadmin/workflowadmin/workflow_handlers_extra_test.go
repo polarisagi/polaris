@@ -36,7 +36,9 @@ func TestWorkflowHandlersExtra(t *testing.T) {
 			risk_level TEXT,
 			enabled INTEGER,
 			created_at DATETIME,
-			updated_at DATETIME
+			updated_at DATETIME,
+			deliver_from TEXT DEFAULT '',
+			source TEXT DEFAULT 'user'
 		);
 		CREATE TABLE IF NOT EXISTS workflow_runs (
 			id TEXT PRIMARY KEY,
@@ -48,7 +50,8 @@ func TestWorkflowHandlersExtra(t *testing.T) {
 			step_outputs TEXT,
 			error_msg TEXT,
 			started_at DATETIME,
-			finished_at DATETIME
+			finished_at DATETIME,
+			skipped INTEGER DEFAULT 0
 		);
 		INSERT INTO workflows (id, name, trigger_type, enabled, created_at, updated_at) VALUES ('wf-1', 'Test WF', 'manual', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 	`)

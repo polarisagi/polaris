@@ -28,6 +28,9 @@ type workflow struct {
 	LastRunError  string `json:"last_run_error"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
+	ResultAction  string `json:"result_action,omitempty"`
+	DeliverFrom   string `json:"deliver_from,omitempty"`
+	Source        string `json:"source,omitempty"`
 }
 
 type workflowStep struct {
@@ -49,6 +52,11 @@ type workflowStep struct {
 	CompensationArgs string   `json:"compensation_args"`
 	// MaxRetries>0 时附加失败重试自环边；与 CompensationTool 非空互斥。
 	MaxRetries int `json:"max_retries"`
+
+	// ADR-0114: 管线步骤专用属性
+	StepKey    string `json:"step_key,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	ConfigJSON string `json:"config_json,omitempty"`
 }
 
 type workflowRun struct {
@@ -62,6 +70,7 @@ type workflowRun struct {
 	FinishedAt  string          `json:"finished_at"`
 	ErrorMsg    string          `json:"error_msg"`
 	StepOutputs json.RawMessage `json:"step_outputs"`
+	Skipped     bool            `json:"skipped,omitempty"`
 }
 
 type stepOutput struct {

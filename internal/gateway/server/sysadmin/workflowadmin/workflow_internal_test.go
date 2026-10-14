@@ -45,7 +45,9 @@ func TestWorkflowInternal(t *testing.T) {
 			failure_count INTEGER,
 			circuit_opened_at DATETIME,
 			created_at DATETIME,
-			updated_at DATETIME
+			updated_at DATETIME,
+			deliver_from TEXT DEFAULT '',
+			source TEXT DEFAULT 'user'
 		);
 		CREATE TABLE IF NOT EXISTS workflow_steps (
 			id TEXT PRIMARY KEY,
@@ -62,6 +64,9 @@ func TestWorkflowInternal(t *testing.T) {
 			compensation_tool TEXT DEFAULT '',
 			compensation_args TEXT DEFAULT '',
 			max_retries INTEGER DEFAULT 0,
+			step_key TEXT DEFAULT '',
+			kind TEXT DEFAULT 'agent',
+			config_json TEXT DEFAULT '{}',
 			created_at DATETIME,
 			updated_at DATETIME
 		);
@@ -75,7 +80,8 @@ func TestWorkflowInternal(t *testing.T) {
 			step_outputs TEXT,
 			error_msg TEXT,
 			started_at DATETIME,
-			finished_at DATETIME
+			finished_at DATETIME,
+			skipped INTEGER DEFAULT 0
 		);
 		INSERT INTO workflows (id, name, trigger_type, enabled, circuit_open) VALUES ('wf-1', 'WF', 'cron', 1, 0);
 		INSERT INTO workflow_steps (id, workflow_id, seq, name, automation_id, prompt, reasoning_effort, working_dir, input_from_prev) VALUES ('step-1', 'wf-1', 1, 'Step 1', '', '', '', '', 0);

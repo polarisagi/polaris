@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -251,33 +252,75 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 		reply := result.Reply
 
-		// 处理 result_action
-		if chID, ok := strings.CutPrefix(a.ResultAction, "channel:"); ok {
-			// 向 Channel 发送消息：原 channelType="" 导致 SendReply 走 default 分支静默丢弃。
-			// 须先从 DB 读取 channel 的 type 和 config_json，才能正确分发。
-			if chRow, qErr := ca.ChannelRepo.GetChannel(bgCtx, chID); qErr == nil && chRow != nil {
-				var cfg map[string]any
-				// 2026-08-02 HE-1 补齐：解析失败此前静默丢弃，cfg 保持 nil 继续下发，
-				// SendReply 会因缺少必要 config（如 webhook URL/token）而静默失败，
-				// 运维无从判断"result_action 没送达"到底是配置损坏还是发送失败。
-				if cfgErr := json.Unmarshal([]byte(chRow.ConfigJSON), &cfg); cfgErr != nil {
-					slog.Warn("automation: channel config_json 解析失败，result_action 可能因缺少配置而投递失败",
-						"automation_id", a.ID, "channel_id", chID, "err", cfgErr)
-				}
-				if err := ca.ChannelMgr.SendReply(bgCtx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply); err != nil {
-					// 呼应上方 2026-08-02 注释：区分"配置解析失败"与"发送本身失败"，
-					// 此前二者都不可见，运维无从判断 result_action 未送达的根因。
-					slog.Warn("automation: result_action send reply failed",
-						"automation_id", a.ID, "channel_id", chID, "err", err)
-				}
-			} else {
-				slog.Warn("automation: channel not found for result_action",
-					"automation_id", a.ID, "channel_id", chID, "err", qErr)
-			}
+		// 处理 result_action 投递
+		if err := ca.DeliverResult(bgCtx, a.ResultAction, sessionID, a.Name, reply); err != nil {
+			slog.Warn("automation: deliver result failed", "automation_id", a.ID, "err", err)
 		}
 	})
 
 	return runID
+}
+
+// DeliverResult 统一结果投递入口（支持 channel:xxx 投递与 session 模式会话消息保存）。
+func (ca *CronAdmin) DeliverResult(ctx context.Context, resultAction, sessionID, title, text string) error {
+	act := strings.TrimSpace(resultAction)
+	if act == "" || act == "silent" || act == "none" {
+		return nil
+	}
+
+	if chID, ok := strings.CutPrefix(act, "channel:"); ok {
+		return ca.deliverToChannel(ctx, chID, text)
+	}
+
+	if act == "session" {
+		return ca.deliverToSession(ctx, sessionID, title, text)
+	}
+
+	return nil
+}
+
+func (ca *CronAdmin) deliverToChannel(ctx context.Context, chID, text string) error {
+	if ca.ChannelRepo == nil || ca.ChannelMgr == nil {
+		return nil
+	}
+	chRow, qErr := ca.ChannelRepo.GetChannel(ctx, chID)
+	if qErr != nil {
+		slog.Warn("automation: channel not found for result_action", "channel_id", chID, "err", qErr)
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("get channel %s", chID), qErr)
+	}
+	if chRow == nil {
+		slog.Warn("automation: channel row is nil for result_action", "channel_id", chID)
+		return apperr.New(apperr.CodeNotFound, fmt.Sprintf("channel %s not found", chID))
+	}
+	var cfg map[string]any
+	if cfgErr := json.Unmarshal([]byte(chRow.ConfigJSON), &cfg); cfgErr != nil {
+		slog.Warn("automation: channel config_json 解析失败，result_action 可能因缺少配置而投递失败",
+			"channel_id", chID, "err", cfgErr)
+	}
+	if err := ca.ChannelMgr.SendReply(ctx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, text); err != nil {
+		slog.Warn("automation: result_action send reply failed", "channel_id", chID, "err", err)
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("send reply to channel %s", chID), err)
+	}
+	return nil
+}
+
+func (ca *CronAdmin) deliverToSession(ctx context.Context, sessionID, title, text string) error {
+	if ca.Chat == nil {
+		return nil
+	}
+	if sessionID == "" {
+		sessionID = NewSessionID()
+	}
+	if err := ca.Chat.EnsureSession(ctx, sessionID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("ensure session %s", sessionID), err)
+	}
+	if title != "" {
+		_ = ca.Chat.UpdateSessionTitle(ctx, sessionID, title)
+	}
+	if err := ca.Chat.SaveMessage(ctx, sessionID, "assistant", text, "", "", 0); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("save assistant message to session %s", sessionID), err)
+	}
+	return nil
 }
 
 // updateAutomationStats 更新 automations 表统计字段，含 Gap-C 电路断路器逻辑。

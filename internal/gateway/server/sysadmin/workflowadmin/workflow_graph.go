@@ -29,6 +29,8 @@ const workflowStepCapabilityType = "workflow_step"
 type stepIntentEnvelope struct {
 	WorkflowID string `json:"workflow_id"`
 	RunID      string `json:"run_id"`
+	Date       string `json:"date,omitempty"`
+	Since      string `json:"since,omitempty"`
 }
 
 // validateStepRetryCompensation 校验 MaxRetries>0 与 CompensationTool 非空互斥，
@@ -70,8 +72,13 @@ func stepLabel(st workflowStep) string {
 //   - IsEntry：无外部（非自环）前驱即入口，与是否附带重试自环无关——自环边会让
 //     该节点入度恒 > 0，仅靠入度分析无法识别为入口，必须显式标记
 //     （见 protocol.WorkflowNodeSpec.IsEntry 注释）。
-func buildGraphSpec(wfType, workflowID, runID string, steps []workflowStep) protocol.WorkflowGraphSpec {
-	envelopeJSON, _ := json.Marshal(stepIntentEnvelope{WorkflowID: workflowID, RunID: runID})
+func buildGraphSpec(wfType, workflowID, runID, date, since string, steps []workflowStep) protocol.WorkflowGraphSpec {
+	envelopeJSON, _ := json.Marshal(stepIntentEnvelope{
+		WorkflowID: workflowID,
+		RunID:      runID,
+		Date:       date,
+		Since:      since,
+	})
 	envelope := string(envelopeJSON)
 
 	idByIndex := make([]string, len(steps))

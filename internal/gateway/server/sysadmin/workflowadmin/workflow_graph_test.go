@@ -36,7 +36,7 @@ func TestBuildGraphSpec_ChainIgnoresDependsOn(t *testing.T) {
 		{ID: "s2", Seq: 1, DependsOn: []string{"s1"}}, // 显式声明也应被忽略
 		{ID: "s3", Seq: 2},
 	}
-	spec := buildGraphSpec("chain", "wf1", "run1", steps)
+	spec := buildGraphSpec("chain", "wf1", "run1", "", "", steps)
 
 	if len(spec.Nodes) != 3 {
 		t.Fatalf("expected 3 nodes, got %d", len(spec.Nodes))
@@ -64,7 +64,7 @@ func TestBuildGraphSpec_DAGHonorsDependsOn(t *testing.T) {
 		{ID: "b", Seq: 1}, // 空 DependsOn，并行入口
 		{ID: "c", Seq: 2, DependsOn: []string{"0", "1"}}, // 汇入 seq0(a)、seq1(b)
 	}
-	spec := buildGraphSpec("dag", "wf1", "run1", steps)
+	spec := buildGraphSpec("dag", "wf1", "run1", "", "", steps)
 
 	if !findNode(t, spec, "a").IsEntry {
 		t.Error("a should be entry (empty depends_on in dag mode)")
@@ -91,7 +91,7 @@ func TestBuildGraphSpec_MaxRetriesAddsSelfLoop(t *testing.T) {
 	steps := []workflowStep{
 		{ID: "s1", Seq: 0, MaxRetries: 2},
 	}
-	spec := buildGraphSpec("chain", "wf1", "run1", steps)
+	spec := buildGraphSpec("chain", "wf1", "run1", "", "", steps)
 
 	node := findNode(t, spec, "s1")
 	if node.MaxVisits != 3 {

@@ -46,6 +46,9 @@ func (h *WorkflowAdmin) CronTickWorkflows(ctx context.Context) {
 		wf.Enabled = enabledInt == 1
 		due = append(due, wf)
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("CronTickWorkflows: iterate failed", "err", err)
+	}
 	rows.Close()
 
 	for i := range due {
@@ -81,7 +84,8 @@ func (h *WorkflowAdmin) loadWorkflowSteps(ctx context.Context, wfID string) []wo
 		SELECT id, workflow_id, seq, name, automation_id, prompt,
 		       reasoning_effort, working_dir, input_from_prev,
 		       depends_on, capability_type, compensation_tool,
-		       compensation_args, max_retries
+		       compensation_args, max_retries,
+		       COALESCE(step_key, ''), COALESCE(kind, ''), COALESCE(config_json, '')
 		FROM workflow_steps WHERE workflow_id=? ORDER BY seq ASC`, wfID)
 	if err != nil {
 		return nil
@@ -98,6 +102,7 @@ func (h *WorkflowAdmin) loadWorkflowSteps(ctx context.Context, wfID string) []wo
 			&st.ReasoningEffort, &st.WorkingDir, &inputInt,
 			&dependsOnJSON, &st.CapabilityType, &st.CompensationTool,
 			&st.CompensationArgs, &st.MaxRetries,
+			&st.StepKey, &st.Kind, &st.ConfigJSON,
 		); err != nil {
 			continue
 		}
@@ -111,6 +116,10 @@ func (h *WorkflowAdmin) loadWorkflowSteps(ctx context.Context, wfID string) []wo
 			slog.Warn("workflow: workflow_steps.depends_on 解析失败，按无依赖降级", "step_id", st.ID, "err", err)
 		}
 		steps = append(steps, st)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("workflow: 遍历 workflow_steps 失败", "workflow_id", wfID, "err", err)
+		return nil
 	}
 	return steps
 }
@@ -127,12 +136,14 @@ func (h *WorkflowAdmin) loadWorkflowStepByID(ctx context.Context, stepID string)
 		SELECT id, workflow_id, seq, name, automation_id, prompt,
 		       reasoning_effort, working_dir, input_from_prev,
 		       depends_on, capability_type, compensation_tool,
-		       compensation_args, max_retries
+		       compensation_args, max_retries,
+		       COALESCE(step_key, ''), COALESCE(kind, ''), COALESCE(config_json, '')
 		FROM workflow_steps WHERE id=?`, stepID).Scan(
 		&st.ID, &st.WorkflowID, &st.Seq, &st.Name, &st.AutomationID, &st.Prompt,
 		&st.ReasoningEffort, &st.WorkingDir, &inputInt,
 		&dependsOnJSON, &st.CapabilityType, &st.CompensationTool,
 		&st.CompensationArgs, &st.MaxRetries,
+		&st.StepKey, &st.Kind, &st.ConfigJSON,
 	)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "load workflow_step by id", err)

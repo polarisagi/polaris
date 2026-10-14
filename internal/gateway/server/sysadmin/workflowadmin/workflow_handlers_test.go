@@ -37,7 +37,10 @@ func TestWorkflowHandlers(t *testing.T) {
 			next_run_at DATETIME,
 			run_count INTEGER,
 			created_at DATETIME,
-			updated_at DATETIME
+			updated_at DATETIME,
+			result_action TEXT DEFAULT 'silent',
+			deliver_from TEXT DEFAULT '',
+			source TEXT DEFAULT 'user'
 		);
 		CREATE TABLE IF NOT EXISTS workflow_steps (
 			id TEXT PRIMARY KEY,
@@ -54,6 +57,9 @@ func TestWorkflowHandlers(t *testing.T) {
 			compensation_tool TEXT DEFAULT '',
 			compensation_args TEXT DEFAULT '',
 			max_retries INTEGER DEFAULT 0,
+			step_key TEXT DEFAULT '',
+			kind TEXT DEFAULT 'agent',
+			config_json TEXT DEFAULT '{}',
 			created_at DATETIME,
 			updated_at DATETIME
 		);
@@ -67,7 +73,8 @@ func TestWorkflowHandlers(t *testing.T) {
 			started_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
 			finished_at     TEXT    NOT NULL DEFAULT '',
 			error_msg       TEXT    NOT NULL DEFAULT '',
-			step_outputs    TEXT    NOT NULL DEFAULT '[]'
+			step_outputs    TEXT    NOT NULL DEFAULT '[]',
+			skipped         INTEGER DEFAULT 0
 		);
 	`)
 	if err != nil {

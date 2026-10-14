@@ -19,7 +19,6 @@ internal/memory/testutil # memory 各子包单测共用的 mock，仅被 _test.g
 internal/sysmgr/locale # CLAUDE.md §项目结构列为「locale/ 本地化」。Detect 做时区 +
 #                    GeoIP 地区探测，8 个符号零引用；它服务的上层功能（用户画像/
 #                    内容个性化）本身尚未落地。去向：上层功能立项时接线，或届时一并删除。
-internal/automation/pipeline # T4 ADR-0114 信息自动化管线纯逻辑引擎。Commit ④ 交付纯逻辑与测试，Commit ⑤ 由 workflowadmin 接线后移出。
 
 
 # ── 已删除（保留记录，防止下轮重新长出来）────────────────────────────────────────
