@@ -61,7 +61,7 @@ T0 ─┬─ A: T1 → T2 → T3 → T5 ─┐
 - [x] T3 automation_* 替换 cron_* — f3e6f4c, e7904fe, 04837ad, dd17169
 - [x] T5 knowledge_ingest — 64364bf
 - [x] T6 pipeline 保存 + dry-run — 54a8def, b0bef73, 2ab5a3f
-- [ ] T7 前端 —
+- [x] T7 前端 — fb696d3
 - [ ] T8 browser_use v2 + 清单迁移 —
 - [ ] T8b 浏览器桥接扩展 + CDP 中继 —
 - [ ] T9 站点配方 —
