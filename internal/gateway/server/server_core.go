@@ -395,6 +395,10 @@ func (s *Server) SetMCPManager(m MCPManager) {
 // SetToolRegistry 注入 ToolRegistry（NewServer 之后、Start 之前调用）。
 func (s *Server) SetToolRegistry(r protocol.ToolRegistry) {
 	s.toolReg = r
+	// 插件设置向导经注册表的 ExecuteAppTool 触发设置工具（与聊天回合同一执行体）。
+	if ex, ok := r.(plugin.AppToolExecutor); ok && s.pluginHandler != nil {
+		s.pluginHandler.AppTools = ex
+	}
 	if s.chatHandler != nil {
 		s.chatHandler.ToolReg = r
 		// GR-9.2-005：同上，内置工具清单（ic.BuiltinTools）依赖 PromptService.ToolReg。

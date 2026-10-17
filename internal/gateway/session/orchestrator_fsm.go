@@ -171,10 +171,7 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 // messageID<=0（写入失败/降级到 outbox 异步兜底，见 Persistence.SaveMessage 注释）
 // 或 viewIDs 为空时跳过——都不是错误，只是本轮没有可关联的东西。
 func (o *orchestrator) linkAppViews(ctx context.Context, sessionID string, viewIDs []string, messageID int64) {
-	if len(viewIDs) == 0 || messageID <= 0 {
-		return
-	}
-	if err := o.persistence.LinkAppViewsToMessage(ctx, sessionID, viewIDs, messageID); err != nil {
+	if err := LinkToolUIViews(ctx, o.persistence, sessionID, viewIDs, messageID); err != nil {
 		slog.Error("session: link app views to message failed", "session", sessionID, "message_id", messageID, "err", err)
 	}
 }
@@ -185,15 +182,7 @@ func (o *orchestrator) linkAppViews(ctx context.Context, sessionID string, viewI
 // viewIDs 只在落库成功时追加：LinkAppViewsToMessage 按 view_id 匹配回填，
 // 数据库里不存在的 id 回填是无意义的空操作。
 func (o *orchestrator) handleToolUIEvent(ctx context.Context, sink Sink, sessionID string, ui *types.ToolUIRef, viewIDs *[]string) {
-	err := o.persistence.SaveAppView(ctx, AppView{
-		ViewID:      ui.ViewID,
-		ServerID:    ui.ServerID,
-		ResourceURI: ui.ResourceURI,
-		ToolName:    ui.ToolName,
-		ToolInput:   ui.ToolInput,
-		ToolResult:  ui.ToolResult,
-	})
-	if err != nil {
+	if err := SaveToolUIView(ctx, o.persistence, sessionID, ui); err != nil {
 		slog.Warn("session: save app view failed", "session", sessionID, "view_id", ui.ViewID, "err", err)
 	} else {
 		*viewIDs = append(*viewIDs, ui.ViewID)

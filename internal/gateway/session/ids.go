@@ -18,3 +18,6 @@ func newSessionID() string {
 	}
 	return "sess_" + hex.EncodeToString(b)
 }
+
+// NewSessionID 供不经聊天回合、但需要预先建会话的调用方（插件设置向导）使用，ID 格式与回合内新建一致。
+func NewSessionID() string { return newSessionID() }

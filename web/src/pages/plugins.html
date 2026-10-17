@@ -133,6 +133,47 @@
                 </template>
               </div>
 
+              <!-- 快捷提示：点击新建会话并发送（清单 interface.defaultPrompt） -->
+              <template x-if="$store.plugins.promptsFor(entry).length > 0">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[10px] uppercase opacity-60" x-text="$store.i18n.t('plugins_try_prompts')"></span>
+                  <div class="flex flex-wrap gap-1">
+                    <template x-for="p in $store.plugins.promptsFor(entry)" :key="p">
+                      <button class="btn btn-xs btn-outline normal-case max-w-full justify-start" :title="p" @click="$store.plugins.usePrompt(p)">
+                        <span class="truncate" x-text="p"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 设置向导：仅插件声明 setupTool 时出现；不可用时禁用并说明原因 -->
+              <template x-if="$store.plugins.setupFor(entry)">
+                <div class="flex flex-wrap items-center gap-2">
+                  <button class="btn btn-xs btn-primary"
+                          :disabled="!$store.plugins.setupFor(entry).setup.available || !!$store.plugins.setupBusy[$store.plugins.setupFor(entry).row.id]"
+                          @click="$store.plugins.runSetup($store.plugins.setupFor(entry).row)">
+                    <span x-show="$store.plugins.setupBusy[$store.plugins.setupFor(entry).row.id]" class="loading loading-spinner loading-xs"></span>
+                    <span x-text="$store.i18n.t('plugins_setup_btn')"></span>
+                  </button>
+                  <span x-show="!$store.plugins.setupFor(entry).setup.available" class="text-[10px] text-warning"
+                        x-text="$store.plugins.reasonText($store.plugins.setupFor(entry).setup.reason)"></span>
+                </div>
+              </template>
+
+              <!-- 依赖插件需先完成设置 -->
+              <template x-for="h in $store.plugins.hintsFor(entry)" :key="h.row.id">
+                <div class="flex flex-wrap items-center gap-2 rounded border border-warning/40 bg-warning/10 p-2">
+                  <span x-show="h.ready === false" class="text-[11px] text-warning flex-1 min-w-0"
+                        x-text="$store.i18n.t('plugins_dep_needs_setup').replace('{0}', h.name)"></span>
+                  <span x-show="h.ready !== false" class="text-[11px] opacity-70 flex-1 min-w-0"
+                        x-text="h.name"></span>
+                  <button class="btn btn-xs btn-warning"
+                          :disabled="!h.row.setup.available || !!$store.plugins.setupBusy[h.row.id]"
+                          @click="$store.plugins.runSetup(h.row)" x-text="$store.i18n.t('plugins_setup_btn')"></button>
+                </div>
+              </template>
+
               <!-- Actions -->
               <div class="card-actions mt-auto pt-4 border-t border-base-300 items-center justify-between">
                 <div class="flex-1 flex gap-2">

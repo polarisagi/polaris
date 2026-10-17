@@ -608,19 +608,12 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 // 条件确保只有"MCP 来源 + 声明了 UI 资源 + 调用成功"的工具才触发，不改变
 // outputContent（模型可见文本）本身。ViewID 每次调用用 crypto/rand 重新生成。
 func (a *Agent) buildToolUIRef(toolName string, args []byte, res *types.ToolResult) *types.ToolUIRef {
-	if res == nil || !res.Success || len(res.MCPRaw) == 0 || a.catalog == nil {
+	if a.catalog == nil {
 		return nil
 	}
 	entry, ok := a.catalog.Lookup(toolName)
-	if !ok || entry.ResourceURI == "" {
+	if !ok {
 		return nil
 	}
-	return &types.ToolUIRef{
-		ViewID:      types.NewToolUIViewID(),
-		ServerID:    entry.MCPServerID,
-		ResourceURI: entry.ResourceURI,
-		ToolName:    entry.MCPToolName,
-		ToolInput:   args,
-		ToolResult:  res.MCPRaw,
-	}
+	return types.BuildToolUIRef("", entry.ResourceURI, entry.MCPServerID, entry.MCPToolName, args, res)
 }

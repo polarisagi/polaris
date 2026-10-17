@@ -227,6 +227,9 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 			return s.mcpMgr.StartFromDB(ctx, serverID)
 		},
 	})
+	if s.chatHandler != nil && s.chatHandler.PersistenceService != nil {
+		s.pluginHandler.SetupStore = s.chatHandler.PersistenceService
+	}
 	mux := http.NewServeMux()
 
 	s.registerRoutes(mux)

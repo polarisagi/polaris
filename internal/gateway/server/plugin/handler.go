@@ -36,6 +36,11 @@ type PluginHandler struct {
 	CatalogSync CatalogSyncer
 	Catalog     CatalogInstaller
 
+	// AppTools / SetupStore 插件设置向导（POST /v1/plugins/{id}/setup、GET .../setup-status）的执行器与落库；
+	// 任一为 nil 时接口返回 503/未知，不做静默降级。
+	AppTools   AppToolExecutor
+	SetupStore SetupStore
+
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
 }

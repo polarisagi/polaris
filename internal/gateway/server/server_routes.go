@@ -276,6 +276,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Codex 应用绑定（ADR-0103 决策四）
 	mux.HandleFunc("GET /v1/plugins/{id}/apps", s.pluginHandler.HandleListPluginApps)
 	mux.HandleFunc("GET /v1/plugins/{id}/dependencies", s.pluginHandler.HandleListPluginDependencies)
+	mux.HandleFunc("POST /v1/plugins/{id}/setup", s.pluginHandler.HandlePluginSetup)
+	mux.HandleFunc("GET /v1/plugins/{id}/setup-status", s.pluginHandler.HandlePluginSetupStatus)
 	mux.HandleFunc("PUT /v1/plugins/{id}/apps/{alias}", s.pluginHandler.HandleBindPluginApp)
 	mux.HandleFunc("GET /v1/plugins/{id}/config", s.pluginHandler.HandleGetPluginConfig)
 	mux.HandleFunc("PUT /v1/plugins/{id}/config", s.pluginHandler.HandleUpdatePluginConfig)

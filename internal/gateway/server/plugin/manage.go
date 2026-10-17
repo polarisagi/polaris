@@ -31,6 +31,8 @@ type pluginRow struct {
 	CatalogID   string `json:"catalog_id"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+	// Manifest 安装时的清单快照，仅供服务端派生 defaultPrompts/setup，不对外序列化。
+	Manifest string `json:"-"`
 }
 
 type pluginMCPStatus struct {
@@ -44,7 +46,9 @@ type pluginMCPStatus struct {
 
 type pluginResponse struct {
 	pluginRow
-	MCPServers []pluginMCPStatus `json:"mcp_servers"`
+	MCPServers     []pluginMCPStatus `json:"mcp_servers"`
+	DefaultPrompts []string          `json:"defaultPrompts"`
+	Setup          *setupInfo        `json:"setup,omitempty"`
 }
 
 // HandleListPlugins 返回已安装插件列表，含子 MCP 运行时状态。
@@ -65,11 +69,10 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	connectedMCPs := make(map[string]protocol.MCPServerInfo)
-	if h.MCPMgr != nil {
-		for _, srv := range h.MCPMgr.ListServers() {
-			connectedMCPs[srv.ID] = srv
-		}
+	servers := h.listServers()
+	connectedMCPs := make(map[string]protocol.MCPServerInfo, len(servers))
+	for _, srv := range servers {
+		connectedMCPs[srv.ID] = srv
 	}
 	mcpByPlugin := h.listPluginMCPStatuses(r, connectedMCPs)
 
@@ -79,7 +82,9 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 		if statuses == nil {
 			statuses = []pluginMCPStatus{}
 		}
-		result = append(result, pluginResponse{pluginRow: p, MCPServers: statuses})
+		resp := pluginResponse{pluginRow: p, MCPServers: statuses, DefaultPrompts: []string{}}
+		h.fillManifestDerived(r.Context(), &resp, servers)
+		result = append(result, resp)
 	}
 
 	httputil.WriteJSON(w, map[string]any{"plugins": result, "total": len(result)})
@@ -89,7 +94,7 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 func (h *PluginHandler) listPluginRows(r *http.Request) ([]pluginRow, error) {
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name, version, display_name, description, publisher, enabled,
-		        trust_tier, mcp_policy, install_path, catalog_id, created_at, updated_at
+		        trust_tier, mcp_policy, install_path, catalog_id, created_at, updated_at, manifest
 		 FROM plugins ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "plugin: 查询 plugins 列表失败", err)
@@ -102,7 +107,7 @@ func (h *PluginHandler) listPluginRows(r *http.Request) ([]pluginRow, error) {
 		var enabledInt int
 		if err := rows.Scan(&p.ID, &p.Name, &p.Version, &p.DisplayName, &p.Description,
 			&p.Publisher, &enabledInt, &p.TrustTier, &p.MCPPolicy, &p.InstallPath,
-			&p.CatalogID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.CatalogID, &p.CreatedAt, &p.UpdatedAt, &p.Manifest); err != nil {
 			continue
 		}
 		p.Enabled = enabledInt == 1

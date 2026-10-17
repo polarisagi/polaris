@@ -157,6 +157,7 @@ retryLoop:
 func (s *ChatPersistenceService) SaveAppView(ctx context.Context, v session.AppView) error {
 	err := s.ChatRepo.SaveAppView(ctx, types.ChatAppViewRow{
 		ViewID:      v.ViewID,
+		SessionID:   v.SessionID,
 		ServerID:    v.ServerID,
 		ResourceURI: v.ResourceURI,
 		ToolName:    v.ToolName,
@@ -241,4 +242,14 @@ func (s *ChatPersistenceService) TouchSession(ctx context.Context, sessionID str
 		return apperr.Wrap(apperr.CodeInternal, "ChatPersistenceService.TouchSession", err)
 	}
 	return nil
+}
+
+// SessionExists 供不经聊天回合的调用方（插件设置向导）校验调用方传入的会话 ID：
+// EnsureSession 对不存在的 ID 会静默新建，无法用来区分"续用已有会话"与"拼错了 ID"。
+func (s *ChatPersistenceService) SessionExists(ctx context.Context, sessionID string) (bool, error) {
+	row, err := s.ChatRepo.GetSession(ctx, sessionID)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "ChatPersistenceService.SessionExists", err)
+	}
+	return row != nil, nil
 }

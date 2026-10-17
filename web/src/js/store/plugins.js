@@ -24,6 +24,11 @@ Alpine.store('plugins', {
   deauthorizing: {}, // serverID -> true（注销授权中）
   mcpServers: [],    // 全量 /v1/mcp-servers 快照（Apps 绑定下拉框用，需要 name 字段）
 
+  // 插件设置向导（setupTool/statusTool，ADR-0103 私有字段）：setupBusy 为设置请求进行中的 pluginRow.id；
+  // setupHints[pluginRow.id] 为"依赖插件需要先完成设置"的提示列表，随 load() 刷新。
+  setupBusy: {},
+  setupHints: {},
+
   // 已安装插件详情（config/apps/dependencies/agents/hooks/channels，见 §插件详情弹窗）。
   // installedIndex: entry.id（目录条目 ID，两种命名空间之一）→ pluginRow（plugins 表行，
   // 詳情类接口唯一认的 ID）。目录条目分两类来源，ID 命名空间不同：
@@ -190,6 +195,103 @@ Alpine.store('plugins', {
       }
     } catch { /* 静默：installedIndex 为空时 onDetail 自然回落到目录条目详情 */ }
     this.loading = false
+    this.loadSetupHints() // 不阻塞列表渲染：依赖状态是附加提示
+  },
+
+  // ── 插件快捷提示 / 设置向导 ───────────────────────────────────────────
+
+  promptsFor(entry) {
+    return this.installedPluginFor(entry)?.defaultPrompts || []
+  },
+
+  // setupFor 返回 { row, setup }；未安装或插件未声明 setupTool 返回 null（不显示设置入口）。
+  setupFor(entry) {
+    const row = this.installedPluginFor(entry)
+    return row?.setup?.tool ? { row, setup: row.setup } : null
+  },
+
+  hintsFor(entry) {
+    const row = this.installedPluginFor(entry)
+    return row ? (this.setupHints[row.id] || []) : []
+  },
+
+  // reasonText 后端机器码 → 本地化文案；未知码回落到通用文案，避免界面露出内部码。
+  reasonText(reason) {
+    const i18n = Alpine.store('i18n')
+    const key = 'plugins_setup_reason_' + reason
+    const text = i18n.t(key)
+    return text === key ? i18n.t('plugins_setup_reason_unknown') : text
+  },
+
+  // usePrompt 新建会话并发送该提示（与 projects.startChat 同一条"新会话 → 进入聊天页"路径）。
+  usePrompt(prompt) {
+    const chat = Alpine.store('chat')
+    chat.newSession()
+    Alpine.store('nav').navigate('chat')
+    chat.submit(prompt)
+  },
+
+  // runSetup 不经 LLM 直接触发插件的设置工具；成功后打开服务端落库的会话，视图由历史回放挂载。
+  async runSetup(row) {
+    if (!row || this.setupBusy[row.id]) return
+    this.setupBusy[row.id] = true
+    try {
+      const r = await fetch(`/v1/plugins/${encodeURIComponent(row.id)}/setup`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      if (!r.ok) {
+        let reason = ''
+        try { reason = (await r.json()).reason || '' } catch { /* 非 JSON 错误体 */ }
+        Alpine.store('toast').show('error', this.reasonText(reason))
+        return
+      }
+      const d = await r.json()
+      await Alpine.store('chat').loadSession(d.session_id)
+      Alpine.store('nav').navigate('chat')
+    } catch (e) {
+      Alpine.store('toast').show('error', `${Alpine.store('i18n').t('plugins_setup_failed')}: ${e.message}`)
+    } finally {
+      delete this.setupBusy[row.id]
+    }
+  },
+
+  // loadSetupHints 对每个已安装插件找出"声明了 setupTool 的依赖插件"。
+  // 有 statusTool 的依赖才查就绪状态，ready===false 才提示；没有 statusTool 的依赖无法判断，
+  // 只给设置入口、不报未就绪。依赖插件均无 setupTool 时整段跳过，避免白打一轮请求。
+  async loadSetupHints() {
+    const byName = {}
+    for (const p of this.installed) if (p.setup?.tool) byName[p.name] = p
+    if (Object.keys(byName).length === 0) { this.setupHints = {}; return }
+    const readyCache = {}
+    const readyOf = async (dep) => {
+      if (!dep.setup.statusTool) return null
+      if (!(dep.id in readyCache)) {
+        readyCache[dep.id] = fetch(`/v1/plugins/${encodeURIComponent(dep.id)}/setup-status`, { headers: authHeaders() })
+          .then(r => (r.ok ? r.json() : null)).then(d => (d && typeof d.ready === 'boolean' ? d.ready : null))
+          .catch(() => null)
+      }
+      return readyCache[dep.id]
+    }
+    const hints = {}
+    for (const p of this.installed) {
+      try {
+        const r = await fetch(`/v1/plugins/${encodeURIComponent(p.id)}/dependencies`, { headers: authHeaders() })
+        if (!r.ok) continue
+        const deps = (await r.json()).dependencies || []
+        const list = []
+        for (const d of deps) {
+          const dep = byName[d.name]
+          if (!dep || dep.id === p.id) continue
+          const ready = await readyOf(dep)
+          if (dep.setup.statusTool && ready !== false) continue
+          list.push({ name: dep.display_name || dep.name, row: dep, ready, hasStatus: !!dep.setup.statusTool })
+        }
+        if (list.length) hints[p.id] = list
+      } catch { /* 静默：依赖提示是附加信息 */ }
+    }
+    this.setupHints = hints
   },
 
   // installedPluginFor 目录条目 → 对应的已安装 pluginRow；找不到（未安装/非 plugin 类型

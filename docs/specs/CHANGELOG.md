@@ -5,6 +5,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-17（插件设置向导 — 含**契约变更**）
+
+- **[契约]** 清单私有命名空间 `extensions["ai.polarisagi"]` 新增 `setupTool`/`statusTool`；`pluginspec.Plugin` 新增 `SetupTool`/`StatusTool`/`DefaultPrompts`（`interface.defaultPrompt` 归一，≤3 条）。
+- **[契约]** 新增 `POST /v1/plugins/{id}/setup`、`GET /v1/plugins/{id}/setup-status`；`GET /v1/plugins` 每项新增 `defaultPrompts`/`setup`。详见 M13-bis §5.3.3、ADR-0103 沿革。
+- **[修复]** `session.AppView` 补 `SessionID`：`ChatPersistenceService.SaveAppView` 此前不写 `chat_app_views.session_id`，聊天回合的视图落库与消息关联恒失败；视图落库/关联抽为 `session.SaveToolUIView`/`LinkToolUIViews`，视图引用提取抽为 `types.BuildToolUIRef`，聊天回合与设置向导共用。
+
 ## 2026-10-14（ADR-0114 信息获取与自动化管线 — 含**规范/契约变更**）
 
 - **[决策]** ADR-0114：确定性步骤管线（0-Token 数据步骤）、Web 双通道（内核 HTTP / 插件浏览器）、Agent 自建自动化。

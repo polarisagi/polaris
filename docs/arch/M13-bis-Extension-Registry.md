@@ -2,7 +2,7 @@
 # 模块 13-bis: Extension Registry
 
 > 扩展系统的市场、安装、路由三层模型。覆盖 Skill / MCP（UI 称「连接器」）/ Plugin / Automation / Agent 五类扩展；分类、双厂商标准、信任模型、安装实例表见 ADR-0103。[HE-Rule-3] [HE-Rule-6]
-<!-- §跳读: 0:9 职责边界 / 1:16 能力分层 / 2:30 扩展类型 / 3:67 技能执行模式 / 4:91 工具懒加载 / 5:101 安装流 / 6:168 信任门控 / 7:214 文件系统 / 8:236 调用路由 / 9:274 自动化 / 10:327 434 跨代理协作 / 11:336 460 学习技能归并 / 12:345 474 表引用 -->
+<!-- §跳读: 0:9 职责边界 / 1:16 能力分层 / 2:30 扩展类型 / 3:67 技能执行模式 / 4:91 工具懒加载 / 5:101 安装流 / 6:191 信任门控 / 7:237 文件系统 / 8:259 调用路由 / 9:297 自动化 / 10:350 434 跨代理协作 / 11:359 460 学习技能归并 / 12:368 474 表引用 -->
 
 ---
 
@@ -133,6 +133,29 @@ MCP 连接一律经 `MCPManager.StartFromDB(serverID)`：`mcp_servers` 行是配
 ### 5.3.2 插件 userConfig
 
 选项定义来自清单（Claude `userConfig`、`channels[].userConfig`、`.mcpb` 的 `user_config`），权威源是 `plugins.manifest` 快照；取值存 `plugin_user_config`（021，`scope` 区分插件级与 channel 服务器级）。`sensitive` 值经 `credential.Vault` 加密落库，API（`GET/PUT /v1/plugins/{id}/config`）只回报 `is_set`；Vault 不可用拒绝写入敏感值。`MCPManager.ConfigFromRow` 经 `PluginVarsResolver` 展开 `${user_config.*}`（channel 级覆盖插件级，默认值兜底），必填缺失则拒绝启动该服务器并返回缺失键名。保存后自动重启该插件已启用的子 MCP。
+
+### 5.3.3 插件设置向导与快捷提示（ADR-0103 沿革 2026-10-17）
+
+插件需要用户在界面里完成一次性设置（如安装浏览器扩展）时，在清单私有命名空间声明两个**插件内裸工具名**（解析在 `pluginspec.loadSetupTools`，进入 `Plugin.SetupTool/StatusTool`，随 `plugins.manifest` 快照落库）：
+
+```json
+"extensions": { "ai.polarisagi": { "setupTool": "bridge_setup", "statusTool": "bridge_status" } }
+```
+
+- `setupTool`：返回带 MCP Apps UI（工具定义 `_meta.ui.resourceUri`，或结果 `_meta.ui.resourceUri`）的设置视图；`statusTool` 必须配合 `setupTool`，返回 `structuredContent.ready`(bool)，可选 `message`(string)。单独出现的 `statusTool` 忽略并出诊断 `polaris.setup.statusWithoutSetup`。
+- 工具可见性：`_meta.ui.visibility` 含 `app` 或 `model` 即可；仅 `app` 的工具不进模型目录，只能经本入口调用。
+- 裸名 → 注册名：`lifecycle.ResolvePluginTool` 按安装期固定的服务器 ID 前缀 `plugin_<pluginID>_` 在该插件的运行时服务器里按 MCP 原始工具名查找，注册名为 `mcp__<scopedServerName>__<sanitize(tool)>`；一个插件可带多个子 MCP，不能靠拼接插件名推断。
+- `Interface.DefaultPrompt`（Codex `interface.defaultPrompt`，字符串或数组）归一为 `Plugin.DefaultPrompts`：去空白/空串、≤3 条（超出截断并出诊断 `codex.interface.defaultPrompt`）。
+
+**接口**（`internal/gateway/server/plugin/setup_handlers.go`）：
+
+| 接口 | 说明 |
+|------|------|
+| `GET /v1/plugins` | 每项新增 `defaultPrompts: []string` 与 `setup: {tool, statusTool, available, reason}`（未声明 setupTool 则无 `setup`）；`reason` ∈ `not_enabled`/`dependency_unmet`/`tool_not_found`/`tool_not_visible`。清单快照来自安装时；升级前已安装的插件需重装/升级才带新字段 |
+| `POST /v1/plugins/{id}/setup` | body `{"session_id"?}`。校验已安装、已启用、依赖满足（`EnableBlocker`）、工具已连接且可见 → `AppToolExecutor.ExecuteAppTool(注册名, "{}", TaintMedium, viewID, sessionID)`（与聊天回合同一执行体，principal=MCPApp，不经 LLM、不计 token）→ `types.BuildToolUIRef` → `session.SaveToolUIView` + `SaveMessage(assistant)` + `session.LinkToolUIViews` → `{session_id, message_id, view_id}`。错误体 `{"error","reason"}`：404 `not_installed`/`tool_not_found`/`session_not_found`，409 `not_enabled`/`dependency_unmet`，403 `tool_not_visible`，502 `no_ui_resource`/`tool_failed`，500 `persist_failed`，503 `not_configured`。无 `session_id` 时仅在成功后才建会话，失败不留空会话 |
+| `GET /v1/plugins/{id}/setup-status` | 执行 `statusTool`（5s 超时，viewID/sessionID 置空）→ `{ready: bool, message}`；未声明、插件未就绪、工具失败、超时、缺 `ready` 一律 `{ready: null, reason?}`（200，前端轮询不应见 5xx）；插件未安装 404 |
+
+前端（`web/src/pages/plugins.html` + `store/plugins.js`）：已安装插件卡片展示 `defaultPrompts`（点击新建会话并 `chat.submit`）、「设置」按钮（`setup.available=false` 时禁用并显示 `plugins_setup_reason_*`）；对声明了 `setupTool` 的依赖插件，有 `statusTool` 时仅 `ready===false` 报"依赖插件 {name} 需要完成设置"，无 `statusTool` 只给设置入口。
 
 ### 5.4 Automation
 

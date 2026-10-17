@@ -40,6 +40,10 @@ type Plugin struct {
 	Dependencies   []Dependency           `json:"dependencies,omitempty"`
 	Unsupported    []UnsupportedComponent `json:"unsupported,omitempty"`
 	ScheduledTasks []ScheduledTask        `json:"scheduled_tasks,omitempty"`
+	// SetupTool / StatusTool 插件自带的"设置向导"与"就绪状态"工具的插件内裸名（extensions["ai.polarisagi"]）。
+	SetupTool      string   `json:"setup_tool,omitempty"`
+	StatusTool     string   `json:"status_tool,omitempty"`
+	DefaultPrompts []string `json:"default_prompts,omitempty"`
 
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
@@ -107,6 +111,8 @@ func loadComponents(p *Plugin, docs []manifestDoc, opts LoadOptions, ds *diagnos
 	p.Dependencies = loadDependencies(docs, ds)
 	p.Unsupported = detectUnsupported(p.Root, docs)
 	p.ScheduledTasks = loadScheduledTasks(docs, ds)
+	p.SetupTool, p.StatusTool = loadSetupTools(docs, ds)
+	p.DefaultPrompts = normalizeDefaultPrompts(p.Interface, firstDocPath(docs), ds)
 }
 
 func (p *Plugin) isEmpty() bool {

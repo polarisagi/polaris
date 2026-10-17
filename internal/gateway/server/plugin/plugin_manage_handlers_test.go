@@ -35,6 +35,7 @@ func TestPluginManageHandlers(t *testing.T) {
 			catalog_id TEXT,
 			enabled INTEGER,
 			mcp_policy TEXT,
+			manifest TEXT NOT NULL DEFAULT '{}',
 			status TEXT,
 			created_at DATETIME,
 			updated_at DATETIME

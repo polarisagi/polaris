@@ -304,3 +304,24 @@ type ToolUIRef struct {
 	ToolResult  json.RawMessage `json:"tool_result,omitempty"`
 	Cancelled   bool            `json:"cancelled,omitempty"`
 }
+
+// BuildToolUIRef 判定一次 MCP 工具调用是否产出 UI 视图引用：仅"调用成功 + 有 MCP 原始结果 +
+// 声明了 UI 资源"三者同时成立才返回非 nil。聊天回合（Agent）与无 LLM 的直接触发
+// （插件设置向导）共用本函数，避免两处各写一份提取条件后逐步漂移。
+// viewID 为空时新生成；调用方需要在执行前就知道 viewID（用于审计关联）时自行生成后传入。
+func BuildToolUIRef(viewID, resourceURI, serverID, toolName string, args []byte, res *ToolResult) *ToolUIRef {
+	if res == nil || !res.Success || len(res.MCPRaw) == 0 || resourceURI == "" {
+		return nil
+	}
+	if viewID == "" {
+		viewID = NewToolUIViewID()
+	}
+	return &ToolUIRef{
+		ViewID:      viewID,
+		ServerID:    serverID,
+		ResourceURI: resourceURI,
+		ToolName:    toolName,
+		ToolInput:   args,
+		ToolResult:  res.MCPRaw,
+	}
+}

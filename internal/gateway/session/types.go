@@ -204,6 +204,7 @@ type Persistence interface {
 // 的输入形状；与 types.ToolUIRef 字段对应，但独立声明——本包零 net/http/协议依赖，
 // 不直接复用 pkg/types 里可能演进的事件载荷类型，见文件头 HE-3 说明）。
 type AppView struct {
+	SessionID   string
 	ViewID      string
 	ServerID    string
 	ResourceURI string
