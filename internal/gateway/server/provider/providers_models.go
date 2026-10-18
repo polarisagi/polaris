@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
-
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -195,4 +195,24 @@ func (h *ProviderHandler) HandleSetModelRoles(w http.ResponseWriter, r *http.Req
 	}
 	h.reloadProviders()
 	httputil.WriteJSON(w, map[string]string{"status": "ok"})
+}
+
+// HandleRefreshModels POST /v1/providers/{providerID}/models/refresh
+// 触发对指定厂商的实时模型探测刷新（ADR-0115 WP3）。
+func (h *ProviderHandler) HandleRefreshModels(w http.ResponseWriter, r *http.Request) {
+	providerID := r.PathValue("providerID")
+	if providerID == "" {
+		httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "providerID required"), http.StatusBadRequest)
+		return
+	}
+	if h.CatalogManager == nil {
+		httputil.RespondError(w, "", apperr.New(apperr.CodeUnimplemented, "model catalog manager not available"), http.StatusNotImplemented)
+		return
+	}
+	models, err := h.CatalogManager.RefreshProvider(r.Context(), providerID)
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+	httputil.WriteJSON(w, map[string]any{"models": models, "count": len(models)})
 }

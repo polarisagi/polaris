@@ -78,18 +78,28 @@ func (e *providerEntry) recordOutcome(success bool, onRecovery func()) {
 
 // ProviderRegistry 注册/注销 Provider，支持热更新。
 type ProviderRegistry struct {
-	mu         sync.RWMutex
-	entries    map[string]*providerEntry
-	onRecovery func(providerName string)     // 可选：Provider 熔断恢复时的回调
-	cfg        config.M1RouterThresholds     // 熔断器配置（来自 M1RouterThresholds TOML）
-	usage      atomic.Pointer[usageSink]     // llm_calls 记账队列；nil 时只跳过记账（见 InjectUsageRecorder）
-	cache      atomic.Pointer[responseCache] // 确定性后台调用精确响应缓存；nil 时不缓存（见 InjectResponseCache）
+	mu             sync.RWMutex
+	entries        map[string]*providerEntry
+	onRecovery     func(providerName string)     // 可选：Provider 熔断恢复时的回调
+	cfg            config.M1RouterThresholds     // 熔断器配置（来自 M1RouterThresholds TOML）
+	usage          atomic.Pointer[usageSink]     // llm_calls 记账队列；nil 时只跳过记账（见 InjectUsageRecorder）
+	cache          atomic.Pointer[responseCache] // 确定性后台调用精确响应缓存；nil 时不缓存（见 InjectResponseCache）
+	factory        ProviderFactory
+	dynamicEntries map[string]*providerEntry // LRU 缓存：key 为 ref
+	dynamicKeys    []string                  // LRU 键顺序
+	dynamicMax     int                       // LRU 上限
 }
 
 func NewProviderRegistry(cfg config.M1RouterThresholds) *ProviderRegistry {
+	maxDynamic := cfg.ModelDynamicCacheSize
+	if maxDynamic <= 0 {
+		maxDynamic = 32
+	}
 	return &ProviderRegistry{
-		entries: make(map[string]*providerEntry),
-		cfg:     cfg,
+		entries:        make(map[string]*providerEntry),
+		cfg:            cfg,
+		dynamicEntries: make(map[string]*providerEntry),
+		dynamicMax:     maxDynamic,
 	}
 }
 
@@ -140,6 +150,8 @@ func (r *ProviderRegistry) UnregisterAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.entries = make(map[string]*providerEntry)
+	r.dynamicEntries = make(map[string]*providerEntry)
+	r.dynamicKeys = nil
 }
 
 // ReplaceAll 以 build 回调构建的新条目集合原子替换整个注册表（GD-13-002）。
@@ -152,6 +164,8 @@ func (r *ProviderRegistry) ReplaceAll(build func(register func(name, displayName
 	})
 	r.mu.Lock()
 	r.entries = next
+	r.dynamicEntries = make(map[string]*providerEntry)
+	r.dynamicKeys = nil
 	r.mu.Unlock()
 }
 

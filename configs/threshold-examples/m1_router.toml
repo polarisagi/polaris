@@ -34,3 +34,6 @@ window_breaker_cooldown_sec = 30
 'openai.prompt_cache_retention' = ''
 'anthropic.inline_nonleading_system' = true
 'google.inline_nonleading_system' = true
+'model_catalog.refresh_hours' = 24
+model_dynamic_cache_size = 32
+'model_select.max_output_price_per_mtok' = 0.0

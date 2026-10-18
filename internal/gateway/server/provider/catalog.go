@@ -39,53 +39,18 @@ type CatalogModel struct {
 // HandleListCatalogProviders GET /v1/catalog/providers
 // 返回内置厂商字典（含各厂商预设模型列表），供前端展示选择器。
 func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, display_name, provider_type, default_base_url, is_local, display_order
-		   FROM sys_providers ORDER BY display_order`)
+	provMap, order, err := h.fetchCatalogProviders(r.Context())
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	provMap := make(map[string]*CatalogProvider)
-	var order []string
-	for rows.Next() {
-		p := &CatalogProvider{Models: []CatalogModel{}}
-		var isLocal int
-		if err := rows.Scan(&p.ID, &p.DisplayName, &p.ProviderType, &p.DefaultBaseURL, &isLocal, &p.DisplayOrder); err != nil {
-			httputil.RespondError(w, "", err, http.StatusInternalServerError)
-			return
-		}
-		p.IsLocal = isLocal == 1
-		provMap[p.ID] = p
-		order = append(order, p.ID)
-	}
-	if err := rows.Err(); err != nil {
+	if err := h.fetchCatalogProviderModels(r.Context(), provMap); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
-	mrows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, catalog_provider_id, model_id, display_name, recommended_role, display_order
-		   FROM sys_provider_models ORDER BY catalog_provider_id, display_order`)
-	if err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
-		return
-	}
-	defer mrows.Close()
-	for mrows.Next() {
-		m := CatalogModel{}
-		var provID string
-		if err := mrows.Scan(&m.ID, &provID, &m.ModelID, &m.DisplayName, &m.RecommendedRole, &m.DisplayOrder); err != nil {
-			httputil.RespondError(w, "", err, http.StatusInternalServerError)
-			return
-		}
-		if p, ok := provMap[provID]; ok {
-			p.Models = append(p.Models, m)
-		}
-	}
-	if err := mrows.Err(); err != nil {
+	if err := h.mergeDiscoveredCatalogModels(r.Context(), provMap); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
@@ -96,6 +61,58 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 	}
 
 	httputil.WriteJSON(w, map[string]any{"providers": out})
+}
+
+func (h *ProviderHandler) fetchCatalogProviders(ctx context.Context) (map[string]*CatalogProvider, []string, error) {
+	rows, err := h.DB.QueryContext(ctx,
+		`SELECT id, display_name, provider_type, default_base_url, is_local, display_order
+		   FROM sys_providers ORDER BY display_order`)
+	if err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "fetchCatalogProviders: query sys_providers", err)
+	}
+	defer rows.Close()
+
+	provMap := make(map[string]*CatalogProvider)
+	var order []string
+	for rows.Next() {
+		p := &CatalogProvider{Models: []CatalogModel{}}
+		var isLocal int
+		if err := rows.Scan(&p.ID, &p.DisplayName, &p.ProviderType, &p.DefaultBaseURL, &isLocal, &p.DisplayOrder); err != nil {
+			return nil, nil, apperr.Wrap(apperr.CodeInternal, "fetchCatalogProviders: scan sys_providers", err)
+		}
+		p.IsLocal = isLocal == 1
+		provMap[p.ID] = p
+		order = append(order, p.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "fetchCatalogProviders: rows.Err", err)
+	}
+	return provMap, order, nil
+}
+
+func (h *ProviderHandler) fetchCatalogProviderModels(ctx context.Context, provMap map[string]*CatalogProvider) error {
+	mrows, err := h.DB.QueryContext(ctx,
+		`SELECT id, catalog_provider_id, model_id, display_name, recommended_role, display_order
+		   FROM sys_provider_models ORDER BY catalog_provider_id, display_order`)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "fetchCatalogProviderModels: query sys_provider_models", err)
+	}
+	defer mrows.Close()
+
+	for mrows.Next() {
+		m := CatalogModel{}
+		var provID string
+		if err := mrows.Scan(&m.ID, &provID, &m.ModelID, &m.DisplayName, &m.RecommendedRole, &m.DisplayOrder); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "fetchCatalogProviderModels: scan sys_provider_models", err)
+		}
+		if p, ok := provMap[provID]; ok {
+			p.Models = append(p.Models, m)
+		}
+	}
+	if err := mrows.Err(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "fetchCatalogProviderModels: rows.Err", err)
+	}
+	return nil
 }
 
 // fromCatalogRequest POST /v1/providers/from-catalog 请求体。
@@ -267,5 +284,7 @@ func (h *ProviderHandler) fetchCatalogModels(ctx context.Context, catalogID stri
 	if err := mrows.Err(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels rows error", err)
 	}
-	return catalogModels, nil
+
+	// 合并该 catalogID 下已探测发现的模型（ADR-0115 WP3）
+	return h.mergeDiscoveredForCatalog(ctx, catalogID, catalogModels)
 }

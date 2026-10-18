@@ -65,6 +65,7 @@ type InferRequest struct {
 	ThinkingMode   ThinkingMode    // TTC 推理深度控制（None=不传，High=最大扩展思考）
 	ThinkingBudget int
 	ModelPool      string // 目标 Model Pool（Provider 角色/role），空串表示不限定。由 WithModelPool 选项填充（GD-13-005）
+	ProviderRef    string // 目标 Provider/Model 引用（ADR-0115 WP3）：<记录ID前缀> 或 <provider_id>/<model_id>
 	// ToolChoice 工具选择约束（ADR-0105 决策三）："" = 不下发（Provider 默认 auto）；
 	// "none" = 带 tools 定义但禁止调用（使各阶段 tools 前缀一致而不触发工具）；"auto"|"required"。
 	// 仅在 Tools 非空时有意义；不支持的适配器忽略。
@@ -159,6 +160,7 @@ InferOptions struct {
 	ThinkingBudget int
 	CacheHints     *SemanticCacheHints
 	ModelPool      string // 目标 Model Pool（Provider 角色/role），空串表示不限定（GD-13-005）
+	ProviderRef    string // 目标 Provider/Model 引用（ADR-0115 WP3）
 	// Purpose 调用用途（perceive/plan/consolidate_summary/...），只用于 llm_calls 记账归因，
 	// 不参与路由与请求构造。空串记为 "unspecified"。
 	Purpose string
