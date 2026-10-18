@@ -228,4 +228,10 @@ var (
 	InstrWorkflowStepDurationMs   metric.Float64Histogram
 	InstrWorkflowStepsTotal       metric.Int64Counter
 	InstrWorkflowRunsSkippedTotal metric.Int64Counter
+
+	// WP2 / ADR-0115: 智能体自主循环指标
+	InstrAgentLoopRoundsTotal         metric.Int64Counter
+	InstrAgentLoopTurnDurationSeconds metric.Float64Histogram
+	InstrAgentLoopTerminationTotal    metric.Int64Counter // label: reason=auto|finish|budget|guard|interrupt
+	InstrAgentObservationMaskedTotal  metric.Int64Counter
 )

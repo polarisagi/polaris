@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -27,6 +28,7 @@ type Transition struct {
 	From    types.AgentState
 	Trigger types.AgentTrigger
 	To      types.AgentState
+	Target  func(ctx context.Context, sCtx *StateContext) types.AgentState // 若非空，覆盖静态 To 目标状态
 	Guard   func(ctx context.Context, sCtx *StateContext) bool
 	// Effects 返回此转移产生的副作用（DeterministicEffect 或 LLMFillEffect）。
 	Effects func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error)
@@ -263,6 +265,25 @@ type StateContext struct {
 	// 续跑时跳过已完成节点直接从委派节点下游继续，而非从头重跑或直接
 	// 终态截断。正常（非恢复）路径下保持为空，无行为变化。
 	CompletedNodeIDs []string
+
+	// Agentic Loop 状态字段（WP2 / ADR-0115）
+	LoopRound                      int
+	LoopMessages                   []types.Message
+	LoopRunawayLimit               int
+	LoopTurnBudgetUSD              float64
+	LoopTurnBudgetTokens           int
+	LoopTurnWallSeconds            int
+	LoopObservationMaskAfterRounds int
+	LoopObservationMaskBatch       int
+	LoopCompletion                 string
+	LoopTurnStartTime              time.Time
+	LoopSteerQueue                 []string
+	LoopPendingToolCalls           []types.InferToolCall
+	LoopLastUsageTokens            int
+	LoopLastUsageCost              float64
+	LoopLastWallSeconds            float64
+	LoopWarningInjected            bool
+	LoopSummary                    string
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
@@ -306,6 +327,9 @@ func NewStateMachine(cb ContextBuilder) *StateMachine {
 		stashedTriggers:            make([]types.AgentTrigger, 0),
 	}
 	sm.registerTransitions()
+	if config.CurrentThresholds().M4Kernel.LoopMode == "agentic" {
+		sm.registerLoopTransitions()
+	}
 	return sm
 }
 
@@ -618,11 +642,17 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 	}
 
 	// 记录历史
+	toState := t.To
+	if t.Target != nil {
+		if custom := t.Target(ctx, sCtx); custom != 0 {
+			toState = custom
+		}
+	}
 	sm.history = append(sm.history, current)
-	sm.current = t.To
+	sm.current = toState
 
 	if sm.sessionEventWriter != nil {
-		sm.sessionEventWriter.WriteStateTransEvent(sCtx.SessionID, fmt.Sprintf("%d", t.To))
+		sm.sessionEventWriter.WriteStateTransEvent(sCtx.SessionID, fmt.Sprintf("%d", toState))
 	}
 
 	return effects, nil

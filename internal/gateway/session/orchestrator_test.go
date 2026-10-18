@@ -272,6 +272,7 @@ func (a *fakeAgentController) SubscribeStream(ctx context.Context) <-chan types.
 }
 func (a *fakeAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) {}
 func (a *fakeAgentController) SetConversationHistory(h []types.Message)        { a.history = h }
+func (a *fakeAgentController) Steer(text string) bool                          { return true }
 
 // fakeAgentPool：Acquire 返回预置的 fakeAgentController；AcquireHeadless 返回
 // 预置的 AgentResult 或 error。

@@ -2,6 +2,7 @@ package sysadmin
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -54,11 +55,13 @@ func (h *SysAdminHandler) HandleListCheckpoints(w http.ResponseWriter, r *http.R
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"project_dir": projectDir,
 		"snapshots":   res,
 		"count":       len(res),
-	})
+	}); err != nil {
+		slog.Warn("checkpoint: failed to encode list response", "err", err)
+	}
 }
 
 // HandleRestoreCheckpoint 处理 POST /v1/checkpoints/restore（ADR-0115 WP1）。
@@ -92,9 +95,11 @@ func (h *SysAdminHandler) HandleRestoreCheckpoint(w http.ResponseWriter, r *http
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"restored_to": req.Hash,
 		"project_dir": req.ProjectDir,
 		"message":     "checkpoint restored successfully",
-	})
+	}); err != nil {
+		slog.Warn("checkpoint: failed to encode restore response", "err", err)
+	}
 }

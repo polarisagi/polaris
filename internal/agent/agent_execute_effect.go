@@ -488,6 +488,45 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 							"session_id", a.sCtx.SessionID, "err", convErr)
 					}
 				}
+				if a.sm.Current() == types.AgentStateLoop {
+					a.sCtx.Mu.Lock()
+					if len(resp.ToolCalls) > 0 {
+						a.sCtx.LoopPendingToolCalls = resp.ToolCalls
+						parts := make([]any, 0, len(resp.ToolCalls)+1)
+						if resp.Content != "" {
+							parts = append(parts, map[string]any{"type": "text", "text": resp.Content})
+						}
+						for _, tc := range resp.ToolCalls {
+							var input any
+							if len(tc.Input) > 0 {
+								if err := json.Unmarshal(tc.Input, &input); err != nil {
+									input = map[string]any{"raw": string(tc.Input)}
+								}
+							}
+							if input == nil {
+								input = map[string]any{}
+							}
+							parts = append(parts, map[string]any{
+								"type":  "tool_use",
+								"id":    tc.ID,
+								"name":  tc.Name,
+								"input": input,
+							})
+						}
+						a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
+							Role:    "assistant",
+							Content: resp.Content,
+							Parts:   parts,
+						})
+					} else if resp.Content != "" {
+						a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
+							Role:    "assistant",
+							Content: resp.Content,
+						})
+					}
+					a.sCtx.LoopLastUsageTokens = resp.Usage.InputTokens + resp.Usage.OutputTokens
+					a.sCtx.Mu.Unlock()
+				}
 
 				// GR-4-005 复核修复：仅做可观测性埋点，不在此处改变控制流。
 				// 原本考虑过在这里校验失败时直接短路到 OnFailure，但 OnSuccess 的具体实现

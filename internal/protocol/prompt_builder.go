@@ -57,6 +57,8 @@ type PromptBuilder interface {
 	// level >= TaintMedium 时内部强制 Spotlighting 包裹，禁止调用方自行绕过；
 	// 空内容（ts.Value()==""）直接跳过。
 	WriteExternalCatalog(kind string, ts taint.TaintedString)
+	// WriteTurnMessage 将一条回合内部消息写入 ZoneTaintedData 与 LayerTurn（用于 Agentic 循环消息流）。
+	WriteTurnMessage(msg types.Message)
 	// Build 输出最终组装完毕可用于 InferRequest 的消息序列。
 	Build() []types.Message
 }

@@ -35,6 +35,9 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	if p.SafeDialerAuditOnly {
 		t.Error("standard: SafeDialerAuditOnly should be false")
 	}
+	if p.RunawayGuardDefaultRounds != 200 {
+		t.Errorf("standard: RunawayGuardDefaultRounds should be 200, got %d", p.RunawayGuardDefaultRounds)
+	}
 }
 
 func TestProfilePolicy_Full(t *testing.T) {
@@ -70,6 +73,9 @@ func TestProfilePolicy_Full(t *testing.T) {
 	if !p.SafeDialerAuditOnly {
 		t.Error("full: SafeDialerAuditOnly should be true")
 	}
+	if p.RunawayGuardDefaultRounds != 0 {
+		t.Errorf("full: RunawayGuardDefaultRounds should be 0, got %d", p.RunawayGuardDefaultRounds)
+	}
 }
 
 func TestProfilePolicy_Hardened(t *testing.T) {
@@ -100,6 +106,9 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if p.SafeDialerAuditOnly {
 		t.Error("hardened: SafeDialerAuditOnly should be false")
+	}
+	if p.RunawayGuardDefaultRounds != 50 {
+		t.Errorf("hardened: RunawayGuardDefaultRounds should be 50, got %d", p.RunawayGuardDefaultRounds)
 	}
 }
 

@@ -51,6 +51,8 @@ func (s *sseSink) Emit(ev session.Event) error {
 		WriteSSE(s.w, s.flusher, "error", ev.Payload)
 	case session.KindSystemNotice:
 		WriteSSE(s.w, s.flusher, "system_notice", ev.Payload)
+	case session.KindSteerAccepted:
+		WriteSSE(s.w, s.flusher, "steer_accepted", ev.Payload)
 	}
 	return nil
 }

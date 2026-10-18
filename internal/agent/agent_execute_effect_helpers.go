@@ -87,6 +87,12 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
+	// S_LOOP_EXEC 阶段拦截：调用 Agent 层循环工具执行与校验
+	if a.sm.Current() == types.AgentStateLoopExec {
+		execErr := a.runExecuteLoop(ctx)
+		return "", execErr, true
+	}
+
 	// S_EXECUTE 阶段拦截：调用 Agent 层 DAG 执行（可访问 toolRegistry 与完整 sCtx）。
 	// 同理，由 runExecuteDAG 自行推进 FSM（ExecuteDone / ExecuteFail）。
 	if a.sm.Current() == types.AgentStateExecute { //nolint:nestif

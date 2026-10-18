@@ -43,6 +43,8 @@ const (
 	// KindSystemNotice 对应 wire 事件 "system_notice"（Agent 池资源降级提示，
 	// 独立事件名，非嵌套在 KindStatus 的 "status" 事件内），Payload 直接透传。
 	KindSystemNotice
+	// KindSteerAccepted 对应 wire 事件 "steer_accepted"（回合内插话被接纳通知），Payload 直接透传。
+	KindSteerAccepted
 )
 
 // Event 领域事件。Text 用于 KindDelta 增量文本；Payload 用于 KindStatus /

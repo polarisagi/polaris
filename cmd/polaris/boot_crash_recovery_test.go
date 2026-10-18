@@ -71,6 +71,7 @@ func (f *fakeAgentController) CurrentState() types.AgentState                  {
 func (f *fakeAgentController) ConfigInfo() map[string]any                      { return nil }
 func (f *fakeAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) { f.replayCalls = calls }
 func (f *fakeAgentController) SetConversationHistory(history []types.Message)  {}
+func (f *fakeAgentController) Steer(text string) bool                          { return true }
 func (f *fakeAgentController) SubscribeStream(_ context.Context) <-chan types.AgentStreamEvent {
 	return f.streamCh
 }

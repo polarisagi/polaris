@@ -77,6 +77,10 @@ type Policy struct {
 	// SafeDialerAuditOnly SafeDialer/SSRFGuard 是否只记录不阻断。
 	// full 档 true（放行公网与内网，只审计）；standard/hardened 档 false（保持阻断）。
 	SafeDialerAuditOnly bool
+
+	// RunawayGuardDefaultRounds agentic 循环单回合失控保护默认轮数上限（ADR-0115 WP2）。
+	// full 档 0（不限）；standard 档 200；hardened 档 50。
+	RunawayGuardDefaultRounds int
 }
 
 // ProfilePolicy 将信任档位映射为安全策略快照（ADR-0115 WP1 决策二）。
@@ -89,45 +93,48 @@ func ProfilePolicy(profile TrustProfile) Policy {
 	switch p {
 	case ProfileFull:
 		return Policy{
-			Profile:                 ProfileFull,
-			SandboxDisabled:         true,  // 宿主直接执行（无路径白名单）
-			ForceContainerSandbox:   false, // 互斥
-			AllowedPathsOpen:        true,  // bash 不受路径白名单限制
-			HITLAutoApprove:         true,  // 高风险前自动放行+审计+快照
-			TaintEgressBlockEnabled: false, // 只记录不阻断
-			PIITokenizeEnabled:      false, // 关闭减少摩擦
-			RunCmdWhitelistEnabled:  false, // 宿主执行，白名单无意义
-			CheckpointEnabled:       true,  // 高风险前写前快照
-			SecretGetEnabled:        true,  // 凭据可读
-			SafeDialerAuditOnly:     true,  // 放行公网+内网，只审计
+			Profile:                   ProfileFull,
+			SandboxDisabled:           true,  // 宿主直接执行（无路径白名单）
+			ForceContainerSandbox:     false, // 互斥
+			AllowedPathsOpen:          true,  // bash 不受路径白名单限制
+			HITLAutoApprove:           true,  // 高风险前自动放行+审计+快照
+			TaintEgressBlockEnabled:   false, // 只记录不阻断
+			PIITokenizeEnabled:        false, // 关闭减少摩擦
+			RunCmdWhitelistEnabled:    false, // 宿主执行，白名单无意义
+			CheckpointEnabled:         true,  // 高风险前写前快照
+			SecretGetEnabled:          true,  // 凭据可读
+			SafeDialerAuditOnly:       true,  // 放行公网+内网，只审计
+			RunawayGuardDefaultRounds: 0,     // 不限轮数
 		}
 	case ProfileHardened:
 		return Policy{
-			Profile:                 ProfileHardened,
-			SandboxDisabled:         false,
-			ForceContainerSandbox:   true, // 强制容器沙箱
-			AllowedPathsOpen:        false,
-			HITLAutoApprove:         false, // 严格 HITL 审批
-			TaintEgressBlockEnabled: true,  // 出站记录+阻断
-			PIITokenizeEnabled:      true,  // 强制 PII 保护
-			RunCmdWhitelistEnabled:  true,  // 白名单严格
-			CheckpointEnabled:       false,
-			SecretGetEnabled:        false,
-			SafeDialerAuditOnly:     false, // 保持阻断
+			Profile:                   ProfileHardened,
+			SandboxDisabled:           false,
+			ForceContainerSandbox:     true, // 强制容器沙箱
+			AllowedPathsOpen:          false,
+			HITLAutoApprove:           false, // 严格 HITL 审批
+			TaintEgressBlockEnabled:   true,  // 出站记录+阻断
+			PIITokenizeEnabled:        true,  // 强制 PII 保护
+			RunCmdWhitelistEnabled:    true,  // 白名单严格
+			CheckpointEnabled:         false,
+			SecretGetEnabled:          false,
+			SafeDialerAuditOnly:       false, // 保持阻断
+			RunawayGuardDefaultRounds: 50,    // 严格限制
 		}
 	default: // ProfileStandard
 		return Policy{
-			Profile:                 ProfileStandard,
-			SandboxDisabled:         false,
-			ForceContainerSandbox:   false,
-			AllowedPathsOpen:        false,
-			HITLAutoApprove:         false,
-			TaintEgressBlockEnabled: true, // 现状：阻断
-			PIITokenizeEnabled:      true, // 现状：开启
-			RunCmdWhitelistEnabled:  true, // 现状：白名单
-			CheckpointEnabled:       false,
-			SecretGetEnabled:        false,
-			SafeDialerAuditOnly:     false,
+			Profile:                   ProfileStandard,
+			SandboxDisabled:           false,
+			ForceContainerSandbox:     false,
+			AllowedPathsOpen:          false,
+			HITLAutoApprove:           false,
+			TaintEgressBlockEnabled:   true, // 现状：阻断
+			PIITokenizeEnabled:        true, // 现状：开启
+			RunCmdWhitelistEnabled:    true, // 现状：白名单
+			CheckpointEnabled:         false,
+			SecretGetEnabled:          false,
+			SafeDialerAuditOnly:       false,
+			RunawayGuardDefaultRounds: 200, // 默认防失控
 		}
 	}
 }

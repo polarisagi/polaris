@@ -100,7 +100,9 @@ func (s *Store) Create(ctx context.Context, message string) (string, error) {
 
 	// 超出保留数时裁剪旧快照
 	if s.retentionCount > 0 {
-		_ = s.prune(ctx)
+		if pErr := s.prune(ctx); pErr != nil {
+			slog.Warn("checkpoint: prune failed", "err", pErr)
+		}
 	}
 	return hash, nil
 }
@@ -148,7 +150,9 @@ func (s *Store) Restore(ctx context.Context, hash string) error {
 	)
 
 	// 先做一次快照，保留恢复前状态
-	_, _ = s.Create(ctx, fmt.Sprintf("pre-restore: before restoring to %s", hash[:min8(hash)]))
+	if _, sErr := s.Create(ctx, fmt.Sprintf("pre-restore: before restoring to %s", hash[:min8(hash)])); sErr != nil {
+		slog.Warn("checkpoint: pre-restore backup failed", "err", sErr)
+	}
 
 	if err := s.git(ctx, "checkout", hash, "--", "."); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("checkpoint: restore to %s", hash), err)
@@ -181,8 +185,12 @@ func (s *Store) init() error {
 		return apperr.Wrap(apperr.CodeInternal, "git init", err)
 	}
 	// 设置 user 避免 commit 报错（不继承全局 git config，保持隔离）
-	_ = exec.Command("git", "--git-dir="+s.gitDir, "config", "user.email", "polaris-checkpoint@local").Run()
-	_ = exec.Command("git", "--git-dir="+s.gitDir, "config", "user.name", "polaris-checkpoint").Run()
+	if err := exec.Command("git", "--git-dir="+s.gitDir, "config", "user.email", "polaris-checkpoint@local").Run(); err != nil {
+		slog.Warn("checkpoint: init git config user.email failed", "err", err)
+	}
+	if err := exec.Command("git", "--git-dir="+s.gitDir, "config", "user.name", "polaris-checkpoint").Run(); err != nil {
+		slog.Warn("checkpoint: init git config user.name failed", "err", err)
+	}
 	return nil
 }
 
@@ -220,8 +228,12 @@ func (s *Store) prune(ctx context.Context) error {
 	}
 	// 用 grafts 机制截断历史：让 retentionCount-th commit 无父节点
 	cutoff := hashes[s.retentionCount-1]
-	_ = s.git(ctx, "replace", "--graft", cutoff)
-	_ = s.git(ctx, "gc", "--prune=now", "-q")
+	if err := s.git(ctx, "replace", "--graft", cutoff); err != nil {
+		slog.Warn("checkpoint: prune graft failed", "err", err)
+	}
+	if err := s.git(ctx, "gc", "--prune=now", "-q"); err != nil {
+		slog.Warn("checkpoint: prune gc failed", "err", err)
+	}
 	return nil
 }
 

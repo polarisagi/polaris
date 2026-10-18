@@ -225,6 +225,8 @@ allow_wildcard_listen = false
 # （loopback-only + LocalProvider 内存预算守卫），fail-closed，任一环节失败阻止启动。
 # 见 docs/arch/M11-Policy-Safety.md §5 local_only 模式。Tier 0/1/2 不应开启（无本地模型）。
 local_only_mode = false
+# 信任档位（ADR-0115 WP1）："standard"（默认）/ "full" / "hardened"
+trust_profile = "standard"
 
 [sandbox]
 # 是否启用平台原生进程隔离（macOS Seatbelt / Linux bubblewrap / Windows WSL2）。

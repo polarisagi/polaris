@@ -2,6 +2,8 @@ package fsm
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/config"
@@ -154,4 +156,53 @@ func WritePhaseContract(b *prompt.PromptBuilder, memory protocol.MemoryFacade, n
 		}
 	}
 	WriteKernelInstruction(b, name, fallback)
+}
+
+// WriteAgenticUsage 写入 T7 计量行到易变区末尾（ADR-0115 / WP2）。
+func WriteAgenticUsage(b *prompt.PromptBuilder, tokens int, cost float64, wallSeconds float64) {
+	b.WritePhaseSystem(fmt.Sprintf("[usage] tokens=%d cost≈$%.4f wall=%.1fs", tokens, cost, wallSeconds))
+}
+
+// BuildAgenticPrompt 组装 Agentic 循环单轮请求的提示词：
+// 复用 BuildLayered 的稳定层 (L0)、会话层 (L1)、历史层 (L2)、阶段层 (L3) 和回合层 (L4)。
+func BuildAgenticPrompt(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, roundMsgs []types.Message, usageText string) ([]types.Message, error) {
+	b := prompt.NewPromptBuilder()
+
+	// 1. L1 会话层
+	if err := WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
+		slog.Warn("prompt: agentic session layer write failed", "err", err)
+	}
+
+	// 2. L2 历史层
+	WriteConversationHistory(b, sCtx)
+
+	// 3. L3 阶段层：内核指令
+	WritePhaseContract(b, memory, "kernel/loop.md", "You are Polaris in agentic loop mode. Use available tools to fulfill user goals. When done, reply clearly or call finish.")
+
+	// 4. L3 易变区末尾：召回记忆（若有）+ T7 计量（若有）
+	sCtx.Mu.RLock()
+	recall := sCtx.TurnRecall
+	sCtx.Mu.RUnlock()
+	if recall != nil && recall.Text != "" {
+		b.WritePhaseSystem("## Recalled Context\n" + recall.Text)
+	}
+	if usageText != "" {
+		b.WritePhaseSystem(usageText)
+	}
+
+	// 5. L4 回合层：如果 roundMsgs 为空，写入初始 RawIntentTS；否则逐条写入 roundMsgs
+	if len(roundMsgs) == 0 {
+		sCtx.Mu.RLock()
+		intent := sCtx.RawIntentTS
+		sCtx.Mu.RUnlock()
+		if !intent.IsEmpty() {
+			b.WriteUserData(intent)
+		}
+	} else {
+		for _, m := range roundMsgs {
+			b.WriteTurnMessage(m)
+		}
+	}
+
+	return FinishLayered(b, memory), nil
 }

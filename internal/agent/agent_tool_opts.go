@@ -15,7 +15,7 @@ import (
 // 让 tools（缓存前缀最靠前的部分）不再因阶段而失配。Validate 等其余状态从不携带 tools。
 func stateWantsTools(state types.AgentState, uniform bool) (attach, forbidCall bool) {
 	switch state {
-	case types.AgentStatePlan:
+	case types.AgentStatePlan, types.AgentStateLoop:
 		return true, false
 	case types.AgentStatePerceive, types.AgentStateReflect, types.AgentStateRespond:
 		return uniform, uniform

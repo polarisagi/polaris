@@ -158,6 +158,8 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 		// 走 KindStatus 而非 KindDelta——它不是模型输出，绝不能进 *reply
 		// （那会被当作助手回复正文持久化进消息历史）。
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "notice", "message": ev.Content}})
+	case types.AgentStreamEventSteerAccepted:
+		_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{"type": "steer_accepted", "message": ev.Content}})
 	case types.AgentStreamEventStatus:
 		if ev.Content == "task_done" {
 			return true

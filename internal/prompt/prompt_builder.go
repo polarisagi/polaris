@@ -128,6 +128,11 @@ func (b *PromptBuilder) WriteUserImages(imgs []types.ImagePart) {
 	})
 }
 
+// WriteTurnMessage 将一条回合内部消息写入 ZoneTaintedData 与 LayerTurn（用于 Agentic 循环消息流）。
+func (b *PromptBuilder) WriteTurnMessage(msg types.Message) {
+	b.add(protocol.ZoneTaintedData, protocol.LayerTurn, msg)
+}
+
 // WriteExternalCatalog 写入第三方来源的工具/扩展目录（S-02，防间接 Prompt Injection）。
 // 目录正文一律以 <external_catalog> 包裹并声明来源不可信；达到 TaintMedium 及以上
 // 再叠加 Spotlighting（与 WriteCoreMemory 同一 idiom），调用方无法自行绕过。
