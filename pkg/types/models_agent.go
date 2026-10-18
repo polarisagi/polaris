@@ -260,6 +260,8 @@ const (
 	// 客户端就地渲染审批卡片，经 POST /v1/approvals/{id}/resolve 回复——审批的
 	// 唯一裁决通道仍是 HITL 网关，事件只负责让对话里的用户看见它。
 	AgentStreamEventApproval AgentStreamEventType = "approval"
+	// AgentStreamEventSteerAccepted 用户在回合中途发送的插话已被状态机接纳，将于下一轮次边界生效。
+	AgentStreamEventSteerAccepted AgentStreamEventType = "steer_accepted"
 )
 
 // TurnPhase AgentStreamEventPhase 的 Content 取值（ADR-0098）。内核 → session → 客户端

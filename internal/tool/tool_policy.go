@@ -94,6 +94,8 @@ func (r *InMemoryToolRegistry) triggerPreExecutionCheckpoint(ctx context.Context
 	r.mu.RUnlock()
 
 	if pol.CheckpointEnabled && ckpt != nil {
-		_ = ckpt.MaybeSnapshot(ctx, tool.Name, tool.Capability, tool.SideEffects, execInput, taintLevel)
+		if snapErr := ckpt.MaybeSnapshot(ctx, tool.Name, tool.Capability, tool.SideEffects, execInput, taintLevel); snapErr != nil {
+			slog.WarnContext(ctx, "tool_policy: checkpoint snapshot failed", "tool", tool.Name, "err", snapErr)
+		}
 	}
 }

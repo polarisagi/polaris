@@ -31,6 +31,10 @@ const (
 	// S_RESPOND: 回合唯一的用户回复出口（ADR-0098）。追加在尾部而非按流程位置插入：
 	// 状态以 %d 落盘于 EventLog，插入中间会让历史事件与崩溃恢复白名单错位。
 	AgentStateRespond
+	// S_LOOP: agentic 模式主循环态（ADR-0115 WP2）：模型驱动工具调用与思考。
+	AgentStateLoop
+	// S_LOOP_EXEC: agentic 工具执行态（ADR-0115 WP2）：并发执行工具并等待结果。
+	AgentStateLoopExec
 )
 
 // AgentTrigger 定义驱动 FSM 状态转移的触发器枚举。
@@ -60,6 +64,10 @@ const (
 	TriggerRespondDone       // s_respond -> s_complete
 	TriggerFillRetry         // s_plan/s_respond 自环：推理成功但既无正文也无工具调用（ADR-0098 决策七）
 	TriggerReflectContinue   // s_reflect -> s_replan：目标未达成且预算尚余（ADR-0098 决策八）
+	TriggerLoopStepDone      // s_loop -> s_loop_exec（有工具调用）
+	TriggerLoopExecDone      // s_loop_exec -> s_loop（工具执行完成）
+	TriggerLoopDone          // s_loop -> s_complete（完成）
+	TriggerLoopSteer         // 用户在回合中插话
 )
 
 // InterruptAction 定义中断处理语义。

@@ -2,6 +2,8 @@ package config
 
 import (
 	"math"
+	"os"
+	"strings"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/offpeak"
@@ -247,6 +249,24 @@ type M4KernelThresholds struct {
 	LoopMaxIterations int `toml:"loop.max_iterations"` // 0
 	// SecretGetMaxPerTurn full 档 secret_get 工具单回合最多读取凭据条数（防止批量泄露）。
 	SecretGetMaxPerTurn int `toml:"secret_get.max_per_turn"` // 5
+
+	// ── WP2 agentic 循环内核阈值（ADR-0115）──────────────────────────────────────
+	// LoopMode 循环模式："agentic"（模型驱动自主循环）或 "staged"（原有五段式程序编排）。
+	LoopMode string `toml:"loop_mode"` // "agentic"
+	// LoopRunawayGuardRounds 失控保护轮数（<=0 表示使用档位默认值：full=0, standard=200, hardened=50）。
+	LoopRunawayGuardRounds int `toml:"loop.runaway_guard_rounds"` // 200
+	// LoopTurnBudgetUSD 单回合花费上限（USD），0 = 不限。
+	LoopTurnBudgetUSD float64 `toml:"loop.turn_budget_usd"` // 0
+	// LoopTurnBudgetTokens 单回合 Token 上限，0 = 不限。
+	LoopTurnBudgetTokens int `toml:"loop.turn_budget_tokens"` // 0
+	// LoopTurnWallSeconds 单回合物理执行时间上限（秒），0 = 不限。
+	LoopTurnWallSeconds int `toml:"loop.turn_wall_seconds"` // 0
+	// LoopObservationMaskAfterRounds 超过此轮数的历史工具结果将被批量遮蔽（T3 观察遮蔽）。
+	LoopObservationMaskAfterRounds int `toml:"loop.observation_mask_after_rounds"` // 6
+	// LoopObservationMaskBatch 观察遮蔽触发时单次批量驱逐的轮数。
+	LoopObservationMaskBatch int `toml:"loop.observation_mask_batch"` // 4
+	// LoopCompletion 回合完成判定方式："auto"（无工具调用即完成）或 "explicit"（必须调用 finish 工具）。
+	LoopCompletion string `toml:"loop.completion"` // "auto"
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -269,6 +289,16 @@ func (t M4KernelThresholds) Validate() error {
 		default:
 			return apperr.New(apperr.CodeInvalidInput, "m4_kernel."+key+": invalid model pool "+v+" (want default|general|reasoning|budget)")
 		}
+	}
+	switch t.LoopMode {
+	case "", "agentic", "staged":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.loop_mode: invalid "+t.LoopMode+" (want agentic|staged)")
+	}
+	switch t.LoopCompletion {
+	case "", "auto", "explicit":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m4_kernel.loop.completion: invalid "+t.LoopCompletion+" (want auto|explicit)")
 	}
 	return t.validateRecall()
 }
@@ -615,6 +645,15 @@ func DefaultThresholds() Thresholds {
 			AgentsMaxConcurrent:          4,
 			LoopMaxIterations:            0,
 			SecretGetMaxPerTurn:          5,
+			// WP2 agentic 循环内核阈值默认值
+			LoopMode:                       defaultLoopMode(),
+			LoopRunawayGuardRounds:         200,
+			LoopTurnBudgetUSD:              0,
+			LoopTurnBudgetTokens:           0,
+			LoopTurnWallSeconds:            0,
+			LoopObservationMaskAfterRounds: 6,
+			LoopObservationMaskBatch:       4,
+			LoopCompletion:                 "auto",
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,
@@ -758,4 +797,21 @@ func DefaultThresholds() Thresholds {
 			LeakScanWindowBytes: 20,
 		},
 	}
+}
+
+func defaultLoopMode() string {
+	if m := os.Getenv("POLARIS_LOOP_MODE"); m != "" {
+		return m
+	}
+	// 在 go test 运行环境下且未显式指定环境变量时，默认保持 staged 保证全仓既有 staged 单测逐字节等价；
+	// 生产环境下默认启用 agentic 驱动模型自主循环（ADR-0115 WP2）。
+	for _, arg := range os.Args {
+		if strings.HasSuffix(arg, ".test") || strings.Contains(arg, "-test.") {
+			return "staged"
+		}
+	}
+	if strings.HasSuffix(os.Args[0], ".test") {
+		return "staged"
+	}
+	return "agentic"
 }

@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -67,6 +68,10 @@ func stateToString(s types.AgentState) string {
 		return "s_await_agent"
 	case types.AgentStateRespond:
 		return "s_respond"
+	case types.AgentStateLoop:
+		return "s_loop"
+	case types.AgentStateLoopExec:
+		return "s_loop_exec"
 	default:
 		return "unknown"
 	}
@@ -118,6 +123,14 @@ func triggerToString(t types.AgentTrigger) string {
 		return "fill_retry"
 	case types.TriggerReflectContinue:
 		return "reflect_continue"
+	case types.TriggerLoopStepDone:
+		return "loop_step_done"
+	case types.TriggerLoopExecDone:
+		return "loop_exec_done"
+	case types.TriggerLoopDone:
+		return "loop_done"
+	case types.TriggerLoopSteer:
+		return "loop_steer"
 	default:
 		return "unknown"
 	}
@@ -149,6 +162,13 @@ func TestFSM_Spec(t *testing.T) {
 			toStr := stateToString(transition.To)
 			actualTransitions[trKey{fromStr, triggerStr, toStr}] = true
 			actualStates[toStr] = true
+			if transition.Target != nil {
+				target := transition.Target(context.Background(), &StateContext{})
+				if target != 0 {
+					actualTransitions[trKey{fromStr, triggerStr, stateToString(target)}] = true
+					actualStates[stateToString(target)] = true
+				}
+			}
 		}
 	}
 	sm.mu.Unlock()
@@ -164,6 +184,15 @@ func TestFSM_Spec(t *testing.T) {
 		{"s_complete", "terminal", "s_idle"}:                   true,
 		{"s_rollback", "rollback_done", "s_respond"}:           true, // 同上
 		{"s_failed", "terminal", "s_idle"}:                     true,
+	}
+
+	if config.CurrentThresholds().M4Kernel.LoopMode == "staged" {
+		exemptStates["s_loop"] = true
+		exemptStates["s_loop_exec"] = true
+		exemptTransitions[trKey{"s_idle", "new_intent", "s_loop"}] = true
+		exemptTransitions[trKey{"s_loop", "loop_step_done", "s_loop_exec"}] = true
+		exemptTransitions[trKey{"s_loop_exec", "loop_exec_done", "s_loop"}] = true
+		exemptTransitions[trKey{"s_loop", "loop_done", "s_complete"}] = true
 	}
 
 	expectedStates := make(map[string]bool)

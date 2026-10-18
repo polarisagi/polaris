@@ -53,6 +53,25 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	}
 	isFirstTurn := len(history) == 0
 
+	// 插话（Steer）：若会话内已有正在运行的循环（AgentStateLoop / AgentStateLoopExec），直接入队并退出本轮编排
+	if steerable, ok := o.agentPool.(interface{ TrySteer(string, string) bool }); ok {
+		if steerable.TrySteer(sessionID, req.Input) {
+			finalInput, _ := o.buildUserMessage(req)
+			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
+			}
+			_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
+				"session_id": sessionID,
+				"message":    "插话已入队，将于下一轮次生效",
+			}})
+			_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
+				"session_id": sessionID,
+				"steered":    true,
+			}})
+			return &Result{SessionID: sessionID, Reply: ""}, nil
+		}
+	}
+
 	var agentCtrl protocol.AgentController
 	var release func()
 	if o.agentPool != nil {
@@ -62,6 +81,23 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 			return &Result{SessionID: sessionID, Aborted: true}, nil
 		}
 		defer release()
+
+		st := agentCtrl.CurrentState()
+		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec) && agentCtrl.Steer(req.Input) {
+			finalInput, _ := o.buildUserMessage(req)
+			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
+			}
+			_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
+				"session_id": sessionID,
+				"message":    "插话已入队，将于下一轮次生效",
+			}})
+			_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
+				"session_id": sessionID,
+				"steered":    true,
+			}})
+			return &Result{SessionID: sessionID, Reply: ""}, nil
+		}
 	}
 
 	history = o.prompt.InjectSystemPrompt(ctx, agentCtrl, history, req.Input)

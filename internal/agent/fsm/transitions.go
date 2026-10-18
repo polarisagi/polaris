@@ -104,11 +104,17 @@ func (sm *StateMachine) registerTransitions() {
 		},
 	})
 
-	// S_IDLE → S_PERCEIVE: 收到意图脉冲
+	// S_IDLE → S_PERCEIVE: 收到意图脉冲（agentic 模式下动态分派至 S_LOOP）
 	sm.add(Transition{
 		From:    types.AgentStateIdle,
 		Trigger: types.TriggerIntentReceived,
 		To:      types.AgentStatePerceive,
+		Target: func(ctx context.Context, sCtx *StateContext) types.AgentState {
+			if config.CurrentThresholds().M4Kernel.LoopMode == "agentic" {
+				return types.AgentStateLoop
+			}
+			return types.AgentStatePerceive
+		},
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
 			// 回合起点清空上一回合的直答（4b′）：本回合任何不经 applyPerceiveResult 的
 			// 感知路径（System-1 旁路、FastPath、寒暄旁路）都不得发布陈旧回复。
@@ -121,6 +127,9 @@ func (sm *StateMachine) registerTransitions() {
 			}
 			if phatic := tryPhaticBypass(sCtx); phatic != nil {
 				return []protocol.Effect{phatic}, nil
+			}
+			if config.CurrentThresholds().M4Kernel.LoopMode == "agentic" {
+				return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 			}
 			// Unmatched case
 			metrics.RecordSystem1Bypass(ctx, false)

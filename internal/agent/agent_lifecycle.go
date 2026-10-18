@@ -44,6 +44,11 @@ func stateToTriggerMap() map[types.State]types.AgentTrigger {
 		"S_REFLECT_CONTINUE": types.TriggerReflectContinue,
 		"S_RESPOND_DONE":     types.TriggerRespondDone,
 		"S_RESPOND_FAILED":   types.TriggerReplanExhausted,
+		// WP2 / ADR-0115: Agentic loop states
+		"S_LOOP_STEP_DONE": types.TriggerLoopStepDone,
+		"S_LOOP_EXEC_DONE": types.TriggerLoopExecDone,
+		"S_LOOP_DONE":      types.TriggerLoopDone,
+		"S_LOOP_STEER":     types.TriggerLoopSteer,
 	}
 }
 

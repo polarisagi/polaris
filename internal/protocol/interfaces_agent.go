@@ -137,6 +137,8 @@ AgentController interface {
 	// 按顺序消费队列而非发起真实 Provider 调用；队列耗尽时自动切回真实调用
 	// 并关闭全局 ReplayMode（见 internal/agent/agent_execute_effect.go 消费点）。
 	InjectReplayData(calls []ReplayLLMCall)
+	// Steer 向正在执行的 Agent 注入插话（ADR-0115 WP2），在下一个轮次边界作为 user 消息注入。
+	Steer(text string) bool
 }
 
 // @consumer internal/gateway/server/chat

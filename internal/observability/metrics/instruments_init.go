@@ -406,6 +406,8 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("工作流管线运行被整次跳过次数 (label: reason)"),
 	)
 	ie.capture("polaris.workflow.runs_skipped_total", err)
+
+	initLoopInstruments(meter, ie)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {
