@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -299,6 +300,12 @@ func (p *spawnDepthCapturingPool) lastNamespaceForTest() string {
 	return p.lastNamespace
 }
 
+func (p *spawnDepthCapturingPool) lastProfileForTest() *types.AgentProfileSpec {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastProfile
+}
+
 // mockFailTrackingBlackboard 包一层 mockBlackboard，记录 FailTask 是否被调用
 // （基类的 FailTask 是无操作 stub，无法从外部观测调用与否）。
 type mockFailTrackingBlackboard struct {
@@ -476,4 +483,111 @@ func TestSQLiteBlackboard_ListPendingTaskIDs(t *testing.T) {
 		t.Fatalf("only unclaimed tasks are pending, got %v %v", ids, err)
 	}
 	var _ PendingTaskLister = bb
+}
+
+// TestDefaultTaskWorker_SpawnTaskSpec_StructuredIntent 验证 DefaultTaskWorker 正确解析 SpawnTaskSpec 结构化 Intent。
+func TestDefaultTaskWorker_SpawnTaskSpec_StructuredIntent(t *testing.T) {
+	bb := &mockBlackboard{tasks: make(map[string]*types.TaskEntry), events: make(chan types.BlackboardEvent, 10)}
+	spec := types.SpawnTaskSpec{
+		Prompt:   "analyze logs",
+		Role:     "reviewer",
+		Model:    "openai/o3-mini",
+		Thinking: "high",
+		ReadOnly: true,
+		Tools:    []string{"read_file", "grep"},
+	}
+	specBytes, _ := json.Marshal(spec)
+	bb.tasks["task-spec-1"] = &types.TaskEntry{
+		ID:     "task-spec-1",
+		Type:   "agent_handoff:reviewer",
+		Status: types.TaskPending,
+		Intent: specBytes,
+	}
+
+	pool := &spawnDepthCapturingPool{replyOutput: "done"}
+	worker := NewDefaultTaskWorker(bb, pool).WithSubagents(NewSubagentRunner(pool, mapProfileResolver{"reviewer": {Name: "reviewer"}}, nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "task-spec-1"}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		bb.mu.Lock()
+		st := bb.tasks["task-spec-1"].Status
+		bb.mu.Unlock()
+		if st == types.TaskDone {
+			prof := pool.lastProfileForTest()
+			if prof == nil {
+				t.Fatal("expected profile to be injected")
+			}
+			if prof.Model != "openai/o3-mini" {
+				t.Errorf("expected model openai/o3-mini, got %s", prof.Model)
+			}
+			if prof.Thinking != "high" {
+				t.Errorf("expected thinking high, got %s", prof.Thinking)
+			}
+			if !prof.ReadOnly {
+				t.Error("expected ReadOnly=true")
+			}
+			if !prof.AllowDelegation {
+				t.Error("local subagents should default to AllowDelegation=true")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task did not finish in time, status: %v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestDefaultTaskWorker_PeerDelegation_DisallowsDelegation 验证跨节点任务严格禁止再委派（ADR-0111 / ADR-0115）。
+func TestDefaultTaskWorker_PeerDelegation_DisallowsDelegation(t *testing.T) {
+	bb := &mockBlackboard{tasks: make(map[string]*types.TaskEntry), events: make(chan types.BlackboardEvent, 10)}
+	bb.tasks["peer-task-1"] = &types.TaskEntry{
+		ID:     "peer-task-1",
+		Type:   PeerDelegationTaskType,
+		Status: types.TaskPending,
+		Intent: []byte("remote prompt"),
+	}
+
+	pool := &spawnDepthCapturingPool{replyOutput: "peer done"}
+	peerProf := func(snap *types.TaskSnapshot) *types.AgentProfileSpec {
+		return &types.AgentProfileSpec{
+			Name:            "peer:remote",
+			ReadOnly:        true,
+			AllowDelegation: false, // 严格禁止再委派
+		}
+	}
+	worker := NewDefaultTaskWorker(bb, pool).WithPeerProfile(peerProf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "peer-task-1"}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		bb.mu.Lock()
+		st := bb.tasks["peer-task-1"].Status
+		bb.mu.Unlock()
+		if st == types.TaskDone {
+			prof := pool.lastProfileForTest()
+			if prof == nil {
+				t.Fatal("expected peer profile to be injected")
+			}
+			if prof.AllowDelegation {
+				t.Fatal("peer delegation must strictly disallow further delegation (AllowDelegation=false)")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer task did not finish in time, status: %v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

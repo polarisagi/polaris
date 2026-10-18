@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "目标子智能体 ID"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}

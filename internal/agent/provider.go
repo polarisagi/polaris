@@ -96,6 +96,10 @@ type HandoffPoster interface {
 	Subscribe(ctx context.Context) (<-chan types.BlackboardEvent, error)
 	// SubscribeTaskEvents 订阅子 Agent 实时事件流（GD-13-001）。
 	SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func())
+	// PublishTaskEvent 向子 Agent 广播事件（ADR-0115 WP4 agent_message 插话）。
+	PublishTaskEvent(taskID string, event types.AgentStreamEvent)
+	// FailTask 中止子任务（ADR-0115 WP4 agent_stop 中止原语）。
+	FailTask(ctx context.Context, taskID, agentID string, reason []byte) error
 }
 
 // LAMPolicyChecker Agent 对 LAM GUI 自动化策略预检的消费端接口。

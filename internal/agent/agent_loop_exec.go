@@ -41,6 +41,7 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	taskID := a.sCtx.SessionID
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, taskID)
 	toolCtx = context.WithValue(toolCtx, protocol.CtxModelSwitcherKey{}, a)
+	toolCtx = context.WithValue(toolCtx, protocol.CtxSubagentManagerKey{}, a)
 
 	// JIT 签发能力令牌（必须在 validatedCalls 中），确保无旁路漏洞
 	toolCtx, revoke, err := a.withJITCapability(toolCtx, call.Name, call.Input)

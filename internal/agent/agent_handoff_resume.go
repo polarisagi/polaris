@@ -45,6 +45,7 @@ type HandoffResumeContext struct {
 	CompletedNodeIDs []string         `json:"completed_node_ids,omitempty"`
 	GlobalTaintLevel types.TaintLevel `json:"global_taint_level"`
 	HandoffNodeID    string           `json:"handoff_node_id,omitempty"`
+	HandoffTaskIDs   []string         `json:"handoff_task_ids,omitempty"`
 	NamespaceID      string           `json:"namespace_id,omitempty"`
 	SnapshotAt       int64            `json:"snapshot_at"`
 }
@@ -63,6 +64,7 @@ func (a *Agent) buildHandoffResumeSnapshot() (string, error) {
 		CompletedNodeIDs: a.sCtx.CompletedNodeIDs,
 		GlobalTaintLevel: a.sCtx.GlobalTaintLevel,
 		HandoffNodeID:    a.sCtx.HandoffTaskID,
+		HandoffTaskIDs:   a.sCtx.HandoffTaskIDs,
 		NamespaceID:      a.sCtx.NamespaceID,
 		SnapshotAt:       time.Now().Unix(),
 	}
@@ -190,6 +192,9 @@ func (a *Agent) ResumeAwaitingHandoff(childTaskID, resumeCtxJSON string) (restor
 	a.sCtx.DAGModel = snap.DAGModel
 	a.sCtx.ExecuteResult = snap.ExecuteResult
 	a.sCtx.CompletedNodeIDs = snap.CompletedNodeIDs
+	if len(snap.HandoffTaskIDs) > 0 {
+		a.sCtx.HandoffTaskIDs = snap.HandoffTaskIDs
+	}
 	// 污点 only-up：禁止用快照值直接覆盖当前值（防降级攻击，ADR-0007）。
 	if snap.GlobalTaintLevel > a.sCtx.GlobalTaintLevel {
 		a.sCtx.GlobalTaintLevel = snap.GlobalTaintLevel

@@ -1,0 +1,5 @@
+name: spawn_agents
+description: 一次派生一个或多个子智能体并发执行任务，可选模型、思考档、工具集合和只读模式。
+capability: CapWrite
+read_only: false
+idempotent: false

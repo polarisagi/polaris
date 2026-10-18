@@ -81,6 +81,14 @@ type Policy struct {
 	// RunawayGuardDefaultRounds agentic 循环单回合失控保护默认轮数上限（ADR-0115 WP2）。
 	// full 档 0（不限）；standard 档 200；hardened 档 50。
 	RunawayGuardDefaultRounds int
+
+	// SubagentMaxConcurrent 子智能体最大并发数（ADR-0115 WP4）。
+	// full 档 16；standard 档 6；hardened 档 2；0 = 不限（仅 full 可设）。
+	SubagentMaxConcurrent int
+
+	// DelegationChainMaxDepth 委派链最大深度（ADR-0115 WP4）。
+	// full 档 8；standard 档 3；hardened 档 2。
+	DelegationChainMaxDepth int
 }
 
 // ProfilePolicy 将信任档位映射为安全策略快照（ADR-0115 WP1 决策二）。
@@ -105,6 +113,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			SecretGetEnabled:          true,  // 凭据可读
 			SafeDialerAuditOnly:       true,  // 放行公网+内网，只审计
 			RunawayGuardDefaultRounds: 0,     // 不限轮数
+			SubagentMaxConcurrent:     16,    // 并发上限更高
+			DelegationChainMaxDepth:   8,     // 深度上限更高
 		}
 	case ProfileHardened:
 		return Policy{
@@ -120,6 +130,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			SecretGetEnabled:          false,
 			SafeDialerAuditOnly:       false, // 保持阻断
 			RunawayGuardDefaultRounds: 50,    // 严格限制
+			SubagentMaxConcurrent:     2,     // 严格并发限制
+			DelegationChainMaxDepth:   2,     // 严格深度限制
 		}
 	default: // ProfileStandard
 		return Policy{
@@ -135,6 +147,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			SecretGetEnabled:          false,
 			SafeDialerAuditOnly:       false,
 			RunawayGuardDefaultRounds: 200, // 默认防失控
+			SubagentMaxConcurrent:     6,   // 默认并发限制
+			DelegationChainMaxDepth:   3,   // 默认深度限制（inv_M8_06）
 		}
 	}
 }

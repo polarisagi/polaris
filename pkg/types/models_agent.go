@@ -41,6 +41,8 @@ type TaskSnapshot struct {
 	// 再派生子任务（如 transfer_to_agent 委派链），据此设置子任务的
 	// SpawnDepth+1，使 resolveMaxDepth 深度上限校验对多级委派链生效。
 	SpawnDepth int
+	// ParentTaskID 委派父任务 ID（ADR-0115 WP4 并行子智能体）。
+	ParentTaskID string
 }
 
 type
@@ -114,24 +116,25 @@ type TaskCheckpointRow struct {
 	ResumeCtxJSON string
 }
 type TaskEntry struct {
-	ID          string
-	Type        string
-	Priority    int
-	Status      TaskStatus
-	ClaimedBy   string
-	ClaimedAt   int64
-	ExpiresAt   int64
-	Toxicity    int
-	Intent      []byte
-	IntentTaint TaintLevel // Taint 污点随 Intent 传播，禁止跨 Agent 边界降级
-	Result      []byte
-	ResultTaint TaintLevel // Taint 污点随 Result 传播，禁止跨 Agent 边界降级
-	DependsOn   []string
-	SubTasks    []string
-	Deadline    int64
-	SpawnDepth  int // 防止 Custom Agent 递归超限
-	CreatedAt   int64
-	UpdatedAt   int64
+	ID           string
+	Type         string
+	Priority     int
+	Status       TaskStatus
+	ClaimedBy    string
+	ClaimedAt    int64
+	ExpiresAt    int64
+	Toxicity     int
+	Intent       []byte
+	IntentTaint  TaintLevel // Taint 污点随 Intent 传播，禁止跨 Agent 边界降级
+	Result       []byte
+	ResultTaint  TaintLevel // Taint 污点随 Result 传播，禁止跨 Agent 边界降级
+	DependsOn    []string
+	SubTasks     []string
+	Deadline     int64
+	SpawnDepth   int // 防止 Custom Agent 递归超限
+	ParentTaskID string
+	CreatedAt    int64
+	UpdatedAt    int64
 
 	// ── 流水线阶段 handoff 字段 ──────────────────────────────────────────────
 	// PipelineID 标识本 Task 所属流水线实例；空表示非流水线任务。
@@ -285,6 +288,8 @@ type AgentStreamEvent struct {
 	ToolInput      []byte               `json:"tool_input,omitempty"`
 	ChildAgentRole string               `json:"child_agent_role,omitempty"` // 子 Agent 角色（委派场景嵌套事件，GD-13-001）
 	ParentTaskID   string               `json:"parent_task_id,omitempty"`   // 父任务 ID（委派场景嵌套事件）
+	AgentID        string               `json:"agent_id,omitempty"`         // 当前事件所属 Agent ID（ADR-0115 WP4 树状展示）
+	ParentID       string               `json:"parent_id,omitempty"`        // 父 Agent ID（ADR-0115 WP4 树状展示）
 	IsNested       bool                 `json:"is_nested,omitempty"`        // 是否为子 Agent 嵌套事件
 	DeadlineNs     int64                `json:"deadline_ns,omitempty"`      // 仅 AgentStreamEventApproval：审批截止（绝对 Unix 纳秒）
 	// UI 仅 Type==AgentStreamEventToolResult 且该工具关联 MCP Apps UI 视图时非空

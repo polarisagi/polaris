@@ -38,6 +38,12 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	if p.RunawayGuardDefaultRounds != 200 {
 		t.Errorf("standard: RunawayGuardDefaultRounds should be 200, got %d", p.RunawayGuardDefaultRounds)
 	}
+	if p.SubagentMaxConcurrent != 6 {
+		t.Errorf("standard: SubagentMaxConcurrent should be 6, got %d", p.SubagentMaxConcurrent)
+	}
+	if p.DelegationChainMaxDepth != 3 {
+		t.Errorf("standard: DelegationChainMaxDepth should be 3, got %d", p.DelegationChainMaxDepth)
+	}
 }
 
 func TestProfilePolicy_Full(t *testing.T) {
@@ -76,6 +82,12 @@ func TestProfilePolicy_Full(t *testing.T) {
 	if p.RunawayGuardDefaultRounds != 0 {
 		t.Errorf("full: RunawayGuardDefaultRounds should be 0, got %d", p.RunawayGuardDefaultRounds)
 	}
+	if p.SubagentMaxConcurrent != 16 {
+		t.Errorf("full: SubagentMaxConcurrent should be 16, got %d", p.SubagentMaxConcurrent)
+	}
+	if p.DelegationChainMaxDepth != 8 {
+		t.Errorf("full: DelegationChainMaxDepth should be 8, got %d", p.DelegationChainMaxDepth)
+	}
 }
 
 func TestProfilePolicy_Hardened(t *testing.T) {
@@ -109,6 +121,12 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if p.RunawayGuardDefaultRounds != 50 {
 		t.Errorf("hardened: RunawayGuardDefaultRounds should be 50, got %d", p.RunawayGuardDefaultRounds)
+	}
+	if p.SubagentMaxConcurrent != 2 {
+		t.Errorf("hardened: SubagentMaxConcurrent should be 2, got %d", p.SubagentMaxConcurrent)
+	}
+	if p.DelegationChainMaxDepth != 2 {
+		t.Errorf("hardened: DelegationChainMaxDepth should be 2, got %d", p.DelegationChainMaxDepth)
 	}
 }
 

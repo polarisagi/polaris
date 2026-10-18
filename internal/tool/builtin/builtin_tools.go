@@ -16,6 +16,10 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/tool/builtin/agent_message"
+	"github.com/polarisagi/polaris/internal/tool/builtin/agent_result"
+	"github.com/polarisagi/polaris/internal/tool/builtin/agent_status"
+	"github.com/polarisagi/polaris/internal/tool/builtin/agent_stop"
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 	"github.com/polarisagi/polaris/internal/tool/builtin/checkpoint_list"
 	"github.com/polarisagi/polaris/internal/tool/builtin/checkpoint_restore"
@@ -37,6 +41,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_tool_ref"
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
 	"github.com/polarisagi/polaris/internal/tool/builtin/secret_get"
+	"github.com/polarisagi/polaris/internal/tool/builtin/spawn_agents"
 	"github.com/polarisagi/polaris/internal/tool/builtin/str_replace_editor"
 	"github.com/polarisagi/polaris/internal/tool/builtin/switch_model"
 	"github.com/polarisagi/polaris/internal/tool/builtin/sys_probe"
@@ -134,6 +139,13 @@ func RegisterBuiltinTools(
 		// 模型自选与目录工具（ADR-0115 WP3）
 		{"list_models", list_models.MakeListModelsFn(db, modelCatalogMgr)},
 		{"switch_model", switch_model.MakeSwitchModelFn()},
+
+		// 并行子智能体与控制工具（ADR-0115 WP4）
+		{"spawn_agents", spawn_agents.MakeSpawnAgentsFn()},
+		{"agent_status", agent_status.MakeAgentStatusFn()},
+		{"agent_result", agent_result.MakeAgentResultFn()},
+		{"agent_message", agent_message.MakeAgentMessageFn()},
+		{"agent_stop", agent_stop.MakeAgentStopFn()},
 	}
 
 	// automation_* 工具依赖，仅在 autoSvc != nil 时注册（单元测试无 Service 时不报错）

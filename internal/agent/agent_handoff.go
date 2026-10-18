@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -62,7 +60,7 @@ func (a *Agent) InjectHandoffPoster(p HandoffPoster) {
 //
 // taintLevel 必须是调用方（runExecuteDAG）传入的、已经过 S_VALIDATE 四层校验
 // 的授信值，禁止从 LLM 生成的工具参数中采信（与 F0-2/GD-04-001 同一不变量）。
-func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextSummary string, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextSummary string, taintLevel types.TaintLevel) (*types.ToolResult, error) { //nolint:gocyclo
 	if a.handoffPoster == nil {
 		return nil, apperr.New(apperr.CodeInternal,
 			"transfer_to_agent: handoffPoster not injected (fail-closed)")
@@ -71,18 +69,16 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		return nil, apperr.New(apperr.CodeInvalidInput, "transfer_to_agent: target_agent_role is required")
 	}
 
-	namespace := a.sCtx.NamespaceID
-	if namespace == "" {
-		// 未配置共享命名空间时退化为以当前 SessionID 作为命名空间，保证委派
-		// 任务至少与发起方共享同一记忆检索范围（不引入全新隔离域）。
-		namespace = a.sCtx.SessionID
-	}
-
 	// [GD-1] 检查是否为挂起恢复
-	if a.sCtx.HandoffTaskID != "" {
-		snap, err := a.handoffPoster.PeekTask(ctx, a.sCtx.HandoffTaskID)
+	if a.sCtx.HandoffTaskID != "" || len(a.sCtx.HandoffTaskIDs) > 0 {
+		targetID := a.sCtx.HandoffTaskID
+		if targetID == "" && len(a.sCtx.HandoffTaskIDs) > 0 {
+			targetID = a.sCtx.HandoffTaskIDs[0]
+		}
+		snap, err := a.handoffPoster.PeekTask(ctx, targetID)
 		if err == nil && snap != nil && snap.Status == types.TaskDone {
 			a.sCtx.HandoffTaskID = "" // 清理恢复状态
+			a.sCtx.HandoffTaskIDs = nil
 			return &types.ToolResult{
 				Success:    true,
 				Output:     snap.Result,
@@ -91,6 +87,7 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		}
 		if err == nil && snap != nil && snap.Status == types.TaskFailed {
 			a.sCtx.HandoffTaskID = "" // 清理恢复状态
+			a.sCtx.HandoffTaskIDs = nil
 			return &types.ToolResult{ //nolint:nilerr
 				Success: false,
 				Output:  []byte(fmt.Sprintf("handoff task %s failed: %s", snap.ID, snap.Result)),
@@ -109,29 +106,19 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		contextSummary = a.redactForMCPEgress(ctx, targetRole, contextSummary)
 	}
 
-	childID := fmt.Sprintf("handoff-%s-%s", a.ID, uuid.NewString())
-	entry := &types.TaskEntry{
-		ID:          childID,
-		Type:        "agent_handoff:" + targetRole,
-		Priority:    5,
-		Intent:      []byte(contextSummary),
-		IntentTaint: taintLevel,
-		Namespace:   namespace,
-		// SpawnDepth（ADR-0084）：复用既有 inv_M8_06 委派链深度校验
-		// （SQLiteBlackboard.PostTask resolveMaxDepth），此前恒为 0 从未生效。
-		SpawnDepth: a.sCtx.SpawnDepth + 1,
+	// [ADR-0115 WP4] transfer_to_agent 作为单任务快捷别名转调 a.SpawnAgents
+	_, err := a.SpawnAgents(ctx, types.SpawnAgentsArgs{
+		Tasks: []types.SpawnTaskSpec{
+			{
+				Role:   targetRole,
+				Prompt: contextSummary,
+			},
+		},
+		Wait: "all",
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if err := a.handoffPoster.PostTask(ctx, entry); err != nil {
-		// [ADR-0084] SpawnDepth 校验现实际可触发 CodeForbidden（此前 SpawnDepth
-		// 恒为 0 从未命中）；用 apperr.CodeOf 保留分类，避免固定 CodeInternal
-		// 把深度超限误报成内部错误。
-		return nil, apperr.Wrap(apperr.CodeOf(err), "transfer_to_agent: post task", err)
-	}
-
-	// [GD-1] 改造为异步挂起，移除阻塞轮询
-	a.sCtx.HandoffTaskID = childID
-	a.asyncIntent(types.TriggerAwaitAgent)
 
 	return &types.ToolResult{
 		Success:    true,
