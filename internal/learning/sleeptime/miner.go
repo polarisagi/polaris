@@ -9,6 +9,60 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+func classifyError(errStr string) string {
+	errorMatchers := []struct {
+		cat      string
+		patterns []string
+	}{
+		{"timeout", []string{"timeout", "deadline"}},
+		{"canceled", []string{"cancel"}},
+		{"rate_limit", []string{"rate limit", "429", "quota"}},
+		{"schema_error", []string{"unmarshal", "json", "syntax", "eof"}},
+		{"permission_denied", []string{"forbidden", "permission", "denied", "blocked"}},
+		{"not_found", []string{"not found", "no such file"}},
+		{"command_failed", []string{"exit status", "command failed"}},
+	}
+
+	lower := strings.ToLower(errStr)
+	for _, m := range errorMatchers {
+		for _, p := range m.patterns {
+			if strings.Contains(lower, p) {
+				return m.cat
+			}
+		}
+	}
+	return "execution_error"
+}
+
+func recordFailure(clusters map[string]*Weakness, purpose, errStr string) {
+	if purpose == "" {
+		purpose = "unknown"
+	}
+	cat := classifyError(errStr)
+	sig := purpose + ":" + cat
+
+	w, exists := clusters[sig]
+	if !exists {
+		w = &Weakness{
+			Signature:    sig,
+			Purpose:      purpose,
+			Category:     cat,
+			Count:        0,
+			SampleErrors: make([]string, 0, 3),
+		}
+		clusters[sig] = w
+	}
+	w.Count++
+	if len(w.SampleErrors) < 3 && errStr != "" {
+		for _, s := range w.SampleErrors {
+			if s == errStr {
+				return
+			}
+		}
+		w.SampleErrors = append(w.SampleErrors, errStr)
+	}
+}
+
 // MineFailures 从 llm_calls 历史记录中挖掘失败模式并聚类为弱点列表。
 func MineFailures(ctx context.Context, db protocol.SQLQuerier, limit int) ([]Weakness, error) {
 	if db == nil {
@@ -40,36 +94,7 @@ func MineFailures(ctx context.Context, db protocol.SQLQuerier, limit int) ([]Wea
 		if err := rows.Scan(&purpose, &errStr); err != nil {
 			continue
 		}
-		if purpose == "" {
-			purpose = "unknown"
-		}
-		cat := classifyError(errStr)
-		sig := purpose + ":" + cat
-
-		w, exists := clusters[sig]
-		if !exists {
-			w = &Weakness{
-				Signature:    sig,
-				Purpose:      purpose,
-				Category:     cat,
-				Count:        0,
-				SampleErrors: make([]string, 0, 3),
-			}
-			clusters[sig] = w
-		}
-		w.Count++
-		if len(w.SampleErrors) < 3 && errStr != "" {
-			alreadyHas := false
-			for _, s := range w.SampleErrors {
-				if s == errStr {
-					alreadyHas = true
-					break
-				}
-			}
-			if !alreadyHas {
-				w.SampleErrors = append(w.SampleErrors, errStr)
-			}
-		}
+		recordFailure(clusters, purpose, errStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -88,26 +113,4 @@ func MineFailures(ctx context.Context, db protocol.SQLQuerier, limit int) ([]Wea
 		weaknesses = weaknesses[:5]
 	}
 	return weaknesses, nil
-}
-
-func classifyError(errStr string) string {
-	lower := strings.ToLower(errStr)
-	switch {
-	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline"):
-		return "timeout"
-	case strings.Contains(lower, "cancel"):
-		return "canceled"
-	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "429") || strings.Contains(lower, "quota"):
-		return "rate_limit"
-	case strings.Contains(lower, "unmarshal") || strings.Contains(lower, "json") || strings.Contains(lower, "syntax") || strings.Contains(lower, "eof"):
-		return "schema_error"
-	case strings.Contains(lower, "forbidden") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied") || strings.Contains(lower, "blocked"):
-		return "permission_denied"
-	case strings.Contains(lower, "not found") || strings.Contains(lower, "no such file"):
-		return "not_found"
-	case strings.Contains(lower, "exit status") || strings.Contains(lower, "command failed"):
-		return "command_failed"
-	default:
-		return "execution_error"
-	}
 }

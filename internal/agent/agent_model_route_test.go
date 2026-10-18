@@ -132,6 +132,7 @@ func TestAgent_ResolveModelRoute_CostLimit(t *testing.T) {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
 
 	_, err = db.ExecContext(ctx, `
 		CREATE TABLE providers (id TEXT, name TEXT, type TEXT);

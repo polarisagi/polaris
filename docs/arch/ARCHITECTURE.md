@@ -4,13 +4,13 @@
 >
 > **代码位置**：根目录
 >
-<!-- §跳读: 0-bis:11 哲学 / 0:19 SSoT / 1:25 定位约束 / 2:70 (SOFT)部署 / 3:83 Staging / 4:109 HT0预算 / 5:138 变更控制 / 6:152 配置层 / 8:167 启动与关停协议 / 7:204 244 当前实现状态 -->
+<!-- §跳读: 0-bis:11 哲学 / 0:19 SSoT / 1:25 定位约束 / 2:70 (SOFT)部署 / 3:83 Staging / 4:109 HT0预算 / 5:138 变更控制 / 6:152 配置层 / 8:167 启动与关停协议 / 7:198 244 当前实现状态 -->
 
 ---
 
 ## 0-bis. 设计哲学（三句话）
 
-1. **大模型是协处理器，不是指挥官**：Go 确定性状态机持有控制流，LLM 做概率性填空，不做自由编排。三角色 Swarm（Supervisor / Librarian / Governance）物理隔离，通过异步黑板协调。
+1. **模型驱动、程序兜底**（ADR-0115）：核心采用自主 Agent 循环，模型直接生成回复并驱动工具调用，Go 状态机与安全闸门守底线（物理权限、单层批并发、失控保护与崩溃恢复）；经典阶段式状态机保留作为程序兜底与回退基线。三角色 Swarm（Supervisor / Librarian / Governance）物理隔离，通过异步黑板协调。
 2. **物理安全边界优先**：五级 Taint 只升不降 + Cedar deny-by-default + 三级沙箱。概率过滤不是安全边界（[HE-Rule-2]）。
 3. **Eval 门控进化**：Prompt、Skill、Config、源码补丁全部走 Staging 七阶段 CI。MEMF 持久化失败记忆，幻觉改进无法晋升至生产记忆。
 
@@ -195,15 +195,9 @@ bootstrap 包（`Bootable` + `DependencyMap` + Kahn 拓扑 + 四阶关停）与 
 
 该包曾是未接线的 CLI 引导契约（`AgentREPL` / `RateLimiterMiddleware` / `WebSocketHub`），按 ADR-0096 决策六删除：`AgentREPL` 依赖 `InferFn` 直连内核，与"客户端与内核之间只有 HTTP/SSE 一条路"正面冲突。命令行版实现在 `cmd/polaris/cli*.go`（HTTP 客户端，不直连数据库与内核）；服务发现所需的运行时状态读写在 `internal/runtimeinfo`。
 
----
-
-**END OF ARCHITECTURE.md**
-
----
-
 ## 7. 当前实现状态（代码与文档对齐）
 
-> 状态以代码实际行为为准。2026-10 复核：M1–M13-bis 全部落码；近期增量以 ADR-0096/0097/0098/0103/0104/0105/0109/0110/0111 为准，模块文档已随之更新。
+> 状态以代码实际行为为准。2026-10 复核：M1–M13-bis 全部落码；近期增量以 ADR-0096/0097/0098/0103/0104/0105/0109/0110/0111/0115 为准，模块文档已随之更新。
 
 ### 7.1 模块整体完成度
 
@@ -212,6 +206,7 @@ M1–M13-bis 均为 ✅ 完整，下列为需知的设计取舍/边界：
 | 模块 | 说明 |
 |------|------|
 | M3 Observability | SurpriseIndex 基础版（两组件简化版）；完整版在 M9 |
+| M4 Agent Kernel | 自主 Agentic 循环内核上线（ADR-0115），模型驱动工具并发执行与前缀缓存优化；经典 staged 模式冻结为兜底 |
 | M7 Tool Sandbox / MCP | sandbox 内部不重复 Policy 校验（设计决策，依赖 ExecuteTool 前置 PolicyGate） |
 | M9 Self-Improvement | 见下方 [M9 补充](#m9-补充) |
 | M11 Policy / Safety | `polaris_cedar_degraded_total` Counter 已实现（定义于 `internal/observability/metrics/metrics.go`，埋点于 `internal/security/policy/gate.go`） |
@@ -227,9 +222,15 @@ M1–M13-bis 均为 ✅ 完整，下列为需知的设计取舍/边界：
 
 ### 7.2 已落码的跨模块重构（原"已知缺口"，均已闭环）
 
+- **自主 Agent 内核重构**（ADR-0115）：重构为自主 Agentic 循环内核，由模型直接生成回复并驱动工具调用；引入单层批并发调度器、KV Cache 前缀缓存固化、动态模型提议（`switch_model`）、失控保护与 panic 恢复；经典 staged 阶段式状态机冻结并保留作为程序兜底与对比基准。
 - **M13 ChatOrchestrator 拆分**（ADR-0066 目标态，含原 ADR-0085）：`internal/gateway/session` 收敛 SSE 与 Headless 两条入口的会话生命周期编排（会话确保/历史加载/Hook 分发/斜线命令路由/压缩决策/`SystemPromptGuard` 装配/消息持久化），`chat/sse.go` 仅保留请求解码/SSE 帧翻译/错误码映射。零 `net/http` 依赖 + 唯一 FSM 轮次入口两条防退化 lint 已接入 CI。
 - **跨 Agent / 跨节点委派**（ADR-0111，含原 ADR-0084、ADR-0017 决策三）：出站外部 Agent 建模为 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 异步挂起机制 + `MCPManager.CallTool`；入站为 `/mcp`（Polaris 对端）与 `/a2a/v1`（外部 A2A 1.0）两个门面，共用一个内部委派服务。
 
 ### 7.3 审计依据
 
 2026-06-15 全量核查，其后逐 ADR 增量更新；2026-10-12 文档优化轮次对总览章节做代码对齐。
+
+---
+
+**END OF ARCHITECTURE.md**
+

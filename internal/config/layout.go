@@ -22,21 +22,21 @@ type DataLayout struct {
 	CLISessionFile string // Root/cli_session.json
 
 	// 子目录
-	Data       string // Root/data        — SQLite + SurrealDB 数据库文件
-	Logs       string // Root/logs        — 所有日志文件
-	Config     string // Root/config      — Operator 配置覆盖、SOUL.md、prompts/
-	Extensions string // Root/extensions  — 从 Marketplace 安装的插件（含内嵌 MCP）
-	Skills     string // Root/skills      — 用户安装的技能脚本 / Wasm
-	Models     string // Root/models      — AI 模型文件（SenseVoice 等）
-	Workspace  string // Root/workspace   — Agent 每任务沙箱 VFS
-	Sessions   string // Root/sessions    — 会话 transcript（旧名 transcripts）
-	Audit      string // Root/audit       — 审计档案根目录
-	Reports    string // Root/reports     — 月度成本报告
-	Cache      string // Root/cache       — HTTP / 推理缓存
-	Hooks      string // Root/hooks       — 用户事件 Hook 脚本
-	Tmp        string // Root/tmp         — 临时下载 / 解压暂存
-	Bin        string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist、桌面版的 polaris 本体）
-	Run        string // Root/run         — 运行时状态：端口/令牌/PID，仅本机有效，不随备份迁移
+	Data           string // Root/data        — SQLite + SurrealDB 数据库文件
+	Logs           string // Root/logs        — 所有日志文件
+	Config         string // Root/config      — Operator 配置覆盖、SOUL.md、prompts/
+	Extensions     string // Root/extensions  — 从 Marketplace 安装的插件（含内嵌 MCP）
+	Skills         string // Root/skills      — 用户安装的技能脚本 / Wasm
+	Models         string // Root/models      — AI 模型文件（SenseVoice 等）
+	Workspace      string // Root/workspace   — Agent 每任务沙箱 VFS
+	Sessions       string // Root/sessions    — 会话 transcript（旧名 transcripts）
+	Audit          string // Root/audit       — 审计档案根目录
+	Reports        string // Root/reports     — 月度成本报告
+	Cache          string // Root/cache       — HTTP / 推理缓存
+	Hooks          string // Root/hooks       — 用户事件 Hook 脚本
+	Tmp            string // Root/tmp         — 临时下载 / 解压暂存
+	Bin            string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist、桌面版的 polaris 本体）
+	Run            string // Root/run         — 运行时状态：端口/令牌/PID，仅本机有效，不随备份迁移
 	Secrets        string // Root/secrets         — 机密数据目录（Vault 密钥与敏感凭据保护区）
 	Eval           string // Root/eval            — 评测数据集根目录
 	HarnessOverlay string // Root/harness_overlay — 自改进 harness 覆盖层（WP6）

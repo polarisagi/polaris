@@ -7,15 +7,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-var (
-	// InstrAgentModelRouteTotal 记录模型路由选优来源分布（ADR-0115 / WP3）。
-	// labels: source=user_lock|agent_profile|next_round|default, fallback=none|local_only|cost_limit|pool_fallback
-	InstrAgentModelRouteTotal metric.Int64Counter
-
-	// InstrLLMModelRefFallbackTotal 记录引用模型在 router 中不可用回落至 model pool 的次数。
-	// label: route=model_ref_fallback
-	InstrLLMModelRefFallbackTotal metric.Int64Counter
-)
+// 模型路由可观测性指标初始化与记录函数（ADR-0115 / WP3）。
 
 func initModelRouteInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	var err error

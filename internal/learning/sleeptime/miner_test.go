@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
 	"github.com/polarisagi/polaris/internal/learning/sleeptime"
 )
 
@@ -16,6 +17,7 @@ func TestMineFailures(t *testing.T) {
 		t.Fatalf("failed to open in-memory sqlite: %v", err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS llm_calls (

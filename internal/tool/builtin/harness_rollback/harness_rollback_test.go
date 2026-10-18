@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/builtin/harness_rollback"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -15,13 +15,13 @@ type fakeOverlayManager struct {
 	err          error
 }
 
-func (f *fakeOverlayManager) Dir() string { return "/tmp" }
-func (f *fakeOverlayManager) Init(ctx context.Context) error { return nil }
+func (f *fakeOverlayManager) Dir() string                       { return "/tmp" }
+func (f *fakeOverlayManager) Init(ctx context.Context) error    { return nil }
 func (f *fakeOverlayManager) ValidatePath(relPath string) error { return nil }
 func (f *fakeOverlayManager) WriteAndCommit(ctx context.Context, files map[string][]byte, message string, author string) (string, error) {
 	return "", nil
 }
-func (f *fakeOverlayManager) History(ctx context.Context, limit int) ([]harnessoverlay.Version, error) {
+func (f *fakeOverlayManager) History(ctx context.Context, limit int) ([]protocol.HarnessVersion, error) {
 	return nil, nil
 }
 func (f *fakeOverlayManager) Rollback(ctx context.Context, version string) error {

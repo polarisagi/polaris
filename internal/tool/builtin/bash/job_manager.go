@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -79,16 +81,19 @@ type JobManager struct {
 }
 
 var (
-	defaultJobManagerOnce sync.Once   //nolint:gochecknoglobals
-	defaultJobManager     *JobManager //nolint:gochecknoglobals
+	defaultJobManagerOnce sync.Once                  //nolint:gochecknoglobals
+	defaultJobManager     atomic.Pointer[JobManager] //nolint:gochecknoglobals
 )
 
 // GetDefaultJobManager 返回进程级共享的 JobManager 单例。
 func GetDefaultJobManager() *JobManager {
+	if jm := defaultJobManager.Load(); jm != nil {
+		return jm
+	}
 	defaultJobManagerOnce.Do(func() {
-		defaultJobManager = NewJobManager("")
+		defaultJobManager.Store(NewJobManager(""))
 	})
-	return defaultJobManager
+	return defaultJobManager.Load()
 }
 
 // NewJobManager 创建 JobManager 实例。dir 为空时使用 os.TempDir()/polaris_jobs。
@@ -96,7 +101,9 @@ func NewJobManager(dir string) *JobManager {
 	if dir == "" {
 		dir = filepath.Join(os.TempDir(), "polaris_jobs")
 	}
-	_ = os.MkdirAll(dir, 0o700)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		slog.Warn("bash job_manager: mkdir failed", "dir", dir, "err", err)
+	}
 	return &JobManager{
 		jobsDir: dir,
 		jobs:    make(map[string]*jobProcess),
@@ -159,7 +166,9 @@ func (jm *JobManager) StartJob(
 	jm.jobs[jobID] = proc
 	jm.mu.Unlock()
 
-	_ = jm.writeMetaLocked(jobPath, meta)
+	if err := jm.writeMetaLocked(jobPath, meta); err != nil {
+		slog.Warn("bash job_manager: write initial meta failed", "job_id", jobID, "err", err)
+	}
 
 	concurrent.SafeGo(context.Background(), "job_manager.waiter", func(context.Context) {
 		waitErr := cmd.Wait()
@@ -168,7 +177,9 @@ func (jm *JobManager) StartJob(
 		proc.mu.RLock()
 		m := proc.meta
 		proc.mu.RUnlock()
-		_ = jm.writeMetaLocked(jobPath, m)
+		if err := jm.writeMetaLocked(jobPath, m); err != nil {
+			slog.Warn("bash job_manager: write final meta failed", "job_id", proc.meta.JobID, "err", err)
+		}
 	})
 
 	metaCopy := meta
@@ -318,11 +329,15 @@ func (jm *JobManager) KillJob(jobID string) (*JobMeta, error) {
 
 	if proc.meta.Status == JobStatusRunning {
 		if proc.cmd != nil && proc.cmd.Process != nil {
-			_ = proc.cmd.Process.Kill()
+			if kErr := proc.cmd.Process.Kill(); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
+				slog.Debug("bash job_manager: kill process failed", "job_id", jobID, "err", kErr)
+			}
 		}
 		proc.meta.Status = JobStatusKilled
 		proc.meta.FinishedAt = time.Now()
-		_ = jm.writeMetaLocked(filepath.Join(jm.jobsDir, jobID), proc.meta)
+		if wErr := jm.writeMetaLocked(filepath.Join(jm.jobsDir, jobID), proc.meta); wErr != nil {
+			slog.Warn("bash job_manager: write killed meta failed", "job_id", jobID, "err", wErr)
+		}
 	}
 
 	metaCopy := proc.meta
@@ -350,11 +365,15 @@ func (jm *JobManager) CleanupSessionJobs(sessionID string) {
 		proc.mu.Lock()
 		if proc.meta.Status == JobStatusRunning {
 			if proc.cmd != nil && proc.cmd.Process != nil {
-				_ = proc.cmd.Process.Kill()
+				if kErr := proc.cmd.Process.Kill(); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
+					slog.Debug("bash job_manager: kill session process failed", "job_id", proc.meta.JobID, "err", kErr)
+				}
 			}
 			proc.meta.Status = JobStatusKilled
 			proc.meta.FinishedAt = time.Now()
-			_ = jm.writeMetaLocked(filepath.Join(jm.jobsDir, proc.meta.JobID), proc.meta)
+			if wErr := jm.writeMetaLocked(filepath.Join(jm.jobsDir, proc.meta.JobID), proc.meta); wErr != nil {
+				slog.Warn("bash job_manager: write session killed meta failed", "job_id", proc.meta.JobID, "err", wErr)
+			}
 		}
 		proc.mu.Unlock()
 	}

@@ -8,11 +8,11 @@ import (
 )
 
 type mockEvaluator struct {
-	baseIn   float64
-	baseOut  float64
-	candIn   float64
-	candOut  float64
-	err      error
+	baseIn  float64
+	baseOut float64
+	candIn  float64
+	candOut float64
+	err     error
 }
 
 func (m *mockEvaluator) Evaluate(ctx context.Context, overlayFiles map[string][]byte) (float64, float64, error) {

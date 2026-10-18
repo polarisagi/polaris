@@ -3,7 +3,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI + 桌面外壳; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:363 对内调度 / 3:452 MCP / 6:460 (SOFT)降级 / 6-bis:473 已知Bug修复记录 / 7:485 跨模块契约 / 8:502 Web UI 规约 / 8.6:616 834 插件聚合市场DB+流 / 8.7:647 870 自动化中心DB+流+工作流 / 8.8:752 987 电脑操控权限+Preferences / 8.9:769 1027 前端组件规范 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:368 对内调度 / 3:457 MCP / 6:465 (SOFT)降级 / 6-bis:478 已知Bug修复记录 / 7:490 跨模块契约 / 8:507 Web UI 规约 / 8.6:621 834 插件聚合市场DB+流 / 8.7:652 870 自动化中心DB+流+工作流 / 8.8:757 987 电脑操控权限+Preferences / 8.9:774 1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -211,6 +211,8 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | DELETE | `/v1/channels/{channelID}` | `sysadminHandler.Channels.HandleDeleteChannel` |
 | PUT | `/v1/channels/{channelID}` | `sysadminHandler.Channels.HandleUpdateChannel` |
 | POST | `/v1/chat/completions` | `sysadminHandler.HandleOpenAIChat` |
+| GET | `/v1/checkpoints` | `sysadminHandler.HandleListCheckpoints` |
+| POST | `/v1/checkpoints/restore` | `sysadminHandler.HandleRestoreCheckpoint` |
 | GET | `/v1/config` | `handleGetConfig` |
 | GET | `/v1/config/budget` | `sysadminHandler.HandleGetBudget` |
 | PUT | `/v1/config/budget` | `sysadminHandler.HandleSetBudget` |
@@ -228,6 +230,8 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/eval/run` | `handleEvalRun` |
 | GET | `/v1/export/backup` | `sysadminHandler.HandleExportBackup` |
 | GET | `/v1/export/trajectories` | `sysadminHandler.HandleExportTrajectories` |
+| GET | `/v1/harness/history` | `sysadminHandler.HandleHarnessHistory` |
+| POST | `/v1/harness/rollback` | `sysadminHandler.HandleHarnessRollback` |
 | GET | `/v1/hooks` | `pluginHandler.HandleListHooks` |
 | DELETE | `/v1/hooks/trust` | `pluginHandler.HandleRevokeHookTrust` |
 | POST | `/v1/hooks/trust` | `pluginHandler.HandleTrustHook` |
@@ -295,6 +299,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | PUT | `/v1/providers/{providerID}` | `providerHandler.HandleUpdateProvider` |
 | GET | `/v1/providers/{providerID}/models` | `providerHandler.HandleListModels` |
 | POST | `/v1/providers/{providerID}/models` | `providerHandler.HandleCreateModel` |
+| POST | `/v1/providers/{providerID}/models/refresh` | `providerHandler.HandleRefreshModels` |
 | DELETE | `/v1/providers/{providerID}/models/{modelID}` | `providerHandler.HandleDeleteModel` |
 | PUT | `/v1/providers/{providerID}/models/{modelID}` | `providerHandler.HandleUpdateModel` |
 | POST | `/v1/providers/{providerID}/models/{modelID}/deprecate` | `providerHandler.HandleModelDeprecate` |
@@ -334,7 +339,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 165 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 170 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]

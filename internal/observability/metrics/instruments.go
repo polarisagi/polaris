@@ -122,6 +122,10 @@ var (
 	// 非任意外部输入）；outcome 固定枚举 "success"/"error"。
 	InstrMCPAppToolCallsTotal metric.Int64Counter // labels: mcp_server, outcome
 
+	// [ADR-0115 / WP3] 模型路由与回退可观测性
+	InstrAgentModelRouteTotal     metric.Int64Counter
+	InstrLLMModelRefFallbackTotal metric.Int64Counter
+
 	instrOnce sync.Once
 )
 

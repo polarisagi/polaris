@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -79,7 +80,9 @@ func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol pol
 
 	// Unix domain socket 路径长度限制（macOS 104 字节，Linux 108 字节），使用简短前缀
 	sockPath := filepath.Join("/tmp", fmt.Sprintf("pb_%s.sock", uuid.NewString()[:8]))
-	_ = os.Remove(sockPath) // 防御性清理旧残留
+	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
+		slog.Debug("code_act bridge: cleanup old socket", "path", sockPath, "err", err)
+	}
 	l, err := net.Listen("unix", sockPath)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act bridge: listen unix failed", err)
@@ -87,7 +90,9 @@ func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol pol
 
 	if err := os.Chmod(sockPath, 0600); err != nil {
 		_ = l.Close()
-		_ = os.Remove(sockPath)
+		if rmErr := os.Remove(sockPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Debug("code_act bridge: cleanup socket failed", "path", sockPath, "err", rmErr)
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act bridge: chmod failed", err)
 	}
 
@@ -164,10 +169,13 @@ func (s *BridgeServer) handleConn(ctx context.Context, conn net.Conn) {
 func (s *BridgeServer) writeResponse(conn net.Conn, resp bridgeResponse) {
 	bytes, err := json.Marshal(resp)
 	if err != nil {
+		slog.Warn("code_act bridge: marshal response failed", "err", err)
 		return
 	}
 	bytes = append(bytes, '\n')
-	_, _ = conn.Write(bytes)
+	if _, err := conn.Write(bytes); err != nil {
+		slog.Debug("code_act bridge: write response failed", "err", err)
+	}
 }
 
 func (s *BridgeServer) dispatch(ctx context.Context, req bridgeRequest) bridgeResponse {
@@ -296,7 +304,9 @@ func (s *BridgeServer) Close() {
 		_ = s.listener.Close()
 	}
 	if s.sockPath != "" {
-		_ = os.Remove(s.sockPath)
+		if err := os.Remove(s.sockPath); err != nil && !os.IsNotExist(err) {
+			slog.Debug("code_act bridge: remove socket on close failed", "path", s.sockPath, "err", err)
+		}
 	}
 }
 

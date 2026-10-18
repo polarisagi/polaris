@@ -2,7 +2,7 @@
 
 > Go 状态机持有控制流，LLM 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 > 代码位置：`internal/agent/`（FSM 在 `internal/agent/fsm/`；DAG 执行器与 S_VALIDATE 四层校验物理实现在 `internal/execute/dag/`，ADR-0046；FSM 经 `internal/agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口驱动，唯一决定何时进入 S_EXECUTE/S_VALIDATE）。
-<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:133 Suspend-on-Idle / 3:149 S_VALIDATE / 4:188 DAG（Directed Acyclic Graph，有向无环图） / 5:258 System1/2 / 6:282 WorldModel / 7:290 推理预算 / 8:337 CrashRecovery / 8-bis:374 444 Handoff唤醒事件化+无损续跑 / 12:384 454 已知Bug修复记录 / 13:390 463 (SOFT)降级 / 14:407 481 跨模块契约 / 15:431 505 默认参数 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:155 Suspend-on-Idle / 3:171 S_VALIDATE / 4:210 DAG（Directed Acyclic Graph，有向无环图） / 5:280 System1/2 / 6:304 WorldModel / 7:312 推理预算 / 8:359 CrashRecovery / 8-bis:396 Handoff唤醒事件化+无损续跑 / 12:406 已知Bug修复记录 / 13:412 463 (SOFT)降级 / 14:429 481 跨模块契约 / 15:453 505 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -35,6 +35,10 @@ System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath�
 ---
 
 ## 1. 状态机
+
+> [!NOTE] 状态机架构演进与冻结状态（ADR-0115）
+> 经典阶段式状态机（staged 模式：S_PERCEIVE → S_PLAN → S_VALIDATE → S_EXECUTE → S_REFLECT → S_RESPOND）已**冻结**，保留作为程序兜底机制与对比基线。
+> 默认运行模式为自主循环架构（agentic 模式：见 §1.2），由模型原生驱动工具调用，程序保证安全闸门与失控熔断。
 
 状态枚举权威定义：`pkg/types/enums_agent.go`（AgentState 共 **14 态**：Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed/Respond；Respond 追加在枚举尾部以保持落盘状态值不变，ADR-0098 决策二）。转移注册：`internal/agent/fsm/transitions.go` + `internal/agent/fsm/transitions_respond.go`。`[HE-Rule-5]` LLM 结构化填空三态输出：TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)；S_RESPOND 是唯一面向用户的自由文本态（§1.1）。
 
@@ -113,6 +117,24 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
 - **步数上限**：`m4_kernel.max_steps`（回合内 FSM 触发次数，覆盖完整工具回合 + 观察循环 + 校验失败重规划 + 空输出重试 + 耗尽转回复）；截断经 `abortTurn` 收尾。
 - **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不丢弃已执行回合的回复。
 - **阶段契约 SSoT**：`configs/prompts/kernel/perceive.md`、`plan.md`、`reflect.md`、`respond.md`，记忆路径与降级路径同源加载；Perceive/Reflect 请求 `json_object` 约束解码。
+
+### 1.2 自主循环内核（Agentic Loop，ADR-0115）
+
+自主循环内核采用「模型驱动、程序兜底」架构（ADR-0115），模型直接面对会话上下文生成文本或发起工具调用：
+
+```text
+S_IDLE ──(TriggerIntentReceived)──→ S_LOOP ──(TriggerLoopStepDone)──→ S_LOOP_EXEC ──(TriggerLoopExecDone)──→ S_LOOP ──(TriggerLoopDone)──→ S_COMPLETE
+                                      │                                                                        ↑
+                                      └──(无工具调用 / 最终回答)────────────────────────────────────────────────┘
+```
+
+1. **单层批并发执行**：模型在单个响应中可同时发出多个工具调用（如并发读取多个文件），内核并发执行所有工具调用，收集结果并按 `tool_result` 单调追加回会话历史，再驱动下一轮模型推理。
+2. **前缀缓存友好（KV Cache）**：严格保持不可变稳定核（`ImmutableCoreFields`），System Prompt、工具元数据与覆盖层提示词（`prompt_addenda`）在会话生命周期内前缀完全一致，多轮调用单调追加，KV Cache 命中率由 staged 的 12% 跃升至 50%~65%，端到端成本降低近 90%（详见 `local_playground/upgrade/EVAL-RESULT.md`）。
+3. **安全闸门不旁路**：循环中每个工具调用严格经过 `S_VALIDATE`，执行参数校验、路径守卫（`path_guard`）、Cedar 策略评估以及出站污点检查，高风险操作需持有 HITL 豁免令牌；所有工具执行结果与版本回滚均写入审计事件轨迹。
+4. **双重失控保护**：
+   - 软保护：达到 `LoopWarningRounds`（默认 20 轮）时向模型注入失控告警提示词，促使模型及时收敛；
+   - 硬保护：达到 `RunawayGuardDefaultRounds`（standard 200 轮，hardened 50 轮）时强行熔断并转移至 `S_FAILED`。
+5. **网关插话与控制**：用户在多轮循环执行期间可随时发送新消息或转向指令，内核在下一步模型调用前合并插话内容，支持流式交互与动态中断。
 
 **回合上下文（ADR-0105）**
 

@@ -17,6 +17,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	db.SetMaxOpenConns(1)
 	schema := `
 	CREATE TABLE providers (
 		id TEXT PRIMARY KEY,
