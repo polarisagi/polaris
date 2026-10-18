@@ -158,6 +158,17 @@
                   </button>
                   <span x-show="!$store.plugins.setupFor(entry).setup.available" class="text-[10px] text-warning"
                         x-text="$store.plugins.reasonText($store.plugins.setupFor(entry).setup.reason)"></span>
+                  <!-- 自身就绪状态（statusTool）：ready 未知时不显示；message 作悬停提示，未就绪时同时以小字展示 -->
+                  <template x-if="$store.plugins.readyFor(entry)">
+                    <span class="flex items-center gap-1">
+                      <span class="badge badge-xs"
+                            :class="$store.plugins.readyFor(entry).ready ? 'badge-success' : 'badge-warning'"
+                            :title="$store.plugins.readyFor(entry).message"
+                            x-text="$store.i18n.t($store.plugins.readyFor(entry).ready ? 'plugins_setup_ready' : 'plugins_setup_needed')"></span>
+                      <span x-show="!$store.plugins.readyFor(entry).ready && $store.plugins.readyFor(entry).message"
+                            class="text-[10px] opacity-70" x-text="$store.plugins.readyFor(entry).message"></span>
+                    </span>
+                  </template>
                 </div>
               </template>
 
@@ -166,6 +177,7 @@
                 <div class="flex flex-wrap items-center gap-2 rounded border border-warning/40 bg-warning/10 p-2">
                   <span x-show="h.ready === false" class="text-[11px] text-warning flex-1 min-w-0"
                         x-text="$store.i18n.t('plugins_dep_needs_setup').replace('{0}', h.name)"></span>
+                  <span x-show="h.ready === false && h.message" class="text-[10px] opacity-70 w-full" x-text="h.message"></span>
                   <span x-show="h.ready !== false" class="text-[11px] opacity-70 flex-1 min-w-0"
                         x-text="h.name"></span>
                   <button class="btn btn-xs btn-warning"

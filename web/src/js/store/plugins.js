@@ -28,6 +28,9 @@ Alpine.store('plugins', {
   // setupHints[pluginRow.id] 为"依赖插件需要先完成设置"的提示列表，随 load() 刷新。
   setupBusy: {},
   setupHints: {},
+  // setupReady[pluginRow.id] = { ready: boolean, message } —— 声明了 statusTool 的插件自身就绪状态；
+  // ready 未知（null）的不入表。与依赖提示共用同一轮查询，随 load() 刷新。
+  setupReady: {},
 
   // 已安装插件详情（config/apps/dependencies/agents/hooks/channels，见 §插件详情弹窗）。
   // installedIndex: entry.id（目录条目 ID，两种命名空间之一）→ pluginRow（plugins 表行，
@@ -210,6 +213,12 @@ Alpine.store('plugins', {
     return row?.setup?.tool ? { row, setup: row.setup } : null
   },
 
+  // readyFor 自身卡片的就绪标记；未声明 statusTool 或状态未知返回 null（不显示）。
+  readyFor(entry) {
+    const row = this.installedPluginFor(entry)
+    return row ? (this.setupReady[row.id] || null) : null
+  },
+
   hintsFor(entry) {
     const row = this.installedPluginFor(entry)
     return row ? (this.setupHints[row.id] || []) : []
@@ -263,17 +272,25 @@ Alpine.store('plugins', {
   async loadSetupHints() {
     const byName = {}
     for (const p of this.installed) if (p.setup?.tool) byName[p.name] = p
-    if (Object.keys(byName).length === 0) { this.setupHints = {}; return }
+    if (Object.keys(byName).length === 0) { this.setupHints = {}; this.setupReady = {}; return }
+    // 自身卡片与依赖提示共用 readyCache：同一插件一轮 load() 只查一次 setup-status。
     const readyCache = {}
-    const readyOf = async (dep) => {
-      if (!dep.setup.statusTool) return null
+    const statusOf = (dep) => {
+      if (!dep.setup.statusTool) return Promise.resolve({ ready: null, message: '' })
       if (!(dep.id in readyCache)) {
         readyCache[dep.id] = fetch(`/v1/plugins/${encodeURIComponent(dep.id)}/setup-status`, { headers: authHeaders() })
-          .then(r => (r.ok ? r.json() : null)).then(d => (d && typeof d.ready === 'boolean' ? d.ready : null))
-          .catch(() => null)
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => ({ ready: d && typeof d.ready === 'boolean' ? d.ready : null, message: (d && d.message) || '' }))
+          .catch(() => ({ ready: null, message: '' }))
       }
       return readyCache[dep.id]
     }
+    const own = {}
+    await Promise.all(Object.values(byName).map(async (p) => {
+      const st = await statusOf(p)
+      if (st.ready !== null) own[p.id] = st
+    }))
+    this.setupReady = own
     const hints = {}
     for (const p of this.installed) {
       try {
@@ -284,9 +301,9 @@ Alpine.store('plugins', {
         for (const d of deps) {
           const dep = byName[d.name]
           if (!dep || dep.id === p.id) continue
-          const ready = await readyOf(dep)
+          const { ready, message } = await statusOf(dep)
           if (dep.setup.statusTool && ready !== false) continue
-          list.push({ name: dep.display_name || dep.name, row: dep, ready, hasStatus: !!dep.setup.statusTool })
+          list.push({ name: dep.display_name || dep.name, row: dep, ready, message, hasStatus: !!dep.setup.statusTool })
         }
         if (list.length) hints[p.id] = list
       } catch { /* 静默：依赖提示是附加信息 */ }

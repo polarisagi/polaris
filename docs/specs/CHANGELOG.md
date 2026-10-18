@@ -5,6 +5,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-18（插件设置向导审查修复）
+
+- **[修复]** `loadInstalledPlugin` 仅 `sql.ErrNoRows` 视为未安装，其它读错误返回 500 `load_failed`；`setup-status` 读错误/清单损坏改为 200 `{ready:null,reason:load_failed}`。
+- **[修复]** 新会话设置落库失败时经 `SetupStore.DeleteSession` 回滚（外键级联清理视图与消息），不再遗留空会话；已有会话不删除。
+- **[修复]** 插件页：声明 `statusTool` 的插件自身卡片显示就绪标记与 `message`；补 i18n `plugins_setup_reason_invalid_body`/`load_failed`、`plugins_setup_ready`/`needed`。详见 M13-bis §5.3.3。
+
 ## 2026-10-17（插件设置向导 — 含**契约变更**）
 
 - **[契约]** 清单私有命名空间 `extensions["ai.polarisagi"]` 新增 `setupTool`/`statusTool`；`pluginspec.Plugin` 新增 `SetupTool`/`StatusTool`/`DefaultPrompts`（`interface.defaultPrompt` 归一，≤3 条）。
