@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -24,9 +25,10 @@ import (
 // 并发模型：同一 liveSession 同一时刻只能处理一次 exec 调用（单个解释器无法
 // 并行执行两段代码），execMu 串行化；跨 session 并发不受影响。
 type liveSession struct {
-	sessionID string
-	language  string // "python" | "bash"
-	workDir   string // 会话专属工作目录，kill 时一并清理
+	sessionID      string
+	language       string // "python" | "bash"
+	workDir        string // 会话专属工作目录，kill 时一并清理
+	cleanupWorkDir bool
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -75,7 +77,7 @@ func (s *liveSession) kill() {
 	}
 	_, _ = s.cmd.Process.Wait() //nolint:errcheck // 回收僵尸进程，退出状态不关心
 	_ = s.pr.Close()
-	if s.workDir != "" {
+	if s.workDir != "" && s.cleanupWorkDir {
 		_ = os.RemoveAll(s.workDir)
 	}
 }
@@ -224,4 +226,106 @@ func (s *liveSession) execBash(ctx context.Context, code string) (*sessionExecRe
 		}
 		return &sessionExecResult{ok: r.exitCode == 0, output: r.output}, nil
 	}
+}
+
+func (p *PersistentSandbox) reapLoop(ctx context.Context) {
+	ticker := time.NewTicker(p.cfg.ReapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.reapIdleSessions()
+		}
+	}
+}
+
+func (p *PersistentSandbox) reapIdleSessions() {
+	p.mu.Lock()
+	var toReap []*liveSession
+	for id, sess := range p.sessions {
+		if !sess.alive() || sess.idle(p.cfg.IdleTTL) {
+			toReap = append(toReap, sess)
+			delete(p.sessions, id)
+		}
+	}
+	p.mu.Unlock()
+	for _, sess := range toReap {
+		sess.kill()
+	}
+}
+
+func (p *PersistentSandbox) validateSpec(spec SandboxSpec) error {
+	if !spec.HostExecution && !p.Available() {
+		return apperr.New(apperr.CodeUnimplemented, "sandbox: L4 persistent backend unavailable on this host")
+	}
+	if spec.HostExecution && p.pythonPath == "" && p.bashPath == "" {
+		return apperr.New(apperr.CodeUnimplemented, "sandbox: L4 persistent backend unavailable on this host")
+	}
+	if spec.SessionID == "" {
+		return apperr.New(apperr.CodeInvalidInput, "sandbox: L4 persistent requires SessionID")
+	}
+	lang := spec.Language
+	if lang != "python" && lang != "bash" {
+		return apperr.New(apperr.CodeInvalidInput, "sandbox: L4 persistent supports python/bash only, got "+lang)
+	}
+	if (lang == "python" && p.pythonPath == "") || (lang == "bash" && p.bashPath == "") {
+		return apperr.New(apperr.CodeUnimplemented, "sandbox: L4 persistent: interpreter for "+lang+" not found on host")
+	}
+	return nil
+}
+
+func (p *PersistentSandbox) buildSessionCmd(ctx context.Context, spec SandboxSpec, execPath string, execArgs []string, workDir string) (*exec.Cmd, error) {
+	if spec.HostExecution {
+		cmd := exec.Command(execPath, execArgs...) //nolint:gosec // full 档宿主执行已显式鉴权并审计
+		cmd.Dir = workDir
+		cmd.Env = append(os.Environ(), spec.ExtraEnv...)
+		return cmd, nil
+	}
+
+	sctx := protocol.SandboxContext{
+		CallerType:    protocol.CallerCodeAct,
+		ExecPath:      execPath,
+		ExecArgs:      execArgs,
+		Workdir:       workDir,
+		AllowedPaths:  append([]string{workDir}, spec.AllowedPaths...),
+		NetworkPolicy: protocol.NetPolicyDeny,
+		EnvExtra:      spec.ExtraEnv,
+	}
+	wrapped, err := p.argvWrapper.WrapArgv(ctx, sctx)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: sandbox wrap failed, refusing to spawn unsandboxed (fail-closed)", err)
+	}
+
+	cmd := exec.Command(wrapped.Executable, wrapped.Argv...) //nolint:gosec // Executable/Argv 来自 Rust 沙箱封装，非用户直接输入
+	cmd.Dir = workDir
+	if wrapped.EnvInArgv {
+		cmd.Env = []string{}
+	} else {
+		cmd.Env = wrapped.Env
+	}
+	return cmd, nil
+}
+
+func (p *PersistentSandbox) prepareSessionEnv(spec SandboxSpec) (string, []string, string, bool, error) {
+	var execPath string
+	var execArgs []string
+	switch spec.Language {
+	case "python":
+		execPath = p.pythonPath
+		execArgs = []string{"-u", "-c", pythonSessionHarness}
+	case "bash":
+		execPath = p.bashPath
+		execArgs = []string{"--noprofile", "--norc", "-s"}
+	}
+
+	if spec.WorkDir != "" {
+		return execPath, execArgs, spec.WorkDir, false, nil
+	}
+	workDir, err := os.MkdirTemp("", "polaris_l4_session_")
+	if err != nil {
+		return "", nil, "", false, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: create session workdir", err)
+	}
+	return execPath, execArgs, workDir, true, nil
 }

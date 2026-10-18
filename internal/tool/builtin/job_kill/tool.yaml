@@ -1,0 +1,2 @@
+name: job_kill
+description: Terminate a running background job.

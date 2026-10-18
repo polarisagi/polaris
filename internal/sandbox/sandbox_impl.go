@@ -115,4 +115,8 @@ type SandboxSpec struct {
 	SessionID string
 	// Language 配合 SessionID 使用，标识长驻解释器语言（当前仅 "python"|"bash"）。
 	Language string
+	// HostExecution full 档或宿主模式下直接在宿主运行，不经容器/Seatbelt 封装。
+	HostExecution bool
+	// WorkDir 可选的工作目录，如果不指定则使用临时目录或当前工作目录。
+	WorkDir string
 }

@@ -445,6 +445,13 @@ func (s *Server) SetHookRunner(r *hook.Runner) {
 	}
 }
 
+// RegisterSessionEndCallback 注册在 SessionEnd 时触发的清理回调函数。
+func (s *Server) RegisterSessionEndCallback(fn func(ctx context.Context, sessionID, reason string)) {
+	if s.hooks != nil {
+		s.hooks.RegisterSessionEndCallback(fn)
+	}
+}
+
 // SetElicitationBroker 注入 MCP elicitation 网关侧 broker，启用
 // GET /v1/elicitations 与 POST /v1/elicitations/{id}。
 func (s *Server) SetElicitationBroker(b *elicitation.Broker) { s.elicitationBroker = b }

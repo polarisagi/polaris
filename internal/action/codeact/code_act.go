@@ -3,15 +3,15 @@ package codeact
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
-
-	"github.com/polarisagi/polaris/internal/security/taint"
+	"path/filepath"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -46,6 +46,8 @@ type CodeAct struct {
 	tokenMgr       tokenManager           // Capability Token 管理器
 	stateDir       string                 // GD-4-002: REPL 状态快照根目录；空值时 StatefulSession 请求静默降级为一次性执行
 	stagingBackend ScriptStagingBackend   // 批次4 XR-11 修复：临时脚本落盘目标；nil 时降级为 os.CreateTemp（见 code_act_script_staging.go）
+	toolExec       ToolBridgeExecutor     // ADR-0115 WP5: 工具桥执行器
+	policy         policy.Policy          // ADR-0115 WP5: 安全策略
 }
 
 type govAgent interface {
@@ -113,8 +115,6 @@ func WithTokenManager(mgr tokenManager) CodeActOption {
 	}
 }
 
-// CodeActRequest CodeAct 执行请求。
-
 // AuditRecorder CodeAct 审计写入的消费端接口（生产由 security.AuditTrail 满足）。
 //
 // 2026-09-20（GR-4.2-005 复核）：此前依赖整个 protocol.ToolExecutor（4 个方法）却只用
@@ -135,167 +135,22 @@ func NewCodeAct(envelope *sandbox.ExecEnvelope, auditor AuditRecorder, opts ...C
 	return ca
 }
 
-func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req protocol.CodeActRequest) error {
-	if err := ca.validateBasic(req); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
-	}
-	if err := ca.validatePolicyAndEnv(ctx, req); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
-	}
-	if err := ca.validateAST(req); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
-	}
-	if err := ca.validateL1(req); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
-	}
-	return ca.validateL2(ctx, req)
-}
-
-func (ca *CodeAct) validateBasic(req protocol.CodeActRequest) error {
-	if req.Code == "" {
-		return apperr.New(apperr.CodeInternal, "code_act: code is empty")
-	}
-	if req.Language != "python" && req.Language != "bash" {
-		return apperr.New(apperr.CodeInternal, fmt.Sprintf("code_act: unsupported language %q (allowed: python|bash)", req.Language))
-	}
-	if req.CapabilityID == "" {
-		return apperr.New(apperr.CodeForbidden, "code_act: capability_id required (inv_global_07)")
-	}
-	if ca.maxCodeSize > 0 && len(req.Code) > ca.maxCodeSize {
-		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("code_act: code size %d bytes exceeds maximum limit of %d bytes", len(req.Code), ca.maxCodeSize))
-	}
-	return nil
-}
-
-func (ca *CodeAct) validatePolicyAndEnv(ctx context.Context, req protocol.CodeActRequest) error {
-	if ca.envelope == nil {
-		return apperr.New(apperr.CodeInternal, "code_act: envelope not available (fail-closed)")
-	}
-	if ca.govAgent == nil {
-		return apperr.New(apperr.CodeInternal,
-			"code_act: governance agent not initialized, refusing code execution (fail-closed)")
-	}
-	if ca.tokenMgr == nil {
-		return apperr.New(apperr.CodeInternal, "code_act: token manager not initialized (fail-closed)")
-	}
-
-	tok, err := ca.tokenMgr.Lookup(req.CapabilityID)
-	if err != nil {
-		return apperr.New(apperr.CodeForbidden, "code_act: invalid capability token")
-	}
-	if verifyErr := ca.tokenMgr.Verify(tok); verifyErr != nil {
-		return apperr.New(apperr.CodeForbidden, "code_act: capability token verification failed")
-	}
-	// 兑现 Claims.MaxCallsPerTask（2026-08-06 修复）：Verify 只覆盖签名/过期/撤销，
-	// "还能用几次"是有状态语义，必须在真正放行副作用之前单独消费一次。
-	// 本处是 code_act 唯一的执行入口，放在这里等价于"每次真实执行消费一次"。
-	if consumeErr := ca.tokenMgr.Consume(req.CapabilityID); consumeErr != nil {
-		return apperr.Wrap(apperr.CodeForbidden, "code_act: capability token consumption refused", consumeErr)
-	}
-
-	return nil
-}
-
-func (ca *CodeAct) validateAST(req protocol.CodeActRequest) error {
-	if ca.astChecker == nil {
-		return nil
-	}
-	var err error
-	switch req.Language {
-	case "python":
-		err = ca.astChecker.CheckPython([]byte(req.Code))
-	case "bash":
-		err = ca.astChecker.CheckBash([]byte(req.Code))
-	}
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "code_act: L0 AST 检查失败", err)
-	}
-	return nil
-}
-
-func (ca *CodeAct) validateL1(req protocol.CodeActRequest) error {
-	caps := map[string]bool{}
-	if err := ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "code_act: L1 governance 检查失败", err)
-	}
-	return nil
-}
-
-func (ca *CodeAct) validateL2(ctx context.Context, req protocol.CodeActRequest) error {
-	// 注意：不能用 req.TaintLevel 做跳过判断——TaintLevel 来自调用方（LLM tool-call
-	// JSON 参数 / HTTP 请求体，见 agent_execute.go / handler_codeact.go），
-	// 是调用方自报的值，可被伪造成低污点从而绕过 L2。CodeAct 的存在意义就是执行
-	// "LLM 生成的代码"，按定义恒为最高风险（Execute() 内构造 sandbox.ExecRequest
-	// 时已硬编码 TaintLevel:TaintHigh，不受 req.TaintLevel 影响）——L2 语义审查同理，
-	// 只要配置了 reviewer 就必须跑，不能被调用方声明的污点等级绕开。
-	if ca.reviewer == nil {
-		return nil
-	}
-	risk, err := ca.reviewer.Review(ctx, req.Code)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "code_act: L2 peer review failed", err)
-	}
-	if risk == "danger" {
-		return apperr.New(apperr.CodeForbidden, "code_act: L2 peer review rejected (danger)")
-	}
-	if risk == "warning" {
-		return ca.requestHITLForWarning(ctx, req)
-	}
-	return nil
-}
-
-func (ca *CodeAct) requestHITLForWarning(ctx context.Context, req protocol.CodeActRequest) error {
-	if ca.hitlGateway == nil {
-		return apperr.New(apperr.CodeForbidden, "code_act: L2 peer review rejected (warning - needs HITL, but no HITL gateway available)")
-	}
-	resp, err := ca.hitlGateway.Prompt(ctx, types.HITLPrompt{
-		ID:             req.SessionID,
-		CheckpointType: "code_act_warning",
-		PromptText:     "LLM generated code flagged as warning. Approve execution?",
-		Options: []types.HITLOption{
-			{Key: "approve", Label: "Approve"},
-			{Key: "deny", Label: "Deny"},
-		},
-	})
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "code_act: HITL prompt failed", err)
-	}
-	if resp != nil && resp.Approved {
-		return nil
-	}
-	return apperr.New(apperr.CodeForbidden, "code_act: L2 peer review rejected (warning - HITL denied)")
-}
-
 // Execute 执行 LLM 生成的代码（强制 Sbx-L3 + Cedar 门控）。
 func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*protocol.CodeActResult, error) {
-	// 前置校验与权限检查
+	// 前置校验与权限检查（实现移至 code_act_validate.go，R7 行数治理）
 	if err := ca.validateExecuteRequest(ctx, req); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "CodeAct.Execute", err)
 	}
 
-	// 构造沙箱运行规格
-	// D4/ADR-0008：StatefulSession 请求优先尝试 L4 长驻会话（真正的解释器进程
-	// 跨调用存活，而非 pickle/env 快照）。这个决策必须在构造 execCode 之前
-	// 就确定下来——L4 可用时发送原始代码（长驻进程自己保有状态，不需要样板
-	// 包装；反之样板包装反而会破坏协议：pickle 快照假设"每次调用都是全新
-	// 进程"，套在一个从不重启的长驻进程上没有意义），L4 不可用时维持原有
-	// pickle/env 包装路径不变（GD-4-002，零回归）。
-	useL4 := req.StatefulSession && req.SessionID != "" &&
-		(req.Language == "python" || req.Language == "bash") &&
-		ca.envelope.PersistentSandboxAvailable()
+	// ADR-0115 WP5: 启动专有工具桥服务（T6 原则）
+	bridgeSrv := ca.startBridgeIfEligible(ctx, req)
+	if bridgeSrv != nil {
+		defer bridgeSrv.Close()
+	}
 
-	var execCode string
-	var err error
-	if useL4 {
-		execCode = req.Code
-	} else {
-		// GD-4-002: StatefulSession=true 时在真正执行的脚本首尾注入状态快照样板
-		// （不改变 req.Code 本身，L0/L1/L2 审查已在上面 validateExecuteRequest 中
-		// 针对原始 req.Code 完成，此处只影响实际执行的字节，不影响审查范围）。
-		execCode, err = ca.buildExecutableScript(req)
-		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "code_act: build executable script failed", err)
-		}
+	execCode, useL4, err := ca.prepareExecCode(req)
+	if err != nil {
+		return nil, err
 	}
 
 	// 安全策略：LLM 生成代码写入临时文件执行，禁止通过 -c 参数拼接（shell 注入向量）。
@@ -309,7 +164,19 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	}
 	defer cleanupScript() // 执行后立即删除，防止敏感代码驻留磁盘
 
+	// 确保同目录存在 polaris.py 模块，供 Python 脚本直接 import polaris
+	if bridgeSrv != nil {
+		if perr := EnsurePolarisPythonModule(filepath.Dir(tmpFile)); perr != nil {
+			slog.WarnContext(ctx, "codeact: write polaris.py failed", "err", perr)
+		}
+	}
+
 	tok, _ := ca.tokenMgr.Lookup(req.CapabilityID)
+
+	var extraEnv []string
+	if bridgeSrv != nil {
+		extraEnv = append(extraEnv, "POLARIS_BRIDGE_SOCKET="+bridgeSrv.SocketPath())
+	}
 
 	execReq := sandbox.ExecRequest{
 		Principal: sandbox.PrincipalAgent, Kind: sandbox.KindScriptExecute,
@@ -322,6 +189,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 		Input: []byte("{}"), ScriptPath: tmpFile,
 		CapToken:   tok,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
+		ExtraEnv: extraEnv,
 	}
 	if useL4 {
 		// 只有真正按 L4 路径构造了 execCode（未经 pickle 包装）时才要求 Execute()
@@ -338,12 +206,17 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: sandbox execution failed", err)
 	}
 
-	return ca.finalizeExecuteResult(ctx, req, res)
+	highestTaint := types.TaintHigh
+	if bridgeSrv != nil && bridgeSrv.HighestTaint() > highestTaint {
+		highestTaint = bridgeSrv.HighestTaint()
+	}
+
+	return ca.finalizeExecuteResult(ctx, req, res, highestTaint)
 }
 
 // finalizeExecuteResult 计算退出码、二次 PII 脱敏输出、写入全链路审计并组装最终结果
 // （从 Execute 拆出，gocyclo 治理，行为不变）。
-func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeActRequest, res *sandbox.ExecResult) (*protocol.CodeActResult, error) {
+func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeActRequest, res *sandbox.ExecResult, finalTaint types.TaintLevel) (*protocol.CodeActResult, error) {
 	exitCode := 0
 	out := res.Output
 	if !res.Success {
@@ -378,7 +251,7 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 			"agent_id":      req.AgentID,
 			"language":      req.Language,
 			"capability_id": req.CapabilityID,
-			"taint_level":   types.TaintHigh, // 与 Execute() 内 sandbox.ExecRequest 的强制值保持一致，
+			"taint_level":   finalTaint,
 			"exit_code":     exitCode,
 			"latency_ms":    res.LatencyMs,
 		})
@@ -389,7 +262,7 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 	}
 
 	return &protocol.CodeActResult{
-		Output:    taint.NewTaintedString(string(out), taint.TaintSource{Module: "action/codeact", OriginTaintLevel: types.TaintHigh}, "codeact_sandbox"),
+		Output:    taint.NewTaintedString(string(out), taint.TaintSource{Module: "action/codeact", OriginTaintLevel: finalTaint}, "codeact_sandbox"),
 		ExitCode:  exitCode,
 		LatencyMs: res.LatencyMs,
 	}, nil
@@ -433,4 +306,31 @@ func writeTempScript(language, code string) (string, error) {
 	}
 
 	return f.Name(), nil
+}
+
+func (ca *CodeAct) startBridgeIfEligible(ctx context.Context, req protocol.CodeActRequest) *BridgeServer {
+	if req.Language != "python" || ca.toolExec == nil {
+		return nil
+	}
+	bs, berr := StartBridgeServer(ctx, ca.toolExec, ca.policy, types.TaintHigh)
+	if berr != nil {
+		slog.WarnContext(ctx, "codeact: start tool bridge failed, proceeding without bridge", "err", berr)
+		return nil
+	}
+	return bs
+}
+
+func (ca *CodeAct) prepareExecCode(req protocol.CodeActRequest) (string, bool, error) {
+	useL4 := req.StatefulSession && req.SessionID != "" &&
+		(req.Language == "python" || req.Language == "bash") &&
+		ca.envelope.PersistentSandboxAvailable()
+
+	if useL4 {
+		return req.Code, true, nil
+	}
+	code, err := ca.buildExecutableScript(req)
+	if err != nil {
+		return "", false, apperr.Wrap(apperr.CodeInternal, "code_act: build executable script failed", err)
+	}
+	return code, false, nil
 }

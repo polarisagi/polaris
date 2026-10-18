@@ -396,6 +396,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		nil,
 		sb.Store.DB(),
 		modelcatalog.NewCatalogManager(sb.Store.DB(), sb.Vault, sb.SafeHTTP),
+		persistentSandbox,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

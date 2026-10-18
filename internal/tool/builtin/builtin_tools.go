@@ -32,6 +32,9 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_task_result"
 	"github.com/polarisagi/polaris/internal/tool/builtin/glob"
 	"github.com/polarisagi/polaris/internal/tool/builtin/grep"
+	"github.com/polarisagi/polaris/internal/tool/builtin/job_kill"
+	"github.com/polarisagi/polaris/internal/tool/builtin/job_output"
+	"github.com/polarisagi/polaris/internal/tool/builtin/job_status"
 	"github.com/polarisagi/polaris/internal/tool/builtin/list_dir"
 	"github.com/polarisagi/polaris/internal/tool/builtin/list_models"
 	"github.com/polarisagi/polaris/internal/tool/builtin/multi_edit"
@@ -84,7 +87,13 @@ func RegisterBuiltinTools(
 	// list_models 工具依赖（ADR-0115 WP3）
 	db protocol.SQLQuerier,
 	modelCatalogMgr *modelcatalog.CatalogManager,
+	persistentSbx ...*sandbox.PersistentSandbox,
 ) error {
+	var pSbx *sandbox.PersistentSandbox
+	if len(persistentSbx) > 0 {
+		pSbx = persistentSbx[0]
+	}
+
 	if webDeps.Dialer == nil {
 		webDeps.Dialer = dialer
 	}
@@ -96,16 +105,13 @@ func RegisterBuiltinTools(
 
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
-	defs := []struct {
-		name string
-		fn   sandbox.InProcessFn
-	}{
+	defs := append(make([]builtinDef, 0, 48), []builtinDef{
 		{"read_file", read_file.MakeReadFileFn(allowedPaths)},
 		{"list_dir", list_dir.MakeListDirFn(allowedPaths)},
 		{"write_file", write_file.MakeWriteFileFn(allowedPaths)},
 		{"web_fetch", web_fetch.MakeWebFetchFn(webDeps)},
 		{"feed_fetch", feed_fetch.MakeFeedFetchFn(webDeps)},
-		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol)},
+		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol, pSbx)},
 		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol)},
 		{"get_datetime", get_datetime.GetDatetimeFn},
 		{"csv_parse", csv_parse.CsvParseFn},
@@ -146,44 +152,15 @@ func RegisterBuiltinTools(
 		{"agent_result", agent_result.MakeAgentResultFn()},
 		{"agent_message", agent_message.MakeAgentMessageFn()},
 		{"agent_stop", agent_stop.MakeAgentStopFn()},
-	}
 
-	// automation_* 工具依赖，仅在 autoSvc != nil 时注册（单元测试无 Service 时不报错）
-	if autoSvc != nil {
-		defs = append(defs, []struct {
-			name string
-			fn   sandbox.InProcessFn
-		}{
-			{"automation_list", MakeAutomationListFn(autoSvc)},
-			{"automation_save", MakeAutomationSaveFn(autoSvc)},
-			{"automation_run_now", MakeAutomationRunNowFn(autoSvc)},
-			{"automation_delete", MakeAutomationDeleteFn(autoSvc)},
-		}...)
-	}
+		// 后台任务管理工具（ADR-0115 WP5）
+		{"job_status", job_status.MakeJobStatusFn(bash.GetDefaultJobManager())},
+		{"job_output", job_output.MakeJobOutputFn(bash.GetDefaultJobManager())},
+		{"job_kill", job_kill.MakeJobKillFn(bash.GetDefaultJobManager())},
+	}...)
 
-	// full 档专属工具（ADR-0115 WP1）：仅当 pol.CheckpointEnabled / pol.SecretGetEnabled 时注册。
-	// 不满足时这些工具对 LLM 不可见，减少攻击面（standard/hardened 档 LLM 不知道快照工具存在）。
-	if pol.CheckpointEnabled && checkpointDataDir != "" && len(checkpointProjects) > 0 {
-		projectDir := checkpointProjects[0]
-		retentionCount := config.CurrentThresholds().M4Kernel.CheckpointRetentionCount
-		defs = append(defs, []struct {
-			name string
-			fn   sandbox.InProcessFn
-		}{
-			{"checkpoint_list", checkpoint_list.MakeCheckpointListFn(checkpointDataDir, projectDir, retentionCount)},
-			{"checkpoint_restore", checkpoint_restore.MakeCheckpointRestoreFn(checkpointDataDir, projectDir, retentionCount)},
-		}...)
-	}
-	if pol.SecretGetEnabled && secretReader != nil {
-		maxPerTurn := config.CurrentThresholds().M4Kernel.SecretGetMaxPerTurn
-		fn, _ := secret_get.MakeSecretGetFn(secretReader, maxPerTurn)
-		// TurnCounter 的重置由上层回合调度器负责（此处不持有 counter，
-		// 注：WP4 的回合生命周期调度器会在每回合开始时重置此限额计数器。
-		defs = append(defs, struct {
-			name string
-			fn   sandbox.InProcessFn
-		}{"secret_get", fn})
-	}
+	defs = append(defs, automationToolDefs(autoSvc)...)
+	defs = append(defs, fullProfileToolDefs(pol, checkpointDataDir, checkpointProjects, secretReader)...)
 
 	for _, d := range defs {
 		meta, err := tool.GetBuiltinToolMeta(d.name)
@@ -220,4 +197,44 @@ func RegisterBuiltinTools(
 	}
 
 	return nil
+}
+
+type builtinDef struct {
+	name string
+	fn   sandbox.InProcessFn
+}
+
+func automationToolDefs(autoSvc AutomationService) []builtinDef {
+	if autoSvc == nil {
+		return nil
+	}
+	return []builtinDef{
+		{"automation_list", MakeAutomationListFn(autoSvc)},
+		{"automation_save", MakeAutomationSaveFn(autoSvc)},
+		{"automation_run_now", MakeAutomationRunNowFn(autoSvc)},
+		{"automation_delete", MakeAutomationDeleteFn(autoSvc)},
+	}
+}
+
+func fullProfileToolDefs(
+	pol policy.Policy,
+	checkpointDataDir string,
+	checkpointProjects []string,
+	secretReader secret_get.NamedSecretReader,
+) []builtinDef {
+	var out []builtinDef
+	if pol.CheckpointEnabled && checkpointDataDir != "" && len(checkpointProjects) > 0 {
+		projectDir := checkpointProjects[0]
+		retentionCount := config.CurrentThresholds().M4Kernel.CheckpointRetentionCount
+		out = append(out, []builtinDef{
+			{"checkpoint_list", checkpoint_list.MakeCheckpointListFn(checkpointDataDir, projectDir, retentionCount)},
+			{"checkpoint_restore", checkpoint_restore.MakeCheckpointRestoreFn(checkpointDataDir, projectDir, retentionCount)},
+		}...)
+	}
+	if pol.SecretGetEnabled && secretReader != nil {
+		maxPerTurn := config.CurrentThresholds().M4Kernel.SecretGetMaxPerTurn
+		fn, _ := secret_get.MakeSecretGetFn(secretReader, maxPerTurn)
+		out = append(out, builtinDef{"secret_get", fn})
+	}
+	return out
 }

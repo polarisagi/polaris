@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/action/hook"
@@ -12,10 +13,19 @@ import (
 // StandardHooks 以 hooks.json 引擎实现会话与压缩的事件接口。引擎在网关构造之后注入
 // （SetRunner），未注入时全部事件为空操作。
 type StandardHooks struct {
-	runner atomic.Pointer[hook.Runner]
+	runner              atomic.Pointer[hook.Runner]
+	mu                  sync.Mutex
+	sessionEndCallbacks []func(ctx context.Context, sessionID, reason string)
 }
 
 func NewStandardHooks() *StandardHooks { return &StandardHooks{} }
+
+// RegisterSessionEndCallback 注册在 SessionEnd 时触发的清理回调函数。
+func (s *StandardHooks) RegisterSessionEndCallback(fn func(ctx context.Context, sessionID, reason string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionEndCallbacks = append(s.sessionEndCallbacks, fn)
+}
 
 // SetRunner 注入 hooks.json 引擎。
 func (s *StandardHooks) SetRunner(r *hook.Runner) { s.runner.Store(r) }
@@ -51,6 +61,13 @@ func (s *StandardHooks) StopFailure(ctx context.Context, sessionID, reason strin
 
 func (s *StandardHooks) SessionEnd(ctx context.Context, sessionID, reason string) {
 	s.dispatch(ctx, sessionID, hook.Input{HookEventName: hook.EventSessionEnd, Reason: reason})
+	s.mu.Lock()
+	cbs := make([]func(ctx context.Context, sessionID, reason string), len(s.sessionEndCallbacks))
+	copy(cbs, s.sessionEndCallbacks)
+	s.mu.Unlock()
+	for _, cb := range cbs {
+		cb(ctx, sessionID, reason)
+	}
 }
 
 // PreCompact continue:false 或阻断时跳过压缩（Codex 语义）。

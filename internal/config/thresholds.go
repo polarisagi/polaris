@@ -272,6 +272,9 @@ type M4KernelThresholds struct {
 	LoopObservationMaskBatch int `toml:"loop.observation_mask_batch"` // 4
 	// LoopCompletion 回合完成判定方式："auto"（无工具调用即完成）或 "explicit"（必须调用 finish 工具）。
 	LoopCompletion string `toml:"loop.completion"` // "auto"
+	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（WP5，ADR-0115）。
+	// full 档默认 false；standard/hardened 档默认 true。
+	JobsKillOnSessionEnd bool `toml:"jobs.kill_on_session_end"`
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -663,6 +666,7 @@ func DefaultThresholds() Thresholds {
 			LoopObservationMaskAfterRounds: 6,
 			LoopObservationMaskBatch:       4,
 			LoopCompletion:                 "auto",
+			JobsKillOnSessionEnd:           true,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

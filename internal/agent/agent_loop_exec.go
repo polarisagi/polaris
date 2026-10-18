@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -17,8 +18,41 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// makeToolResultMessage 构造符合 LLM tool_result 规范的消息结构体。
-func makeToolResultMessage(callID string, content string) types.Message {
+// makeToolResultMessage 构造符合 LLM tool_result 规范的消息结构体，支持文本与多模态图片内容块。
+func makeToolResultMessage(callID string, content string, imageParts ...types.ImagePart) types.Message {
+	if len(imageParts) == 0 {
+		return types.Message{
+			Role:    "user",
+			Content: content,
+			Parts: []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": callID,
+					"content":     content,
+				},
+			},
+		}
+	}
+
+	// 多模态结果：将文本与图片块组装到 tool_result.content 块列表中（Anthropic/Vision 协议标准）
+	blocks := make([]any, 0, 1+len(imageParts))
+	if content != "" {
+		blocks = append(blocks, map[string]any{
+			"type": "text",
+			"text": content,
+		})
+	}
+	for _, img := range imageParts {
+		blocks = append(blocks, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": img.MediaType,
+				"data":       base64.StdEncoding.EncodeToString(img.Data),
+			},
+		})
+	}
+
 	return types.Message{
 		Role:    "user",
 		Content: content,
@@ -26,7 +60,7 @@ func makeToolResultMessage(callID string, content string) types.Message {
 			map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": callID,
-				"content":     content,
+				"content":     blocks,
 			},
 		},
 	}
@@ -78,7 +112,13 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 		rendered = view.render(maxExecResultBytes)
 	}
 
-	return makeToolResultMessage(call.ID, string(rendered))
+	if len(res.ImageParts) > 0 {
+		a.sCtx.Mu.Lock()
+		a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts...)
+		a.sCtx.Mu.Unlock()
+	}
+
+	return makeToolResultMessage(call.ID, string(rendered), res.ImageParts...)
 }
 
 // executeToolCallsConcurrently 并发执行多个独立的工具调用，并按原序收集结果。

@@ -1,0 +1,2 @@
+name: job_output
+description: Get recent output (tail) of a background job.

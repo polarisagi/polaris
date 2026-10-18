@@ -59,3 +59,4 @@ loop_mode = 'agentic'
 'loop.observation_mask_after_rounds' = 6
 'loop.observation_mask_batch' = 4
 'loop.completion' = 'auto'
+'jobs.kill_on_session_end' = true

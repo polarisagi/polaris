@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/store/repo"
 
 	"context"
@@ -37,6 +38,7 @@ import (
 	si "github.com/polarisagi/polaris/internal/learning"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
+	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -242,6 +244,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		// hitl/timeout 参数已随 AuditAsync 死代码一并删除（2026-07-02）：SecurityAuditAgent
 		// 现在只提供同步 ReviewSync，HITL 审批统一由下面 codeact.WithHITL(tb.HITLGateway) 处理。
 		auditAgent := swarmAgents.NewSecurityAuditAgent(tb.LLMInfer, "zh")
+		trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
 
 		codeActEngine := codeact.NewCodeAct(
 			tb.Envelope,
@@ -255,6 +258,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 			codeact.WithTokenManager(action.GetTokenManager()),
 			codeact.WithStateDir(sb.Layout.Workspace),         // GD-4-002: REPL 状态快照根目录
 			codeact.WithScriptStagingBackend(tb.VFSWorkspace), // 批次4 XR-11 复核修复：临时脚本落盘迁移至 VFS 隔离边界
+			codeact.WithToolExecutor(tb.ToolReg),              // ADR-0115 WP5: 注入工具桥执行器
+			codeact.WithPolicy(trustPol),                      // ADR-0115 WP5: 注入安全策略
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
 		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})
@@ -333,6 +338,12 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	if ab.Subagents != nil {
 		httpServer.SetSubagentRunner(ab.Subagents)
 	}
+	// WP5: 会话结束按配置清理后台任务（ADR-0115 WP5）
+	httpServer.RegisterSessionEndCallback(func(ctx context.Context, sessionID, reason string) {
+		if config.CurrentThresholds().M4Kernel.JobsKillOnSessionEnd {
+			bash.GetDefaultJobManager().CleanupSessionJobs(sessionID)
+		}
+	})
 	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
 	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
 	httpServer.SetToolExecutor(tb.Dispatcher.Execute)

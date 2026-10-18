@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "job_kill",
+  "description": "Terminate a background job.",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "description": "The job ID to terminate."
+    }
+  },
+  "required": ["job_id"]
+}

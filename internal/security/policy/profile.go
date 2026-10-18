@@ -89,6 +89,14 @@ type Policy struct {
 	// DelegationChainMaxDepth 委派链最大深度（ADR-0115 WP4）。
 	// full 档 8；standard 档 3；hardened 档 2。
 	DelegationChainMaxDepth int
+
+	// CodeActAllToolsAllowed code_act 工具桥是否允许调用所有工具（ADR-0115 WP5）。
+	// full 档 true（放行全部工具）；standard/hardened 档 false（仅允许 CapReadOnly 且幂等的只读工具）。
+	CodeActAllToolsAllowed bool
+
+	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（ADR-0115 WP5）。
+	// full 档默认 false（保留后台进程）；standard/hardened 档默认 true（回收后台进程）。
+	JobsKillOnSessionEnd bool
 }
 
 // ProfilePolicy 将信任档位映射为安全策略快照（ADR-0115 WP1 决策二）。
@@ -115,6 +123,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			RunawayGuardDefaultRounds: 0,     // 不限轮数
 			SubagentMaxConcurrent:     16,    // 并发上限更高
 			DelegationChainMaxDepth:   8,     // 深度上限更高
+			CodeActAllToolsAllowed:    true,  // full 档允许在 code_act 里调用全部工具
+			JobsKillOnSessionEnd:      false, // full 档默认保留后台进程
 		}
 	case ProfileHardened:
 		return Policy{
@@ -132,6 +142,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			RunawayGuardDefaultRounds: 50,    // 严格限制
 			SubagentMaxConcurrent:     2,     // 严格并发限制
 			DelegationChainMaxDepth:   2,     // 严格深度限制
+			CodeActAllToolsAllowed:    false, // 只允许 CapReadOnly 幂等工具
+			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
 		}
 	default: // ProfileStandard
 		return Policy{
@@ -146,9 +158,11 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			CheckpointEnabled:         false,
 			SecretGetEnabled:          false,
 			SafeDialerAuditOnly:       false,
-			RunawayGuardDefaultRounds: 200, // 默认防失控
-			SubagentMaxConcurrent:     6,   // 默认并发限制
-			DelegationChainMaxDepth:   3,   // 默认深度限制（inv_M8_06）
+			RunawayGuardDefaultRounds: 200,   // 默认防失控
+			SubagentMaxConcurrent:     6,     // 默认并发限制
+			DelegationChainMaxDepth:   3,     // 默认深度限制（inv_M8_06）
+			CodeActAllToolsAllowed:    false, // 只允许 CapReadOnly 幂等工具
+			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
 		}
 	}
 }
