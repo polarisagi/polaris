@@ -38,6 +38,8 @@ func forbiddenDirsLiteral() []string {
 		layout.Data,
 		layout.Secrets,
 		layout.Audit,
+		layout.Eval,
+		filepath.Join(layout.HarnessOverlay, "prompt_addenda"),
 		filepath.Join(home, ".ssh"),
 		filepath.Join(home, ".gnupg"),
 		"/etc",

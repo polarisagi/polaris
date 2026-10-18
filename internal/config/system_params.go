@@ -113,9 +113,10 @@ const (
 	SubdirBin        = "bin"
 	SubdirRun        = "run"
 	SubdirEval       = "eval"
-	SubdirSecrets    = "secrets"
-	SubdirPrompts    = "prompts"
-	SubdirArchive    = "archive"
+	SubdirSecrets        = "secrets"
+	SubdirPrompts        = "prompts"
+	SubdirArchive        = "archive"
+	SubdirHarnessOverlay = "harness_overlay"
 )
 
 // 规范文件名定义。

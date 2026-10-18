@@ -1,0 +1,3 @@
+name: harness_history
+description: "View version history of the harness overlay (skills, prompt addenda, tool notes)."
+trust_tier: system

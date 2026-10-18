@@ -37,8 +37,9 @@ type DataLayout struct {
 	Tmp        string // Root/tmp         — 临时下载 / 解压暂存
 	Bin        string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist、桌面版的 polaris 本体）
 	Run        string // Root/run         — 运行时状态：端口/令牌/PID，仅本机有效，不随备份迁移
-	Secrets    string // Root/secrets     — 机密数据目录（Vault 密钥与敏感凭据保护区）
-	Eval       string // Root/eval        — 评测数据集根目录
+	Secrets        string // Root/secrets         — 机密数据目录（Vault 密钥与敏感凭据保护区）
+	Eval           string // Root/eval            — 评测数据集根目录
+	HarnessOverlay string // Root/harness_overlay — 自改进 harness 覆盖层（WP6）
 
 	// 派生路径（从上方字段组合，避免调用方再次拼接）
 	SQLiteDB     string // Data/polaris.db
@@ -109,6 +110,7 @@ func NewDataLayout(root string, overrides DirsConfig) DataLayout {
 	d.Run = pick(overrides.RunDir, filepath.Join(root, SubdirRun))
 	d.Secrets = pick(overrides.SecretsDir, filepath.Join(root, SubdirSecrets))
 	d.Eval = pick(overrides.EvalDir, filepath.Join(root, SubdirEval))
+	d.HarnessOverlay = filepath.Join(root, SubdirHarnessOverlay)
 
 	// 派生路径从各自父目录计算
 	d.SQLiteDB = filepath.Join(d.Data, SQLiteDBFileName)
@@ -155,6 +157,10 @@ func (l DataLayout) MkdirAll() error {
 		l.Run,
 		l.Secrets,
 		l.Eval,
+		l.HarnessOverlay,
+		filepath.Join(l.HarnessOverlay, "skills"),
+		filepath.Join(l.HarnessOverlay, "prompt_addenda"),
+		filepath.Join(l.HarnessOverlay, "tool_notes"),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {

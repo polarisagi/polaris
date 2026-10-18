@@ -47,4 +47,8 @@ type ImmutableCoreFields struct {
 
 	// OperationalDirectives 高级操作指令集合（含 Tool-Use, Task Completion 等）。
 	OperationalDirectives string `json:"operational_directives,omitempty"`
+
+	// PromptAddenda harness 覆盖层提示词附加片段（ADR-0115 WP6）。
+	// 拼接自 <DataDir>/harness_overlay/prompt_addenda/*.md，进入 stable 层末尾。
+	PromptAddenda string `json:"prompt_addenda,omitempty"`
 }

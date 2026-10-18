@@ -50,6 +50,12 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	if !p.JobsKillOnSessionEnd {
 		t.Error("standard: JobsKillOnSessionEnd should be true")
 	}
+	if p.SleepTimeEnabled {
+		t.Error("standard: SleepTimeEnabled should be false")
+	}
+	if p.SleepTimeIdleMinutes != 10 {
+		t.Errorf("standard: SleepTimeIdleMinutes should be 10, got %d", p.SleepTimeIdleMinutes)
+	}
 }
 
 func TestProfilePolicy_Full(t *testing.T) {
@@ -100,6 +106,12 @@ func TestProfilePolicy_Full(t *testing.T) {
 	if p.JobsKillOnSessionEnd {
 		t.Error("full: JobsKillOnSessionEnd should be false")
 	}
+	if !p.SleepTimeEnabled {
+		t.Error("full: SleepTimeEnabled should be true")
+	}
+	if p.SleepTimeIdleMinutes != 10 {
+		t.Errorf("full: SleepTimeIdleMinutes should be 10, got %d", p.SleepTimeIdleMinutes)
+	}
 }
 
 func TestProfilePolicy_Hardened(t *testing.T) {
@@ -145,6 +157,12 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if !p.JobsKillOnSessionEnd {
 		t.Error("hardened: JobsKillOnSessionEnd should be true")
+	}
+	if p.SleepTimeEnabled {
+		t.Error("hardened: SleepTimeEnabled should be false")
+	}
+	if p.SleepTimeIdleMinutes != 10 {
+		t.Errorf("hardened: SleepTimeIdleMinutes should be 10, got %d", p.SleepTimeIdleMinutes)
 	}
 }
 

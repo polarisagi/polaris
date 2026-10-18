@@ -313,6 +313,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/checkpoints", s.sysadminHandler.HandleListCheckpoints)
 	mux.HandleFunc("POST /v1/checkpoints/restore", s.sysadminHandler.HandleRestoreCheckpoint)
 
+	// 自改进 harness 覆盖层版本与回滚（ADR-0115 WP6）
+	mux.HandleFunc("GET /v1/harness/history", s.sysadminHandler.HandleHarnessHistory)
+	mux.HandleFunc("POST /v1/harness/rollback", s.sysadminHandler.HandleHarnessRollback)
 }
 
 // handleSkillCreate 按请求体分派 POST /v1/skills/create：含非空 intent 字段 →

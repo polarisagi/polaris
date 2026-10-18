@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HarnessHistoryInput",
+  "type": "object",
+  "properties": {
+    "limit": {
+      "type": "integer",
+      "description": "Maximum number of history versions to return (default: 20)",
+      "default": 20
+    }
+  },
+  "additionalProperties": false
+}

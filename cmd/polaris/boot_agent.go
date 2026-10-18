@@ -26,11 +26,13 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
+	"github.com/polarisagi/polaris/internal/learning/sleeptime"
 	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/learning/synthetic"
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/token"
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
@@ -117,6 +119,9 @@ type AgentBundle struct {
 
 	// SurpriseCalc 全进程单例；run() 在 shutdown 时 Close 停掉 worker goroutine（幂等）。
 	SurpriseCalc *surprise.SurpriseCalculator
+
+	// SleepTimeCoordinator ADR-0115 WP6：空闲整理与自改进闭环协调器。
+	SleepTimeCoordinator *sleeptime.Coordinator
 }
 
 // buildAgent 构造并完全装配一个 Agent 实例。
@@ -1063,6 +1068,62 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	bgTaskScheduler.Start(ctx)
 	slog.Info("polaris: background task scheduler started", "auto_curriculum", sb.Cfg.SelfImprove.AutoCurriculum)
 
+	// ─── Sleep-Time & Self-Improvement 闭环 (ADR-0115 WP6) ───────────────────
+	var harnessAudit *harnessAuditAdapter
+	if sb.AuditTrail != nil {
+		harnessAudit = &harnessAuditAdapter{at: sb.AuditTrail}
+	}
+	var sleepCaller sleeptime.RouterInferCaller
+	if sb.Router != nil {
+		sleepCaller = &routerInferCallerAdapter{router: sb.Router}
+	}
+	sleepProposer := sleeptime.NewDefaultProposer(sleepCaller, tb.HarnessOverlayMgr)
+	evalAdapter := &harnessEvaluatorAdapter{runner: evalRunner}
+
+	var consolidateFn sleeptime.ConsolidationRunner
+	if tb.ConsolidationPipeline != nil {
+		consolidateFn = func(ctx context.Context, sessionID string) error {
+			return tb.ConsolidationPipeline.Run(ctx, sessionID)
+		}
+	}
+
+	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
+	coordinator := sleeptime.NewCoordinator(sleeptime.CoordinatorConfig{
+		OverlayMgr:      tb.HarnessOverlayMgr,
+		Evaluator:       evalAdapter,
+		Proposer:        sleepProposer,
+		DB:              sb.Store.DB(),
+		AuditTrail:      harnessAudit,
+		OffPeak:         sb.OffPeak,
+		Consolidate:     consolidateFn,
+		Enabled:         trustPol.SleepTimeEnabled,
+		IdleMinutes:     trustPol.SleepTimeIdleMinutes,
+		MaxFailuresScan: 100,
+	})
+
+	if trustPol.SleepTimeEnabled {
+		idleMin := trustPol.SleepTimeIdleMinutes
+		if idleMin <= 0 {
+			idleMin = 10
+		}
+		concurrent.SafeGo(ctx, "sleeptime-coordinator", func(ctx context.Context) {
+			ticker := time.NewTicker(time.Duration(idleMin) * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := coordinator.RunSleepTime(ctx); err != nil {
+						slog.WarnContext(ctx, "sleeptime: cycle failed", "err", err)
+					}
+				}
+			}
+		})
+		slog.Info("polaris: sleeptime coordinator background worker started",
+			"idle_minutes", idleMin)
+	}
+
 	// ─── M09 §4 条件梯度训练：样本采集 + 批次触发（2026-07-21 deadcode 审查
 	// 补齐）。sb.QLoRA/sb.PRM 为 nil 时（对应 FeatureGate 未启用）跳过构造，
 	// 避免"nil 具体类型包进非 nil interface"经典陷阱——TrainingSampleCollector.Add
@@ -1253,8 +1314,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Subagents:        subagentRunner,
 		Supervisor:       sv,
 		ReaperStop:       reaperStop,
-		PersonaRefiner:   personaRefiner,
-		SamplingMonitor:  samplingMonitor,
+		PersonaRefiner:        personaRefiner,
+		SamplingMonitor:       samplingMonitor,
+		SleepTimeCoordinator:  coordinator,
 	}, nil
 }
 
