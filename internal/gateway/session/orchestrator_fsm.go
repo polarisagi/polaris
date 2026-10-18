@@ -129,9 +129,23 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 		*reply = append(*reply, cleaned...)
 	case types.AgentStreamEventToolCall:
 		msg := fmt.Sprintf("%sExecuting tool %s...", prefix, ev.ToolName)
-		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "tool_call", "message": msg}})
+		payload := map[string]any{"type": "tool_call", "message": msg}
+		if ev.AgentID != "" {
+			payload["agent_id"] = ev.AgentID
+		}
+		if ev.ParentID != "" {
+			payload["parent_id"] = ev.ParentID
+		}
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 	case types.AgentStreamEventToolResult:
-		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "tool_result", "message": ev.Content}})
+		payload := map[string]any{"type": "tool_result", "message": ev.Content}
+		if ev.AgentID != "" {
+			payload["agent_id"] = ev.AgentID
+		}
+		if ev.ParentID != "" {
+			payload["parent_id"] = ev.ParentID
+		}
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 		if ev.UI != nil {
 			o.handleToolUIEvent(ctx, sink, sessionID, ev.UI, viewIDs)
 		}
@@ -143,28 +157,56 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 	case types.AgentStreamEventPhase:
 		// 回合阶段进度（ADR-0098）：内部阶段不再推 token，客户端靠它在首 token 前
 		// 展示进度。阶段键原样透传，本地化由客户端负责。
-		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "phase", "phase": ev.Content}})
+		payload := map[string]any{"type": "phase", "phase": ev.Content}
+		if ev.AgentID != "" {
+			payload["agent_id"] = ev.AgentID
+		}
+		if ev.ParentID != "" {
+			payload["parent_id"] = ev.ParentID
+		}
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 	case types.AgentStreamEventApproval:
 		// 回合内阻塞式人工审批：客户端就地渲染审批卡片。走 KindStatus，不进 *reply。
-		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{
+		payload := map[string]any{
 			"type":        "approval_required",
 			"id":          ev.Content,
 			"tool":        ev.ToolName,
 			"input":       string(ev.ToolInput),
 			"deadline_ns": ev.DeadlineNs,
-		}})
+		}
+		if ev.AgentID != "" {
+			payload["agent_id"] = ev.AgentID
+		}
+		if ev.ParentID != "" {
+			payload["parent_id"] = ev.ParentID
+		}
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 	case types.AgentStreamEventNotice:
 		// 系统旁路提示（当前唯一来源：LLM 跨 Model Pool 降级，GD-13-005）。
 		// 走 KindStatus 而非 KindDelta——它不是模型输出，绝不能进 *reply
 		// （那会被当作助手回复正文持久化进消息历史）。
-		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "notice", "message": ev.Content}})
+		payload := map[string]any{"type": "notice", "message": ev.Content}
+		if ev.AgentID != "" {
+			payload["agent_id"] = ev.AgentID
+		}
+		if ev.ParentID != "" {
+			payload["parent_id"] = ev.ParentID
+		}
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 	case types.AgentStreamEventSteerAccepted:
 		_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{"type": "steer_accepted", "message": ev.Content}})
 	case types.AgentStreamEventStatus:
 		if ev.Content == "task_done" {
 			return true
 		}
-		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "info", "message": ev.Content}})
+		payload := map[string]any{"type": "info", "message": ev.Content}
+		if ev.AgentID != "" {
+			payload["agent_id"] = ev.AgentID
+		}
+		if ev.ParentID != "" {
+			payload["parent_id"] = ev.ParentID
+		}
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 	}
 	return false
 }

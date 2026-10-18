@@ -9,9 +9,12 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
     parent_session_id TEXT    NOT NULL DEFAULT '',
     child_session_id  TEXT    NOT NULL DEFAULT '',
     task_id           TEXT,                                -- 仅委派入口有值（tasks.task_id）
+    parent_agent_id   TEXT    NOT NULL DEFAULT '',         -- 父 Agent ID（树状关系）
     agent_type        TEXT    NOT NULL DEFAULT '',
-    entry             TEXT    NOT NULL CHECK(entry IN ('delegation','fork_skill','hook')),
-    status            TEXT    NOT NULL CHECK(status IN ('running','ok','error','interrupted')),
+    model             TEXT    NOT NULL DEFAULT '',         -- 运行模型
+    thinking          TEXT    NOT NULL DEFAULT '',         -- 思考档位
+    entry             TEXT    NOT NULL CHECK(entry IN ('delegation','fork_skill','hook','spawn_agents')),
+    status            TEXT    NOT NULL CHECK(status IN ('running','ok','error','interrupted','cancelled')),
     prompt            TEXT    NOT NULL DEFAULT '',         -- 截断至 4000 字符
     output            TEXT    NOT NULL DEFAULT '',         -- 截断至 8000 字符
     error             TEXT    NOT NULL DEFAULT '',

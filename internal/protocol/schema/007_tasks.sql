@@ -8,6 +8,7 @@
 CREATE TABLE IF NOT EXISTS tasks (
     task_id                  TEXT    PRIMARY KEY,
     session_id               TEXT    NOT NULL,
+    parent_task_id           TEXT,
     status                   TEXT    NOT NULL,
     priority                 INTEGER NOT NULL DEFAULT 1,
     -- intent: TaskEntry.Intent 的持久化落点（2026-07-12 补齐）。此前 PostTask 仅写

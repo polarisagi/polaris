@@ -152,6 +152,18 @@ type ModelSwitcher interface {
 	SwitchModel(ref, pool, thinking string) (string, error)
 }
 
+// CtxSubagentManagerKey 用于在工具执行上下文传递 SubagentManager（ADR-0115 WP4）。
+type CtxSubagentManagerKey struct{}
+
+// SubagentManager 供内置工具派生、查询与控制子智能体（ADR-0115 WP4）。
+type SubagentManager interface {
+	SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]string, error)
+	AgentStatus(ctx context.Context, ids []string) ([]types.SubagentStatusInfo, error)
+	AgentResult(ctx context.Context, id string) (string, error)
+	AgentMessage(ctx context.Context, id, text string) (string, error)
+	AgentStop(ctx context.Context, id string) (string, error)
+}
+
 // @consumer internal/gateway/server/chat
 // AgentPool 管理 per-session Agent 生命周期。
 // Acquire 返回该 session 专属 Agent 及 release 回调；调用方 defer release()。

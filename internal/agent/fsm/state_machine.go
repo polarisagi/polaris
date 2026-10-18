@@ -249,7 +249,8 @@ type StateContext struct {
 	SkillVersions map[string]int64
 
 	// GD-1: Handoff 委派的目标任务 ID，持久化至 checkpoint 以供恢复
-	HandoffTaskID string
+	HandoffTaskID  string
+	HandoffTaskIDs []string // ADR-0115 WP4: 并行子智能体集合，全部完成时恢复
 
 	// SpawnDepth 当前 Agent 实例继承自其所属 TaskEntry.SpawnDepth 的委派链深度
 	// （ADR-0084）。默认 0（顶层交互式/首个 headless 任务）。由 Worker 在 Run()

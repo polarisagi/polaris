@@ -22,6 +22,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
@@ -176,7 +177,7 @@ func (w *DefaultTaskWorker) RunLoop(ctx context.Context) error {
 // 应处理的类型/已被抢占/未处于 Pending 状态均静默跳过（与
 // orchestrator.Worker.tryClaimAndExecute、workflowadmin.tryClaimAndExecuteStep
 // 的"被抢占则无视"语义一致）。
-func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID string) {
+func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID string) { //nolint:gocyclo
 	snap, err := w.bb.PeekTask(ctx, taskID)
 	if err != nil || snap == nil {
 		return
@@ -200,6 +201,13 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	if prompt == "" {
 		w.failTask(taskID, "empty task intent, nothing to execute")
 		return
+	}
+
+	var spec *types.SpawnTaskSpec
+	var parsedSpec types.SpawnTaskSpec
+	if err := json.Unmarshal(snap.Intent, &parsedSpec); err == nil && parsedSpec.Prompt != "" {
+		spec = &parsedSpec
+		prompt = parsedSpec.Prompt
 	}
 
 	bgCtx, cancel := context.WithTimeout(context.Background(), defaultTaskExecTimeout)
@@ -226,10 +234,14 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	// 99-new-findings.md 阶段05 P-03 续 发现 / ADR-0084"已知限制"）。
 	// GD-13-001：注册事件回调，透传子 Agent 事件到 Blackboard
 	eventCb := types.WithEventCallback(func(ev types.AgentStreamEvent) {
-		// 附加嵌套标记及当前委派的角色
+		// 附加嵌套标记及当前委派的角色与 Agent 标识（ADR-0115 WP4 树状呈现）
 		ev.IsNested = true
 		ev.ParentTaskID = taskID
 		ev.ChildAgentRole = strings.TrimPrefix(snap.Type, handoffTypePrefix)
+		ev.AgentID = taskID
+		if snap.ParentTaskID != "" {
+			ev.ParentID = snap.ParentTaskID
+		}
 		w.bb.PublishTaskEvent(taskID, ev)
 	})
 
@@ -241,7 +253,7 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		}
 		opts = append(opts, types.WithAgentProfile(w.peerProfile(snap)))
 	}
-	output, err := w.execute(bgCtx, snap, prompt, opts)
+	output, err := w.execute(bgCtx, snap, prompt, opts, spec)
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())
@@ -255,21 +267,75 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 
 // execute 委派任务（agent_handoff:<name>）经 SubagentRunner 按角色执行；其余任务为一次性 headless 查询。
 // hook 的 session_id 取任务 Namespace：委派方未配置协同命名空间时即其 SessionID（agent_handoff.go）。
-func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapshot, prompt string, opts []types.HeadlessOption) (string, error) {
+func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapshot, prompt string, opts []types.HeadlessOption, spec *types.SpawnTaskSpec) (string, error) {
 	if name, ok := strings.CutPrefix(snap.Type, handoffTypePrefix); ok && w.subagents != nil {
-		out, err := w.subagents.Run(ctx, SubagentRequest{ParentSessionID: snap.Namespace, AgentID: snap.ID,
-			AgentName: name, Prompt: prompt, Options: opts,
-			Entry: SubagentEntryDelegation, TaskID: snap.ID})
+		req := SubagentRequest{
+			ParentSessionID: snap.Namespace,
+			AgentID:         snap.ID,
+			AgentName:       name,
+			Prompt:          prompt,
+			Options:         opts,
+			Entry:           SubagentEntryDelegation,
+			TaskID:          snap.ID,
+			Profile:         w.buildDelegationProfile(ctx, name, spec),
+		}
+		out, err := w.subagents.Run(ctx, req)
 		if err != nil {
 			return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: subagent", err)
 		}
 		return out, nil
+	}
+	if spec != nil {
+		opts = append(opts, types.WithAgentProfile(&types.AgentProfileSpec{
+			Name:            spec.Role,
+			Model:           spec.Model,
+			Thinking:        spec.Thinking,
+			ReadOnly:        spec.ReadOnly,
+			Tools:           spec.Tools,
+			AllowDelegation: true,
+		}))
 	}
 	res, err := w.pool.AcquireHeadless(ctx, types.Intent{Query: prompt}, opts...)
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: headless", err)
 	}
 	return res.Output, nil
+}
+
+func (w *DefaultTaskWorker) buildDelegationProfile(ctx context.Context, name string, spec *types.SpawnTaskSpec) *types.AgentProfileSpec {
+	if spec == nil {
+		return nil
+	}
+	specProfile := &types.AgentProfileSpec{
+		Name:            spec.Role,
+		Model:           spec.Model,
+		Thinking:        spec.Thinking,
+		ReadOnly:        spec.ReadOnly,
+		Tools:           spec.Tools,
+		AllowDelegation: true, // 本地子智能体默认允许再委派
+	}
+	if w.subagents == nil {
+		return specProfile
+	}
+	p, err := w.subagents.resolve(ctx, name)
+	if err != nil || p == nil {
+		return specProfile
+	}
+	cp := *p
+	if spec.Model != "" {
+		cp.Model = spec.Model
+	}
+	if spec.Thinking != "" {
+		cp.Thinking = spec.Thinking
+	}
+	if spec.ReadOnly {
+		cp.ReadOnly = true
+	}
+	if len(spec.Tools) > 0 {
+		cp.Tools = spec.Tools
+	}
+	cp.AllowDelegation = true
+	return &cp
 }
 
 func (w *DefaultTaskWorker) failTask(taskID, msg string) {

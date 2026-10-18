@@ -401,6 +401,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		}
 
 		ctx = context.WithValue(ctx, protocol.CtxModelSwitcherKey{}, a)
+		ctx = context.WithValue(ctx, protocol.CtxSubagentManagerKey{}, a)
 		capCtx, revokeCap, capErr := a.withJITCapability(ctx, toolName, args)
 		if capErr != nil {
 			return nil, capErr

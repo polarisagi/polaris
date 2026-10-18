@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "目标子智能体 ID"
+    },
+    "text": {
+      "type": "string",
+      "description": "要发送的消息或插话内容"
+    }
+  },
+  "required": [
+    "id",
+    "text"
+  ]
+}

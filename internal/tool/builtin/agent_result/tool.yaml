@@ -1,0 +1,5 @@
+name: agent_result
+description: 获取指定子智能体的执行输出结果，结果过大时自动引用卸载。
+capability: CapReadOnly
+read_only: true
+idempotent: true

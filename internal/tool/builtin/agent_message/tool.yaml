@@ -1,0 +1,5 @@
+name: agent_message
+description: 向正在执行的子智能体发送插话或补充指令。
+capability: CapWrite
+read_only: false
+idempotent: false

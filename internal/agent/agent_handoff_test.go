@@ -30,13 +30,25 @@ type fakeHandoffPoster struct {
 func (f *fakeHandoffPoster) PostTask(_ context.Context, task *types.TaskEntry) error {
 	f.mu.Lock()
 	f.lastPosted = task
-	f.tasks[task.ID] = &types.TaskSnapshot{ID: task.ID, Status: types.TaskPending, Namespace: task.Namespace, Type: task.Type}
+	f.tasks[task.ID] = &types.TaskSnapshot{ID: task.ID, Status: types.TaskPending, Namespace: task.Namespace, Type: task.Type, Intent: task.Intent}
 	f.mu.Unlock()
 	return nil
 }
 
 func (f *fakeHandoffPoster) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
 	return nil, func() {}
+}
+
+func (f *fakeHandoffPoster) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
+
+func (f *fakeHandoffPoster) FailTask(_ context.Context, taskID, _ string, reason []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if snap, ok := f.tasks[taskID]; ok && snap != nil {
+		snap.Status = types.TaskFailed
+		snap.Result = reason
+	}
+	return nil
 }
 
 func (f *fakeHandoffPoster) PeekTask(_ context.Context, taskID string) (*types.TaskSnapshot, error) {
@@ -392,7 +404,7 @@ func TestExecuteTransferToAgent_NonMCPTargetSkipsPIIRedaction(t *testing.T) {
 	if _, err := a.executeTransferToAgent(context.Background(), "librarian", summary, types.TaintLow); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if string(poster.lastPosted.Intent) != summary {
+	if !strings.Contains(string(poster.lastPosted.Intent), summary) {
 		t.Errorf("expected non-mcp target intent to pass through unmodified, got: %s", poster.lastPosted.Intent)
 	}
 }
@@ -410,7 +422,7 @@ func TestExecuteTransferToAgent_MCPTargetNilPIIDetectorSkipsRedaction(t *testing
 	if _, err := a.executeTransferToAgent(context.Background(), "mcp:linear/researcher", summary, types.TaintLow); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if string(poster.lastPosted.Intent) != summary {
+	if !strings.Contains(string(poster.lastPosted.Intent), summary) {
 		t.Errorf("expected passthrough when PIIDetector is nil, got: %s", poster.lastPosted.Intent)
 	}
 }

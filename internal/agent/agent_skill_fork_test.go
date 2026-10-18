@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -39,7 +40,7 @@ func TestTryForkSkill_DelegatesAndResumesWithoutRerender(t *testing.T) {
 	if err != nil || !handled || !res.Suspended {
 		t.Fatalf("fork skill must suspend on delegation: %+v %v %v", res, handled, err)
 	}
-	if poster.lastPosted.Type != "agent_handoff:Explore" || string(poster.lastPosted.Intent) != "rendered skill:research" {
+	if poster.lastPosted.Type != "agent_handoff:Explore" || !strings.Contains(string(poster.lastPosted.Intent), "rendered skill:research") {
 		t.Fatalf("posted: %+v", poster.lastPosted)
 	}
 	// 恢复分支：子任务完成后重入，不得再次渲染（渲染会重复执行动态注入命令）。

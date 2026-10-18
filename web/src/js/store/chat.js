@@ -33,6 +33,7 @@ Alpine.store('chat', {
   compacting: false,     // status/compacting 事件期间为 true
   phase: '',             // 回合阶段键 perceive/plan/execute/reflect/respond（status/phase 事件，ADR-0098）
   approvals: [],         // 本回合待用户确认的操作（status/approval_required 事件）；回合结束即清空
+  subagents: [],         // 本回合并行子智能体状态（status 事件带 agent_id/parent_id）
 
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
 
@@ -735,6 +736,18 @@ Alpine.store('chat', {
           if (!last.views) last.views = []
           last.views.push(viewRef)
         }
+        if (data && data.agent_id) {
+          if (!this.subagents) this.subagents = []
+          let sa = this.subagents.find(s => s.id === data.agent_id)
+          if (!sa) {
+            sa = { id: data.agent_id, parent_id: data.parent_id || '', status: 'running', message: '' }
+            this.subagents.push(sa)
+          }
+          if (data.message) sa.message = data.message
+          if (data.type === 'tool_result' || (data.message && data.message.includes('task_done'))) {
+            sa.status = 'ok'
+          }
+        }
         break
     }
 
@@ -752,6 +765,7 @@ Alpine.store('chat', {
     this._finalizeMessage(false)
     this.phase = ''
     this.approvals = []
+    this.subagents = []
     this.state = 'COMPLETE'
     this.thinkingOpen = false
     this.thinkingText = ''

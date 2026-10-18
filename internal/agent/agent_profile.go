@@ -71,7 +71,7 @@ func (a *Agent) visibleCatalog() catalog.Catalog {
 
 // delegationTools 子 Agent 默认不得再委派（Claude 子 Agent 无 Agent 工具；Codex max_depth 默认 1）。
 func delegationTools() []string {
-	return []string{catalog.DelegateToolName, catalog.ListAgentsToolName, "spawn_planner"}
+	return []string{catalog.DelegateToolName, catalog.ListAgentsToolName, "spawn_planner", "spawn_agents"}
 }
 
 // checkProfileTool 执行入口硬拦截：所有 DAG 工具节点（含 code_act / 委派 / spawn_planner 特判）
