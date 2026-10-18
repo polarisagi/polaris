@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "job_output",
+  "description": "Tail output of a background job.",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "description": "The job ID returned by background bash execution."
+    },
+    "tail_lines": {
+      "type": "integer",
+      "description": "Number of lines to read from the end of the log (default 200).",
+      "default": 200
+    }
+  },
+  "required": ["job_id"]
+}

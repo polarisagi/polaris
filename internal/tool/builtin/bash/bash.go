@@ -20,7 +20,9 @@ import (
 )
 
 type bashArgs struct {
-	Command string `json:"command"`
+	Command    string `json:"command"`
+	Background bool   `json:"background,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
 }
 
 // MakeBashFn 创建 bash 工具执行函数。
@@ -40,7 +42,12 @@ func MakeBashFn(
 	bwrapPath string,
 	hitlGateway HITLGateway,
 	pol policy.Policy,
+	persistentSbx ...*sandbox.PersistentSandbox,
 ) sandbox.InProcessFn {
+	var pSbx *sandbox.PersistentSandbox
+	if len(persistentSbx) > 0 {
+		pSbx = persistentSbx[0]
+	}
 	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
 	riskClassifier := classifier.NewDefaultClassifier()
@@ -64,6 +71,16 @@ func MakeBashFn(
 		// full 档 AllowedPathsOpen：不限路径，workDir 仍取第一个可用路径（通常是项目目录）
 		if len(paths) > 0 {
 			workDir = paths[0]
+		}
+
+		// 1. 后台进程模式（WP5 ADR-0115）：返回 job_id，日志与元数据落盘
+		if args.Background {
+			return execBackgroundJob(ctx, args.Command, args.SessionID, workDir)
+		}
+
+		// 2. 持久终端模式（WP5 ADR-0115）：复用 sandbox_persistent 长驻进程
+		if args.SessionID != "" {
+			return execPersistentTerminal(ctx, pSbx, args, paths, workDir, pol)
 		}
 
 		execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -200,4 +217,79 @@ func evaluateBashRisk(ctx context.Context, cmd string, pol policy.Policy, riskCl
 			"cmd", cmd, "reason", verdict.Reason)
 	}
 	return verdict, nil
+}
+
+func execBackgroundJob(ctx context.Context, cmdStr, sessionID, workDir string) ([]byte, error) {
+	sessID := sessionID
+	if sessID == "" {
+		sessID, _ = guard.SessionIDFromCtx(ctx)
+	}
+	jobMeta, err := GetDefaultJobManager().StartJob(
+		ctx,
+		cmdStr,
+		workDir,
+		sessID,
+		sandboxenv.BaseEnv(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{
+		"command":    cmdStr,
+		"job_id":     jobMeta.JobID,
+		"status":     jobMeta.Status,
+		"started_at": jobMeta.StartedAt,
+		"session_id": jobMeta.SessionID,
+		"background": true,
+	}
+	out, err := json.Marshal(result)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "bash: marshal background result", err)
+	}
+	return out, nil
+}
+
+func execPersistentTerminal(
+	ctx context.Context,
+	pSbx *sandbox.PersistentSandbox,
+	args bashArgs,
+	paths []string,
+	workDir string,
+	pol policy.Policy,
+) ([]byte, error) {
+	if pSbx == nil {
+		return nil, apperr.New(apperr.CodeUnimplemented, "bash: persistent terminal backend not configured")
+	}
+	spec := sandbox.SandboxSpec{
+		ToolName:      "bash",
+		Language:      "bash",
+		SessionID:     args.SessionID,
+		HostExecution: pol.SandboxDisabled,
+		AllowedPaths:  paths,
+		WorkDir:       workDir,
+		ScriptBytes:   []byte(args.Command),
+		ExtraEnv:      sandboxenv.BaseEnv(),
+	}
+	toolRes, err := pSbx.Run(ctx, spec)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "bash: persistent session run", err)
+	}
+	result := map[string]any{
+		"command":    args.Command,
+		"output":     string(toolRes.Output),
+		"exit_code":  0,
+		"session_id": args.SessionID,
+		"persistent": true,
+	}
+	if !toolRes.Success {
+		result["exit_code"] = -1
+		if toolRes.Error != "" {
+			result["error"] = toolRes.Error
+		}
+	}
+	out, err := json.Marshal(result)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "bash: marshal persistent result", err)
+	}
+	return out, nil
 }

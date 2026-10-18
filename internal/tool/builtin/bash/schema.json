@@ -1,12 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "bash",
-  "description": "Execute a bash command in a sandboxed environment. Restricted to allowed working directories.",
+  "description": "Execute a bash command in a sandboxed or persistent environment, or in background. Restricted to allowed working directories.",
   "type": "object",
   "properties": {
     "command": {
       "type": "string",
       "description": "Bash command string to execute (passed to bash -c). Runs in the first allowed directory as working directory."
+    },
+    "background": {
+      "type": "boolean",
+      "description": "If true, run the command asynchronously in background as a job and return job_id immediately."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Optional session ID for persistent terminal session or background job attribution. Reuses persistent bash process across calls."
     }
   },
   "required": ["command"]

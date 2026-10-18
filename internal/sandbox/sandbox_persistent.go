@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -131,18 +130,8 @@ func (p *PersistentSandbox) Backend() string {
 // Run 实现 SandboxProvider：执行一段代码，若 SessionID 对应的会话已存在且
 // 语言匹配则复用，否则创建新会话。
 func (p *PersistentSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
-	if !p.Available() {
-		return nil, apperr.New(apperr.CodeUnimplemented, "sandbox: L4 persistent backend unavailable on this host")
-	}
-	if spec.SessionID == "" {
-		return nil, apperr.New(apperr.CodeInvalidInput, "sandbox: L4 persistent requires SessionID")
-	}
-	lang := spec.Language
-	if lang != "python" && lang != "bash" {
-		return nil, apperr.New(apperr.CodeInvalidInput, "sandbox: L4 persistent supports python/bash only, got "+lang)
-	}
-	if (lang == "python" && p.pythonPath == "") || (lang == "bash" && p.bashPath == "") {
-		return nil, apperr.New(apperr.CodeUnimplemented, "sandbox: L4 persistent: interpreter for "+lang+" not found on host")
+	if err := p.validateSpec(spec); err != nil {
+		return nil, err
 	}
 
 	code, err := readSpecCode(spec)
@@ -267,46 +256,19 @@ func (p *PersistentSandbox) removeSession(sessionID string) {
 // spawnSession 通过 ArgvWrapper 取得沙箱封装后的 argv/env，构建并启动长驻
 // 解释器进程，返回持有 stdin/stdout 管道的 liveSession。
 func (p *PersistentSandbox) spawnSession(ctx context.Context, spec SandboxSpec) (*liveSession, error) {
-	var execPath string
-	var execArgs []string
-	switch spec.Language {
-	case "python":
-		execPath = p.pythonPath
-		execArgs = []string{"-u", "-c", pythonSessionHarness}
-	case "bash":
-		execPath = p.bashPath
-		execArgs = []string{"--noprofile", "--norc", "-s"}
-	}
-
-	workDir, err := os.MkdirTemp("", "polaris_l4_session_")
+	execPath, execArgs, workDir, cleanupWorkDir, err := p.prepareSessionEnv(spec)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: create session workdir", err)
+		return nil, err
 	}
 
-	sctx := protocol.SandboxContext{
-		CallerType:    protocol.CallerCodeAct,
-		ExecPath:      execPath,
-		ExecArgs:      execArgs,
-		Workdir:       workDir,
-		AllowedPaths:  append([]string{workDir}, spec.AllowedPaths...),
-		NetworkPolicy: protocol.NetPolicyDeny,
-		EnvExtra:      spec.ExtraEnv,
-	}
-	wrapped, err := p.argvWrapper.WrapArgv(ctx, sctx)
+	cmd, err := p.buildSessionCmd(ctx, spec, execPath, execArgs, workDir)
 	if err != nil {
-		_ = os.RemoveAll(workDir)
-		return nil, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: sandbox wrap failed, refusing to spawn unsandboxed (fail-closed)", err)
+		if cleanupWorkDir {
+			_ = os.RemoveAll(workDir)
+		}
+		return nil, err
 	}
-
-	cmd := exec.Command(wrapped.Executable, wrapped.Argv...) //nolint:gosec // Executable/Argv 来自 Rust 沙箱封装，非用户直接输入
 	cmd.SysProcAttr = setPdeathsig(cmd.SysProcAttr)
-	cmd.Dir = workDir
-
-	if wrapped.EnvInArgv {
-		cmd.Env = []string{}
-	} else {
-		cmd.Env = wrapped.Env
-	}
 	// DEBUG
 	for _, e := range cmd.Env {
 		if strings.HasPrefix(e, "PYTHON") || strings.HasPrefix(e, "CONDA") || strings.HasPrefix(e, "PATH") {
@@ -316,12 +278,16 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, spec SandboxSpec) 
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		_ = os.RemoveAll(workDir)
+		if cleanupWorkDir {
+			_ = os.RemoveAll(workDir)
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: create stdin pipe", err)
 	}
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		_ = os.RemoveAll(workDir)
+		if cleanupWorkDir {
+			_ = os.RemoveAll(workDir)
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: create stdout pipe", err)
 	}
 	// stdout/stderr 合并到同一管道：长驻会话没有逐次独立的"这次调用的 stderr"
@@ -334,21 +300,24 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, spec SandboxSpec) 
 	if err := cmd.Start(); err != nil {
 		_ = pr.Close()
 		_ = pw.Close()
-		_ = os.RemoveAll(workDir)
+		if cleanupWorkDir {
+			_ = os.RemoveAll(workDir)
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "sandbox: L4 persistent: spawn failed", err)
 	}
 	_ = pw.Close() // 父进程侧写端副本关闭；子进程持有自己的副本，管道不会提前 EOF
 
 	sess := &liveSession{
-		sessionID: spec.SessionID,
-		language:  spec.Language,
-		workDir:   workDir,
-		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    bufio.NewReader(pr),
-		pr:        pr,
-		sentinel:  uuid.NewString(),
-		createdAt: time.Now(),
+		sessionID:      spec.SessionID,
+		language:       spec.Language,
+		workDir:        workDir,
+		cleanupWorkDir: cleanupWorkDir,
+		cmd:            cmd,
+		stdin:          stdin,
+		stdout:         bufio.NewReader(pr),
+		pr:             pr,
+		sentinel:       uuid.NewString(),
+		createdAt:      time.Now(),
 	}
 	return sess, nil
 }
@@ -367,34 +336,6 @@ func (p *PersistentSandbox) Shutdown() {
 	p.sessions = make(map[string]*liveSession)
 	p.mu.Unlock()
 	for _, sess := range sessions {
-		sess.kill()
-	}
-}
-
-func (p *PersistentSandbox) reapLoop(ctx context.Context) {
-	ticker := time.NewTicker(p.cfg.ReapInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.reapIdleSessions()
-		}
-	}
-}
-
-func (p *PersistentSandbox) reapIdleSessions() {
-	p.mu.Lock()
-	var toReap []*liveSession
-	for id, sess := range p.sessions {
-		if !sess.alive() || sess.idle(p.cfg.IdleTTL) {
-			toReap = append(toReap, sess)
-			delete(p.sessions, id)
-		}
-	}
-	p.mu.Unlock()
-	for _, sess := range toReap {
 		sess.kill()
 	}
 }
