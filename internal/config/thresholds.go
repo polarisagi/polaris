@@ -275,6 +275,10 @@ type M4KernelThresholds struct {
 	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（WP5，ADR-0115）。
 	// full 档默认 false；standard/hardened 档默认 true。
 	JobsKillOnSessionEnd bool `toml:"jobs.kill_on_session_end"`
+	// SleepTimeIdleMinutes 会话空闲超过此时长（分钟）触发后台整理与失败挖掘（WP6，ADR-0115）。默认 10。
+	SleepTimeIdleMinutes int `toml:"sleep_time.idle_minutes"`
+	// SleepTimeEnabled 显式开关后台 sleep-time。若未显式配置，由当前 TrustProfile 策略决定。
+	SleepTimeEnabled *bool `toml:"sleep_time.enabled"`
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -667,6 +671,8 @@ func DefaultThresholds() Thresholds {
 			LoopObservationMaskBatch:       4,
 			LoopCompletion:                 "auto",
 			JobsKillOnSessionEnd:           true,
+			SleepTimeIdleMinutes:           10,
+			SleepTimeEnabled:               nil,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

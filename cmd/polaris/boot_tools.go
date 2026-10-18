@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/dispatch"
 
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
+	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
 	"github.com/polarisagi/polaris/internal/memory/consolidation"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -118,6 +119,8 @@ type ToolBundle struct {
 	// ElicitationBroker ADR-0103 决策八：MCP elicitation 网关侧 broker，boot_server.go 经
 	// httpServer.SetElicitationBroker 注入，启用 /v1/elicitations 系列 API。
 	ElicitationBroker *elicitation.Broker
+	// HarnessOverlayMgr ADR-0115 WP6：覆盖层 Git 管理器（skills/prompt_addenda/tool_notes）。
+	HarnessOverlayMgr harnessoverlay.HarnessOverlayManager
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -450,6 +453,20 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		slog.Warn("polaris: native extension tool registration partial failure", "err", err)
 	}
 	slog.Info("polaris: builtin tools registered, MCP manager initialized")
+
+	// ─── §6.6-bis Harness 覆盖层管理器与工具 (ADR-0115 WP6) ───────────────────
+	harnessOverlayMgr := harnessoverlay.New(sb.Layout.HarnessOverlay)
+	if err := harnessOverlayMgr.Init(ctx); err != nil {
+		slog.Warn("polaris: harness overlay manager init failed", "err", err)
+	}
+	var harnessAudit *harnessAuditAdapter
+	if sb.AuditTrail != nil {
+		harnessAudit = &harnessAuditAdapter{at: sb.AuditTrail}
+	}
+	if err := builtin.RegisterHarnessTools(inProcSandbox, toolReg, harnessOverlayMgr, harnessAudit); err != nil {
+		slog.Warn("polaris: harness tool registration failed", "err", err)
+	}
+	slog.Info("polaris: harness overlay manager initialized and tools registered")
 
 	// ─── GapFillWorker（M9 能力缺口探测，OutboxWorker handler）────────────
 	gapFillWorker := curriculum.NewGapFillWorker(sb.Store.DB(), sb.Router, toolReg)
@@ -801,6 +818,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExemptionVault:        exemptionVault,
 		PersistentSandbox:     persistentSandbox,
 		ElicitationBroker:     elicitationBroker,
+		HarnessOverlayMgr:     harnessOverlayMgr,
 	}, nil
 }
 

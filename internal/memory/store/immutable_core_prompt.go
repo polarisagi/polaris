@@ -93,6 +93,11 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		parts = append(parts, prefsBlock)
 	}
 
+	// 9. PromptAddenda: harness 覆盖层提示词附加片段（进入稳定层末尾，ADR-0115 WP6）
+	if ic.PromptAddenda != "" {
+		parts = append(parts, ic.PromptAddenda)
+	}
+
 	// 6. volatile（VolatileBlock/AmbientContext）不在此渲染，见 PrependToMessages。
 
 	return strings.Join(parts, "\n\n")

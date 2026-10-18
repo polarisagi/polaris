@@ -44,6 +44,8 @@ func run() error { //nolint:gocyclo
 			return runProjectCmd(os.Args[2:])
 		case "checkpoint", "checkpoints":
 			return runCheckpointCmd(os.Args[2:])
+		case "harness":
+			return runHarnessCmd(os.Args[2:])
 		case "status":
 			return runCLIStatus()
 		case "usage":

@@ -1,0 +1,3 @@
+name: harness_rollback
+description: "Roll back harness overlay to a specified git commit hash."
+trust_tier: system

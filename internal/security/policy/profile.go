@@ -97,6 +97,14 @@ type Policy struct {
 	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（ADR-0115 WP5）。
 	// full 档默认 false（保留后台进程）；standard/hardened 档默认 true（回收后台进程）。
 	JobsKillOnSessionEnd bool
+
+	// SleepTimeEnabled 是否启用会话空闲 sleep-time 后台整理与自改进闭环（ADR-0115 WP6）。
+	// full 档默认 true；standard/hardened 档默认 false。
+	SleepTimeEnabled bool
+
+	// SleepTimeIdleMinutes 会话空闲触发阈值（分钟）（ADR-0115 WP6）。
+	// 默认 10 分钟。
+	SleepTimeIdleMinutes int
 }
 
 // ProfilePolicy 将信任档位映射为安全策略快照（ADR-0115 WP1 决策二）。
@@ -125,6 +133,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			DelegationChainMaxDepth:   8,     // 深度上限更高
 			CodeActAllToolsAllowed:    true,  // full 档允许在 code_act 里调用全部工具
 			JobsKillOnSessionEnd:      false, // full 档默认保留后台进程
+			SleepTimeEnabled:          true,  // full 档默认开启 sleep-time 后台自改进
+			SleepTimeIdleMinutes:      10,    // 默认空闲 10 分钟触发
 		}
 	case ProfileHardened:
 		return Policy{
@@ -144,6 +154,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			DelegationChainMaxDepth:   2,     // 严格深度限制
 			CodeActAllToolsAllowed:    false, // 只允许 CapReadOnly 幂等工具
 			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
+			SleepTimeEnabled:          false, // hardened 档默认关闭后台自改进
+			SleepTimeIdleMinutes:      10,
 		}
 	default: // ProfileStandard
 		return Policy{
@@ -163,6 +175,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			DelegationChainMaxDepth:   3,     // 默认深度限制（inv_M8_06）
 			CodeActAllToolsAllowed:    false, // 只允许 CapReadOnly 幂等工具
 			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
+			SleepTimeEnabled:          false, // standard 档默认关闭后台自改进
+			SleepTimeIdleMinutes:      10,
 		}
 	}
 }
