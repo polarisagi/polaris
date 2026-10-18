@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -298,4 +299,22 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 		slog.Warn("inference_router: stream failover attempt failed, trying next",
 			"provider", chosen.name, "err", err, "tried", len(skipped))
 	}
+}
+
+func (ir *InferenceRouter) selectEntryForStream(ctx context.Context, req *types.InferRequest) *providerEntry {
+	if req.ProviderRef != "" {
+		if entry := ir.registry.PickEntryByRef(ctx, req.ProviderRef, true); entry != nil {
+			return entry
+		}
+		metrics.RecordModelRefFallback(ctx)
+		slog.WarnContext(ctx, "inference_router: provider ref unserviceable, falling back to model pool",
+			"provider_ref", req.ProviderRef, "pool", req.ModelPool)
+	}
+
+	if req.ModelPool != "" {
+		ir.registry.mu.RLock()
+		defer ir.registry.mu.RUnlock()
+		return ir.findBestProviderLockedMultiSkip(req, nil)
+	}
+	return ir.registry.best(req)
 }

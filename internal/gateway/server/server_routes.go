@@ -82,6 +82,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/providers/{providerID}/models", s.providerHandler.HandleCreateModel)
 	mux.HandleFunc("PUT /v1/providers/{providerID}/models/{modelID}", s.providerHandler.HandleUpdateModel)
 	mux.HandleFunc("DELETE /v1/providers/{providerID}/models/{modelID}", s.providerHandler.HandleDeleteModel)
+	mux.HandleFunc("POST /v1/providers/{providerID}/models/refresh", s.providerHandler.HandleRefreshModels)
 
 	// ModelVersionRegistry 运营触发入口（P3-2，M01 §9；2026-07-21 deadcode 审查补齐）
 	mux.HandleFunc("POST /v1/providers/{providerID}/models/{modelID}/upgrade", s.providerHandler.HandleModelUpgrade)

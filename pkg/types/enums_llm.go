@@ -73,3 +73,13 @@ const (
 	// ModelPoolBudget 级联降级链末档，最低成本。
 	ModelPoolBudget ModelPool = "budget"
 )
+
+// IsKnownPool 判断 pool 字符串是否为系统已知的四档 ModelPool 之一。
+func IsKnownPool(pool string) bool {
+	switch ModelPool(pool) {
+	case ModelPoolReasoning, ModelPoolGeneral, ModelPoolDefault, ModelPoolBudget:
+		return true
+	default:
+		return false
+	}
+}

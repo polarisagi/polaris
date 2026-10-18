@@ -66,3 +66,14 @@ func TestAssignCatalogRoles(t *testing.T) {
 		t.Fatalf("default held: got %v want %v", got, want)
 	}
 }
+
+func TestHandleRefreshModels(t *testing.T) {
+	h := &ProviderHandler{}
+	req := httptest.NewRequest("POST", "/v1/providers/p1/models/refresh", nil)
+	req.SetPathValue("providerID", "p1")
+	w := httptest.NewRecorder()
+	h.HandleRefreshModels(w, req)
+	if w.Result().StatusCode != http.StatusNotImplemented {
+		t.Fatalf("expected 501 when CatalogManager is nil, got %d", w.Result().StatusCode)
+	}
+}

@@ -89,6 +89,11 @@ type M1RouterThresholds struct {
 	// 其后的 system（L3 阶段层）原位转 user 角色 <system_instruction> 块，使阶段模板落在 L2 历史之后。
 	AnthropicInlineNonLeadingSystem bool `toml:"anthropic.inline_nonleading_system"` // true
 	GoogleInlineNonLeadingSystem    bool `toml:"google.inline_nonleading_system"`    // true
+
+	// 实时模型目录与模型自选（ADR-0115 WP3）。
+	ModelCatalogRefreshHours         int     `toml:"model_catalog.refresh_hours"`            // 24
+	ModelDynamicCacheSize            int     `toml:"model_dynamic_cache_size"`               // 32
+	ModelSelectMaxOutputPricePerMtok float64 `toml:"model_select.max_output_price_per_mtok"` // 0 = 不限
 }
 
 // Validate 校验 M1 中的缓存枚举字段，错误在加载时失败而非运行时被上游拒绝。
@@ -564,6 +569,10 @@ func DefaultThresholds() Thresholds {
 
 			AnthropicInlineNonLeadingSystem: true,
 			GoogleInlineNonLeadingSystem:    true,
+
+			ModelCatalogRefreshHours:         24,
+			ModelDynamicCacheSize:            32,
+			ModelSelectMaxOutputPricePerMtok: 0,
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,

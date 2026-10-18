@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/modelregistry"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -104,6 +105,11 @@ func (ir *InferenceRouter) InjectModelRegistry(reg *modelregistry.Registry) {
 	ir.modelRegistry = reg
 }
 
+// InjectProviderFactory 启动期后置注入 ProviderFactory，供按需实例化动态条目。
+func (ir *InferenceRouter) InjectProviderFactory(f ProviderFactory) {
+	ir.registry.InjectProviderFactory(f)
+}
+
 var _ protocol.Provider = (*InferenceRouter)(nil)
 
 func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts ...RouterOption) *InferenceRouter {
@@ -184,6 +190,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		ResponseFormat: options.ResponseFormat,
 		ThinkingBudget: options.ThinkingBudget,
 		ModelPool:      options.ModelPool,
+		ProviderRef:    options.ProviderRef,
 	}
 
 	normalizeInferRequest(req)
@@ -193,15 +200,24 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		return cached, nil
 	}
 
-	// ModelPool 非空时，初始选择也应严格按 role 过滤（GD-13-005）；
-	// ModelPool 为空时使用全局 best()。
+	// ProviderRef 非空时优先按引用选路；未命中则回落至 ModelPool 路径。
 	var entry *providerEntry
-	if req.ModelPool != "" {
-		ir.registry.mu.RLock()
-		entry = ir.findBestProviderLockedMultiSkip(req, nil)
-		ir.registry.mu.RUnlock()
-	} else {
-		entry = ir.registry.best(req)
+	if req.ProviderRef != "" {
+		entry = ir.registry.PickEntryByRef(ctx, req.ProviderRef, true)
+		if entry == nil {
+			metrics.RecordModelRefFallback(ctx)
+			slog.WarnContext(ctx, "inference_router: provider ref unserviceable, falling back to model pool",
+				"provider_ref", req.ProviderRef, "pool", req.ModelPool)
+		}
+	}
+	if entry == nil {
+		if req.ModelPool != "" {
+			ir.registry.mu.RLock()
+			entry = ir.findBestProviderLockedMultiSkip(req, nil)
+			ir.registry.mu.RUnlock()
+		} else {
+			entry = ir.registry.best(req)
+		}
 	}
 	if entry == nil {
 		// 指定了 Pool 却在该 Pool 内无可用 Provider：这与"该 Pool 的 Provider
@@ -371,6 +387,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 		ResponseFormat: options.ResponseFormat,
 		ThinkingBudget: options.ThinkingBudget,
 		ModelPool:      options.ModelPool,
+		ProviderRef:    options.ProviderRef,
 	}
 
 	normalizeInferRequest(req)
@@ -395,16 +412,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 		}()
 	}
 
-	// ModelPool 非空时，初始选择也应严格按 role 过滤（GD-13-005）；
-	// ModelPool 为空时使用全局 best()。
-	var entry *providerEntry
-	if req.ModelPool != "" {
-		ir.registry.mu.RLock()
-		entry = ir.findBestProviderLockedMultiSkip(req, nil)
-		ir.registry.mu.RUnlock()
-	} else {
-		entry = ir.registry.best(req)
-	}
+	entry := ir.selectEntryForStream(ctx, req)
 	if entry == nil {
 		// 与 Infer 同构：目标 Pool 内无可用 Provider 时不直接拒绝，先走
 		// 流式跨 Pool 降级链（GD-13-005）。

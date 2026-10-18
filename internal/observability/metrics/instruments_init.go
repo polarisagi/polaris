@@ -408,6 +408,7 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	ie.capture("polaris.workflow.runs_skipped_total", err)
 
 	initLoopInstruments(meter, ie)
+	initModelRouteInstruments(meter, ie)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {

@@ -243,6 +243,7 @@ type fakeAgentController struct {
 	sendErr     error
 	history     []types.Message
 	intents     []string
+	modelLock   string
 }
 
 func newFakeAgentController() *fakeAgentController {
@@ -250,6 +251,9 @@ func newFakeAgentController() *fakeAgentController {
 }
 
 func (a *fakeAgentController) AgentID() string { return "fake-agent" }
+func (a *fakeAgentController) SetModelLock(ref string) {
+	a.modelLock = ref
+}
 func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
 	a.intents = append(a.intents, intent.UnsafeContent())
 }
@@ -704,5 +708,28 @@ func TestRunTurn_Interactive_LinksAppViewsToAssistantMessage(t *testing.T) {
 	}
 	if persistence.linkedTo["view-1"] == 0 {
 		t.Fatalf("expected view-1 linked to a real message id, got %+v", persistence.linkedTo)
+	}
+}
+
+func TestRunTurn_Interactive_PassesModelLock(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "ok"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	persistence := newFakePersistence()
+	orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{ctrl: ctrl})
+
+	req := Request{
+		SessionID: "s-model-lock",
+		Input:     "hello",
+		ModelID:   "prov_google/gemini-2.5-pro",
+		Channel:   "web",
+	}
+	if _, err := orc.RunTurn(context.Background(), req, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	if ctrl.modelLock != "prov_google/gemini-2.5-pro" {
+		t.Fatalf("expected agent controller modelLock='prov_google/gemini-2.5-pro', got %q", ctrl.modelLock)
 	}
 }

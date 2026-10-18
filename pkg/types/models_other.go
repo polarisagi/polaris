@@ -187,6 +187,14 @@ func WithModelPool(pool string) InferOption {
 	return func(o *InferOptions) { o.ModelPool = pool }
 }
 
+// WithProviderRef 设置请求的目标 Provider/Model 引用（ADR-0115 WP3）。
+// 引用格式：
+// 1. <provider_models 记录 ID 前缀>（与 PickProviderByRecordID 同口径）
+// 2. <provider_id>/<model_id>（实时目录中的任意模型）
+func WithProviderRef(ref string) InferOption {
+	return func(o *InferOptions) { o.ProviderRef = ref }
+}
+
 type
 
 // DecisionLogEntry 对应 006_decision_log.sql 表的数据结构

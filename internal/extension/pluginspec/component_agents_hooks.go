@@ -25,6 +25,7 @@ type AgentFile struct {
 	Tools           []string       `json:"tools,omitempty"`
 	DisallowedTools []string       `json:"disallowed_tools,omitempty"`
 	Model           string         `json:"model,omitempty"`
+	Thinking        string         `json:"thinking,omitempty"`
 	Skills          []string       `json:"skills,omitempty"`
 	MaxTurns        int            `json:"max_turns,omitempty"`
 	ReadOnly        bool           `json:"read_only,omitempty"`

@@ -1,0 +1,12 @@
+name: switch_model
+description: "请求在下一轮执行中切换使用的模型或思考档位。若当前已被用户在前端界面锁定，将拒绝切换。注意：切换模型会导致前缀缓存失效（T4 成本），请谨慎使用。"
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - model
+  - agentic
+  - routing

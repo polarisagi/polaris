@@ -284,6 +284,12 @@ type StateContext struct {
 	LoopLastWallSeconds            float64
 	LoopWarningInjected            bool
 	LoopSummary                    string
+
+	// 模型自选与手选锁定（ADR-0115 WP3）
+	UserLockedModel   string // 用户手选锁定的模型引用
+	NextRoundModelRef string // 循环中 switch_model 请求在下一轮使用的模型引用
+	NextRoundThinking string // 循环中 switch_model 请求在下一轮使用的思考档位
+	CurrentModelRef   string // 当前轮次裁定生效的模型引用（ADR-0115 WP3）
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。

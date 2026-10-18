@@ -25,4 +25,10 @@ type AgentProfileSpec struct {
 	// 对端节点委派来的任务用它把可读范围收窄到共享目录：只读不等于安全——进程级白名单含整个
 	// DataDir，read_file / data_query 可直接读到 vault.key 与 polaris.db（ADR-0111）。
 	FileRoot string
+	// Model 角色指定的模型名或池名（ADR-0115 WP3）：
+	// 插件 agent 的 model: 字段映射（opus->reasoning, sonnet->general, haiku->default, inherit/空->不指定）。
+	// 池名原样保留，其他值作为模型名原样存入，运行时经 resolveModelRoute 解析成引用。
+	Model string
+	// Thinking 角色指定的思考模式/预算档位（ADR-0115 WP3）。
+	Thinking string
 }

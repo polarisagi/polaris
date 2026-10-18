@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "switch_model",
+  "description": "请求在下一轮切换使用的模型或思考档位。",
+  "type": "object",
+  "properties": {
+    "ref": {
+      "type": "string",
+      "description": "目标模型引用，格式为 <provider_id>/<model_id> 或已有池名（如 general/reasoning/default/budget）。"
+    },
+    "pool": {
+      "type": "string",
+      "description": "目标角色池，取值 reasoning, general, default, budget（可选，当未指定 ref 时使用）。"
+    },
+    "thinking": {
+      "type": "string",
+      "description": "目标思考档位，取值 none, low, medium, high（可选）。"
+    }
+  }
+}

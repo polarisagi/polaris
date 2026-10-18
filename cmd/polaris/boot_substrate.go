@@ -541,6 +541,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// 写走单写连接；内核阶段 purpose 在 internal/llm 内被硬性排除，与配置无关。
 	reg.InjectResponseCache(ctx, repo.NewSQLiteLLMResponseCacheRepository(store.DB(), store.ReadDB()),
 		llm.ResponseCacheConfigFromThresholds(cfg.Thresholds.M1Router))
+	reg.InjectProviderFactory(NewDBProviderFactory(store.DB(), vault, safeHTTPClient.Client, tbr))
 	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。
 	provider.SeedProvidersFromEnv(ctx, repo.NewSQLiteProviderRepository(store.DB()).WithVault(vault))
 
