@@ -14,7 +14,10 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
+	"github.com/polarisagi/polaris/internal/tool/builtin/checkpoint_list"
+	"github.com/polarisagi/polaris/internal/tool/builtin/checkpoint_restore"
 	"github.com/polarisagi/polaris/internal/tool/builtin/csv_parse"
 	"github.com/polarisagi/polaris/internal/tool/builtin/data_query"
 	"github.com/polarisagi/polaris/internal/tool/builtin/diff_text"
@@ -31,6 +34,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_file"
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_tool_ref"
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
+	"github.com/polarisagi/polaris/internal/tool/builtin/secret_get"
 	"github.com/polarisagi/polaris/internal/tool/builtin/str_replace_editor"
 	"github.com/polarisagi/polaris/internal/tool/builtin/sys_probe"
 	"github.com/polarisagi/polaris/internal/tool/builtin/todo_read"
@@ -64,6 +68,11 @@ func RegisterBuiltinTools(
 	todoRepo repo.TodoRepository, // todo_write/todo_read 按会话落库（ADR-0104 决策三）；nil 时两工具调用即报错
 	ttsSynth ttstool.Synthesizer, // tts 工具依赖的本地 TTS 引擎（ADR-0107）；nil 时该工具调用即报错，不回出假音频
 	webDeps web_fetch.Deps, // web_fetch 工具依赖（ADR-0114 决策三）
+	pol policy.Policy, // 信任档位安全策略快照（ADR-0115 WP1）；影响 bash/run_command 沙箱行为
+	// full 档专属工具依赖（ADR-0115 WP1）
+	checkpointDataDir string, // 快照仓库数据根目录；pol.CheckpointEnabled=true 时必须非空
+	checkpointProjects []string, // 被快照的项目目录列表（通常是 allowedPaths 的第一个）
+	secretReader secret_get.NamedSecretReader, // nil = 不注册 secret_get
 ) error {
 	if webDeps.Dialer == nil {
 		webDeps.Dialer = dialer
@@ -85,8 +94,8 @@ func RegisterBuiltinTools(
 		{"write_file", write_file.MakeWriteFileFn(allowedPaths)},
 		{"web_fetch", web_fetch.MakeWebFetchFn(webDeps)},
 		{"feed_fetch", feed_fetch.MakeFeedFetchFn(webDeps)},
-		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
-		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
+		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol)},
+		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol)},
 		{"get_datetime", get_datetime.GetDatetimeFn},
 		{"csv_parse", csv_parse.CsvParseFn},
 		{"diff_text", diff_text.DiffTextFn},
@@ -128,6 +137,30 @@ func RegisterBuiltinTools(
 			{"automation_run_now", MakeAutomationRunNowFn(autoSvc)},
 			{"automation_delete", MakeAutomationDeleteFn(autoSvc)},
 		}...)
+	}
+
+	// full 档专属工具（ADR-0115 WP1）：仅当 pol.CheckpointEnabled / pol.SecretGetEnabled 时注册。
+	// 不满足时这些工具对 LLM 不可见，减少攻击面（standard/hardened 档 LLM 不知道快照工具存在）。
+	if pol.CheckpointEnabled && checkpointDataDir != "" && len(checkpointProjects) > 0 {
+		projectDir := checkpointProjects[0]
+		retentionCount := config.CurrentThresholds().M4Kernel.CheckpointRetentionCount
+		defs = append(defs, []struct {
+			name string
+			fn   sandbox.InProcessFn
+		}{
+			{"checkpoint_list", checkpoint_list.MakeCheckpointListFn(checkpointDataDir, projectDir, retentionCount)},
+			{"checkpoint_restore", checkpoint_restore.MakeCheckpointRestoreFn(checkpointDataDir, projectDir, retentionCount)},
+		}...)
+	}
+	if pol.SecretGetEnabled && secretReader != nil {
+		maxPerTurn := config.CurrentThresholds().M4Kernel.SecretGetMaxPerTurn
+		fn, _ := secret_get.MakeSecretGetFn(secretReader, maxPerTurn)
+		// TurnCounter 的重置由上层回合调度器负责（此处不持有 counter，
+		// 注：WP4 的回合生命周期调度器会在每回合开始时重置此限额计数器。
+		defs = append(defs, struct {
+			name string
+			fn   sandbox.InProcessFn
+		}{"secret_get", fn})
 	}
 
 	for _, d := range defs {

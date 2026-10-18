@@ -1,10 +1,9 @@
 package builtin
 
 import (
-	"fmt"
-
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -13,21 +12,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/tool"
-
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/token"
+	"github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_tool_ref"
 	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-type dummyDialer struct {
-	net.Dialer
-}
+type dummyDialer struct{ net.Dialer }
 
 var dummyDialerPtr = &dummyDialer{}
 
@@ -44,12 +41,19 @@ type dummyTokenVerifier struct{}
 
 func (dummyTokenVerifier) Verify(_ *token.Token) error { return nil }
 
+func regBuiltin(sbx *sandbox.InProcessSandbox, reg *tool.InMemoryToolRegistry, paths []string, d protocol.SafeDialer, deps web_fetch.Deps) error {
+	if d == nil {
+		d = dummyDialerPtr
+	}
+	return RegisterBuiltinTools(sbx, reg, paths, d, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, deps, policy.StandardPolicy(), "", nil, nil)
+}
+
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool) // 无 PolicyGate，只测工具逻辑
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -78,7 +82,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -100,7 +104,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -136,7 +140,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -169,7 +173,7 @@ func TestBuiltinTools_WebFetch_SSRFGuard(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
 	sd := network.NewSafeDialer(0, nil, config.M11PolicyThresholds{})
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, sd, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{Dialer: sd}); err != nil {
+	if err := regBuiltin(sbx, toolReg, nil, sd, web_fetch.Deps{Dialer: sd}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -197,17 +201,15 @@ func TestBuiltinTools_WebFetch_SSRFGuard(t *testing.T) {
 func TestBuiltinTools_WebFetch_PublicURL(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
 	t.Skip("Skipping network test to avoid flakiness")
 }
 
-// TestBuiltinTools_GitDiffAndCommit 覆盖 git_diff/git_commit 两个此前只有
-// 空壳占位文件、后被 git_text_tools.go 实现但从未注册进 defs 的工具
-// （GR-5-008，见 tools/baselines/deadcode-allowlist.txt 历史记录）：验证注册后能
-// 通过 ExecuteTool 正常调用真实 git 二进制，而不仅仅是"metadata 能加载"。
+// TestBuiltinTools_GitDiffAndCommit 覆盖 git_diff/git_commit 工具：
+// 验证注册后能通过 ExecuteTool 正常调用真实 git 二进制。
 func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available in test environment")
@@ -228,7 +230,7 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
@@ -314,12 +316,11 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 	}
 }
 
-// TestBuiltinTools_TemplateRender 覆盖 template_render（此前同样只注册了
-// metadata 但从未接入 defs 的工具）：验证 Go text/template 渲染与截断逻辑。
+// TestBuiltinTools_TemplateRender 覆盖 template_render：验证 Go text/template 渲染与截断逻辑。
 func TestBuiltinTools_TemplateRender(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := regBuiltin(sbx, toolReg, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 	ctx := context.Background()

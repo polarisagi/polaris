@@ -311,6 +311,12 @@ type InterfaceConfig struct {
 
 type SecurityConfig struct {
 	LocalOnlyMode bool `toml:"local_only_mode"`
+	// TrustProfile 信任档位（ADR-0115 WP1）：
+	//   "standard"（默认）— 维持现有安全行为，沙箱 + 路径白名单 + HITL 审批
+	//   "full"            — 宿主直接执行、自动放行 HITL、写前快照、出站只审计
+	//   "hardened"        — 强制容器化，所有出站记录+阻断
+	// 空字符串等价于 "standard"。
+	TrustProfile string `toml:"trust_profile"`
 }
 
 // SandboxConfig 原生进程沙箱配置（bash / run_command 工具使用）。

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "checkpoint_restore",
+  "description": "把当前项目目录恢复到指定的写前快照。",
+  "type": "object",
+  "properties": {
+    "hash": {
+      "type": "string",
+      "description": "要恢复到的快照 commit hash（完整或前 8 字符）。可通过 checkpoint_list 查看。",
+      "minLength": 7
+    }
+  },
+  "required": ["hash"]
+}

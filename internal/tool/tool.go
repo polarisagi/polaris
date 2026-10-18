@@ -19,6 +19,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -48,6 +49,8 @@ type InMemoryToolRegistry struct {
 	sessionEventWriter SessionEventWriter
 	taintEgressChecker TaintEgressChecker    // 可选注入（M04 §3 出口污点检查）
 	exemptionVault     *token.ExemptionVault // 可选注入（HITL 豁免令牌存储）
+	policy             policy.Policy         // 信任档位安全策略（ADR-0115 WP1）
+	checkpointTrigger  CheckpointTrigger     // 写前快照触发器（ADR-0115 WP1）
 }
 
 // TaintEgressChecker/WithTaintEgressChecker/WithExemptionVault/checkTaintEgress
@@ -107,6 +110,7 @@ func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope, cfg config.M7ToolTh
 			string(types.ToolMCP):     newRateLimiter(int64(cfg.RateLimitMCPQPS)),
 			"shell":                   newRateLimiter(int64(cfg.RateLimitShellQPS)),
 		},
+		policy: policy.ProfilePolicy(policy.ProfileStandard),
 	}
 }
 
@@ -250,6 +254,9 @@ func (r *InMemoryToolRegistry) execute(ctx context.Context, tool types.Tool, inp
 		capTok = tok
 	}
 
+	// 写前快照（ADR-0115 WP1 full 档下写类/高风险/跨工作区写前自动打快照）
+	r.triggerPreExecutionCheckpoint(ctx, tool, execInput, taintLevel)
+
 	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
 	execRes, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
 		Principal:    origin.principal,
@@ -377,44 +384,6 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 // isFileWriteTool/isShellTool/isReversible、lruCache、rateLimiter、
 // ErrToolNotFound 见 tool_helpers.go（R7 拆分）。
 
-func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, execInput []byte) error {
-	f, ok := ctx.Value(protocol.CtxAnomalyFilterKey{}).(*guard.AnomalyDistanceFilter)
-	if !ok {
-		return nil
-	}
-	features := []float64{float64(len(execInput))}
-	_, chkErr := f.Check(name, features)
-	if chkErr == nil {
-		return nil
-	}
-
-	r.mu.RLock()
-	hitlGw := r.hitl
-	r.mu.RUnlock()
-
-	if hitlGw == nil {
-		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: anomaly detected but no HITL gateway configured", chkErr)
-	}
-
-	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
-	resp, promptErr := hitlGw.Prompt(ctx, types.HITLPrompt{
-		ID:             taskID,
-		CheckpointType: "anomaly_escalation",
-		PromptText:     fmt.Sprintf("Tool %q anomalous behavior detected. Approve execution?", name),
-		Options: []types.HITLOption{
-			{Key: "approve", Label: "Approve"},
-			{Key: "deny", Label: "Deny"},
-		},
-	})
-	if promptErr != nil {
-		return apperr.Wrap(apperr.CodeInternal, "tool_registry: HITL prompt failed", promptErr)
-	}
-	if resp == nil || !resp.Approved {
-		return apperr.New(apperr.CodeForbidden, "tool_registry: execution blocked by anomaly filter (HITL denied)")
-	}
-	slog.Info("tool_registry: HITL approved anomalous execution", "tool", name, "taskID", taskID)
-	f.Record(name, features)
-	return nil
-}
+// checkAnomaly 见 tool_policy.go（R7 拆分自 tool.go，接入 ADR-0115 WP1 HITL 自动放行）。
 
 // redactOutputsForPII 见 tool_pii.go（R7 拆分）。
