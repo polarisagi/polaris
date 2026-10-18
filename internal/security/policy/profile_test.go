@@ -44,6 +44,12 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	if p.DelegationChainMaxDepth != 3 {
 		t.Errorf("standard: DelegationChainMaxDepth should be 3, got %d", p.DelegationChainMaxDepth)
 	}
+	if p.CodeActAllToolsAllowed {
+		t.Error("standard: CodeActAllToolsAllowed should be false")
+	}
+	if !p.JobsKillOnSessionEnd {
+		t.Error("standard: JobsKillOnSessionEnd should be true")
+	}
 }
 
 func TestProfilePolicy_Full(t *testing.T) {
@@ -88,6 +94,12 @@ func TestProfilePolicy_Full(t *testing.T) {
 	if p.DelegationChainMaxDepth != 8 {
 		t.Errorf("full: DelegationChainMaxDepth should be 8, got %d", p.DelegationChainMaxDepth)
 	}
+	if !p.CodeActAllToolsAllowed {
+		t.Error("full: CodeActAllToolsAllowed should be true")
+	}
+	if p.JobsKillOnSessionEnd {
+		t.Error("full: JobsKillOnSessionEnd should be false")
+	}
 }
 
 func TestProfilePolicy_Hardened(t *testing.T) {
@@ -127,6 +139,12 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if p.DelegationChainMaxDepth != 2 {
 		t.Errorf("hardened: DelegationChainMaxDepth should be 2, got %d", p.DelegationChainMaxDepth)
+	}
+	if p.CodeActAllToolsAllowed {
+		t.Error("hardened: CodeActAllToolsAllowed should be false")
+	}
+	if !p.JobsKillOnSessionEnd {
+		t.Error("hardened: JobsKillOnSessionEnd should be true")
 	}
 }
 
