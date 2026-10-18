@@ -308,6 +308,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/system/version", s.sysadminHandler.HandleGetVersion)
 	mux.HandleFunc("POST /v1/system/update", s.sysadminHandler.HandleTriggerUpdate)
 
+	// 写前快照与回滚（ADR-0115 WP1）
+	mux.HandleFunc("GET /v1/checkpoints", s.sysadminHandler.HandleListCheckpoints)
+	mux.HandleFunc("POST /v1/checkpoints/restore", s.sysadminHandler.HandleRestoreCheckpoint)
+
 }
 
 // handleSkillCreate 按请求体分派 POST /v1/skills/create：含非空 intent 字段 →

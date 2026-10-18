@@ -42,6 +42,8 @@ func run() error { //nolint:gocyclo
 			return runChatCmd(os.Args[2:])
 		case "project", "projects":
 			return runProjectCmd(os.Args[2:])
+		case "checkpoint", "checkpoints":
+			return runCheckpointCmd(os.Args[2:])
 		case "status":
 			return runCLIStatus()
 		case "usage":

@@ -230,6 +230,23 @@ type M4KernelThresholds struct {
 	// RecallRAGMinSurprise SurpriseIndex 低于此值时本回合不查 RAG（环境平稳、无需外部知识补充）；
 	// 高于 SurpriseHintThreshold 时 RAG 检索深度加倍。自原 Assembler 迁入回合内召回（ADR-0105 决策十）。
 	RecallRAGMinSurprise float64 `toml:"recall.rag_min_surprise"` // 0.3
+
+	// ── WP1 信任档位与快照阈值（ADR-0115）────────────────────────────────────────
+	// CheckpointThrottleMaxPerTurn 同一回合内影子 git 写前快照的最大次数。
+	// 超出后当回合剩余高风险操作仍执行，但跳过快照（避免 IO 风暴）。
+	// 仅 full 档启用快照；standard/hardened 档此字段不生效。
+	CheckpointThrottleMaxPerTurn int `toml:"checkpoint.throttle_max_per_turn"` // 20
+	// CheckpointRetentionCount 保留的最近快照数（影子 git 保留的 commit 数）。
+	// 超出时旧快照 gc 裁剪。0 = 不裁剪（不推荐用于长时间运行的 Agent）。
+	CheckpointRetentionCount int `toml:"checkpoint.retention_count"` // 10
+	// AgentsMaxConcurrent 并发子 Agent 上限（full 档 loop_mode 下的并发协程数上限）。
+	// standard/hardened 档该字段备查，由上层 M4 调度器决定是否引用。
+	AgentsMaxConcurrent int `toml:"agents_max_concurrent"` // 4
+	// LoopMaxIterations 自主循环模式（loop_mode）单次任务最大迭代轮数。0 = 不限。
+	// 防止无终止条件时无限循环消耗 token。
+	LoopMaxIterations int `toml:"loop.max_iterations"` // 0
+	// SecretGetMaxPerTurn full 档 secret_get 工具单回合最多读取凭据条数（防止批量泄露）。
+	SecretGetMaxPerTurn int `toml:"secret_get.max_per_turn"` // 5
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -592,6 +609,12 @@ func DefaultThresholds() Thresholds {
 			RecallRerankTopN:               12,
 			RecallRerankMinProb:            0.5,
 			RecallRAGMinSurprise:           0.3,
+			// WP1 信任档位与快照阈值默认值
+			CheckpointThrottleMaxPerTurn: 20,
+			CheckpointRetentionCount:     10,
+			AgentsMaxConcurrent:          4,
+			LoopMaxIterations:            0,
+			SecretGetMaxPerTurn:          5,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

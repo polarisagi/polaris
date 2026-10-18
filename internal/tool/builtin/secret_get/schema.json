@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "secret_get",
+  "description": "读取 polaris 凭据存储中的凭据值（仅 full 档可用）。",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "凭据名称，与 `polaris secret set <name>` 时指定的名称一致。",
+      "minLength": 1
+    }
+  },
+  "required": ["name"]
+}

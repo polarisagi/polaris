@@ -1,0 +1,12 @@
+name: checkpoint_restore
+description: "把当前项目目录恢复到指定的写前快照（仅 full 档可用）。恢复前会自动创建当前状态的快照作为回滚保障。此操作会覆盖工作区文件，不可撤销（恢复前的状态已保存为新快照）。"
+version: "1.0.0"
+capability: write
+risk_level: high
+sandbox: in-process
+side_effects:
+  - filesystem-write
+tags:
+  - checkpoint
+  - recovery
+  - destructive

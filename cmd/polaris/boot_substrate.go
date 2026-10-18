@@ -500,13 +500,17 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	} else {
 		slog.Info("polaris: cedar policy loaded", "policy_count", gate.CedarPolicyCount())
 	}
-	slog.Info("polaris: policy gate initialized (deny-by-default)")
+	trustPol := policy.ProfilePolicy(policy.TrustProfile(cfg.Security.TrustProfile))
+	slog.Info("polaris: trust profile configured", "profile", trustPol.Profile)
 
 	// ─── 3.5 信任发布者白名单 ─────────────────────────────────────────────────
 	publisherTrustMap := config.ListTrustedPublishers(configs.FS, "extensions/trusted-publishers.yaml")
 
 	// ─── 4. 推理路由器 (L0 M1) ──────────────────────────────────────────────
 	dialer := network.NewSafeDialer(0, cfg.System.EgressAllowedDomains, cfg.Thresholds.M11Policy)
+	if trustPol.SafeDialerAuditOnly {
+		dialer.WithAuditOnly(true)
+	}
 	safeHTTPClient := network.NewSafeHTTPClient(dialer)
 	// M13 §1.2.2: EgressGateway 包裹 SafeDialer transport，添加域名白名单预检层
 	allowedDomains := append(egress.DefaultAllowedDomains(), cfg.System.EgressAllowedDomains...)

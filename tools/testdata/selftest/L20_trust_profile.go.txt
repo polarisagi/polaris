@@ -1,0 +1,11 @@
+package zztrust
+
+// 负向用例：直接在 ProfilePolicy 外比较 TrustProfile 字符串字面量。
+// L-20 规则必须在此文件中检测到违规并报红。
+// 注意：本文件是 selftest fixture，属于 internal/ 目录（非 tools/），
+// lint_selftest.go 会在测试后立即删除它，不会留在仓库里。
+
+func selftestTrustProfileDirect(profile string) bool {
+	// 直接字面量比较：这是 L-20 要拦截的形式。
+	return profile == "full"
+}

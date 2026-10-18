@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 	"github.com/polarisagi/polaris/internal/tool/builtin/grep"
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
@@ -65,7 +66,7 @@ func TestBuiltinTools_StrReplace(t *testing.T) {
 
 func TestBuiltinTools_Bash(t *testing.T) {
 	tmpDir := t.TempDir()
-	bashFn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil)
+	bashFn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, policy.StandardPolicy())
 	ctx := context.Background()
 
 	args := `{"command": "echo hello"}`
@@ -79,7 +80,7 @@ func TestBuiltinTools_Bash(t *testing.T) {
 
 func TestBuiltinTools_RunCommand(t *testing.T) {
 	tmpDir := t.TempDir()
-	runFn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil)
+	runFn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, policy.StandardPolicy())
 	ctx := context.Background()
 
 	args := `{"command": "echo hello"}`

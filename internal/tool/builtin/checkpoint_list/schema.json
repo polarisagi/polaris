@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "checkpoint_list",
+  "description": "列出当前项目目录的写前快照列表。",
+  "type": "object",
+  "properties": {
+    "limit": {
+      "type": "integer",
+      "description": "返回最近 N 条快照（默认 20，最大 100）。0 表示返回全部。",
+      "default": 20,
+      "minimum": 0,
+      "maximum": 100
+    }
+  }
+}

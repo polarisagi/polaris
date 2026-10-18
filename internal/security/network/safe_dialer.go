@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"crypto/tls"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -86,6 +87,9 @@ type SafeDialer struct {
 
 	toctouDelayMs   int
 	maxIPsThreshold int
+
+	// auditOnly full 信任档位（ADR-0115 WP1）：放行公网与内网连接，只保留审计日志，不阻断 SSRF。
+	auditOnly bool
 }
 
 var _ protocol.SafeDialer = (*SafeDialer)(nil)
@@ -122,58 +126,11 @@ func NewSafeDialer(taintLevel int, allowedDomains []string, m11 config.M11Policy
 	}
 }
 
-// SafeHTTPClient 包装了 *http.Client 并标记为已受 SafeDialer 保护
-type SafeHTTPClient struct {
-	*http.Client
-	isSafe bool
-}
-
-// IsSafe 返回该客户端是否真正经过安全配置
-func (s SafeHTTPClient) IsSafe() bool {
-	return s.isSafe
-}
-
-// NewSafeHTTPClient 返回一个绑定了 SafeDialer 的 SafeHTTPClient。
-// 所有 Adapter 和工具调用须使用此工厂，禁止传入 http.DefaultClient。
-func NewSafeHTTPClient(sd *SafeDialer) SafeHTTPClient {
-	if sd == nil {
-		sd = NewSafeDialer(0, nil, config.M11PolicyThresholds{})
-	}
-	return SafeHTTPClient{Client: newSafeHTTPClientFromDialer(sd), isSafe: true}
-}
-
-// NewLoopbackSafeHTTPClient 返回允许连接 loopback（127.x / ::1）的安全 HTTP 客户端。
-// 仅用于系统级受控本地服务（Ollama inference / embedding / QLoRA / PRM / Steering）。
-// 其余私有 CIDR 仍受 SafeDialer SSRF 阻断保护。
-func NewLoopbackSafeHTTPClient(m11 config.M11PolicyThresholds) SafeHTTPClient {
-	sd := NewSafeDialer(0, nil, m11)
-	sd.allowLoopback = true
-	c := newSafeHTTPClientFromDialer(sd)
-	if t, ok := c.Transport.(*http.Transport); ok {
-		t.ResponseHeaderTimeout = 300 * time.Second
-	}
-	return SafeHTTPClient{Client: c, isSafe: true}
-}
-
-// newSafeHTTPClientFromDialer 从已配置的 SafeDialer 构造 http.Client（内部共用逻辑）。
-func newSafeHTTPClientFromDialer(sd *SafeDialer) *http.Client {
-	transport := &http.Transport{
-		DialContext:         sd.DialContext,
-		ForceAttemptHTTP2:   true,
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-		// 只限制等待响应头的时间；body 读取由各 adapter 的 context 控制，
-		// 不在此设全局 Timeout，否则 30s 后强制断流导致前端对话卡死。
-		ResponseHeaderTimeout: 30 * time.Second,
-	}
-	// 禁用 HTTP/3: 仅允许 h2 和 http/1.1
-	transport.TLSClientConfig = &tls.Config{
-		NextProtos: []string{"h2", "http/1.1"},
-	}
-	return &http.Client{
-		Transport: transport,
-	}
+// WithAuditOnly 配置 SafeDialer 为仅审计模式（ADR-0115 WP1 full 信任档位使用）。
+// 在此模式下，内网/私网 IP 和受限域名不会被阻断，但会输出 Warn 级别的审计日志。
+func (sd *SafeDialer) WithAuditOnly(auditOnly bool) *SafeDialer {
+	sd.auditOnly = auditOnly
+	return sd
 }
 
 // DialContext 执行 SSRFGuard 五阶段校验后建立连接。
@@ -213,15 +170,12 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium && !peerOK {
-		allowed := false
-		for _, d := range sd.allowedDomains {
-			if strings.EqualFold(host, d) || strings.HasSuffix(strings.ToLower(host), "."+strings.ToLower(d)) {
-				allowed = true
-				break
+		if !matchAllowedDomain(host, sd.allowedDomains) {
+			if sd.auditOnly {
+				slog.Warn("safe_dialer: taint>=Medium requests domain restriction bypassed (audit only, full profile)", "host", host)
+			} else {
+				return nil, apperr.New(apperr.CodeForbidden, "safe_dialer: taint>=Medium requests are restricted to allowed domains")
 			}
-		}
-		if !allowed {
-			return nil, apperr.New(apperr.CodeForbidden, "safe_dialer: taint>=Medium requests are restricted to allowed domains")
 		}
 	}
 
@@ -233,7 +187,11 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 
 	// Phase 2: blockedCIDRs 校验
 	if !peerOK && sd.containsBlockedCIDR(ips1) {
-		return nil, &SSRFBlockedError{Host: host, IPs: ips1}
+		if sd.auditOnly {
+			slog.Warn("safe_dialer: SSRFGuard phase2 blocked CIDR bypassed (audit only, full profile)", "host", host, "ips", ips1)
+		} else {
+			return nil, &SSRFBlockedError{Host: host, IPs: ips1}
+		}
 	}
 
 	// Phase 3: 50ms TOCTOU 延迟 + 二次 DNS 解析（强制绕过缓存，TOCTOU 保护）
@@ -245,12 +203,20 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 		return nil, apperr.Wrap(apperr.CodeInternal, "safe_dialer phase3 dns", err)
 	}
 	if !peerOK && sd.containsBlockedCIDR(ips2) {
-		return nil, &SSRFBlockedError{Host: host, IPs: ips2}
+		if sd.auditOnly {
+			slog.Warn("safe_dialer: SSRFGuard phase3 blocked CIDR bypassed (audit only, full profile)", "host", host, "ips", ips2)
+		} else {
+			return nil, &SSRFBlockedError{Host: host, IPs: ips2}
+		}
 	}
 
 	// Phase 3.5: 响应 IP >20 拒绝
 	if len(ips2) > sd.maxIPsThreshold {
-		return nil, &ErrDNSResponseTooLarge{Host: host, Count: len(ips2)}
+		if sd.auditOnly {
+			slog.Warn("safe_dialer: DNS response size check bypassed (audit only, full profile)", "host", host, "count", len(ips2))
+		} else {
+			return nil, &ErrDNSResponseTooLarge{Host: host, Count: len(ips2)}
+		}
 	}
 
 	// Phase 4: 依次尝试 ips2 中的 IP，实现类似标准库的 Happy Eyeballs 故障回退
@@ -410,5 +376,12 @@ func (sd *SafeDialer) containsBlockedCIDR(ips []net.IP) bool {
 	return false
 }
 
-// TaintEgressCheck / Capability 检查(CheckCapability) / ValidateGitURL / 错误类型定义
-// 见 safe_dialer_capability.go（R7 拆分）。
+func matchAllowedDomain(host string, allowedDomains []string) bool {
+	hostLower := strings.ToLower(host)
+	for _, d := range allowedDomains {
+		if strings.EqualFold(host, d) || strings.HasSuffix(hostLower, "."+strings.ToLower(d)) {
+			return true
+		}
+	}
+	return false
+}

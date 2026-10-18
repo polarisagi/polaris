@@ -122,10 +122,14 @@ func collectRegisteredMethods(dir string) map[string]bool {
 			if strings.HasPrefix(trimmed, "//") {
 				continue
 			}
-			// 匹配 handler.HandleXxx 方法引用
-			if strings.Contains(trimmed, ".Handle") {
-				idx := strings.Index(trimmed, ".Handle")
-				sub := trimmed[idx+1:]
+			// 匹配同一行内所有 handler.HandleXxx 方法引用（避免同一行前置 mux.HandleFunc 吞掉后置的 HandleXxx）
+			rem := trimmed
+			for {
+				idx := strings.Index(rem, ".Handle")
+				if idx == -1 {
+					break
+				}
+				sub := rem[idx+1:]
 				// 提取标识符
 				end := 0
 				for end < len(sub) && ((sub[end] >= 'a' && sub[end] <= 'z') || (sub[end] >= 'A' && sub[end] <= 'Z') || (sub[end] >= '0' && sub[end] <= '9') || sub[end] == '_') {
@@ -134,6 +138,7 @@ func collectRegisteredMethods(dir string) map[string]bool {
 				if end > 0 {
 					registered[sub[:end]] = true
 				}
+				rem = sub[end:]
 			}
 		}
 		return nil

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/token"
@@ -63,6 +64,14 @@ func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.
 		}
 	}
 	if err := checker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {
+		r.mu.RLock()
+		pol := r.policy
+		r.mu.RUnlock()
+		if !pol.TaintEgressBlockEnabled {
+			slog.Warn("tool_registry: taint egress blocked by checker, bypassed (audit only, full profile)",
+				"tool", tool.Name, "taint", taintLevel, "err", err)
+			return nil
+		}
 		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: taint egress blocked", err)
 	}
 	return nil

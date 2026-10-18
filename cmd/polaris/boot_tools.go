@@ -43,7 +43,9 @@ import (
 	memretrieval "github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/checkpoint"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -231,7 +233,15 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		[]string{sb.DataDir},
 		sb.Cfg.Sandbox.AllowedPaths...,
 	))
+	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
 	toolReg := polartool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
+	toolReg.WithPolicy(trustPol)
+	if trustPol.CheckpointEnabled && len(allowedPaths) > 0 {
+		ckptStore, err := checkpoint.NewStore(sb.Layout.Data, allowedPaths[0], config.CurrentThresholds().M4Kernel.CheckpointRetentionCount)
+		if err == nil {
+			toolReg.WithCheckpointTrigger(checkpoint.NewTrigger(ckptStore, allowedPaths[0], config.CurrentThresholds().M4Kernel.CheckpointThrottleMaxPerTurn))
+		}
+	}
 	toolReg.WithTokenVault(piiVault)
 
 	// M04 §3 出口污点检查 + HITL 豁免转义（2026-07-14 补齐，见 hitlGateway 构造处
@@ -373,6 +383,16 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		repo.NewSQLiteTodoRepository(sb.Store.DB()),
 		ttsBr.Synthesize,
 		webDeps,
+		// 由配置的 TrustProfile 字符串构建策略快照（ADR-0115 WP1）
+		policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile)),
+		// full 档专属工具依赖（ADR-0115 WP1）
+		// checkpointDataDir: 快照影子仓库根目录（DataDir/checkpoints/）
+		sb.Layout.Data,
+		// checkpointProjects: 被快照的项目目录列表（AllowedPaths 第一项即工作区）
+		allowedPaths,
+		// secretReader: WP1 阶段尚无具名凭据存储，nil=不注册 secret_get；
+		// WP4 接入 NamedSecretRepo 后替换此 nil
+		nil,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

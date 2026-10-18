@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
@@ -302,7 +303,7 @@ func TestAutomationTools_BackgroundContextThroughRegistry(t *testing.T) {
 		config.DefaultThresholds().M7Tool,
 	)
 
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{"/tmp"}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, svc, "", nil, nil, nil, nil, web_fetch.Deps{}); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{"/tmp"}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, svc, "", nil, nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 
