@@ -195,10 +195,14 @@ Eval Harness 驱动自进化，所有变更需通过 CI 门控。
 
 工程化要求：新功能必须定义 `EvalCase`；Prompt 改动必附前后对比结果；RAG 改动必有实验依据；禁跳过 Eval 直改阈值/Prompt/权重。
 
-### [HE-Rule-5] 状态机持有控制流
-Go 确定性状态机持有控制流，LLM 仅做概率性填空。禁止 `while True: call LLM` 自由流转。
+### [HE-Rule-5] 状态机持生命周期
+> 原表述（2026-10-18 前）：**状态机持有控制流** — Go 确定性状态机持有控制流，LLM 仅做概率性填空。禁止 `while True: call LLM` 自由流转。
+> 核心禁止：`while True: call LLM`、LLM 回同内容直接驱动跳转、FSM 锁内做 IO。
 
-工程化要求：所有 LLM 调用必在 FSM handler 回调内；状态跳转必通过 `FSM.Trigger()`；耐时操作必移出锁范围用 `SafeGo` 异步；Failover 必全量遍历。
+**2026-10-18 复核（ADR-0115）**：**状态机持生命周期** — Go FSM 主导回合生命周期、持久化、安全闸门与终止；回合内的行动序列由模型经工具调用决定。
+核心禁止：无持久化的 while 循环、模型输出绕过闸门直接产生副作用、FSM 锁内做 IO。
+
+工程化要求：所有回合生命周期必由 Go FSM 主导；状态跳转必通过 `FSM.Trigger()`；工具调用必经 S_VALIDATE 与 `ExecuteTool` 物理把关；耗时操作必移出锁范围用 `SafeGo` 异步；FSM 锁内严禁 IO。
 
 ### [HE-Rule-6] State-in-DB
 - 所有状态持久化落盘。

@@ -25,7 +25,7 @@
 | HE-2 | **可验证执行** — 安全边界必须物理/密码学可验证 | 概率过滤当安全边界、Taint 静默丢失、nil 安全门放行 |
 | HE-3 | **可组合原语** — 接口在调用方定义，跨模块用结构化事件 | service 调 DAO、字符串隐式耦合、工具注册旁路 ExecuteTool |
 | HE-4 | **数据驱动迭代** — Eval Harness 驱动，所有变更需 CI 门控 | 跳过 Eval 直改阈值 / Prompt / 权重 |
-| HE-5 | **状态机持控制流** — Go FSM 主导；LLM 是协处理器 | `while True: call LLM`、LLM 回同内容直接驱动跳转、FSM 锁内做 IO |
+| HE-5 | **状态机持生命周期**（2026-10-18 复核 ADR-0115，原「状态机持控制流」）— Go FSM 主导回合生命周期、持久化、安全闸门与终止；回合内的行动序列由模型经工具调用决定 | 模型输出绕过闸门直接产生副作用、FSM 锁内做 IO、无持久化的 while 循环 |
 | HE-6 | **State-in-DB** — 持久化落盘，跨模块走异步事件 | 状态仅内存、DB 连接期间发起 LLM 调用（R1.16） |
 | HE-7 | **防退化边界** — 守住五防线与 Memory-Write-Tool | 绕过 ExecuteTool 写记忆、弱化 Taint/Cedar/KillSwitch/SSRFGuard |
 

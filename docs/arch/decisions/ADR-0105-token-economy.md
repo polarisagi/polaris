@@ -19,6 +19,7 @@
 - `self_improve.auto_curriculum` 门控 Curriculum 两个入口（M9 中环传 nil 生成器；`BackgroundTaskScheduler` 生成器为 nil 时只跑红队探测）。新增后台自动任务必须有配置开关。
 - `memory_consolidate` 只在回合终态投递一次（`emitConsolidateOnce`），回放期间不投递；禁止在回合中间阶段触发全会话蒸馏。
 - 多 Agent 不加门控：`spawn_planner`/`transfer_to_agent`/debate 由模型经工具自决，常驻 swarm Agent 不调 LLM，PRM 多候选默认关。
+- **2026-10-18 复核（ADR-0115）**：后台 LLM 任务在 `full` 档默认开启（用于 sleep-time 记忆整理与自改进闭环，WP6）；`standard` 与 `hardened` 档仍受配置开关与错峰门控。
 
 ## 决策二：思考档位、模型池与按失败成因升级（原 ADR-0101 决策三、原 ADR-0101 决策七、原 ADR-0102 决策六、原 ADR-0102 决策二）
 
@@ -44,6 +45,7 @@
 
 - 规划输出有内容但不可解析且无缓存 DAG：升一级后 `TriggerFillRetry` 重试一次（route=`plan_escalated`，与自评超纲共用每回合一次额度），再失败才 S_PLAN_FAILED；空输出按 ADR-0098 关思考重试，不计升级。
 - 反例：「TaintHigh → 满档/贵模型」「任何重规划升 Pro+Max」「规划恒用 budget 池（无该角色时降级链为空）」「由程序启发式判难度」「把花费决定权交给 LLM 输出」均已驳回。
+- **2026-10-18 复核（ADR-0115）**：推翻「LLM 只给信号、选档归程序」。模型自选模型与思考档；程序阶梯只在模型未表态时生效；成本上限改为用户可选配置，默认不限。
 - 重新评估：真实 Key 回合契约评测中 Perceive 路由/Reflect 判定准确率下降 → 对应阶段调回 high；规划 schema 失败率 >5% → `plan_initial` 调回 max；便宜档首轮规划重规划率上升致总费用反升 → `model_pool.plan_initial` 调回 reasoning；`plan_escalated` >20% → 调 `reasoning_complexity`。
 
 ## 决策三：五层前缀账本与阶段契约入稳定核（原 ADR-0101 决策四、原 ADR-0102 决策三、原 ADR-0105 决策一、原 ADR-0105 决策九）
@@ -139,6 +141,7 @@
 | 2026-09-29 | 原 ADR-0105 初稿（Proposed）：五层账本、历史只追加、召回预算、调用门控、响应缓存、错峰、用量可见性；起因是审计发现工具名 map 随机序使稳定层逐请求变化 |
 | 2026-09-30 | 追加决策九/十/十一；WP4–WP11 全部落地，实施追记并入各节。勘误：「持久化恢复 PII 反向映射」作废（映射从不持久化）；WP7「契约追加在稳定层末尾」被 WP10 的独立首条契约 system 取代；删除第二条召回管线 |
 | 2026-10-12 | 三份合一为本文；状态按代码核实改为 Accepted；重排门标注生产未接线 |
+| 2026-10-18 | 决策二追记复核（ADR-0115）：推翻「选档归程序」，模型自主选档与思考档；决策一追记 full 档默认开后台任务 |
 
 ## 引用代码
 

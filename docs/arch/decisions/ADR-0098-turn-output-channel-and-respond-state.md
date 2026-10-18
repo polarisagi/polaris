@@ -69,6 +69,7 @@
 - 空输出重试改用 `ThinkingDisabled`（`planEffect`，`PlanAttempts>0`）：DeepSeek 省略 `thinking` 字段即默认开启思考，适配器对显式 `ThinkingDisabled` 发送 `thinking.type=disabled`，未指定（空串）保持服务端默认。门控 `TestPlanEffect_RetryDisablesThinking`、`TestDisableDeepSeekThinking`。
 - 规划输出有内容但不可用且无缓存 DAG：升一级模型档位经 `TriggerFillRetry` 重试一次（每回合一次，与规划模型自评超纲共用额度），再失败才 S_PLAN_FAILED（ADR-0105 决策二；门控 `TestPlanEffect_RetriesEmptyOutputOnce`）。规划阶段本身失败走 S_FAILED（决策九不变）。
 - `m4_kernel.max_steps` = 24（`state.yaml`）：7（完整工具回合）+ 观察循环 2×5（决策八）+ 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1 = 23 → 24；上界由 ReplanGuard 决定。MAX_STEPS 截断经 `abortTurn` 收尾。
+- **2026-10-18 复核（ADR-0115）**：在 agentic 回合模式下，废除 24 步硬截断与固定五段式流转（Perceive/Plan/Reflect/Respond），改为模型驱动的工具循环；长任务以时间和金额预算控制，失控保护 runaway_guard_rounds 默认放宽（full 档 0 不限，standard 200，hardened 50）。staged 模式维持现状。
 
 ## 决策八：观察—再规划循环（原 ADR-0098 决策八）
 
@@ -124,6 +125,7 @@
 | 2026-09-25 | 决策七：空输出重试改关思考（原 `SelectThinkingMode` 恒 Max 使原样重试无意义；`ThinkingDisabled` 在 DeepSeek 上此前从未生效）；有内容但不可解析改升档重试一次 | 0098 追记、0102 决策六 |
 | 2026-09-25 | Perceive 增可选 `Reply`（直答合并），S_RESPOND 仍是唯一用户正文出口 | 0102 决策四 4b′ |
 | 2026-10-12 | 0065 并入；按代码核实，决策四历史范围改指 ADR-0105 | — |
+| 2026-10-18 | 决策七追记复核（ADR-0115）：新增 agentic 回合模式，放宽步数截断为预算/失控保护控制 | — |
 
 ## 引用代码
 
