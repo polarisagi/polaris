@@ -14,7 +14,7 @@
 | R1.6 | 隐式字符串耦合 | 模块间用字符串 topic/channel 通信 | `internal/protocol/` 结构化事件类型 |
 | R1.7 | 违反层依赖方向 | L0→L1/L2/L3 任一引用 | 单向 L0←L1←L2←L3（`04 B1`）。门控：`Test_inv_NoCrossLayerImport` |
 | R1.8 | comment 解释"是什么" | `// 创建用户` 标在 `CreateUser` 上 | 只写"为什么"：设计意图、约束、坑 |
-| R1.9 | LLM 自由流转 | `while true { call LLM }` 无状态机包裹 | Go FSM 持控制流，LLM 是协处理器。门控：`make fsm-io-check`（Effects 内 IO、goto） |
+| R1.9 | LLM 自由流转 | `while true { call LLM }` 无状态机包裹 | Go FSM 持生命周期（ADR-0115），模型自主决定行动序列。门控：`make fsm-io-check`（Effects 内 IO、goto） |
 | R1.10 | 概率过滤当安全边界 | `if rand > 0.5 { block }` | 物理断裂：Taint + sandbox + capability token |
 | R1.11 | 绕过 Provider 直调 LLM | `internal/` 内 `http.Post("api.openai.com/...")` | `protocol.Provider.Infer/StreamInfer`（XR-09） |
 | R1.12 | 业务路径直接打印 | `fmt.Printf` / `log.Printf` / `fmt.Println` 在 `internal/` | `slog.Info/Warn/Error`（XR-08）。门控：`Test_inv_NoBareLogPrint` |
@@ -141,13 +141,15 @@ HE-1~7 的工程化实现（速查见根 `CLAUDE.md §不变量`）。AI 每写�
 - Prompt 改动附前后 Eval 对比；RAG 改动须有切片、Embedding、检索权重的实验依据
 - 禁止：跳过 Eval 直改阈值 / Prompt / 权重，"看起来更好"不算上线条件
 
-### R3-HE5 状态机持有控制流
+### R3-HE5 状态机持生命周期
 
-Go 确定性 FSM 持控制流，LLM 仅做概率性填空。
+> 原表述（2026-10-18 前）：**状态机持有控制流** — Go 确定性 FSM 持控制流，LLM 仅做概率性填空。禁止无 FSM 包裹的 `while true { callLLM }`；LLM 返回内容直接驱动巨大 `goto`/`if-else` 分支树。
 
-- LLM 调用出现在 FSM 状态 `handler` 内，不存在裸 `callLLMAndWait`；状态跳转只经 `FSM.Trigger()`，禁止直接赋值状态字段
+**2026-10-18 复核（ADR-0115）**：**状态机持生命周期** — Go FSM 主导回合生命周期、持久化、安全闸门与终止；回合内的行动序列由模型经工具调用决定。
+
+- 回合生命周期、持久化与安全闸门由 Go FSM 主导；工具调用必须经过 S_VALIDATE 校验链与 `ExecuteTool`，禁止绕过闸门直接产生副作用
 - 耗时操作（扩展激活、反射写回）移出锁范围，用 `SafeGo` 异步（`09 A-09`）；多 Provider 并发必须全量遍历（`09 A-04`）
-- 禁止：无 FSM 包裹的 `while true { callLLM }`；LLM 返回内容直接驱动巨大 `goto`/`if-else` 分支树（应先导出结构化模型再进 FSM）；FSM Handler 内裸起 goroutine 调 LLM 后回写共享字段（竞态）
+- 禁止：无持久化的 while 循环；模型输出绕过闸门直接产生副作用；FSM 锁内做 IO；FSM Handler 内裸起 goroutine 调 LLM 后回写共享字段（竞态）
 
 ### R3-HE6 状态落盘
 

@@ -49,6 +49,7 @@
 - 来源：插件 `agents/`（`.md`）；项目 `<root>/.polaris/agents/`、用户 `<data>/agents/`（Claude `.md` + Codex `.toml`，同名 `.md` 优先；项目 > 用户）。私有 `agents/*.yaml` 已删。解析唯一实现 `pluginspec.{ParseAgentFile,ListAgentDir}`。
 - 委派入口 `transfer_to_agent` / `list_agents`（内置工具）；`DefaultTaskWorker` 把 `agent_handoff:<name>` 解析为角色规格经 `WithAgentProfile` 注入；未知名称使任务失败并把原因写入 `tasks.result`。
 - 角色只收窄能力，在内核执行入口硬拦截（`Agent.checkProfileTool`，可见性过滤仅辅助）：`tools`/`disallowedTools`（Claude 工具名映射 Polaris 内置名；白名单中参数级规则 `Bash(git *)` 无法等价映射 → 整条忽略，黑名单按整个工具拒绝；`Agent(a, b)` 限定委派目标）；只读（Codex `sandbox_mode="read-only"` / Claude `permissionMode: plan`）→ 只放行能力 ≤ `CapReadOnly`，`code_act` 与未知工具 fail-closed，其余模式继承宿主不得放宽；`maxTurns` 收紧 `MaxStepsLimit`；子 Agent 默认不能再委派（受 `SpawnDepth` 门控）。
+- **2026-10-18 复核（ADR-0115）**：推翻「本地子 Agent 默认禁止再委派」与「忽略 model/effort」。本地子 Agent `AllowDelegation` 默认设为 true，受 `delegation_chain_max_depth`（full 8, standard 3, hardened 2）门控；但跨节点和 mesh 委派来的任务仍严格保持 `AllowDelegation=false`（安全边界，ADR-0111）。支持并行派生子智能体（`spawn_agents`）并可选模型与思考档；插件 agent 的 `model:` 字段按别名/池/具体名映射生效。
 - 角色指令写入 `ZoneMutableSkill`（`<agent_profile>`），不进 `ZoneImmutable`：用户目录 TaintLow，插件/项目目录 TaintMedium。`skills` 字段预加载，缺失即失败。
 - 解析但不生效（记入 `not_applied`）：`model`/`effort`（按阶段池路由，ADR-0105）、`background`、`isolation`、`memory`、`initialPrompt`；插件 agent 的 `hooks`/`mcpServers`/`permissionMode` 按 Claude 安全规则忽略。
 
@@ -157,6 +158,7 @@
 | 2026-09-29 | 决策八：MCP 2026-07-28 客户端落地 |
 | 2026-10-12 | 并入 ADR-0016/0017 决策一二/0002；0017 决策三（入站 A2A 端点实为私有协议，且「出站不复用 MCP 客户端」被 ADR-0084 推翻）归 ADR-0111；白名单订正为 YAML 配置 |
 | 2026-10-17 | 私有命名空间 `extensions["ai.polarisagi"]` 新增 `setupTool` / `statusTool`（插件内裸工具名）：插件自带的一次性设置向导无法靠聊天回合触发（需要模型参与、计 token、结果不确定）。字段仍只进私有命名空间，不触碰两家标准字段；执行走 `ExecuteAppTool` 同一执行体，不新增旁路。接口与解析见 M13-bis §5.3.3 |
+| 2026-10-18 | 决策三补充追记复核（ADR-0115）：推翻本地子 Agent 禁止再委派与忽略 model/effort，支持并行子智能体与模型自选 |
 
 ## 引用代码
 
