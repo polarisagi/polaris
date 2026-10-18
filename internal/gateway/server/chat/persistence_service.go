@@ -253,3 +253,11 @@ func (s *ChatPersistenceService) SessionExists(ctx context.Context, sessionID st
 	}
 	return row != nil, nil
 }
+
+// DeleteSession 供插件设置向导回滚本次新建的会话（消息、视图经外键级联清理）。
+func (s *ChatPersistenceService) DeleteSession(ctx context.Context, sessionID string) error {
+	if err := s.ChatRepo.DeleteSession(ctx, sessionID); err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "ChatPersistenceService.DeleteSession", err)
+	}
+	return nil
+}

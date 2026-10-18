@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,9 +33,11 @@ const (
 	reasonNoUIResource     = "no_ui_resource"
 	reasonToolFailed       = "tool_failed"
 	reasonPersistFailed    = "persist_failed"
+	reasonLoadFailed       = "load_failed"
 	reasonNotConfigured    = "not_configured"
 	setupStatusTimeout     = 5 * time.Second
 	setupExecutionTimeout  = 60 * time.Second
+	setupCleanupTimeout    = 5 * time.Second
 	setupAssistantTemplate = "「%s」设置"
 )
 
@@ -53,6 +56,8 @@ type SetupStore interface {
 	SessionExists(ctx context.Context, sessionID string) (bool, error)
 	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) (int64, error)
 	UpdateSessionTitle(ctx context.Context, sessionID, firstInput string) error
+	// DeleteSession 仅用于回滚本次请求新建的会话；级联清理其消息与视图。
+	DeleteSession(ctx context.Context, sessionID string) error
 }
 
 // setupInfo 插件列表里的 setup 块。
@@ -84,8 +89,12 @@ func (h *PluginHandler) loadInstalledPlugin(ctx context.Context, id string) (*in
 	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, name, display_name, enabled, manifest FROM plugins WHERE id=?`, id).
 		Scan(&p.ID, &p.Name, &p.DisplayName, &enabled, &manifest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, nil //nolint:nilerr // sql.ErrNoRows 与"其它读错误"对调用方都是不可用，统一当未安装
+		// 真实 DB 故障不能伪装成"未安装"：否则用户会被引导去重装一个其实存在的插件。
+		return nil, apperr.Wrap(apperr.CodeInternal, "plugin setup: load plugin", err)
 	}
 	p.Enabled = enabled == 1
 	if err := json.Unmarshal([]byte(manifest), &p.Spec); err != nil {
@@ -177,7 +186,7 @@ func (h *PluginHandler) prepareSetup(ctx context.Context, r *http.Request) (*set
 	}
 	p, err := h.loadInstalledPlugin(ctx, r.PathValue("id"))
 	if err != nil {
-		return nil, reasonPersistFailed, err
+		return nil, reasonLoadFailed, err
 	}
 	if p == nil {
 		return nil, reasonNotInstalled, nil
@@ -262,29 +271,46 @@ func setupResourceURI(tool protocol.MCPTool, res *types.ToolResult) string {
 	return ""
 }
 
+// discardNewSession 回滚本次请求新建的会话。视图与消息的外键均 ON DELETE CASCADE，一次删除即清干净；
+// 用脱离取消的上下文，因为触发回滚的失败常常正是请求超时。删除失败只记日志，不覆盖原始错误。
+func (h *PluginHandler) discardNewSession(ctx context.Context, sessionID string) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), setupCleanupTimeout)
+	defer cancel()
+	if err := h.SetupStore.DeleteSession(cctx, sessionID); err != nil {
+		slog.Warn("plugin setup: rollback new session failed", "session_id", sessionID, "err", err)
+	}
+}
+
 // persistSetupTurn 与聊天回合同序：先落视图、再落助手消息、最后关联。
-func (h *PluginHandler) persistSetupTurn(ctx context.Context, req *setupRequest, ui *types.ToolUIRef) (int64, error) {
+// 视图的 session_id 外键要求会话先存在，所以新会话必须先建；任何后续步骤失败则整体回滚该会话，不留空会话。
+func (h *PluginHandler) persistSetupTurn(ctx context.Context, req *setupRequest, ui *types.ToolUIRef) (messageID int64, err error) {
 	title := fmt.Sprintf(setupAssistantTemplate, req.plugin.title())
 	if req.isNew {
-		if err := h.SetupStore.EnsureSession(ctx, req.sessionID); err != nil {
+		if err = h.SetupStore.EnsureSession(ctx, req.sessionID); err != nil {
 			return 0, apperr.Wrap(apperr.CodeOf(err), "plugin setup: ensure session", err)
 		}
-		if err := h.SetupStore.UpdateSessionTitle(ctx, req.sessionID, title); err != nil {
+		defer func() {
+			if err != nil {
+				h.discardNewSession(ctx, req.sessionID)
+			}
+		}()
+		if err = h.SetupStore.UpdateSessionTitle(ctx, req.sessionID, title); err != nil {
 			return 0, apperr.Wrap(apperr.CodeOf(err), "plugin setup: update title", err)
 		}
 	}
-	if err := session.SaveToolUIView(ctx, h.SetupStore, req.sessionID, ui); err != nil {
+	if err = session.SaveToolUIView(ctx, h.SetupStore, req.sessionID, ui); err != nil {
 		return 0, apperr.Wrap(apperr.CodeOf(err), "plugin setup: save view", err)
 	}
-	messageID, err := h.SetupStore.SaveMessage(ctx, req.sessionID, "assistant", title, "", "", 0)
+	messageID, err = h.SetupStore.SaveMessage(ctx, req.sessionID, "assistant", title, "", "", 0)
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeOf(err), "plugin setup: save message", err)
 	}
 	if messageID <= 0 {
 		// 消息走了 outbox 兜底拿不到 ID：视图无法关联，历史里会丢失，这里没有"降级可接受"的余地。
-		return 0, apperr.New(apperr.CodeInternal, "plugin setup: assistant message id unavailable")
+		err = apperr.New(apperr.CodeInternal, "plugin setup: assistant message id unavailable")
+		return 0, err
 	}
-	if err := session.LinkToolUIViews(ctx, h.SetupStore, req.sessionID, []string{ui.ViewID}, messageID); err != nil {
+	if err = session.LinkToolUIViews(ctx, h.SetupStore, req.sessionID, []string{ui.ViewID}, messageID); err != nil {
 		return 0, apperr.Wrap(apperr.CodeOf(err), "plugin setup: link view", err)
 	}
 	return messageID, nil
@@ -305,7 +331,9 @@ func (h *PluginHandler) HandlePluginSetupStatus(w http.ResponseWriter, r *http.R
 	defer cancel()
 	p, err := h.loadInstalledPlugin(ctx, r.PathValue("id"))
 	if err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		// 读错误与清单快照损坏都是"无法得出结论"，被轮询的接口不返回 5xx。
+		slog.Warn("plugin setup-status: load plugin failed", "plugin", r.PathValue("id"), "err", err)
+		unknown(reasonLoadFailed)
 		return
 	}
 	if p == nil {

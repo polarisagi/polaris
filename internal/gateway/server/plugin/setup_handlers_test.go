@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/extension/pluginspec"
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -73,7 +74,7 @@ func newSetupEnv(t *testing.T, spec pluginspec.Plugin, enabled bool, tool protoc
 	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"013_chat.sql", "021_plugins.sql"} {
+	for _, f := range []string{"013_chat.sql", "021_plugins.sql", "043_session_todos.sql"} {
 		ddl, err := schema.FS.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -382,4 +383,121 @@ func TestListPlugins_IncludesDefaultPromptsAndSetup(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"reason":"not_enabled"`) || !strings.Contains(w.Body.String(), `"available":false`) {
 		t.Fatalf("body=%s", w.Body.String())
 	}
+}
+
+// failingStore 在指定落库步骤注入失败，验证新会话回滚；其余方法透传真实实现。
+type failingStore struct {
+	SetupStore
+	failView, failMsg, failLink bool
+}
+
+var errInjected = errors.New("injected")
+
+func (f *failingStore) SaveAppView(ctx context.Context, v session.AppView) error {
+	if f.failView {
+		return errInjected
+	}
+	return f.SetupStore.SaveAppView(ctx, v)
+}
+
+func (f *failingStore) SaveMessage(ctx context.Context, sid, role, content, tc, rc string, d int64) (int64, error) {
+	if f.failMsg {
+		return 0, errInjected
+	}
+	return f.SetupStore.SaveMessage(ctx, sid, role, content, tc, rc, d)
+}
+
+func (f *failingStore) LinkAppViewsToMessage(ctx context.Context, sid string, ids []string, mid int64) error {
+	if f.failLink {
+		return errInjected
+	}
+	return f.SetupStore.LinkAppViewsToMessage(ctx, sid, ids, mid)
+}
+
+func TestPluginSetup_PersistFailure_RollsBackNewSessionOnly(t *testing.T) {
+	steps := map[string]*failingStore{
+		"save view":    {failView: true},
+		"save message": {failMsg: true},
+		"link view":    {failLink: true},
+	}
+	for name, fs := range steps {
+		t.Run("new session "+name, func(t *testing.T) {
+			e := newSetupEnv(t, pluginspec.Plugin{SetupTool: "bridge_setup"}, true, uiTool)
+			fs.SetupStore = e.h.SetupStore
+			e.h.SetupStore = fs
+			w := e.post(t, `{}`)
+			if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonPersistFailed {
+				t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+			}
+			if count(t, e.db, `SELECT COUNT(*) FROM chat_sessions`) != 0 ||
+				count(t, e.db, `SELECT COUNT(*) FROM chat_messages`) != 0 ||
+				count(t, e.db, `SELECT COUNT(*) FROM chat_app_views`) != 0 {
+				t.Fatal("failed setup must not leave a session, message or view behind")
+			}
+		})
+		t.Run("existing session "+name, func(t *testing.T) {
+			e := newSetupEnv(t, pluginspec.Plugin{SetupTool: "bridge_setup"}, true, uiTool)
+			fs2 := *fs
+			fs2.SetupStore = e.h.SetupStore
+			e.h.SetupStore = &fs2
+			if _, err := e.db.Exec(`INSERT INTO chat_sessions(id, title, project_id) VALUES('sess_x','t','default')`); err != nil {
+				t.Fatal(err)
+			}
+			w := e.post(t, `{"session_id":"sess_x"}`)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+			}
+			if n := count(t, e.db, `SELECT COUNT(*) FROM chat_sessions WHERE id='sess_x'`); n != 1 {
+				t.Fatal("caller-owned session must survive a failed setup")
+			}
+		})
+	}
+}
+
+func TestPluginSetup_DBReadError_IsNotNotInstalled(t *testing.T) {
+	e := newSetupEnv(t, pluginspec.Plugin{SetupTool: "bridge_setup"}, true, uiTool)
+	_ = e.db.Close() // 模拟真实 DB 故障
+	w := e.post(t, `{}`)
+	if w.Code != http.StatusInternalServerError || reasonOf(t, w) != reasonLoadFailed {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestPluginSetupStatus_LoadErrors_AreUnknownNot5xx(t *testing.T) {
+	spec := pluginspec.Plugin{SetupTool: "bridge_setup", StatusTool: "bridge_status"}
+	assertUnknown := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		var m map[string]any
+		if w.Code != http.StatusOK {
+			t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := m["ready"]; !ok || v != nil || m["reason"] != reasonLoadFailed {
+			t.Fatalf("got %v", m)
+		}
+	}
+	t.Run("corrupt manifest", func(t *testing.T) {
+		e := newSetupEnv(t, spec, true, protocol.MCPTool{Name: "bridge_status"})
+		if _, err := e.db.Exec(`UPDATE plugins SET manifest='{broken'`); err != nil {
+			t.Fatal(err)
+		}
+		assertUnknown(t, e.status(t))
+	})
+	t.Run("db read error", func(t *testing.T) {
+		e := newSetupEnv(t, spec, true, protocol.MCPTool{Name: "bridge_status"})
+		_ = e.db.Close()
+		assertUnknown(t, e.status(t))
+	})
+	t.Run("not installed stays 404", func(t *testing.T) {
+		e := newSetupEnv(t, spec, true, protocol.MCPTool{Name: "bridge_status"})
+		req := httptest.NewRequest(http.MethodGet, "/v1/plugins/pl_zzzz/setup-status", nil)
+		req.SetPathValue("id", "pl_zzzz")
+		w := httptest.NewRecorder()
+		e.h.HandlePluginSetupStatus(w, req)
+		if w.Code != http.StatusNotFound || reasonOf(t, w) != reasonNotInstalled {
+			t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+		}
+	})
 }
