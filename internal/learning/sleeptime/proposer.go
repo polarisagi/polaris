@@ -17,7 +17,7 @@ type PathValidator interface {
 
 // RouterInferCaller 调用 LLM 推理接口。
 type RouterInferCaller interface {
-	Infer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error)
+	CallInfer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error)
 }
 
 // DefaultProposer 实现 LLMProposer。
@@ -59,7 +59,7 @@ func (p *DefaultProposer) Propose(ctx context.Context, weaknesses []Weakness) ([
 	}
 
 	//llmopts:exempt caller 接口接收的是 types.InferOptions 结构体且已显式声明 Purpose 与 ThinkingMode
-	resp, err := p.caller.Infer(ctx, req, opts)
+	resp, err := p.caller.CallInfer(ctx, req, opts)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "sleeptime.Propose: infer failed", err)
 	}
@@ -101,9 +101,9 @@ func buildProposalPrompt(weaknesses []Weakness) string {
 	var sb strings.Builder
 	sb.WriteString("Observed recurring failure patterns in recent agent executions:\n")
 	for i, w := range weaknesses {
-		sb.WriteString(fmt.Sprintf("%d. [%s] (occurrences: %d)\n", i+1, w.Signature, w.Count))
+		fmt.Fprintf(&sb, "%d. [%s] (occurrences: %d)\n", i+1, w.Signature, w.Count)
 		if len(w.SampleErrors) > 0 {
-			sb.WriteString(fmt.Sprintf("   Samples: %s\n", strings.Join(w.SampleErrors, " | ")))
+			fmt.Fprintf(&sb, "   Samples: %s\n", strings.Join(w.SampleErrors, " | "))
 		}
 	}
 	sb.WriteString("\nPropose 1 to 3 minimal, targeted additions or edits to the harness overlay to mitigate these weaknesses.\n")

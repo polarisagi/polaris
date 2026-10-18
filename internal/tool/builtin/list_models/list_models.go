@@ -3,6 +3,7 @@ package list_models
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -51,7 +52,9 @@ func MakeListModelsFn(db protocol.SQLQuerier, cm *modelcatalog.CatalogManager) s
 		}
 
 		if args.Refresh && cm != nil {
-			_, _ = cm.RefreshAll(ctx)
+			if _, rErr := cm.RefreshAll(ctx); rErr != nil {
+				slog.WarnContext(ctx, "list_models: refresh catalog failed", "err", rErr)
+			}
 		}
 
 		if db == nil {

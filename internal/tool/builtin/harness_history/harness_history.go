@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -14,7 +14,7 @@ type harnessHistoryArgs struct {
 }
 
 // MakeHarnessHistoryFn 创建 harness_history 执行函数。
-func MakeHarnessHistoryFn(mgr harnessoverlay.HarnessOverlayManager) sandbox.InProcessFn {
+func MakeHarnessHistoryFn(mgr protocol.HarnessOverlayManager) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		if mgr == nil {
 			return nil, apperr.New(apperr.CodeInternal, "harness_history: overlay manager not configured")

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
 	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
 	"github.com/polarisagi/polaris/internal/learning/sleeptime"
 )
@@ -52,6 +53,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
+	db.SetMaxOpenConns(1)
 	schema := `
 	CREATE TABLE IF NOT EXISTS llm_calls (
 		id               TEXT PRIMARY KEY,

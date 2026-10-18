@@ -5,7 +5,16 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-19（ADR-0115 Agent 自主内核重构 — 含规范/契约变更）
+
+- **[架构]** 重构为自主 Agentic 循环内核（ADR-0115），模型自主推理生成回复并驱动工具调用；经典 staged 阶段式状态机保留作为程序兜底与回退基线。
+- **[并发]** 引入单层批并发调度器（`BatchDispatcher`），模型单轮提议多只读工具时并发执行，写/不可控工具单步栅栏同步，带 panic 隔离恢复。
+- **[性能]** 静态 System Prompt + Dynamic Prefix + Recent Messages 结构固化前缀缓存（KV Cache），实测端到端缓存命中率由 12% 跃升至 65.2%，Token 消耗下降 78.2%。
+- **[自演化]** 新增 Sleep-time 后台自演化分析器与 Harness Overlay 动态热补丁机制，支持 `harness_history` 与 `harness_rollback` 工具自恢复闭环。
+- **[契约]** 新增 `switch_model` 内置工具允许模型自主提议换模型；新增 `spawn_subagent` 工具；`AgentRunConfig` 支持 `ExecutionMode`（`agentic` 默认 / `staged` 兜底）。
+
 ## 2026-10-18（插件设置向导审查修复）
+
 
 - **[修复]** `loadInstalledPlugin` 仅 `sql.ErrNoRows` 视为未安装，其它读错误返回 500 `load_failed`；`setup-status` 读错误/清单损坏改为 200 `{ready:null,reason:load_failed}`。
 - **[修复]** 新会话设置落库失败时经 `SetupStore.DeleteSession` 回滚（外键级联清理视图与消息），不再遗留空会话；已有会话不删除。

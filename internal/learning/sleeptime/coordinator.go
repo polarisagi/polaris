@@ -118,19 +118,34 @@ func (c *Coordinator) RunClosedLoop(ctx context.Context) (*LoopResult, error) {
 	if !accepted {
 		slog.InfoContext(ctx, "sleeptime: harness proposals rejected by eval", "reason", reason)
 		if c.auditTrail != nil {
-			_ = c.auditTrail.Record(ctx, "polaris", "harness_overlay_rejected", "eval", map[string]any{
-				"reason":            reason,
-				"baseline_held_in":  baseIn,
-				"baseline_held_out": baseOut,
-				"candidate_held_in": candIn,
+			if aErr := c.auditTrail.Record(ctx, "polaris", "harness_overlay_rejected", "eval", map[string]any{
+				"reason":             reason,
+				"baseline_held_in":   baseIn,
+				"baseline_held_out":  baseOut,
+				"candidate_held_in":  candIn,
 				"candidate_held_out": candOut,
-				"proposals_count":   len(proposals),
-			})
+				"proposals_count":    len(proposals),
+			}); aErr != nil {
+				slog.WarnContext(ctx, "sleeptime: record rejection audit failed", "err", aErr)
+			}
 		}
 		return result, nil
 	}
 
-	// 5. 接受：写入覆盖层并提交 git 版本
+	hash, err := c.commitAcceptedProposals(ctx, proposals, baseIn, candIn, baseOut, candOut, reason)
+	if err != nil {
+		return nil, err
+	}
+	result.CommitHash = hash
+	return result, nil
+}
+
+func (c *Coordinator) commitAcceptedProposals(
+	ctx context.Context,
+	proposals []ProposedChange,
+	baseIn, candIn, baseOut, candOut float64,
+	reason string,
+) (string, error) {
 	files := make(map[string][]byte, len(proposals))
 	for _, p := range proposals {
 		files[p.Path] = []byte(p.Content)
@@ -140,23 +155,24 @@ func (c *Coordinator) RunClosedLoop(ctx context.Context) (*LoopResult, error) {
 
 	hash, err := c.overlayMgr.WriteAndCommit(ctx, files, commitMsg, "Polaris Self-Improvement <polaris@local>")
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "sleeptime: write and commit overlay", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "sleeptime: write and commit overlay", err)
 	}
-	result.CommitHash = hash
 
 	slog.InfoContext(ctx, "sleeptime: harness proposals accepted and committed", "hash", hash, "reason", reason)
 	if c.auditTrail != nil {
-		_ = c.auditTrail.Record(ctx, "polaris", "harness_overlay_commit", hash, map[string]any{
-			"hash":              hash,
-			"reason":            reason,
-			"baseline_held_in":  baseIn,
-			"baseline_held_out": baseOut,
-			"candidate_held_in": candIn,
+		if aErr := c.auditTrail.Record(ctx, "polaris", "harness_overlay_commit", hash, map[string]any{
+			"hash":               hash,
+			"reason":             reason,
+			"baseline_held_in":   baseIn,
+			"baseline_held_out":  baseOut,
+			"candidate_held_in":  candIn,
 			"candidate_held_out": candOut,
-			"proposals_count":   len(proposals),
-		})
+			"proposals_count":    len(proposals),
+		}); aErr != nil {
+			slog.WarnContext(ctx, "sleeptime: record commit audit failed", "err", aErr)
+		}
 	}
-	return result, nil
+	return hash, nil
 }
 
 // FindIdleSessions 查询空闲超过 idleMinutes 的会话列表。

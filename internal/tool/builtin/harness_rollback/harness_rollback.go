@@ -3,8 +3,9 @@ package harness_rollback
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 
-	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -19,7 +20,7 @@ type AuditTrail interface {
 }
 
 // MakeHarnessRollbackFn 创建 harness_rollback 执行函数。
-func MakeHarnessRollbackFn(mgr harnessoverlay.HarnessOverlayManager, audit AuditTrail) sandbox.InProcessFn {
+func MakeHarnessRollbackFn(mgr protocol.HarnessOverlayManager, audit AuditTrail) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		if mgr == nil {
 			return nil, apperr.New(apperr.CodeInternal, "harness_rollback: overlay manager not configured")
@@ -38,9 +39,11 @@ func MakeHarnessRollbackFn(mgr harnessoverlay.HarnessOverlayManager, audit Audit
 		}
 
 		if audit != nil {
-			_ = audit.Record(ctx, "polaris", "harness_overlay_rollback", args.Version, map[string]any{
+			if aErr := audit.Record(ctx, "polaris", "harness_overlay_rollback", args.Version, map[string]any{
 				"version": args.Version,
-			})
+			}); aErr != nil {
+				slog.WarnContext(ctx, "harness_rollback: record audit failed", "err", aErr)
+			}
 		}
 
 		res := map[string]any{

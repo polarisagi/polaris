@@ -3,7 +3,7 @@ package builtin
 import (
 	"fmt"
 
-	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin/harness_history"
@@ -15,7 +15,7 @@ import (
 func RegisterHarnessTools(
 	sbx *sandbox.InProcessSandbox,
 	toolReg *tool.InMemoryToolRegistry,
-	overlayMgr harnessoverlay.HarnessOverlayManager,
+	overlayMgr protocol.HarnessOverlayManager,
 	auditTrail harness_rollback.AuditTrail,
 ) error {
 	if overlayMgr == nil {

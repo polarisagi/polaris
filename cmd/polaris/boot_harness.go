@@ -32,7 +32,10 @@ func (a *harnessAuditAdapter) Record(ctx context.Context, actor, action, target 
 	if err != nil {
 		payload = []byte("{}")
 	}
-	return a.at.RecordAudit(ctx, action, payload)
+	if err := a.at.RecordAudit(ctx, action, payload); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "harnessAuditAdapter.Record: record audit", err)
+	}
+	return nil
 }
 
 // routerInferCallerAdapter 桥接 *llm.InferenceRouter 至 sleeptime.RouterInferCaller 接口。
@@ -40,7 +43,7 @@ type routerInferCallerAdapter struct {
 	router *llm.InferenceRouter
 }
 
-func (a *routerInferCallerAdapter) Infer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error) {
+func (a *routerInferCallerAdapter) CallInfer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error) {
 	if a == nil || a.router == nil {
 		return types.InferResponse{}, apperr.New(apperr.CodeInternal, "routerInferCallerAdapter: nil router")
 	}
@@ -49,7 +52,7 @@ func (a *routerInferCallerAdapter) Infer(ctx context.Context, req types.InferReq
 		types.WithThinkingMode(types.ThinkingDisabled),
 	}
 	if opts.ModelPool != "" {
-		inferOpts = append(inferOpts, types.WithModelPool(string(opts.ModelPool)))
+		inferOpts = append(inferOpts, types.WithModelPool(opts.ModelPool))
 	}
 	if opts.ThinkingMode != "" {
 		inferOpts = append(inferOpts, types.WithThinkingMode(opts.ThinkingMode))
@@ -60,7 +63,7 @@ func (a *routerInferCallerAdapter) Infer(ctx context.Context, req types.InferReq
 	//llmopts:exempt 转发上游 InferOptions，默认 purpose 与 thinking 已在 inferOpts 中声明
 	resp, err := a.router.Infer(ctx, req.Messages, inferOpts...)
 	if err != nil {
-		return types.InferResponse{}, err
+		return types.InferResponse{}, apperr.Wrap(apperr.CodeInternal, "routerInferCallerAdapter.Infer", err)
 	}
 	return types.InferResponse{
 		Content: resp.Content,
@@ -78,11 +81,11 @@ func (a *harnessEvaluatorAdapter) Evaluate(ctx context.Context, overlayFiles map
 	}
 	trainRep, err := a.runner.RunSuite(ctx, "training", "")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, apperr.Wrap(apperr.CodeInternal, "harnessEvaluatorAdapter.Evaluate: train suite", err)
 	}
 	valRep, err := a.runner.RunSuite(ctx, "validation", "")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, apperr.Wrap(apperr.CodeInternal, "harnessEvaluatorAdapter.Evaluate: val suite", err)
 	}
 	if trainRep != nil && trainRep.TotalCases > 0 {
 		heldInScore = float64(trainRep.PassCount) / float64(trainRep.TotalCases)

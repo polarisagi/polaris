@@ -17,7 +17,7 @@ type mockInferCaller struct {
 	err      error
 }
 
-func (m *mockInferCaller) Infer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error) {
+func (m *mockInferCaller) CallInfer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error) {
 	m.lastReq = req
 	m.lastOpts = opts
 	if m.err != nil {

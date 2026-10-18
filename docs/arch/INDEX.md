@@ -104,6 +104,26 @@
 - **根因类别**：原 `cron_jobs`（014 表）仅作为数据沉淀表，系统内无定时调度器轮询消费；已通过 ADR-0114 彻底废弃删除 `cron_*`，改为 `automation_*` 工具统一写入由 `cronTick` 驱动的 `automations` 与 `workflows` 表。
 - **排查起点**：`docs/arch/decisions/ADR-0114-info-acquisition-automation-pipeline.md` 与 `docs/arch/M13-Interface-Scheduler.md §8.7`。
 
+### 症状 17：模型循环失控/回合永不结束
+- **症状特征**：Agent 在自主循环（Agentic Loop）中不断调用工具或重复输出，超过预期轮次不终止，最终触发熔断。
+- **归类模块**：M04
+- **根因类别**：Agentic 循环失控保护生效（连续相同工具调用检测 `runawayRepeatedCallThreshold` 或连续空文本+空工具调用 `runawayNoProgressThreshold`），或 `MaxIterations`（默认 20）耗尽。
+- **排查起点**：`docs/arch/M04-Agent-Kernel.md §1.2` 与 `internal/agent/agent_loop.go`。
+
+### 症状 18：子智能体并发执行失败或崩溃后不恢复
+- **症状特征**：调用 `spawn_subagent` 或模型批并发调用多个工具时，部分任务 panic 或返回错误导致整体流程挂死。
+- **归类模块**：M04 / M08
+- **根因类别**：并发调度器缺少 panic 恢复，或单层批并发屏障（`executeToolBatch`）未处理单个任务的上下文取消与错误降级。
+- **排查起点**：`docs/arch/M04-Agent-Kernel.md §1.2` 与 `internal/agent/agent_loop_exec.go`。
+
+### 症状 19：模型动态切换 switch_model 后下一轮调用不生效
+- **症状特征**：模型调用内置工具 `switch_model` 提议升级或降级模型（如 deepseek-v3 切换至 r1），但后续推理调用仍使用旧模型。
+- **归类模块**：M01 / M04
+- **根因类别**：`ModelSwitchCallback` 注入缺失、请求的目标模型不在可用 Provider 列表（`model_not_found`）或被系统策略门控拒绝（如信任档位不支持或预算耗尽）。
+- **排查起点**：`docs/arch/decisions/ADR-0115-autonomous-agent-kernel.md`、`docs/arch/M04-Agent-Kernel.md §1.2` 与 `internal/agent/agent_loop.go`。
+
+
+
 **维护规范**：
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。
 - 相似症状合并成一项（用"/"列举变体）。
@@ -116,13 +136,13 @@
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
 | `M13-Interface-Scheduler.md` | L3 接口 | 33K | 见下方 [M13 补充](#m13-补充) |
-| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 28K | 状态机 + 全模块阈值（唯一权威） |
+| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 29K | 状态机 + 全模块阈值（唯一权威） |
+| `M04-Agent-Kernel.md` | L1 内核 | 25K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
-| `M04-Agent-Kernel.md` | L1 内核 | 24K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M11-Policy-Safety.md` | L0 策略 | 23K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
 | `M05-Memory-System.md` | L1 记忆 | 22K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
-| `M13-bis-Extension-Registry.md` | L3 扩展 | 16K | 见下方 [M13-bis 补充](#m13-bis-补充) |
+| `M13-bis-Extension-Registry.md` | L3 扩展 | 17K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 14K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
 | `M01-Inference-Runtime.md` | L0 推理 | 14K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
 | `M10-Knowledge-RAG.md` | L2 知识 | 14K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
@@ -131,7 +151,7 @@
 | `M06-Skill-Library.md` | L1 技能 | 12K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
 | `M03-Observability.md` | L0 可观测 | 11K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
 | `M12-Eval-Harness.md` | L3 评测 | 10K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |
-| `ARCHITECTURE.md` | 总览 | 8K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
+| `ARCHITECTURE.md` | 总览 | 9K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
 | `ROADMAP.md` | 路线 | 7K | 时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载） |
 | `DIAGRAMS.md` | 图谱 | 6K | 时序图（**人类参考**，AI 默认不加载） |
 | `Module-Dependency-Axioms.md` | 依赖公理 | 3K | 包间依赖方向、防循环依赖底线、领域模型正交性 |
