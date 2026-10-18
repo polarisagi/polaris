@@ -72,6 +72,7 @@ func (f *fakeAgentController) ConfigInfo() map[string]any                      {
 func (f *fakeAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) { f.replayCalls = calls }
 func (f *fakeAgentController) SetConversationHistory(history []types.Message)  {}
 func (f *fakeAgentController) Steer(text string) bool                          { return true }
+func (f *fakeAgentController) SetModelLock(ref string)                         {}
 func (f *fakeAgentController) SubscribeStream(_ context.Context) <-chan types.AgentStreamEvent {
 	return f.streamCh
 }

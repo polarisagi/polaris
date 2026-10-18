@@ -139,6 +139,17 @@ AgentController interface {
 	InjectReplayData(calls []ReplayLLMCall)
 	// Steer 向正在执行的 Agent 注入插话（ADR-0115 WP2），在下一个轮次边界作为 user 消息注入。
 	Steer(text string) bool
+	// SetModelLock 锁定用户在前端界面手选的模型（ADR-0115 WP3），覆盖 Agent 内部默认路由。
+	SetModelLock(ref string)
+}
+
+// CtxModelSwitcherKey 用于在工具执行上下文传递 ModelSwitcher。
+type CtxModelSwitcherKey struct{}
+
+// ModelSwitcher 供内置工具查询模型状态并请求切换模型。
+type ModelSwitcher interface {
+	GetModelStatus() (currentModel string, userLocked string)
+	SwitchModel(ref, pool, thinking string) (string, error)
 }
 
 // @consumer internal/gateway/server/chat

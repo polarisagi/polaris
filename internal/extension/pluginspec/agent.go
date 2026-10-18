@@ -29,8 +29,6 @@ const (
 // claudeAgentNotApplied Claude agent frontmatter 中已解析但不生效的字段 → 原因。
 func claudeAgentNotApplied(inPlugin bool) map[string]string {
 	m := map[string]string{
-		"model":         reasonProviderRouting,
-		"effort":        reasonProviderRouting,
 		"background":    "delegation already runs asynchronously; the parent resumes when the subagent finishes",
 		"isolation":     reasonNoAgentSurface,
 		"memory":        "subagents share the delegating session's memory namespace (GD-14-001)",
@@ -42,6 +40,27 @@ func claudeAgentNotApplied(inPlugin bool) map[string]string {
 		m["mcpServers"], m["hooks"], m["permissionMode"] = reasonPluginAgentSec, reasonPluginAgentSec, reasonPluginAgentSec
 	}
 	return m
+}
+
+// normalizeAgentModel 将模型标识按 ADR-0115 WP3 规则映射：
+// opus->reasoning, sonnet->general, haiku->default, inherit/空->""。
+// reasoning/general/default/budget 角色池名原样保留，其他值作为模型名原样保留。
+func normalizeAgentModel(raw string) string {
+	raw = strings.TrimSpace(raw)
+	switch strings.ToLower(raw) {
+	case "opus":
+		return "reasoning"
+	case "sonnet":
+		return "general"
+	case "haiku":
+		return "default"
+	case "inherit", "":
+		return ""
+	case "reasoning", "general", "default", "budget":
+		return strings.ToLower(raw)
+	default:
+		return raw
+	}
 }
 
 // ParseAgentFile 解析一个 Claude 格式子 Agent 文件（插件 agents/ 与 agents 目录共用）。
@@ -137,11 +156,16 @@ func appendCodexAgent(out []AgentFile, file string, ds *diagnostics) []AgentFile
 		ds.errorf("agent", file, RuleCodexAgentParse, "unknown sandbox_mode %q", w.SandboxMode)
 		return out
 	}
+	if mVal, ok := fields["model"].(string); ok {
+		a.Model = normalizeAgentModel(mVal)
+	}
+	if eVal, ok := fields["model_reasoning_effort"].(string); ok {
+		a.Thinking = strings.TrimSpace(eVal)
+	}
 	for k := range fields {
 		switch k {
 		case "name", "description", "developer_instructions", "nickname_candidates", "sandbox_mode":
 		case "model", "model_reasoning_effort":
-			a.notApplied(ds, k, reasonProviderRouting)
 		default:
 			a.notApplied(ds, k, "Codex config override without a Polaris subagent equivalent")
 		}
@@ -157,7 +181,10 @@ func (a *AgentFile) notApplied(ds *diagnostics, field, reason string) {
 
 // applyClaudeAgentFields 读取除 name/description 外的 Claude 字段。
 func (a *AgentFile) applyClaudeAgentFields(inPlugin bool, ds *diagnostics) {
-	a.Model, _ = fmString(a.Fields, "model")
+	rawModel, _ := fmString(a.Fields, "model")
+	a.Model = normalizeAgentModel(rawModel)
+	rawEffort, _ := fmString(a.Fields, "effort")
+	a.Thinking = strings.TrimSpace(rawEffort)
 	a.Tools = fmList(a.Fields, "tools", " ,")
 	a.DisallowedTools = fmList(a.Fields, "disallowedTools", " ,")
 	a.Skills = fmList(a.Fields, "skills", " ,")
@@ -171,7 +198,7 @@ func (a *AgentFile) applyClaudeAgentFields(inPlugin bool, ds *diagnostics) {
 	notApplied := claudeAgentNotApplied(inPlugin)
 	for field := range a.Fields {
 		reason, ok := notApplied[field]
-		if !ok || (field == "model" && (a.Model == "" || a.Model == "inherit")) {
+		if !ok {
 			continue
 		}
 		a.notApplied(ds, field, reason)

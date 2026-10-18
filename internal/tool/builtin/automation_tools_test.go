@@ -303,7 +303,7 @@ func TestAutomationTools_BackgroundContextThroughRegistry(t *testing.T) {
 		config.DefaultThresholds().M7Tool,
 	)
 
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{"/tmp"}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, svc, "", nil, nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{"/tmp"}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, svc, "", nil, nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 

@@ -400,6 +400,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}, nil
 		}
 
+		ctx = context.WithValue(ctx, protocol.CtxModelSwitcherKey{}, a)
 		capCtx, revokeCap, capErr := a.withJITCapability(ctx, toolName, args)
 		if capErr != nil {
 			return nil, capErr

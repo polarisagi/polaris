@@ -40,6 +40,7 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 
 	taskID := a.sCtx.SessionID
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, taskID)
+	toolCtx = context.WithValue(toolCtx, protocol.CtxModelSwitcherKey{}, a)
 
 	// JIT 签发能力令牌（必须在 validatedCalls 中），确保无旁路漏洞
 	toolCtx, revoke, err := a.withJITCapability(toolCtx, call.Name, call.Input)
@@ -219,6 +220,13 @@ func (a *Agent) Steer(text string) bool {
 		Content: text,
 	})
 	return true
+}
+
+// SetModelLock 锁定用户手选的模型引用，在当前 Agent 会话中覆盖默认模型。
+func (a *Agent) SetModelLock(ref string) {
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	a.sCtx.UserLockedModel = ref
 }
 
 // drainSteerQueue 出队当前所有插话消息。

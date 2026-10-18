@@ -351,10 +351,17 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			// 因此对"只注册了一个无角色本地 Provider"的 Tier-0 部署不构成回归。
 			// 不传 WithModel：池名不是模型 ID，传入会覆盖 adapter 按 provider_models.role
 			// 配好的真实模型（2026-09-22 DeepSeek 400 "you passed general"）。
+			routedRef, routedPool, routedThinking, routeErr := a.resolveModelRoute(ctx, llmEff.ModelPool, string(llmEff.ThinkingMode))
+			if routeErr != nil {
+				return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "agent: model selection rejected", routeErr)}
+			}
 			inferOpts := []types.InferOption{
-				types.WithModelPool(llmEff.ModelPool),
-				types.WithThinkingMode(llmEff.ThinkingMode),
+				types.WithModelPool(routedPool),
+				types.WithThinkingMode(types.ThinkingMode(routedThinking)),
 				types.WithPurpose(llmPurposeOf(a.sm.Current())),
+			}
+			if routedRef != "" {
+				inferOpts = append(inferOpts, types.WithProviderRef(routedRef))
 			}
 			if llmEff.ResponseFormat != nil {
 				inferOpts = append(inferOpts, types.WithResponseFormat(llmEff.ResponseFormat))

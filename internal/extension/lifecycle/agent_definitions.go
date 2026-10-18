@@ -26,6 +26,8 @@ type AgentDefinition struct {
 	Skills      []string `json:"skills,omitempty"`
 	MaxTurns    int      `json:"max_turns,omitempty"`
 	ReadOnly    bool     `json:"read_only,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Thinking    string   `json:"thinking,omitempty"`
 	NotApplied  []string `json:"not_applied,omitempty"`
 
 	pluginName string
@@ -126,6 +128,7 @@ func withinRoot(root, file string) bool {
 func definitionFrom(a pluginspec.AgentFile, name, source, pluginName string) AgentDefinition {
 	return AgentDefinition{Name: name, Description: a.Description, Source: source, Format: a.Format, File: a.File,
 		Tools: a.Tools, Disallowed: a.DisallowedTools, Skills: a.Skills, MaxTurns: a.MaxTurns, ReadOnly: a.ReadOnly,
+		Model: a.Model, Thinking: a.Thinking,
 		NotApplied: a.NotApplied, pluginName: pluginName, body: a.Body}
 }
 
@@ -145,7 +148,7 @@ func (p *AgentDefinitionProvider) ResolveAgentProfile(ctx context.Context, name 
 		}
 		return &types.AgentProfileSpec{Name: d.Name, Source: d.Source, Instructions: instructions,
 			InstructionTaint: definitionTaint(d.Source), Tools: d.Tools, DisallowedTools: d.Disallowed,
-			ReadOnly: d.ReadOnly, MaxTurns: d.MaxTurns}, nil
+			ReadOnly: d.ReadOnly, MaxTurns: d.MaxTurns, Model: d.Model, Thinking: d.Thinking}, nil
 	}
 	return nil, apperr.New(apperr.CodeNotFound, fmt.Sprintf("unknown agent %q", name))
 }

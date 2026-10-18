@@ -39,6 +39,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/elicitation"
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
+	"github.com/polarisagi/polaris/internal/llm/modelcatalog"
 	"github.com/polarisagi/polaris/internal/memory"
 	memretrieval "github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -393,6 +394,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		// secretReader: WP1 阶段尚无具名凭据存储，nil=不注册 secret_get；
 		// WP4 接入 NamedSecretRepo 后替换此 nil
 		nil,
+		sb.Store.DB(),
+		modelcatalog.NewCatalogManager(sb.Store.DB(), sb.Vault, sb.SafeHTTP),
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

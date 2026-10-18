@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite" // data_query 工具的 SQLite 驱动（ADR-0003：纯 Go，无 CGO）
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/llm/modelcatalog"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -28,6 +29,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/glob"
 	"github.com/polarisagi/polaris/internal/tool/builtin/grep"
 	"github.com/polarisagi/polaris/internal/tool/builtin/list_dir"
+	"github.com/polarisagi/polaris/internal/tool/builtin/list_models"
 	"github.com/polarisagi/polaris/internal/tool/builtin/multi_edit"
 	"github.com/polarisagi/polaris/internal/tool/builtin/notebook_edit"
 	"github.com/polarisagi/polaris/internal/tool/builtin/notebook_read"
@@ -36,6 +38,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
 	"github.com/polarisagi/polaris/internal/tool/builtin/secret_get"
 	"github.com/polarisagi/polaris/internal/tool/builtin/str_replace_editor"
+	"github.com/polarisagi/polaris/internal/tool/builtin/switch_model"
 	"github.com/polarisagi/polaris/internal/tool/builtin/sys_probe"
 	"github.com/polarisagi/polaris/internal/tool/builtin/todo_read"
 	"github.com/polarisagi/polaris/internal/tool/builtin/todo_write"
@@ -73,6 +76,9 @@ func RegisterBuiltinTools(
 	checkpointDataDir string, // 快照仓库数据根目录；pol.CheckpointEnabled=true 时必须非空
 	checkpointProjects []string, // 被快照的项目目录列表（通常是 allowedPaths 的第一个）
 	secretReader secret_get.NamedSecretReader, // nil = 不注册 secret_get
+	// list_models 工具依赖（ADR-0115 WP3）
+	db protocol.SQLQuerier,
+	modelCatalogMgr *modelcatalog.CatalogManager,
 ) error {
 	if webDeps.Dialer == nil {
 		webDeps.Dialer = dialer
@@ -124,6 +130,10 @@ func RegisterBuiltinTools(
 		{"git_diff", MakeGitDiffFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"git_commit", MakeGitCommitFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"template_render", TemplateRenderFn},
+
+		// 模型自选与目录工具（ADR-0115 WP3）
+		{"list_models", list_models.MakeListModelsFn(db, modelCatalogMgr)},
+		{"switch_model", switch_model.MakeSwitchModelFn()},
 	}
 
 	// automation_* 工具依赖，仅在 autoSvc != nil 时注册（单元测试无 Service 时不报错）
