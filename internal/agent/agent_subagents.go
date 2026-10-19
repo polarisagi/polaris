@@ -57,7 +57,6 @@ func (a *Agent) cascadeCancelSubagents(ctx context.Context, ids []string) {
 	}
 }
 
-
 // SpawnAgents 派生一个或多个子智能体并发执行（ADR-0115 WP4）。
 func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]string, error) { //nolint:gocyclo
 	if a.handoffPoster == nil {
@@ -287,7 +286,6 @@ func (a *Agent) AgentStop(ctx context.Context, id string) (string, error) {
 	a.updateSubagentStatusCancelled(ctx, id)
 	return fmt.Sprintf("已成功中止子智能体 %s", id), nil
 }
-
 
 func (a *Agent) currentSecurityPolicy() policy.Policy {
 	prof := policy.ProfileStandard

@@ -4,7 +4,6 @@ import (
 	"github.com/polarisagi/polaris/internal/security/taint"
 )
 
-
 // CodeActRequest CodeAct 执行请求。
 type CodeActRequest struct {
 	Language     string // "python" | "bash"
@@ -22,7 +21,6 @@ type CodeActRequest struct {
 	// 与既有一次性执行行为完全一致，不影响未显式选用此特性的调用方）。
 	StatefulSession bool
 }
-
 
 // CodeActResult CodeAct 执行结果。
 type CodeActResult struct {

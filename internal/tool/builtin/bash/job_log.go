@@ -68,7 +68,6 @@ func (w *limitedLogWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-
 	n, err := w.file.Write(p)
 	w.written += int64(n)
 	if err != nil {

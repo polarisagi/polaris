@@ -179,7 +179,6 @@ func (p *steerHookProvider) StreamInfer(ctx context.Context, msgs []types.Messag
 	return p.loopTestProvider.StreamInfer(ctx, msgs, opts...)
 }
 
-
 // TestAgenticLoop_SteerOnDirectTextCompletion 验证模型单轮无工具调用直接收尾时，
 // 插话队列非空不得直接退出，必须注入插话并继续下一轮（R2-12）。
 func TestAgenticLoop_SteerOnDirectTextCompletion(t *testing.T) {
