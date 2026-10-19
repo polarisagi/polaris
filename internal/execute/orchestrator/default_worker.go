@@ -370,27 +370,3 @@ func (w *DefaultTaskWorker) subscribeTaskEvents(ctx context.Context, taskID stri
 	})
 	return cancelSub
 }
-
-func (w *DefaultTaskWorker) handleTaskEvent(ev types.AgentStreamEvent, taskID string, cancel context.CancelFunc) {
-	if ev.Type == types.AgentStreamEventSteerAccepted {
-		if steerable, ok := w.pool.(interface{ TrySteer(string, string) bool }); ok {
-			if !steerable.TrySteer("sub-"+taskID, ev.Content) {
-				if ok := steerable.TrySteer(taskID, ev.Content); !ok {
-					slog.Debug("default_worker: steer fallback missed", "task_id", taskID)
-				}
-			}
-		}
-		return
-	}
-	if ev.Type == types.AgentStreamEventStatus && ev.Content == "cancel" {
-		cancel()
-		if stoppable, ok := w.pool.(interface{ StopSession(string) bool }); ok {
-			if !stoppable.StopSession("sub-" + taskID) {
-				if ok := stoppable.StopSession(taskID); !ok {
-					slog.Debug("default_worker: stop session fallback missed", "task_id", taskID)
-				}
-			}
-		}
-	}
-}
-
