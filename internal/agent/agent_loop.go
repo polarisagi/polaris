@@ -96,13 +96,10 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		a.sCtx.Mu.Unlock()
 
 		if !warned {
-			// 首触上限：注入易变收尾提示消息，再给一轮机会
+			// 首触上限：记录易变收尾提示（user 角色易变区，不追加为 system 污染历史与破坏缓存，R2-17）
 			a.sCtx.Mu.Lock()
 			a.sCtx.LoopWarningInjected = true
-			a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-				Role:    "system",
-				Content: "预算/失控保护告警：" + exceededReason + "，请在本轮立即总结当前进度并给出最终回复或收尾。",
-			})
+			a.sCtx.LoopWarningPrompt = "预算/失控保护告警：" + exceededReason + "，请在本轮立即总结当前进度并给出最终回复或收尾。"
 			a.sCtx.Mu.Unlock()
 			slog.WarnContext(ctx, "agentic_loop: budget/runaway guard warning injected", "reason", exceededReason)
 		} else {

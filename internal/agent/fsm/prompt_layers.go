@@ -179,15 +179,19 @@ func BuildAgenticPrompt(ctx context.Context, memory protocol.MemoryFacade, sCtx 
 	// 3. L3 阶段层：内核指令
 	WritePhaseContract(b, memory, "kernel/loop.md", "You are Polaris in agentic loop mode. Use available tools to fulfill user goals. When done, reply clearly or call finish.")
 
-	// 4. L3 易变区末尾：召回记忆（若有）+ T7 计量（若有）
+	// 4. L3 易变区末尾：召回记忆（若有）+ T7 计量（若有）+ 收尾告警易变提示（若有，user 角色，R2-17）
 	sCtx.Mu.RLock()
 	recall := sCtx.TurnRecall
+	warnPrompt := sCtx.LoopWarningPrompt
 	sCtx.Mu.RUnlock()
 	if recall != nil && recall.Text != "" {
 		b.WritePhaseSystem("## Recalled Context\n" + recall.Text)
 	}
 	if usageText != "" {
 		b.WritePhaseSystem(usageText)
+	}
+	if warnPrompt != "" {
+		b.WritePhaseUser(warnPrompt)
 	}
 
 	// 5. L4 回合层：如果 roundMsgs 为空，写入初始 RawIntentTS；否则逐条写入 roundMsgs

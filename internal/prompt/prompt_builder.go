@@ -64,6 +64,14 @@ func (b *PromptBuilder) WritePhaseSystem(content string) {
 	b.add(protocol.ZoneMutableSkill, protocol.LayerPhase, types.Message{Role: "system", Content: content})
 }
 
+// WritePhaseUser 写入 L3 的 user 易变提示文本（空串忽略，R2-17）。
+func (b *PromptBuilder) WritePhaseUser(content string) {
+	if content == "" {
+		return
+	}
+	b.add(protocol.ZoneMutableSkill, protocol.LayerPhase, types.Message{Role: "user", Content: content})
+}
+
 // WriteHistoryMessage 把一条历史消息写入 L2：role 为真实角色（user/assistant），内容按 ts 的
 // 污点级别做 Spotlighting——标记由**单条内容**的哈希决定，旧消息字节不随新消息变化，
 // 这是历史只追加、前缀可缓存的前提（ADR-0105 决策二）。历史属数据区语义，调用方须以

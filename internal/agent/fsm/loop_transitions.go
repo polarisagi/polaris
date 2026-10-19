@@ -326,6 +326,13 @@ func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx 
 		slog.WarnContext(ctx, "agentic_loop: WriteSessionLayer fallback failed", "err", wErr)
 	}
 	WriteConversationHistory(b, sCtx)
+	sCtx.Mu.RLock()
+	warnPrompt := sCtx.LoopWarningPrompt
+	sCtx.Mu.RUnlock()
+	if warnPrompt != "" {
+		b.WritePhaseUser(warnPrompt)
+	}
+
 	if len(roundMsgs) == 0 {
 		sCtx.Mu.RLock()
 		intent := sCtx.RawIntentTS
