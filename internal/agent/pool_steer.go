@@ -24,3 +24,23 @@ func (p *Pool) TrySteer(sessionID string, text string) bool {
 	}
 	return entry.agent.Steer(text)
 }
+
+// StopSession 中止指定 session 的 Agent（取消其执行并在 Pool 中释放）（R2-14）。
+func (p *Pool) StopSession(sessionID string) bool {
+	p.mu.Lock()
+	entry, ok := p.sessions[sessionID]
+	if !ok || entry.agent == nil {
+		p.mu.Unlock()
+		return false
+	}
+	ag := entry.agent
+	delete(p.sessions, sessionID)
+	if p.onSessionClose != nil {
+		p.onSessionClose(sessionID)
+	}
+	p.mu.Unlock()
+
+	ag.Interrupt(types.InterruptRequest{Action: types.InterruptAbort})
+	ag.Shutdown()
+	return true
+}
