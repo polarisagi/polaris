@@ -32,6 +32,7 @@ func TestLoadProvidersFromDB_Main(t *testing.T) {
 			location TEXT,
 			sa_key_json TEXT,
 			enabled INTEGER,
+			is_local INTEGER DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME
 		);
@@ -88,12 +89,12 @@ func TestLoadProvidersFromDB_EmptyRoleDefaultsOnlyForLocal(t *testing.T) {
 
 	if _, err := db.Exec(`
 		CREATE TABLE providers (id TEXT PRIMARY KEY, name TEXT, type TEXT, base_url TEXT, api_key TEXT,
-			project_id TEXT, location TEXT, sa_key_json TEXT, enabled INTEGER, created_at DATETIME, updated_at DATETIME);
+			project_id TEXT, location TEXT, sa_key_json TEXT, enabled INTEGER, is_local INTEGER DEFAULT 0, created_at DATETIME, updated_at DATETIME);
 		CREATE TABLE provider_models (id TEXT PRIMARY KEY, provider_id TEXT, model_id TEXT, name TEXT, role TEXT,
 			enabled INTEGER, created_at DATETIME, updated_at DATETIME);
-		INSERT INTO providers (id, name, type, base_url, api_key, enabled) VALUES ('p1', 'Remote', 'openai_compat', 'https://api.example.com', 'sk', 1);
+		INSERT INTO providers (id, name, type, base_url, api_key, enabled, is_local) VALUES ('p1', 'Remote', 'openai_compat', 'https://api.example.com', 'sk', 1, 0);
 		INSERT INTO provider_models (id, provider_id, model_id, name, role, enabled) VALUES ('m1remote', 'p1', 'flash', 'Flash', '', 1);
-		INSERT INTO providers (id, name, type, base_url, api_key, enabled) VALUES ('p2', 'Local', 'ollama', '', '', 1);
+		INSERT INTO providers (id, name, type, base_url, api_key, enabled, is_local) VALUES ('p2', 'Local', 'ollama', '', '', 1, 1);
 		INSERT INTO provider_models (id, provider_id, model_id, name, role, enabled) VALUES ('m2local0', 'p2', 'llama3', 'Llama', '', 1);
 	`); err != nil {
 		t.Fatal(err)

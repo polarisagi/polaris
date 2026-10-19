@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -172,8 +173,8 @@ func (a *Agent) validateModelSelection(ctx context.Context, ref string) error {
 
 	providerID, modelID := parseRef(ref)
 	if a.extQuerier == nil {
-		if localOnly && !isLocalRef(providerID) {
-			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("local_only_mode is enabled: model ref %q is not local", ref))
+		if localOnly {
+			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("local_only_mode is enabled: model ref %q cannot be verified without database", ref))
 		}
 		return nil
 	}
@@ -190,26 +191,34 @@ func parseRef(ref string) (providerID, modelID string) {
 }
 
 func (a *Agent) validateModelFromDB(ctx context.Context, ref, providerID, modelID string, localOnly bool, maxPrice float64) error {
-	var pType string
+	var pID, pName, pType string
+	var isLocalInt int
 	var outputPrice float64
 	var hasDiscovered int
 
 	row := a.extQuerier.QueryRowContext(ctx, `
-		SELECT p.type, COALESCE(d.output_price_per_mtok, 0), CASE WHEN d.model_id IS NOT NULL THEN 1 ELSE 0 END
+		SELECT p.id, p.name, p.type, COALESCE(p.is_local, 0),
+		       COALESCE(d.output_price_per_mtok, 0), CASE WHEN d.model_id IS NOT NULL THEN 1 ELSE 0 END
 		  FROM providers p
 		  LEFT JOIN provider_discovered_models d ON d.provider_id = p.id AND d.model_id = ?
 		 WHERE p.id = ? OR p.type = ? OR p.name = ?
 		 LIMIT 1`, modelID, providerID, providerID, providerID)
 
-	if err := row.Scan(&pType, &outputPrice, &hasDiscovered); err != nil {
-		if localOnly && !isLocalRef(providerID) {
+	if err := row.Scan(&pID, &pName, &pType, &isLocalInt, &outputPrice, &hasDiscovered); err != nil {
+		if localOnly {
 			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("local_only_mode is enabled: unknown or external model %q", ref))
 		}
 		return nil
 	}
 
-	isLocal := pType == "ollama" || pType == "llama_local"
-	if localOnly && !isLocal {
+	pRow := types.ProviderRow{
+		ID:      pID,
+		Name:    pName,
+		Type:    pType,
+		IsLocal: isLocalInt == 1,
+	}
+
+	if localOnly && !llm.IsLocalProvider(pRow) {
 		return apperr.New(apperr.CodeForbidden, fmt.Sprintf("local_only_mode is enabled: provider type %q for model %q is not local", pType, ref))
 	}
 
@@ -218,9 +227,4 @@ func (a *Agent) validateModelFromDB(ctx context.Context, ref, providerID, modelI
 	}
 
 	return nil
-}
-
-func isLocalRef(ref string) bool {
-	lower := strings.ToLower(ref)
-	return strings.HasPrefix(lower, "ollama") || strings.HasPrefix(lower, "llama") || strings.Contains(lower, "local")
 }

@@ -75,9 +75,31 @@ func TestAgent_ResolveModelRoute_PriorityMatrix(t *testing.T) {
 	}
 }
 
+func setupTestRouteDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE providers (id TEXT PRIMARY KEY, name TEXT, type TEXT, is_local INTEGER DEFAULT 0);
+		CREATE TABLE provider_discovered_models (provider_id TEXT, model_id TEXT, output_price_per_mtok REAL);
+		INSERT INTO providers (id, name, type, is_local) VALUES ('ollama', 'Ollama', 'ollama', 1);
+		INSERT INTO providers (id, name, type, is_local) VALUES ('anthropic', 'Anthropic', 'anthropic', 0);
+		INSERT INTO providers (id, name, type, is_local) VALUES ('openai', 'OpenAI', 'openai_compat', 0);
+	`)
+	if err != nil {
+		t.Fatalf("failed to setup test tables: %v", err)
+	}
+	return db
+}
+
 func TestAgent_ResolveModelRoute_LocalOnlyMode(t *testing.T) {
 	ctx := context.Background()
 	a := NewAgentWithDefaults("sess-local-only")
+	a.extQuerier = setupTestRouteDB(t)
 
 	origCfg := config.Get()
 	defer config.Update(origCfg)
@@ -112,6 +134,7 @@ func TestAgent_ResolveModelRoute_LocalOnlyMode(t *testing.T) {
 
 func TestAgent_SwitchModel_LocalOnlyMode(t *testing.T) {
 	a := NewAgentWithDefaults("sess-switch-local")
+	a.extQuerier = setupTestRouteDB(t)
 
 	origCfg := config.Get()
 	defer config.Update(origCfg)
@@ -167,9 +190,9 @@ func TestAgent_ResolveModelRoute_CostLimit(t *testing.T) {
 	db.SetMaxOpenConns(1)
 
 	_, err = db.ExecContext(ctx, `
-		CREATE TABLE providers (id TEXT, name TEXT, type TEXT);
+		CREATE TABLE providers (id TEXT, name TEXT, type TEXT, is_local INTEGER DEFAULT 0);
 		CREATE TABLE provider_discovered_models (provider_id TEXT, model_id TEXT, output_price_per_mtok REAL);
-		INSERT INTO providers VALUES ('prov_custom', 'custom', 'openai_compat');
+		INSERT INTO providers VALUES ('prov_custom', 'custom', 'openai_compat', 0);
 		INSERT INTO provider_discovered_models VALUES ('prov_custom', 'expensive-model', 15.0);
 	`)
 	if err != nil {
@@ -187,3 +210,4 @@ func TestAgent_ResolveModelRoute_CostLimit(t *testing.T) {
 		t.Fatalf("expected error containing 'max_output_price_per_mtok', got: %v", err)
 	}
 }
+

@@ -7,10 +7,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/llm/modelcatalog"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 type listModelsArgs struct {
@@ -37,8 +39,10 @@ type ModelInfo struct {
 }
 
 type provMeta struct {
-	name string
-	typ  string
+	id      string
+	name    string
+	typ     string
+	isLocal bool
 }
 
 // MakeListModelsFn 构造 list_models 工具执行函数。
@@ -97,7 +101,7 @@ func extractModelStatus(ctx context.Context) (currentModel, userLocked string) {
 }
 
 func fetchProvidersMap(ctx context.Context, db protocol.SQLQuerier) (map[string]provMeta, error) {
-	pRows, err := db.QueryContext(ctx, `SELECT id, name, type FROM providers WHERE enabled = 1`)
+	pRows, err := db.QueryContext(ctx, `SELECT id, name, type, COALESCE(is_local, 0) FROM providers WHERE enabled = 1`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "list_models: query providers", err)
 	}
@@ -106,8 +110,15 @@ func fetchProvidersMap(ctx context.Context, db protocol.SQLQuerier) (map[string]
 	providers := make(map[string]provMeta)
 	for pRows.Next() {
 		var id, name, typ string
-		if err := pRows.Scan(&id, &name, &typ); err == nil {
-			providers[id] = provMeta{name: name, typ: typ}
+		var isLocalInt int
+		if err := pRows.Scan(&id, &name, &typ, &isLocalInt); err == nil {
+			pRow := types.ProviderRow{
+				ID:      id,
+				Name:    name,
+				Type:    typ,
+				IsLocal: isLocalInt == 1,
+			}
+			providers[id] = provMeta{id: id, name: name, typ: typ, isLocal: llm.IsLocalProvider(pRow)}
 		}
 	}
 	if err := pRows.Err(); err != nil {
@@ -137,14 +148,13 @@ func fetchSeedModels(ctx context.Context, db protocol.SQLQuerier, providers map[
 		if displayName == "" {
 			displayName = mID
 		}
-		isLocal := pMeta.typ == "ollama" || pMeta.typ == "llama_local"
 		modelsMap[ref] = &ModelInfo{
 			Ref:          ref,
 			Name:         displayName,
 			Provider:     pMeta.name,
 			ProviderType: pMeta.typ,
 			Pool:         role,
-			IsLocal:      isLocal,
+			IsLocal:      pMeta.isLocal,
 		}
 	}
 	if err := mRows.Err(); err != nil {
@@ -182,13 +192,12 @@ func mergeDiscoveredModels(ctx context.Context, db protocol.SQLQuerier, provider
 			if name == "" {
 				name = mID
 			}
-			isLocal := pMeta.typ == "ollama" || pMeta.typ == "llama_local"
 			info = &ModelInfo{
 				Ref:          ref,
 				Name:         name,
 				Provider:     pMeta.name,
 				ProviderType: pMeta.typ,
-				IsLocal:      isLocal,
+				IsLocal:      pMeta.isLocal,
 			}
 			modelsMap[ref] = info
 		}

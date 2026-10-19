@@ -99,3 +99,4 @@ add | L-19h | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_ll
 add | L-19i | tools/llm_call_opts_lint.go | internal/tool/sandbox/zz_selftest_llmopts_i.go | tools/testdata/selftest/L19i_empty_purpose.go.txt
 patch | F-8b | tools/ffi_symbol_check.go | tools/baselines/ffi_exports.txt | surreal_vec_clear\nsurreal_vec_delete | surreal_vec_delete
 add | L-20 | tools/trust_profile_check.go | internal/zz_selftest_trust_profile.go | tools/testdata/selftest/L20_trust_profile.go.txt
+add | L-21 | tools/local_provider_check.go | internal/zz_selftest_local_provider.go | tools/testdata/selftest/L21_local_provider.go.txt

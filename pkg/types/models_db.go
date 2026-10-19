@@ -83,6 +83,7 @@ ProviderRow struct {
 	Location  string
 	SAKeyJSON string
 	Enabled   bool
+	IsLocal   bool // 1=本地无需 API Key（sys_providers.is_local 或 providers.is_local）
 	CatalogID string
 	CreatedAt string
 	UpdatedAt string

@@ -26,6 +26,7 @@ type providerEntry struct {
 	mu          sync.RWMutex
 	p95ms       float64 // P95 延迟（指数移动平均）
 	successRate float64 // 成功率（指数移动平均，初始 1.0）
+	row         types.ProviderRow
 }
 
 func newProviderEntry(name, displayName string, p protocol.Provider, cfg config.M1RouterThresholds) *providerEntry {
@@ -112,9 +113,11 @@ func (r *ProviderRegistry) InjectRecoveryHandler(fn func(providerName string)) {
 }
 
 func (r *ProviderRegistry) Register(name, displayName string, p protocol.Provider) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.entries[name] = r.newEntry(name, displayName, "", p)
+	r.RegisterWithRole(name, displayName, "", p)
+}
+
+func (r *ProviderRegistry) RegisterWithRow(name, displayName string, p protocol.Provider, row types.ProviderRow) {
+	r.RegisterWithRoleAndRow(name, displayName, "", p, row)
 }
 
 // newEntry 构造条目并套上 llm_calls 记账包装。记账队列经原子指针读取，注入顺序无关。
@@ -122,6 +125,9 @@ func (r *ProviderRegistry) newEntry(name, displayName, role string, p protocol.P
 	e := newProviderEntry(name, displayName, &usageRecordingProvider{Provider: p, name: name, sink: &r.usage, cache: &r.cache, inputExcludesCache: usageExcludesCache(p)}, r.cfg)
 	e.raw = p
 	e.role = role
+	if _, isLocal := p.(protocol.LocalProvider); isLocal {
+		e.row.IsLocal = true
+	}
 	return e
 }
 
@@ -158,9 +164,22 @@ func (r *ProviderRegistry) UnregisterAll() {
 // 构建在锁外完成，替换是单次指针交换：并发 selectBest 要么看到旧集合、要么看到
 // 新集合，不存在 UnregisterAll→逐个 Register 之间的空窗。
 func (r *ProviderRegistry) ReplaceAll(build func(register func(name, displayName, role string, p protocol.Provider))) {
+	r.ReplaceAllWithRow(func(register func(name, displayName, role string, p protocol.Provider, row types.ProviderRow)) {
+		build(func(name, displayName, role string, p protocol.Provider) {
+			register(name, displayName, role, p, types.ProviderRow{})
+		})
+	})
+}
+
+// ReplaceAllWithRow 允许附加 ProviderRow 元数据原子替换整个注册表。
+func (r *ProviderRegistry) ReplaceAllWithRow(build func(register func(name, displayName, role string, p protocol.Provider, row types.ProviderRow))) {
 	next := make(map[string]*providerEntry)
-	build(func(name, displayName, role string, p protocol.Provider) {
-		next[name] = r.newEntry(name, displayName, role, p)
+	build(func(name, displayName, role string, p protocol.Provider, row types.ProviderRow) {
+		e := r.newEntry(name, displayName, role, p)
+		if row.ID != "" || row.IsLocal {
+			e.row = row
+		}
+		next[name] = e
 	})
 	r.mu.Lock()
 	r.entries = next
@@ -169,12 +188,22 @@ func (r *ProviderRegistry) ReplaceAll(build func(register func(name, displayName
 	r.mu.Unlock()
 }
 
+
 // RegisterWithRole 注册带角色标记的 Provider（general | default | reasoning | budget，
 // 唯一 SSoT 见 router.go poolFallbackChain 与 pkg/types.ModelPool）。
 func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p protocol.Provider) {
+	r.RegisterWithRoleAndRow(name, displayName, role, p, types.ProviderRow{})
+}
+
+// RegisterWithRoleAndRow 注册带角色标记与 ProviderRow 元数据的 Provider。
+func (r *ProviderRegistry) RegisterWithRoleAndRow(name, displayName, role string, p protocol.Provider, row types.ProviderRow) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.entries[name] = r.newEntry(name, displayName, role, p)
+	e := r.newEntry(name, displayName, role, p)
+	if row.ID != "" || row.IsLocal {
+		e.row = row
+	}
+	r.entries[name] = e
 }
 
 // BestForRole 返回指定角色下 healthScore 最高的可用 entry。
@@ -336,46 +365,3 @@ func costTier(role string) int {
 	}
 }
 
-type trackedProvider struct {
-	protocol.Provider
-	entry    *providerEntry
-	registry *ProviderRegistry
-}
-
-func (tp *trackedProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (resp *types.ProviderResponse, err error) {
-	defer func() {
-		// 请求侧故障不说明 Provider 不健康，与路由的 recordAttempt 同一口径。
-		if isRequestFault(err, tp.entry.name) {
-			return
-		}
-		tp.entry.recordOutcome(err == nil, func() {
-			tp.registry.mu.RLock()
-			fn := tp.registry.onRecovery
-			name := tp.entry.name
-			tp.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-	}()
-	return tp.Provider.Infer(ctx, msgs, opts...) //nolint:wrapcheck
-}
-
-func (tp *trackedProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (ch <-chan types.StreamEvent, err error) {
-	defer func() {
-		// 请求侧故障不说明 Provider 不健康，与路由的 recordAttempt 同一口径。
-		if isRequestFault(err, tp.entry.name) {
-			return
-		}
-		tp.entry.recordOutcome(err == nil, func() {
-			tp.registry.mu.RLock()
-			fn := tp.registry.onRecovery
-			name := tp.entry.name
-			tp.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-	}()
-	return tp.Provider.StreamInfer(ctx, msgs, opts...) //nolint:wrapcheck
-}

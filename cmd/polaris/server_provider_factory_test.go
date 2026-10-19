@@ -33,12 +33,13 @@ func TestDBProviderFactory_CreateProvider_LocalOnlyMode(t *testing.T) {
 			project_id TEXT,
 			location TEXT,
 			sa_key_json TEXT,
-			enabled INTEGER
+			enabled INTEGER,
+			is_local INTEGER DEFAULT 0
 		);
-		INSERT INTO providers (id, name, type, base_url, api_key, enabled)
-		VALUES ('p_openai', 'OpenAI', 'openai_compat', 'https://api.openai.com', 'sk-xxx', 1);
-		INSERT INTO providers (id, name, type, base_url, api_key, enabled)
-		VALUES ('p_ollama', 'Ollama', 'ollama', 'http://localhost:11434', '', 1);
+		INSERT INTO providers (id, name, type, base_url, api_key, enabled, is_local)
+		VALUES ('p_openai', 'OpenAI', 'openai_compat', 'https://api.openai.com', 'sk-xxx', 1, 0);
+		INSERT INTO providers (id, name, type, base_url, api_key, enabled, is_local)
+		VALUES ('p_ollama', 'Ollama', 'ollama', 'http://localhost:11434', '', 1, 1);
 	`); err != nil {
 		t.Fatal(err)
 	}
