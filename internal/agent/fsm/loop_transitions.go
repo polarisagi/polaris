@@ -33,6 +33,9 @@ func (sm *StateMachine) registerLoopTransitions() {
 		Trigger: types.TriggerLoopExecDone,
 		To:      types.AgentStateLoop,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			sCtx.LoopRound++
+			sCtx.Mu.Unlock()
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
@@ -64,6 +67,11 @@ func (sm *StateMachine) executeLoopStep(ctx context.Context, sCtx protocol.State
 	return types.State("S_LOOP_EXEC_DONE"), nil
 }
 
+// LoopEffect 构造单轮 Agentic 调用的 LLMFillEffect（WP2 / ADR-0115）。
+func (sm *StateMachine) LoopEffect(sCtx *StateContext) protocol.Effect {
+	return sm.loopEffect(sCtx)
+}
+
 // loopEffect 构造单轮 Agentic 调用的 LLMFillEffect。
 func (sm *StateMachine) loopEffect(sCtx *StateContext) protocol.Effect {
 	th := config.CurrentThresholds().M4Kernel
@@ -92,8 +100,9 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	defer cancel()
 
 	sCtx.Mu.Lock()
-	sCtx.LoopRound++
-	round := sCtx.LoopRound
+	if sCtx.LoopRound == 0 {
+		sCtx.LoopRound = 1
+	}
 	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
 	copy(roundMsgs, sCtx.LoopMessages)
 
@@ -120,7 +129,6 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 		sCtx.Mu.Unlock()
 	}
 
-	_ = round
 	return msgs
 }
 

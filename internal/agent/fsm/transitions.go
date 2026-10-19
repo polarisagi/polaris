@@ -129,6 +129,11 @@ func (sm *StateMachine) registerTransitions() {
 				return []protocol.Effect{phatic}, nil
 			}
 			if config.CurrentThresholds().M4Kernel.LoopMode == "agentic" {
+				sCtx.Mu.Lock()
+				if sCtx.LoopRound == 0 {
+					sCtx.LoopRound = 1
+				}
+				sCtx.Mu.Unlock()
 				return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 			}
 			// Unmatched case

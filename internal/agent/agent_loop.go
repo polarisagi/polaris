@@ -73,13 +73,17 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		}
 
 		vCtx := a.buildValidationContext(plan)
-		if a.dagValidator != nil {
-			if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
-				slog.WarnContext(ctx, "agentic_loop: plan rejected by taint review", "err", err)
-				a.appendToolErrorMessages(calls, "Forbidden: action rejected by security policy: "+err.Error())
-				a.asyncIntent(types.TriggerLoopExecDone)
-				return nil
-			}
+		if a.dagValidator == nil {
+			slog.ErrorContext(ctx, "agentic_loop: security validator is missing (fail-closed)")
+			a.appendToolErrorMessages(calls, "Internal: security validator is missing (fail-closed)")
+			a.asyncIntent(types.TriggerLoopExecDone)
+			return nil
+		}
+		if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
+			slog.WarnContext(ctx, "agentic_loop: plan rejected by taint review", "err", err)
+			a.appendToolErrorMessages(calls, "Forbidden: action rejected by security policy: "+err.Error())
+			a.asyncIntent(types.TriggerLoopExecDone)
+			return nil
 		}
 		a.recordValidatedPlan(plan)
 
@@ -145,10 +149,12 @@ func toolCallsToDAGPlan(calls []types.InferToolCall, taintLevel types.TaintLevel
 func (a *Agent) appendToolErrorMessages(calls []types.InferToolCall, errText string) {
 	a.sCtx.Mu.Lock()
 	defer a.sCtx.Mu.Unlock()
+	round := a.sCtx.LoopRound
 	for _, c := range calls {
 		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
 			Role:    "user",
 			Content: errText,
+			Round:   round,
 			Parts: []any{
 				map[string]any{
 					"type":        "tool_result",

@@ -591,9 +591,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			maxNodeTaint = r.TaintLevel
 		}
 	}
-	if maxNodeTaint > a.sCtx.GlobalTaintLevel {
-		a.sCtx.GlobalTaintLevel = maxNodeTaint
-	}
+	a.elevateGlobalTaintLevel(maxNodeTaint)
 
 	a.sCtx.Mu.Lock()
 	a.sCtx.ExecAllSucceeded = nodeFailures.Load() == 0 && !degradedReplan
