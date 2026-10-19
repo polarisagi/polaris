@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"context"
+
 	"github.com/polarisagi/polaris/internal/security/taint"
 )
 
@@ -20,6 +22,29 @@ type CodeActRequest struct {
 	// 每次调用仍是独立的一次性沙箱执行，安全边界不变。默认 false（不启用，
 	// 与既有一次性执行行为完全一致，不影响未显式选用此特性的调用方）。
 	StatefulSession bool
+}
+
+// ToolProfileChecker 校验 Agent 角色工具调用限制（R2-15）。
+type ToolProfileChecker interface {
+	CheckProfileTool(toolName, delegateTarget string) error
+}
+
+type profileCheckerContextKey struct{}
+
+// WithProfileChecker 将 ToolProfileChecker 注入 Context（R2-15）。
+func WithProfileChecker(ctx context.Context, checker ToolProfileChecker) context.Context {
+	return context.WithValue(ctx, profileCheckerContextKey{}, checker)
+}
+
+// ProfileCheckerFromContext 从 Context 读取 ToolProfileChecker（R2-15）。
+func ProfileCheckerFromContext(ctx context.Context) ToolProfileChecker {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(profileCheckerContextKey{}).(ToolProfileChecker); ok {
+		return v
+	}
+	return nil
 }
 
 // CodeActResult CodeAct 执行结果。

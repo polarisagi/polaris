@@ -3,6 +3,7 @@ package codeact_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -78,7 +79,7 @@ func TestV5_Bridge_SubcallsRouteThroughExecuteTool(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	resp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "call",
 		"tool":   "read_file",
 		"args":   map[string]any{"path": "data.txt"},
@@ -138,8 +139,8 @@ func TestV5_Bridge_SocketPermissionsAndRandomPath(t *testing.T) {
 	if srv1.SocketPath() == srv2.SocketPath() {
 		t.Fatalf("expected different random socket paths, both got %s", srv1.SocketPath())
 	}
-	if !strings.HasPrefix(srv1.SocketPath(), "/tmp/pb_") {
-		t.Errorf("expected /tmp/pb_ prefix, got %s", srv1.SocketPath())
+	if !strings.Contains(srv1.SocketPath(), filepath.Join("run", "pb_")) {
+		t.Errorf("expected socket path containing run/pb_, got %s", srv1.SocketPath())
 	}
 }
 
@@ -161,7 +162,7 @@ func TestV5_Bridge_StandardProfile_BlocksWritingTools(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	resp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "call",
 		"tool":   "rm_file",
 		"args":   map[string]any{"path": "target.txt"},
@@ -207,7 +208,7 @@ func TestV5_Bridge_TaintMerging(t *testing.T) {
 		t.Fatalf("expected initial taint TaintLow, got %v", srv.HighestTaint())
 	}
 
-	_, _ = sendBridgeRequest(srv.SocketPath(), map[string]any{
+	_, _ = sendBridgeRequest(srv, map[string]any{
 		"action": "call",
 		"tool":   "untrusted_read",
 		"args":   map[string]any{},

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -28,31 +29,30 @@ type ToolBridgeExecutor interface {
 
 // WithToolExecutor 注入工具桥执行器。
 func WithToolExecutor(exec ToolBridgeExecutor) CodeActOption {
-	return func(c *CodeAct) {
-		c.toolExec = exec
-	}
+	return func(c *CodeAct) { c.toolExec = exec }
 }
 
 // WithPolicy 注入安全策略配置。
 func WithPolicy(pol policy.Policy) CodeActOption {
-	return func(c *CodeAct) {
-		c.policy = pol
-	}
+	return func(c *CodeAct) { c.policy = pol }
 }
 
 // BridgeServer 提供 CodeAct 解释器与内核间的专用 Unix Socket 传输桥（ADR-0115 WP5，T6 原则）。
 type BridgeServer struct {
-	sockPath     string
-	listener     net.Listener
-	toolExec     ToolBridgeExecutor
-	pol          policy.Policy
-	currentTaint types.TaintLevel
-	maxTaint     types.TaintLevel
-	mu           sync.Mutex
-	closed       chan struct{}
+	sockPath       string
+	token          string
+	listener       net.Listener
+	toolExec       ToolBridgeExecutor
+	pol            policy.Policy
+	profileChecker ProfileChecker
+	currentTaint   types.TaintLevel
+	maxTaint       types.TaintLevel
+	mu             sync.Mutex
+	closed         chan struct{}
 }
 
 type bridgeRequest struct {
+	Token  string            `json:"token,omitempty"`
 	Action string            `json:"action"` // "call" | "call_many" | "tools"
 	Tool   string            `json:"tool,omitempty"`
 	Args   map[string]any    `json:"args,omitempty"`
@@ -72,8 +72,40 @@ type bridgeResponse struct {
 	Tools   any    `json:"tools,omitempty"`
 }
 
-// StartBridgeServer 启动工具桥本地 Unix Socket 服务。
-func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol policy.Policy, initialTaint types.TaintLevel) (*BridgeServer, error) {
+func createBridgeListener(explicitDataDir string) (net.Listener, string, error) {
+	dataDir := explicitDataDir
+	if dataDir == "" {
+		if d, err := config.ResolveDataDir(""); err == nil && d != "" {
+			dataDir = d
+		} else {
+			dataDir = os.TempDir()
+		}
+	}
+	runDir := filepath.Join(dataDir, "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "code_act bridge: mkdir run dir failed", err)
+	}
+	_ = os.Chmod(runDir, 0o700)
+
+	sockPath := filepath.Join(runDir, fmt.Sprintf("pb_%s.sock", uuid.NewString()[:8]))
+	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
+		slog.Debug("code_act bridge: cleanup old socket", "path", sockPath, "err", err)
+	}
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "code_act bridge: listen unix failed", err)
+	}
+
+	if err := os.Chmod(sockPath, 0o600); err != nil {
+		_ = l.Close()
+		_ = os.Remove(sockPath)
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "code_act bridge: chmod failed", err)
+	}
+	return l, sockPath, nil
+}
+
+// StartBridgeServer 启动工具桥本地 Unix Socket 服务（R2-15：迁入 DataDir/run/ 0700 目录与 Token 鉴权）。
+func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol policy.Policy, initialTaint types.TaintLevel, opts ...BridgeOption) (*BridgeServer, error) {
 	if toolExec == nil {
 		return nil, apperr.New(apperr.CodeInvalidInput, "code_act bridge: tool executor is nil")
 	}
@@ -81,32 +113,26 @@ func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol pol
 		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
 
-	// Unix domain socket 路径长度限制（macOS 104 字节，Linux 108 字节），使用简短前缀
-	sockPath := filepath.Join("/tmp", fmt.Sprintf("pb_%s.sock", uuid.NewString()[:8]))
-	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
-		slog.Debug("code_act bridge: cleanup old socket", "path", sockPath, "err", err)
-	}
-	l, err := net.Listen("unix", sockPath)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "code_act bridge: listen unix failed", err)
+	cfg := parseBridgeConfig(opts)
+	if cfg.token == "" {
+		cfg.token = uuid.NewString()
 	}
 
-	if err := os.Chmod(sockPath, 0600); err != nil {
-		_ = l.Close()
-		if rmErr := os.Remove(sockPath); rmErr != nil && !os.IsNotExist(rmErr) {
-			slog.Debug("code_act bridge: cleanup socket failed", "path", sockPath, "err", rmErr)
-		}
-		return nil, apperr.Wrap(apperr.CodeInternal, "code_act bridge: chmod failed", err)
+	l, sockPath, err := createBridgeListener(cfg.dataDir)
+	if err != nil {
+		return nil, err
 	}
 
 	srv := &BridgeServer{
-		sockPath:     sockPath,
-		listener:     l,
-		toolExec:     toolExec,
-		pol:          pol,
-		currentTaint: initialTaint,
-		maxTaint:     initialTaint,
-		closed:       make(chan struct{}),
+		sockPath:       sockPath,
+		token:          cfg.token,
+		listener:       l,
+		toolExec:       toolExec,
+		pol:            pol,
+		profileChecker: cfg.profileChecker,
+		currentTaint:   initialTaint,
+		maxTaint:       initialTaint,
+		closed:         make(chan struct{}),
 	}
 
 	concurrent.SafeGo(ctx, "code_act_bridge_accept", func(subCtx context.Context) {
@@ -136,6 +162,11 @@ func (s *BridgeServer) SocketPath() string {
 	return s.sockPath
 }
 
+// Token 返回本会话生成的鉴权令牌（R2-15）。
+func (s *BridgeServer) Token() string {
+	return s.token
+}
+
 // HighestTaint 获取会话期间子调用达到的最高污点等级（Taint 不得静默丢失，HE-2）。
 func (s *BridgeServer) HighestTaint() types.TaintLevel {
 	s.mu.Lock()
@@ -162,7 +193,12 @@ func (s *BridgeServer) handleConn(ctx context.Context, conn net.Conn) {
 		var req bridgeRequest
 		if err := json.Unmarshal(line, &req); err != nil {
 			s.writeResponse(conn, bridgeResponse{OK: false, Error: "invalid request payload: " + err.Error()})
-			continue
+			return
+		}
+		// 鉴权校验（R2-15）：Token 不匹配直接断开连接
+		if s.token != "" && req.Token != s.token {
+			s.writeResponse(conn, bridgeResponse{OK: false, Error: "unauthorized: invalid bridge token"})
+			return
 		}
 		resp := s.dispatch(ctx, req)
 		s.writeResponse(conn, resp)
@@ -203,12 +239,12 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 		return bridgeResponse{OK: false, Error: fmt.Sprintf("tool %q not found: %v", toolName, err)}
 	}
 
-	// 档位规则判定（经 ProfilePolicy 纯字段）：standard / hardened 只允许 CapReadOnly 且幂等的工具；full 允许全部
+	// 档位规则判定（R2-15 复用 policy.WritesState 对 MCP/Skill fail-closed）
 	if !s.pol.CodeActAllToolsAllowed {
-		if t.Capability != types.CapReadOnly {
+		if policy.WritesState(toolName, t, true) {
 			return bridgeResponse{
 				OK:    false,
-				Error: fmt.Sprintf("tool %q requires capability %d (not CapReadOnly), blocked in %s profile", toolName, t.Capability, s.pol.Profile),
+				Error: fmt.Sprintf("tool %q writes state (capability %d, source %s), blocked in %s profile", toolName, t.Capability, t.Source, s.pol.Profile),
 			}
 		}
 		for _, se := range t.SideEffects {
@@ -217,6 +253,16 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 					OK:    false,
 					Error: fmt.Sprintf("tool %q has side effect %q (not idempotent), blocked in %s profile", toolName, se, s.pol.Profile),
 				}
+			}
+		}
+	}
+
+	// 角色权限判定：桥接执行前调用注入的 ProfileChecker（R2-15）
+	if s.profileChecker != nil {
+		if err := s.profileChecker.CheckProfileTool(toolName, ""); err != nil {
+			return bridgeResponse{
+				OK:    false,
+				Error: fmt.Sprintf("profile check failed: %v", err),
 			}
 		}
 	}
@@ -272,7 +318,7 @@ func (s *BridgeServer) handleTools() bridgeResponse {
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
 		if !s.pol.CodeActAllToolsAllowed {
-			if t.Capability != types.CapReadOnly {
+			if policy.WritesState(t.Name, t, true) {
 				continue
 			}
 			nonIdempotent := false
@@ -283,6 +329,11 @@ func (s *BridgeServer) handleTools() bridgeResponse {
 				}
 			}
 			if nonIdempotent {
+				continue
+			}
+		}
+		if s.profileChecker != nil {
+			if err := s.profileChecker.CheckProfileTool(t.Name, ""); err != nil {
 				continue
 			}
 		}
@@ -311,69 +362,4 @@ func (s *BridgeServer) Close() {
 			slog.Debug("code_act bridge: remove socket on close failed", "path", s.sockPath, "err", err)
 		}
 	}
-}
-
-// PythonPolarisModule 是注入到 Python 解释器环境的 polaris 客户端源码。
-const PythonPolarisModule = `import os, sys, socket, json
-
-class _PolarisClient:
-    def __init__(self):
-        self._sock_path = os.environ.get("POLARIS_BRIDGE_SOCKET", "")
-
-    def _send(self, req):
-        if not self._sock_path:
-            raise RuntimeError("POLARIS_BRIDGE_SOCKET environment variable not set")
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.connect(self._sock_path)
-        try:
-            payload = json.dumps(req) + "\n"
-            s.sendall(payload.encode("utf-8"))
-            buf = b""
-            while b"\n" not in buf:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-            line = buf.split(b"\n")[0].decode("utf-8")
-            return json.loads(line)
-        finally:
-            s.close()
-
-    def call(self, tool_name, **kwargs):
-        resp = self._send({"action": "call", "tool": tool_name, "args": kwargs})
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("error", f"tool {tool_name} failed"))
-        return resp.get("result")
-
-    def call_many(self, calls):
-        normalized = []
-        for c in calls:
-            if isinstance(c, dict):
-                normalized.append({"tool": c.get("tool", ""), "args": c.get("args", {})})
-            elif isinstance(c, (list, tuple)) and len(c) == 2:
-                normalized.append({"tool": c[0], "args": c[1]})
-        resp = self._send({"action": "call_many", "calls": normalized})
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("error", "call_many failed"))
-        return resp.get("results")
-
-    def tools(self):
-        resp = self._send({"action": "tools"})
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("error", "list tools failed"))
-        return resp.get("tools")
-
-_client = _PolarisClient()
-call = _client.call
-call_many = _client.call_many
-tools = _client.tools
-`
-
-// EnsurePolarisPythonModule 确保指定目录下存在 polaris.py 模块。
-func EnsurePolarisPythonModule(dir string) error {
-	path := filepath.Join(dir, "polaris.py")
-	if err := os.WriteFile(path, []byte(PythonPolarisModule), 0o600); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "ensure polaris module", err)
-	}
-	return nil
 }

@@ -179,6 +179,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	var extraEnv []string
 	if bridgeSrv != nil {
 		extraEnv = append(extraEnv, "POLARIS_BRIDGE_SOCKET="+bridgeSrv.SocketPath())
+		extraEnv = append(extraEnv, "POLARIS_BRIDGE_TOKEN="+bridgeSrv.Token())
 	}
 
 	execReq := sandbox.ExecRequest{
@@ -315,7 +316,11 @@ func (ca *CodeAct) startBridgeIfEligible(ctx context.Context, req protocol.CodeA
 	if req.Language != "python" || ca.toolExec == nil {
 		return nil
 	}
-	bs, berr := StartBridgeServer(ctx, ca.toolExec, ca.policy, types.TaintHigh)
+	var opts []BridgeOption
+	if checker := protocol.ProfileCheckerFromContext(ctx); checker != nil {
+		opts = append(opts, WithBridgeProfileChecker(checker))
+	}
+	bs, berr := StartBridgeServer(ctx, ca.toolExec, ca.policy, types.TaintHigh, opts...)
 	if berr != nil {
 		slog.WarnContext(ctx, "codeact: start tool bridge failed, proceeding without bridge", "err", berr)
 		return nil
