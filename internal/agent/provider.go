@@ -98,6 +98,8 @@ type HandoffPoster interface {
 	SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func())
 	// PublishTaskEvent 向子 Agent 广播事件（ADR-0115 WP4 agent_message 插话）。
 	PublishTaskEvent(taskID string, event types.AgentStreamEvent)
+	// SendTaskControl 向指定任务投递控制指令（插话 / 中止，R3-04）。
+	SendTaskControl(taskID string, ctrl types.TaskControl) bool
 	// FailTask 中止子任务（ADR-0115 WP4 agent_stop 中止原语）。
 	FailTask(ctx context.Context, taskID, agentID string, reason []byte) error
 }

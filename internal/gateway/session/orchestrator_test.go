@@ -254,6 +254,7 @@ func (a *fakeAgentController) AgentID() string { return "fake-agent" }
 func (a *fakeAgentController) SetModelLock(ref string) {
 	a.modelLock = ref
 }
+func (a *fakeAgentController) SetLoopCompletion(mode string) {}
 func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
 	a.intents = append(a.intents, intent.UnsafeContent())
 }

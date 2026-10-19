@@ -51,7 +51,7 @@ func MakeBashFn(
 	if len(persistentSbx) > 0 {
 		pSbx = persistentSbx[0]
 	}
-	if pol.Profile == "" {
+	if pol.IsZero() {
 		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
 	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
@@ -79,12 +79,12 @@ func MakeBashFn(
 			workDir = paths[0]
 		}
 
-		// 1. 后台进程模式（WP5 ADR-0115 / R2-02）：
+		// 1. 后台进程模式（WP5 ADR-0115 / R2-02 / R3-08）：
 		// - full 档（pol.SandboxDisabled == true）：直接在宿主机运行；
 		// - standard 档：后台命令必须走沙箱执行器，若无沙箱支持则明确拒绝，不得回落到宿主；
-		// - hardened 档：拒绝后台模式。
+		// - hardened 档（!pol.BackgroundJobsAllowed）：拒绝后台模式。
 		if args.Background {
-			if pol.Profile == policy.ProfileHardened || pol.ForceContainerSandbox {
+			if !pol.BackgroundJobsAllowed {
 				return nil, apperr.New(apperr.CodeForbidden, "bash: background jobs are disabled in hardened trust profile")
 			}
 			if !pol.SandboxDisabled {
@@ -93,12 +93,12 @@ func MakeBashFn(
 			return execBackgroundJob(ctx, args.Command, args.SessionID, workDir)
 		}
 
-		// 2. 持久终端模式（WP5 ADR-0115 / R2-02）：
-		// - hardened 档：拒绝持久终端模式；
+		// 2. 持久终端模式（WP5 ADR-0115 / R2-02 / R3-08）：
+		// - hardened 档（!pol.PersistentTerminalAllowed）：拒绝持久终端模式；
 		// - standard 档：若无持久沙箱可用，明确拒绝，不得在宿主直接执行；
 		// - full 档：允许宿主持久沙箱执行。
 		if args.SessionID != "" {
-			if pol.Profile == policy.ProfileHardened || pol.ForceContainerSandbox {
+			if !pol.PersistentTerminalAllowed {
 				return nil, apperr.New(apperr.CodeForbidden, "bash: persistent terminal is disabled in hardened trust profile")
 			}
 			if !pol.SandboxDisabled && (pSbx == nil || !pSbx.Available()) {

@@ -76,6 +76,10 @@ func (s *stubBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentS
 	return nil, func() {}
 }
 func (s *stubBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
+func (s *stubBlackboard) SendTaskControl(taskID string, ctrl types.TaskControl) bool   { return true }
+func (s *stubBlackboard) SubscribeTaskControl(taskID string) (<-chan types.TaskControl, func()) {
+	return nil, func() {}
+}
 
 func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan types.BlackboardEvent, error) {
 	ch := make(chan types.BlackboardEvent)

@@ -42,7 +42,7 @@ func (p *loopTestProvider) StreamInfer(_ context.Context, msgs []types.Message, 
 	resp := p.responses[p.idx]
 	p.idx++
 
-	ch := make(chan types.StreamEvent, len(resp.ToolCalls)+2)
+	ch := make(chan types.StreamEvent, len(resp.ToolCalls)+3)
 	if resp.Content != "" {
 		ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: resp.Content}
 	}
@@ -57,6 +57,9 @@ func (p *loopTestProvider) StreamInfer(_ context.Context, msgs []types.Message, 
 			"input": json.RawMessage(rawInput),
 		})
 		ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}
+	}
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: resp.Usage}
 	}
 	close(ch)
 	return ch, nil

@@ -106,7 +106,10 @@ func (r *SubagentRunner) Run(ctx context.Context, req SubagentRequest) (string, 
 	}
 	// 确定的子会话 ID（sub-{agentID}）使运行记录与轨迹可按会话关联；置于最前，
 	// 调用方 Options 里已有的 SessionID 后应用而胜出。
-	opts := append(append([]types.HeadlessOption{types.WithSessionID("sub-" + req.AgentID)}, req.Options...),
+	opts := append(append([]types.HeadlessOption{
+		types.WithSessionID("sub-" + req.AgentID),
+		types.WithLoopCompletion("explicit"),
+	}, req.Options...),
 		types.WithAgentProfile(profile))
 	var resolved types.HeadlessOptions
 	for _, o := range opts {

@@ -520,20 +520,22 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 								"input": input,
 							})
 						}
-						a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
+						a.sCtx.Mu.Unlock()
+						a.appendLoopMessages(types.Message{
 							Role:             "assistant",
 							Content:          resp.Content,
 							Parts:            parts,
 							ReasoningContent: resp.ReasoningContent,
-							Round:            a.sCtx.LoopRound,
 						})
+						a.sCtx.Mu.Lock()
 					} else if resp.Content != "" {
-						a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
+						a.sCtx.Mu.Unlock()
+						a.appendLoopMessages(types.Message{
 							Role:             "assistant",
 							Content:          resp.Content,
 							ReasoningContent: resp.ReasoningContent,
-							Round:            a.sCtx.LoopRound,
 						})
+						a.sCtx.Mu.Lock()
 					}
 					callTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens
 					a.sCtx.LoopLastUsageTokens += callTokens

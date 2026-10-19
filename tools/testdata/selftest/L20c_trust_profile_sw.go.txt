@@ -1,0 +1,17 @@
+package zztrust
+
+import "github.com/polarisagi/polaris/internal/security/policy"
+
+type mockPolicyHolder struct {
+	Profile policy.TrustProfile
+}
+
+func selftestTrustProfileSwitch(h mockPolicyHolder) int {
+	// 负向用例：对 .Profile 字段做 switch 分支（R3-08 门控盲区形态）
+	switch h.Profile {
+	case policy.ProfileHardened:
+		return 1
+	default:
+		return 0
+	}
+}

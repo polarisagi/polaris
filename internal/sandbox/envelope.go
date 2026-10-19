@@ -40,10 +40,11 @@ type ExecRequest struct {
 
 	Tool types.Tool // Kind=Tool/Script 时填充（Source/Capability/SideEffects 驱动 tier）
 
-	Input       []byte
-	ScriptPath  string
-	ScriptBytes []byte
-	ExtraEnv    []string // 追加环境变量，随 SandboxSpec 透传给脚本执行路径
+	Input        []byte
+	ScriptPath   string
+	ScriptBytes  []byte
+	AllowedPaths []string // 文件系统白名单，透传给 SandboxSpec
+	ExtraEnv     []string // 追加环境变量，随 SandboxSpec 透传给脚本执行路径
 
 	TaintLevel types.TaintLevel
 	CapToken   *token.Token
@@ -250,21 +251,22 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	}
 
 	spec := SandboxSpec{
-		ToolName:    req.Resource,
-		Input:       req.Input,
-		SandboxTier: actualTier,
-		Capability:  req.Tool.Capability,
-		SideEffects: req.Tool.SideEffects,
-		ScriptPath:  req.ScriptPath,
-		ScriptBytes: req.ScriptBytes,
-		ExtraEnv:    req.ExtraEnv,
-		CPUQuotaMs:  req.CPUQuotaMs,
-		IOBudget:    req.IOBudget,
-		SystemTier:  e.hwTier,
-		TaintLevel:  req.TaintLevel,
-		DryRunMode:  req.DryRun,
-		SessionID:   req.SessionID,
-		Language:    req.Language,
+		ToolName:     req.Resource,
+		Input:        req.Input,
+		SandboxTier:  actualTier,
+		Capability:   req.Tool.Capability,
+		SideEffects:  req.Tool.SideEffects,
+		ScriptPath:   req.ScriptPath,
+		ScriptBytes:  req.ScriptBytes,
+		AllowedPaths: req.AllowedPaths,
+		ExtraEnv:     req.ExtraEnv,
+		CPUQuotaMs:   req.CPUQuotaMs,
+		IOBudget:     req.IOBudget,
+		SystemTier:   e.hwTier,
+		TaintLevel:   req.TaintLevel,
+		DryRunMode:   req.DryRun,
+		SessionID:    req.SessionID,
+		Language:     req.Language,
 	}
 	execCtx, done := e.router.trackExec(ctx, req.Resource)
 	toolResult, execErr := provider.Run(execCtx, spec)

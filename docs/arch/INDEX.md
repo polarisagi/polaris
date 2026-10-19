@@ -157,7 +157,7 @@
 |------|----|---------|----------|
 | `M13-Interface-Scheduler.md` | L3 接口 | 33K | 见下方 [M13 补充](#m13-补充) |
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 29K | 状态机 + 全模块阈值（唯一权威） |
-| `M04-Agent-Kernel.md` | L1 内核 | 26K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
+| `M04-Agent-Kernel.md` | L1 内核 | 27K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M11-Policy-Safety.md` | L0 策略 | 23K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |

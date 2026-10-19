@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/llm"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
@@ -27,6 +28,7 @@ type ProviderConfig struct {
 	Location  string          `json:"location"`   // Google Agent Platform region
 	SAKeyJSON string          `json:"sa_key_json"`
 	Enabled   bool            `json:"enabled"`
+	IsLocal   *bool           `json:"is_local,omitempty"` // 本地厂商标记；缺省按类型推导 (R3-03)
 	Models    []ProviderModel `json:"models"`
 	CreatedAt string          `json:"created_at"`
 	UpdatedAt string          `json:"updated_at"`
@@ -48,7 +50,7 @@ type ProviderModel struct {
 
 func (h *ProviderHandler) listProviders(db protocol.SQLQuerier) ([]*ProviderConfig, error) {
 	rows, err := db.QueryContext(context.Background(),
-		`SELECT id,name,type,base_url,api_key,project_id,location,sa_key_json,enabled,created_at,updated_at
+		`SELECT id,name,type,base_url,api_key,project_id,location,sa_key_json,enabled,is_local,created_at,updated_at
 		   FROM providers ORDER BY created_at`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
@@ -59,12 +61,14 @@ func (h *ProviderHandler) listProviders(db protocol.SQLQuerier) ([]*ProviderConf
 	var order []string
 	for rows.Next() {
 		p := &ProviderConfig{Models: []ProviderModel{}}
-		var enabled int
+		var enabled, isLocal int
 		if err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.APIKey,
-			&p.ProjectID, &p.Location, &p.SAKeyJSON, &enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.ProjectID, &p.Location, &p.SAKeyJSON, &enabled, &isLocal, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 		}
 		p.Enabled = enabled == 1
+		isLocalBool := isLocal == 1
+		p.IsLocal = &isLocalBool
 		provMap[p.ID] = p
 		order = append(order, p.ID)
 	}
@@ -135,6 +139,13 @@ func (h *ProviderHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Re
 		rand.Read(b) //nolint:errcheck
 		p.ID = "prov_" + hex.EncodeToString(b)
 	}
+	isLocal := false
+	if p.IsLocal != nil {
+		isLocal = *p.IsLocal
+	} else {
+		isLocal = llm.InferIsLocal(p.Type)
+	}
+	p.IsLocal = &isLocal
 	now := time.Now().UTC().Format(time.RFC3339)
 	err := h.ProviderRepo.CreateProvider(r.Context(), types.ProviderRow{
 		ID:        p.ID,
@@ -146,6 +157,7 @@ func (h *ProviderHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Re
 		Location:  p.Location,
 		SAKeyJSON: p.SAKeyJSON,
 		Enabled:   p.Enabled,
+		IsLocal:   isLocal,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -167,6 +179,13 @@ func (h *ProviderHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Re
 		return
 	}
 	p.ID = id
+	isLocal := false
+	if p.IsLocal != nil {
+		isLocal = *p.IsLocal
+	} else {
+		isLocal = llm.InferIsLocal(p.Type)
+	}
+	p.IsLocal = &isLocal
 	now := time.Now().UTC().Format(time.RFC3339)
 	err := h.ProviderRepo.UpdateProvider(r.Context(), id, types.ProviderRow{
 		Name:      p.Name,
@@ -177,6 +196,7 @@ func (h *ProviderHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Re
 		Location:  p.Location,
 		SAKeyJSON: p.SAKeyJSON,
 		Enabled:   p.Enabled,
+		IsLocal:   isLocal,
 		UpdatedAt: now,
 	})
 	if err != nil {

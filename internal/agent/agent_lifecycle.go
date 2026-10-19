@@ -297,13 +297,7 @@ func (a *Agent) emitConsolidateOnce(ctx context.Context) {
 }
 
 // archiveEpisodicAsync 是 ConsolidationPipeline 文档顶部注释描述的
-// "sessionClosed → 强制触发" 会话关闭钩子（2026-07-21 deadcode 审查补齐）：
-// protocol.MemoryFacade.ArchiveEpisodic 此前在接口和实现（facade.go）里都完整
-// 存在，却从未被任何生产调用方触发——语义是"把该会话截至当前时刻的全部
-// Episodic 事件标记为冷数据"，与 ConsolidationPipeline.MarkColdEpisodicEvents
-// 的滑动 1 小时窗口互补而非重复：后者服务仍在进行的长会话（由 Run() 在每次
-// S_REFLECT 完成时调用），前者服务会话终态时的一次性全量归档。异步执行，
-// 失败仅记录 Warn（该标记只影响后续检索排序，不是正确性关键路径）。
+// "sessionClosed → 强制触发" 会话关闭钩子：把该会话截至当前时刻的全部 Episodic 事件标记为冷数据。
 func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
 	if a.memory == nil {
 		return
@@ -326,6 +320,9 @@ func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
 //nolint:gocyclo
 func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
 	a.cancelHandoffWatcher()
+	if current == types.AgentStateComplete {
+		a.publishPreparedReply()
+	}
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:    types.AgentStreamEventStatus,
 		Content: "task_done",

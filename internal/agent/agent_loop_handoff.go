@@ -11,6 +11,22 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+type ctxInBatchDelegationKey struct{}
+type ctxToolCallIDKey struct{}
+
+func withToolCallID(ctx context.Context, callID string) context.Context {
+	return context.WithValue(ctx, ctxToolCallIDKey{}, callID)
+}
+
+func getToolCallID(ctx context.Context) string {
+	if val := ctx.Value(ctxToolCallIDKey{}); val != nil {
+		if id, ok := val.(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
 // isDelegatingWaitAll 判定单条工具调用是否为需挂起等待的委派调用。
 func isDelegatingWaitAll(call types.InferToolCall) bool {
 	if call.Name == "transfer_to_agent" {
@@ -26,7 +42,7 @@ func isDelegatingWaitAll(call types.InferToolCall) bool {
 	return false
 }
 
-// executeBatchWithDelegation 校验并执行当前批次工具调用，处理委派挂起（ADR-0115 WP4 / R2-03）。
+// executeBatchWithDelegation 校验并执行当前批次工具调用，处理委派挂起（ADR-0115 WP4 / R2-03 / R3-05）。
 func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.InferToolCall) (bool, error) {
 	plan := toolCallsToDAGPlan(calls, a.sCtx.GlobalTaintLevel)
 	if err := a.checkPlanAgainstProfile(plan); err != nil {
@@ -52,20 +68,18 @@ func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.In
 	a.recordValidatedPlan(plan)
 
 	var nonDelegatingCalls []types.InferToolCall
-	var delegatingCall *types.InferToolCall
+	var delegatingCalls []types.InferToolCall
 	for i := range calls {
-		if isDelegatingWaitAll(calls[i]) && delegatingCall == nil {
-			delegatingCall = &calls[i]
+		if isDelegatingWaitAll(calls[i]) {
+			delegatingCalls = append(delegatingCalls, calls[i])
 		} else {
 			nonDelegatingCalls = append(nonDelegatingCalls, calls[i])
 		}
 	}
 
-	if delegatingCall == nil {
+	if len(delegatingCalls) == 0 {
 		toolResults := a.executeToolCallsConcurrently(ctx, calls)
-		a.sCtx.Mu.Lock()
-		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, toolResults...)
-		a.sCtx.Mu.Unlock()
+		a.appendLoopMessages(toolResults...)
 		return false, nil
 	}
 
@@ -77,90 +91,99 @@ func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.In
 	a.sCtx.Mu.Lock()
 	a.sCtx.LoopHandoffPendingResults = nonDelegatingResults
 	a.sCtx.LoopHandoffToolCalls = calls
-	a.sCtx.LoopHandoffSpawnCallID = delegatingCall.ID
+	if a.sCtx.LoopHandoffSpawnCallID == nil {
+		a.sCtx.LoopHandoffSpawnCallID = make(map[string][]string)
+	}
 	a.sCtx.Mu.Unlock()
 
-	delMsg := a.executeLoopToolCall(ctx, *delegatingCall)
+	delMsgs := make(map[string]types.Message)
+	for _, delCall := range delegatingCalls {
+		delCtx := context.WithValue(ctx, ctxInBatchDelegationKey{}, true)
+		delCtx = withToolCallID(delCtx, delCall.ID)
+		msg := a.executeLoopToolCall(delCtx, delCall)
+		delMsgs[delCall.ID] = msg
+	}
 
 	a.sCtx.Mu.Lock()
-	isSuspended := len(a.sCtx.HandoffTaskIDs) > 0
+	allChildIDs := append([]string(nil), a.sCtx.HandoffTaskIDs...)
+	isSuspended := len(allChildIDs) > 0
 	a.sCtx.Mu.Unlock()
 
 	if isSuspended {
+		a.persistLoopRoundDelta(ctx)
+		a.watchSubagentsCompletion(allChildIDs)
+		a.asyncIntent(types.TriggerAwaitAgent)
 		return true, nil
 	}
 
 	a.sCtx.Mu.Lock()
 	a.sCtx.LoopHandoffPendingResults = nil
 	a.sCtx.LoopHandoffToolCalls = nil
-	a.sCtx.LoopHandoffSpawnCallID = ""
+	a.sCtx.LoopHandoffSpawnCallID = nil
 	a.sCtx.Mu.Unlock()
 
-	batchMessages := assembleResumeBatchMessages(calls, delegatingCall.ID, delMsg, nonDelegatingResults)
-	a.sCtx.Mu.Lock()
-	a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, batchMessages...)
-	a.sCtx.Mu.Unlock()
+	batchMessages := assembleResumeBatchMessages(calls, delMsgs, nonDelegatingResults)
+	a.appendLoopMessages(batchMessages...)
 	return false, nil
 }
 
-// resumeHandoffInLoop 在 S_LOOP_AWAIT 唤醒回到 S_LOOP_EXEC 时回填子智能体结果并进入下一轮循环（R2-03）。
+// resumeHandoffInLoop 在 S_LOOP_AWAIT 唤醒回到 S_LOOP_EXEC 时回填子智能体结果并进入下一轮循环（R2-03 / R3-05）。
 func (a *Agent) resumeHandoffInLoop(ctx context.Context) error {
 	a.sCtx.Mu.Lock()
-	handoffTaskIDs := a.sCtx.HandoffTaskIDs
-	spawnCallID := a.sCtx.LoopHandoffSpawnCallID
+	spawnCallMap := a.sCtx.LoopHandoffSpawnCallID
 	origCalls := a.sCtx.LoopHandoffToolCalls
 	pendingResults := a.sCtx.LoopHandoffPendingResults
 	currentRound := a.sCtx.LoopRound
 	a.sCtx.Mu.Unlock()
 
-	childResults, highestTaint := a.fetchSubagentsResults(ctx, handoffTaskIDs)
+	spawnMsgs := make(map[string]types.Message)
+	for spawnCallID, childIDs := range spawnCallMap {
+		childResults, highestTaint := a.fetchSubagentsResults(ctx, childIDs)
 
-	var spawnResultText string
-	if len(childResults) == 1 {
-		spawnResultText = childResults[0]
-	} else if len(childResults) > 1 {
-		var b strings.Builder
-		for i, r := range childResults {
-			if i > 0 {
-				b.WriteString("\n\n")
+		var spawnResultText string
+		if len(childResults) == 1 {
+			spawnResultText = childResults[0]
+		} else if len(childResults) > 1 {
+			var b strings.Builder
+			for i, r := range childResults {
+				if i > 0 {
+					b.WriteString("\n\n")
+				}
+				fmt.Fprintf(&b, "[%s]: %s", childIDs[i], r)
 			}
-			fmt.Fprintf(&b, "[%s]: %s", handoffTaskIDs[i], r)
+			spawnResultText = b.String()
+		} else {
+			spawnResultText = "[subagent completed with empty output]"
 		}
-		spawnResultText = b.String()
-	} else {
-		spawnResultText = "[subagent completed with empty output]"
+
+		spawnMsg := makeToolResultMessage(spawnCallID, spawnResultText)
+		spawnMsg.Round = currentRound
+		spawnMsg.TaintLevel = highestTaint
+		if highestTaint > types.TaintNone {
+			a.elevateGlobalTaintLevel(highestTaint)
+		}
+		spawnMsgs[spawnCallID] = spawnMsg
 	}
 
-	spawnMsg := makeToolResultMessage(spawnCallID, spawnResultText)
-	spawnMsg.Round = currentRound
-	spawnMsg.TaintLevel = highestTaint
-	if highestTaint > types.TaintNone {
-		a.elevateGlobalTaintLevel(highestTaint)
-	}
-
-	finalBatchMessages := assembleResumeBatchMessages(origCalls, spawnCallID, spawnMsg, pendingResults)
+	finalBatchMessages := assembleResumeBatchMessages(origCalls, spawnMsgs, pendingResults)
 
 	a.cancelHandoffWatcher()
+	a.appendLoopMessages(finalBatchMessages...)
 	a.sCtx.Mu.Lock()
-	a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, finalBatchMessages...)
 	a.sCtx.HandoffTaskIDs = nil
 	a.sCtx.HandoffTaskID = ""
 	a.sCtx.LoopHandoffPendingResults = nil
 	a.sCtx.LoopHandoffToolCalls = nil
-	a.sCtx.LoopHandoffSpawnCallID = ""
+	a.sCtx.LoopHandoffSpawnCallID = nil
 	a.sCtx.Mu.Unlock()
 
 	a.applyLoopObservationMasking(ctx)
 	steers := a.drainSteerQueue()
-	if len(steers) > 0 {
-		a.sCtx.Mu.Lock()
-		for _, st := range steers {
-			a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-				Role:    "user",
-				Content: st,
-			})
-		}
-		a.sCtx.Mu.Unlock()
+	for _, st := range steers {
+		a.appendLoopMessages(types.Message{
+			Role:    "user",
+			Content: st,
+		})
 	}
 	metrics.RecordLoopRound(ctx)
 	a.persistLoopRoundDelta(ctx)
@@ -200,7 +223,7 @@ func (a *Agent) fetchSubagentsResults(ctx context.Context, handoffTaskIDs []stri
 }
 
 // assembleResumeBatchMessages 按照原始调用序列拼装工具调用结果（保持 tool_use_id 对应）。
-func assembleResumeBatchMessages(origCalls []types.InferToolCall, spawnCallID string, spawnMsg types.Message, pendingResults []types.Message) []types.Message {
+func assembleResumeBatchMessages(origCalls []types.InferToolCall, spawnMsgs map[string]types.Message, pendingResults []types.Message) []types.Message {
 	pendingMap := make(map[string]types.Message)
 	for _, msg := range pendingResults {
 		for _, part := range msg.Parts {
@@ -214,14 +237,19 @@ func assembleResumeBatchMessages(origCalls []types.InferToolCall, spawnCallID st
 
 	finalBatchMessages := make([]types.Message, 0, len(origCalls))
 	for _, c := range origCalls {
-		if c.ID == spawnCallID {
-			finalBatchMessages = append(finalBatchMessages, spawnMsg)
+		if msg, ok := spawnMsgs[c.ID]; ok {
+			finalBatchMessages = append(finalBatchMessages, msg)
 		} else if m, ok := pendingMap[c.ID]; ok {
 			finalBatchMessages = append(finalBatchMessages, m)
+		} else {
+			finalBatchMessages = append(finalBatchMessages, makeToolResultMessage(c.ID, "[completed]"))
 		}
 	}
 	if len(finalBatchMessages) == 0 {
-		finalBatchMessages = append(finalBatchMessages, spawnMsg)
+		for _, msg := range spawnMsgs {
+			finalBatchMessages = append(finalBatchMessages, msg)
+		}
+		finalBatchMessages = append(finalBatchMessages, pendingResults...)
 	}
 	return finalBatchMessages
 }

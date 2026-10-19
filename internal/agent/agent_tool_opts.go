@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -54,7 +55,48 @@ func (a *Agent) toolInferOptions(ctx context.Context, state types.AgentState, un
 		return nil
 	}
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
-	return toolOptionsFor(cata.Schemas(toolCtx, types.TrustCommunity), forbid)
+	schemas := cata.Schemas(toolCtx, types.TrustCommunity)
+	if state == types.AgentStateLoop {
+		filtered := make([]types.ToolSchema, 0, len(schemas)+2)
+		for _, s := range schemas {
+			if s.Name != "spawn_planner" {
+				filtered = append(filtered, s)
+			}
+		}
+		filtered = append(filtered, codeActToolSchema())
+		var completion string
+		if a.sCtx != nil {
+			a.sCtx.Mu.RLock()
+			completion = a.sCtx.LoopCompletion
+			a.sCtx.Mu.RUnlock()
+		}
+		if completion == "" {
+			completion = config.CurrentThresholds().M4Kernel.LoopCompletion
+		}
+		if completion == "explicit" {
+			filtered = append(filtered, finishToolSchema())
+		}
+		schemas = filtered
+	}
+	return toolOptionsFor(schemas, forbid)
+}
+
+// finishToolSchema 返回下发给模型的 finish 工具定义（R3-07 / WP2）。
+func finishToolSchema() types.ToolSchema {
+	return types.ToolSchema{
+		Name:        "finish",
+		Description: "显式完成任务并向用户或父智能体提交最终总结。仅在任务目标已达成或无法继续时调用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary": map[string]any{
+					"type":        "string",
+					"description": "任务执行结果总结与最终产物说明",
+				},
+			},
+			"required": []string{"summary"},
+		},
+	}
 }
 
 // candidateToolOptions 返回 PRM 候选请求的 tools 选项。候选要求模型输出 JSON DAG（不是原生 tool_calls），

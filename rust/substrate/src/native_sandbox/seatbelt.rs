@@ -72,7 +72,7 @@ pub(super) fn build_seatbelt_profile(
     // 网络策略
     if network_block {
         profile.push_str(
-            "; 禁止所有出站网络（对齐 Claude Code / Codex CLI 默认行为）\n(deny network*)\n",
+            "; 禁止所有出站网络（对齐 Claude Code / Codex CLI 默认行为，放行本地 Unix Socket IPC）\n(deny network*)\n(allow network-outbound (remote unix-socket))\n",
         );
     } else {
         profile.push_str("; 允许所有出站网络\n(allow network*)\n");
@@ -188,7 +188,7 @@ pub(super) fn build_seatbelt_profile_v2(
             }
         }
         _ => {
-            p.push_str("(deny network*)\n");
+            p.push_str("(deny network*)\n(allow network-outbound (remote unix-socket))\n");
         }
     }
     p

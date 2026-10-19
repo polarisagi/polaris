@@ -44,14 +44,12 @@ func TestAgenticLoop_SteerQueue_InjectedAtRoundBoundary(t *testing.T) {
 		t.Fatalf("出队插话不符: %v", steers)
 	}
 
-	agent.sCtx.Mu.Lock()
 	for _, st := range steers {
-		agent.sCtx.LoopMessages = append(agent.sCtx.LoopMessages, types.Message{
+		agent.appendLoopMessages(types.Message{
 			Role:    "user",
 			Content: st,
 		})
 	}
-	agent.sCtx.Mu.Unlock()
 
 	agent.sCtx.Mu.Lock()
 	defer agent.sCtx.Mu.Unlock()

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -20,7 +21,7 @@ import (
 //nolint:gocyclo
 func (a *Agent) runExecuteLoop(ctx context.Context) error {
 	a.sCtx.Mu.Lock()
-	isHandoffResume := len(a.sCtx.HandoffTaskIDs) > 0 && a.sCtx.LoopHandoffSpawnCallID != ""
+	isHandoffResume := len(a.sCtx.HandoffTaskIDs) > 0 && len(a.sCtx.LoopHandoffSpawnCallID) > 0
 	a.sCtx.Mu.Unlock()
 
 	if isHandoffResume {
@@ -127,15 +128,11 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 
 	// 7. 消费插话队列（Steer），在轮次边界注入为 user 消息
 	steers := a.drainSteerQueue()
-	if len(steers) > 0 {
-		a.sCtx.Mu.Lock()
-		for _, st := range steers {
-			a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-				Role:    "user",
-				Content: st,
-			})
-		}
-		a.sCtx.Mu.Unlock()
+	for _, st := range steers {
+		a.appendLoopMessages(types.Message{
+			Role:    "user",
+			Content: st,
+		})
 	}
 
 	// 8. 记录指标与持久化增量快照（P1 / ADR-0104 / HE-6）
@@ -155,9 +152,20 @@ func toolCallsToDAGPlan(calls []types.InferToolCall, taintLevel types.TaintLevel
 		if id == "" {
 			id = fmt.Sprintf("n%d", i)
 		}
+		toolName := c.Name
+		if toolName == "code_act" {
+			var codeArgs struct {
+				Language string `json:"language"`
+			}
+			lang := "python"
+			if err := json.Unmarshal(c.Input, &codeArgs); err == nil && codeArgs.Language != "" {
+				lang = codeArgs.Language
+			}
+			toolName = "code_act:" + lang
+		}
 		nodes[i] = protocol.ExecNode{
 			ID:         id,
-			ToolName:   c.Name,
+			ToolName:   toolName,
 			Args:       c.Input,
 			TaintLevel: taintLevel,
 		}
@@ -170,14 +178,10 @@ func toolCallsToDAGPlan(calls []types.InferToolCall, taintLevel types.TaintLevel
 
 // appendToolErrorMessages 为因校验未通过而被拦截的调用构造错误响应。
 func (a *Agent) appendToolErrorMessages(calls []types.InferToolCall, errText string) {
-	a.sCtx.Mu.Lock()
-	defer a.sCtx.Mu.Unlock()
-	round := a.sCtx.LoopRound
 	for _, c := range calls {
-		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
+		a.appendLoopMessages(types.Message{
 			Role:    "user",
 			Content: errText,
-			Round:   round,
 			Parts: []any{
 				map[string]any{
 					"type":        "tool_result",
@@ -202,4 +206,14 @@ func (a *Agent) buildValidationContext(plan *protocol.DAGPlan) *protocol.DAGVali
 		ReviewChecker:    a.Security.TaintReviewChecker,
 		TaintAuditor:     a.Security.TaintAuditor,
 	}
+}
+
+// SetLoopCompletion 设置当前 Agent 会话的循环完成判定模式（"auto" | "explicit"）（R3-07 / WP2）。
+func (a *Agent) SetLoopCompletion(mode string) {
+	if a == nil || a.sCtx == nil {
+		return
+	}
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	a.sCtx.LoopCompletion = mode
 }

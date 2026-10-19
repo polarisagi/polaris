@@ -149,7 +149,7 @@ func TestP3_ObservationMasking_PreservesRecentRounds(t *testing.T) {
 
 	// 前 4 轮输出已在之前批次被遮蔽
 	for r := 1; r <= 4; r++ {
-		agent.sCtx.LoopMessages = append(agent.sCtx.LoopMessages, types.Message{
+		agent.appendLoopMessages(types.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("[output masked: full output: read_tool_ref(task_id=\"test\", id=\"ref-%d\")]", r),
 			Round:   r,
@@ -165,7 +165,7 @@ func TestP3_ObservationMasking_PreservesRecentRounds(t *testing.T) {
 
 	// 轮次 5, 6, 7 以及刚产生的第 8 轮未遮蔽输出
 	for r := 5; r <= 8; r++ {
-		agent.sCtx.LoopMessages = append(agent.sCtx.LoopMessages, types.Message{
+		agent.appendLoopMessages(types.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("raw output of round %d", r),
 			Round:   r,

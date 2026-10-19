@@ -114,7 +114,7 @@ func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol pol
 	if toolExec == nil {
 		return nil, apperr.New(apperr.CodeInvalidInput, "code_act bridge: tool executor is nil")
 	}
-	if pol.Profile == "" {
+	if pol.IsZero() {
 		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
 

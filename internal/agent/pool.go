@@ -9,31 +9,13 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
-	"github.com/polarisagi/polaris/internal/security/taint"
-
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
-
-// headlessPromptGuard 供 AcquireHeadless（Cron/Workflow/Webhook 触发路径的唯一
-// 收敛入口）扫描 finalOutput，堵住 M11 §2.2 六阶段出站防护流水线此前完全未覆盖
-// 的一段——SSE 交互路径（gateway/server/chat/sse.go）早已接入 SystemPromptGuard，
-// 但 headless 路径此前从未调用，Cron/Workflow/Webhook 触发的响应对系统提示词
-// 逐字泄露（OWASP LLM07）完全不设防。headless 场景不像 SSE 有逐会话的 M9 GEPA
-// 激活提示词可注册，只注册内核阶段模板（guard.KernelPromptFragments，见该函数
-// 注释）——这是"系统提示词"的静态主体，覆盖面已经是此前的从 0 到有。
-// 用 sync.OnceValue 构造单例：SystemPromptGuard 本身线程安全（Scan/AddFragment
-// 均有锁），跨请求复用避免每次 AcquireHeadless 都重新注册相同的静态片段。
-var headlessPromptGuard = sync.OnceValue(func() *guard.SystemPromptGuard { //nolint:gochecknoglobals // sync.OnceValue 懒加载单例，SystemPromptGuard 内部自带锁，无外部可变状态
-	g := guard.NewSystemPromptGuard(0)
-	for _, frag := range guard.KernelPromptFragments() {
-		g.AddFragment(frag)
-	}
-	return g
-})
 
 // KillSwitchGate agent 包对系统级三阶段熔断状态的消费端接口（HE-3：接口在调用方定义）。
 // 实现：security.KillSwitch（通过 Pool.WithKillSwitchGate 注入，nil 时不做任何熔断检查，
@@ -275,107 +257,6 @@ func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentCon
 	return p.acquireInner(acquireCtx, sessionID, false)
 }
 
-// AcquireHeadless 供 Cron/Workflow/Webhook 等非交互式触发方注入 Intent 并同步获取最终结果，
-// 内部完整复用 Agent Kernel 的 FSM/DAG/安全 Gate/Reflection/Replan 能力。
-//
-// [Bug 2 修复] 此前调用 p.Acquire(ctx, sessionID)，后者用 100ms acquireTimeout 包裹
-// ctx，导致后台课程任务（AutoCurriculumGenerator 批量投递 4-6 个任务）在 pool 短暂
-// 竞争时立即失败。现改为直接调用 acquireInner，使用调用方传入的 bgCtx（10 分钟超时），
-// 允许后台任务排队等待空闲 slot。交互式路径（Acquire）不受影响，仍保持 100ms 超时。
-func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
-	opt := &types.HeadlessOptions{}
-	for _, o := range opts {
-		o(opt)
-	}
-
-	// GD-13-001：优先复用调用方透传的真实业务 SessionID，使同一会话跨多轮
-	// headless 调用命中 Pool 中同一个 per-session Agent 内核实例（常驻 FSM
-	// Run() 循环得以真正被"按 session 复用"，而非每轮都新建）；未提供时
-	// （如 Blackboard DAG 一次性任务执行，本就没有会话语义）退回原自生成
-	// 一次性 ID 的行为，与引入本机制前完全等价。
-	sessionID := opt.SessionID
-	if sessionID == "" {
-		sessionID = "headless-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	// headless 任务使用 ctx 自身超时（由 defaultTaskWorker 传入的 bgCtx，最长 10 分钟），
-	// 而非 p.acquireTimeout 的 100ms——后台批量任务应排队而非立即失败。
-	agent, release, err := p.acquireInner(ctx, sessionID, true)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	// ADR-0084：透传委派链深度，使 transfer_to_agent 的 SpawnDepth 校验
-	// （inv_M8_06）对经 headless 路径执行的委派任务生效。opt.SpawnDepth 默认 0，
-	// 等同于未引入本机制前的行为。
-	agent.SetSpawnDepth(opt.SpawnDepth)
-
-	// GD-14-001（2026-08-02 补齐）：透传协同任务共享记忆命名空间，使本地
-	// agent_handoff:<role> 委派任务（落 DefaultTaskWorker 兜底执行）与发起方
-	// 共享记忆检索范围，而非静默退化为各自独立命名空间（ADR-0084"已知限制"）。
-	// opt.Namespace 默认空串，等同于未引入本机制前的行为。
-	agent.SetMemoryNamespace(opt.Namespace)
-	// ADR-0103 决策三：子 Agent 角色（nil 显式清除——同 SessionID 复用实例时不得残留上次角色）。
-	agent.SetAgentProfile(opt.Profile)
-	if opt.Profile != nil {
-		metrics.GlobalSubagentRunsTotal.Add(1)
-	}
-
-	intentBytes, _ := json.Marshal(intent)
-	agent.SetTaskIntent(taint.NewTaintedString(string(intentBytes), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
-
-	stream := agent.SubscribeStream(ctx)
-	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to send intent", err)
-	}
-
-	start := time.Now()
-	var finalOutput string
-	for ev := range stream {
-		// GD-13-001：若注入了事件回调（子 Agent 事件透传），先转发给回调方。
-		if opt.EventCallback != nil {
-			opt.EventCallback(ev)
-		}
-		if ev.Type == types.AgentStreamEventError {
-			if p.killGate != nil {
-				p.killGate.ReportError()
-			}
-			return nil, apperr.New(apperr.CodeInternal, ev.Content)
-		}
-		if ev.Type == types.AgentStreamEventToken {
-			finalOutput += ev.Content
-		}
-		// [性能修复] SubscribeStream 返回的 channel 只在 ctx.Done() 时才会被
-		// 关闭（agent_wiring.go 注释），FSM 到达终态（Complete/Failed）本身
-		// 并不会关闭 channel——它只会额外发一条 handleTerminalState 广播的
-		// Status/"task_done" 事件（agent_lifecycle.go）。此前这里没有识别该
-		// 信号提前跳出循环，导致 `for ev := range stream` 只能靠 ctx 自身超时
-		// 才会退出：AcquireHeadless 是 Cron/Workflow/Webhook 全部 headless 触发
-		// 路径的唯一收敛入口，意味着无论任务实际多快完成，每一次调用都会
-		// 阻塞到调用方传入 ctx 的整个超时预算才返回——延迟通知/占用 Pool 容量。
-		// 收到 task_done 后没有更多事件会发生（handleTerminalState 是终态唯一
-		// 处理路径），直接跳出循环即可；stream 订阅本身仍随 ctx 结束时正常清理
-		// （SubscribeStream 内部 SafeGo，不因提前 break 产生泄漏）。
-		if ev.Type == types.AgentStreamEventStatus && ev.Content == "task_done" {
-			break
-		}
-	}
-
-	// [W-2-B] SystemPromptGuard：headless 路径一次性扫描完整 finalOutput（不像
-	// SSE 逐 chunk 扫描那样需要处理跨 chunk 边界问题——这里已经是拼接完成的
-	// 全量文本），redact=true 净化后继续返回，不中断 Cron/Workflow/Webhook 自动化。
-	if cleaned, scanErr := headlessPromptGuard().Scan(finalOutput, true); scanErr == nil {
-		finalOutput = cleaned
-	} else {
-		slog.Warn("agent pool: system prompt guard scan failed on headless output", "session", sessionID, "err", scanErr)
-	}
-
-	return &types.AgentResult{
-		Output:    finalOutput,
-		LatencyMs: time.Since(start).Milliseconds(),
-	}, nil
-}
-
 // GC 清理 idle 超时的 session，应由外部低频 ticker 调用（如每 5 分钟）。
 //
 // 2026-07-12 复核修复：newPoolEntry 补上 Run() 常驻 goroutine 后，仅从
@@ -397,4 +278,102 @@ func (p *Pool) GC() {
 			}
 		}
 	}
+}
+
+// headlessPromptGuard 供 AcquireHeadless 扫描 finalOutput 出站防护。
+var headlessPromptGuard = sync.OnceValue(func() *guard.SystemPromptGuard { //nolint:gochecknoglobals // sync.OnceValue 懒加载单例，SystemPromptGuard 内部自带锁，无外部可变状态
+	g := guard.NewSystemPromptGuard(0)
+	for _, frag := range guard.KernelPromptFragments() {
+		g.AddFragment(frag)
+	}
+	return g
+})
+
+// AcquireHeadless 供 Cron/Workflow/Webhook 等非交互式触发方注入 Intent 并同步获取最终结果，
+// 内部完整复用 Agent Kernel 的 FSM/DAG/安全 Gate/Reflection/Replan 能力。
+func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
+	opt := &types.HeadlessOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	// GD-13-001：优先复用调用方透传的真实业务 SessionID
+	sessionID := opt.SessionID
+	if sessionID == "" {
+		sessionID = "headless-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	// headless 任务使用 ctx 自身超时（最长 10 分钟），后台任务排队而非立即失败
+	agent, release, err := p.acquireInner(ctx, sessionID, true)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	applyHeadlessOptions(agent, opt)
+
+	intentBytes, err := json.Marshal(intent)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "failed to marshal intent", err)
+	}
+	agent.SetTaskIntent(taint.NewTaintedString(string(intentBytes), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
+
+	stream := agent.SubscribeStream(ctx)
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to send intent", err)
+	}
+
+	start := time.Now()
+	finalOutput, err := p.consumeHeadlessStream(stream, opt)
+	if err != nil {
+		return nil, err
+	}
+	finalOutput = scanHeadlessOutput(sessionID, finalOutput)
+
+	return &types.AgentResult{
+		Output:    finalOutput,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
+}
+
+func applyHeadlessOptions(agent protocol.AgentController, opt *types.HeadlessOptions) {
+	agent.SetSpawnDepth(opt.SpawnDepth)
+	agent.SetMemoryNamespace(opt.Namespace)
+	agent.SetAgentProfile(opt.Profile)
+	if opt.Profile != nil {
+		metrics.GlobalSubagentRunsTotal.Add(1)
+	}
+	if opt.LoopCompletion != "" {
+		agent.SetLoopCompletion(opt.LoopCompletion)
+	}
+}
+
+func (p *Pool) consumeHeadlessStream(stream <-chan types.AgentStreamEvent, opt *types.HeadlessOptions) (string, error) {
+	var finalOutput string
+	for ev := range stream {
+		if opt.EventCallback != nil {
+			opt.EventCallback(ev)
+		}
+		if ev.Type == types.AgentStreamEventError {
+			if p.killGate != nil {
+				p.killGate.ReportError()
+			}
+			return "", apperr.New(apperr.CodeInternal, ev.Content)
+		}
+		if ev.Type == types.AgentStreamEventToken {
+			finalOutput += ev.Content
+		}
+		if ev.Type == types.AgentStreamEventStatus && ev.Content == "task_done" {
+			break
+		}
+	}
+	return finalOutput, nil
+}
+
+func scanHeadlessOutput(sessionID, output string) string {
+	cleaned, scanErr := headlessPromptGuard().Scan(output, true)
+	if scanErr == nil {
+		return cleaned
+	}
+	slog.Warn("agent pool: system prompt guard scan failed on headless output", "session", sessionID, "err", scanErr)
+	return output
 }

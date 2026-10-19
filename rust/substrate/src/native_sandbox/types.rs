@@ -101,6 +101,9 @@ pub(super) const CREDENTIAL_STRIP_EXACT: &[&str] = &[
 
 pub(super) fn is_credential_key(key: &str) -> bool {
     let upper = key.to_uppercase();
+    if upper == "POLARIS_BRIDGE_TOKEN" {
+        return false;
+    }
     if CREDENTIAL_STRIP_EXACT.contains(&upper.as_str()) {
         return true;
     }

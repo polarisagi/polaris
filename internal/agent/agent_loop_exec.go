@@ -78,21 +78,17 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	}
 	toolCtx = context.WithValue(toolCtx, protocol.CtxModelSwitcherKey{}, a)
 	toolCtx = context.WithValue(toolCtx, protocol.CtxSubagentManagerKey{}, a)
+	toolCtx = withToolCallID(toolCtx, call.ID)
 
 	// transfer_to_agent 在 agentic 模式下统一转调 SpawnAgents(wait=all)（ADR-0115 WP4 / R2-03）
 	if call.Name == "transfer_to_agent" {
 		return a.executeLoopTransferToAgent(toolCtx, call)
 	}
-
-	// JIT 签发能力令牌（必须在 validatedCalls 中），确保无旁路漏洞
-	toolCtx, revoke, err := a.withJITCapability(toolCtx, call.Name, call.Input)
-	if err != nil {
-		slog.WarnContext(ctx, "agentic_loop: capability token mint failed", "tool", call.Name, "err", err)
-		msg := makeToolResultMessage(call.ID, "Error: "+err.Error())
+	if call.Name == "finish" {
+		msg := makeToolResultMessage(call.ID, "[Finished]")
 		msg.Round = a.sCtx.LoopRound
 		return msg
 	}
-	defer revoke()
 
 	sCtxMu := &a.sCtx.Mu
 	sCtxMu.RLock()
@@ -100,7 +96,27 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	currentRound := a.sCtx.LoopRound
 	sCtxMu.RUnlock()
 
-	res, err := a.toolRegistry.ExecuteWithTaint(toolCtx, call.Name, call.Input, globalTaint)
+	var res *types.ToolResult
+	var err error
+	if call.Name == "code_act" || strings.HasPrefix(call.Name, "code_act:") {
+		lang := strings.TrimPrefix(call.Name, "code_act:")
+		if lang == "code_act" {
+			lang = ""
+		}
+		res, err = a.runCodeAct(toolCtx, lang, call.Input, globalTaint)
+	} else {
+		// JIT 签发能力令牌（必须在 validatedCalls 中），确保无旁路漏洞
+		var revoke func()
+		toolCtx, revoke, err = a.withJITCapability(toolCtx, call.Name, call.Input)
+		if err != nil {
+			slog.WarnContext(ctx, "agentic_loop: capability token mint failed", "tool", call.Name, "err", err)
+			msg := makeToolResultMessage(call.ID, "Error: "+err.Error())
+			msg.Round = a.sCtx.LoopRound
+			return msg
+		}
+		defer revoke()
+		res, err = a.toolRegistry.ExecuteWithTaint(toolCtx, call.Name, call.Input, globalTaint)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "agentic_loop: tool execution error", "tool", call.Name, "err", err)
 		msg := makeToolResultMessage(call.ID, "Error: "+err.Error())

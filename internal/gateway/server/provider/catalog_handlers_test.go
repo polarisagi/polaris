@@ -104,6 +104,7 @@ func TestCatalogHandlers_CreateFromCatalog(t *testing.T) {
 			location TEXT,
 			sa_key_json TEXT,
 			enabled INTEGER,
+			is_local INTEGER DEFAULT 0,
 			catalog_id TEXT,
 			created_at TEXT,
 			updated_at TEXT

@@ -17,6 +17,7 @@ Alpine.store('providers', {
     base_url: '', api_key: '',
     project_id: '', location: 'us-central1',
     enabled: true,
+    is_local: false,
   },
   // 模型条目表单
   modelForm: {
@@ -32,7 +33,7 @@ Alpine.store('providers', {
   // 统一 Modal：内置厂商选择 or 自定义（id='__custom__'）
   showAddModal: false,
   addSelected: null,         // 选中的 CatalogProvider 或 {id:'__custom__',...}
-  addForm: { api_key: '', name: '', base_url: '', type: 'openai_compat', project_id: '', location: 'us-central1' },
+  addForm: { api_key: '', name: '', base_url: '', type: 'openai_compat', project_id: '', location: 'us-central1', is_local: false },
   addSaving: false,
 
   // 兼容旧代码引用（Onboard 等仍使用 catalogSelected/catalogForm）
@@ -106,6 +107,7 @@ Alpine.store('providers', {
           project_id: this.addForm.project_id || '',
           location:   this.addForm.location  || 'us-central1',
           enabled:    true,
+          is_local:   !!this.addForm.is_local,
         }
         const r = await fetch('/v1/providers', {
           method: 'POST',
@@ -172,7 +174,7 @@ Alpine.store('providers', {
   async saveFromCatalog() { await this.saveAdd() },
 
   openEdit(p) {
-    this.form = { id: p.id, name: p.name, type: p.type, base_url: p.base_url, api_key: p.api_key, project_id: p.project_id, location: p.location, sa_key_json: p.sa_key_json, enabled: p.enabled }
+    this.form = { id: p.id, name: p.name, type: p.type, base_url: p.base_url, api_key: p.api_key, project_id: p.project_id, location: p.location, sa_key_json: p.sa_key_json, enabled: p.enabled, is_local: !!p.is_local }
     this.editMode = 'update'
     this.showModal = true
   },

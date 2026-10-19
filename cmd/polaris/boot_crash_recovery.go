@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -46,6 +47,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -244,10 +246,24 @@ func recoverAgenticLoopTurns(ctx context.Context, db *sql.DB, pool protocol.Agen
 		return
 	}
 
-	slog.Warn("polaris: crash recovery detected unfinished agentic loop turns", "count", len(targets))
-	for _, tgt := range targets {
-		recoverOneAgenticLoopTurn(ctx, db, pool, tgt.sessionID, tgt.turnID)
-	}
+	slog.Warn("polaris: crash recovery detected unfinished agentic loop turns, dispatching background recovery", "count", len(targets))
+	concurrent.SafeGo(context.Background(), "polaris.crash_recovery.agentic_loop", func(bgCtx context.Context) {
+		sem := make(chan struct{}, 2)
+		var wg sync.WaitGroup
+		for _, tgt := range targets {
+			target := tgt
+			sem <- struct{}{}
+			wg.Add(1)
+			concurrent.SafeGo(bgCtx, "polaris.crash_recovery.agentic_loop."+target.sessionID, func(turnCtx context.Context) {
+				defer func() {
+					<-sem
+					wg.Done()
+				}()
+				recoverOneAgenticLoopTurn(turnCtx, db, pool, target.sessionID, target.turnID)
+			})
+		}
+		wg.Wait()
+	})
 }
 
 // recoverOneAgenticLoopTurn 恢复单个未完成的 agentic loop 回合（R2-05）。

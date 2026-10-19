@@ -39,15 +39,18 @@ const handoffSnapshotMaxBytes = 256 * 1024
 // SysEnvSnapshot、EpochTracker、LastReasoningContent 等）不入快照——它们要么
 // 可从 DB/配置重算，要么含敏感内容。
 type HandoffResumeContext struct {
-	SchemaVersion    int              `json:"v"`
-	DAGModel         *fsm.DAGModel    `json:"dag_model"`
-	ExecuteResult    []byte           `json:"execute_result,omitempty"`
-	CompletedNodeIDs []string         `json:"completed_node_ids,omitempty"`
-	GlobalTaintLevel types.TaintLevel `json:"global_taint_level"`
-	HandoffNodeID    string           `json:"handoff_node_id,omitempty"`
-	HandoffTaskIDs   []string         `json:"handoff_task_ids,omitempty"`
-	NamespaceID      string           `json:"namespace_id,omitempty"`
-	SnapshotAt       int64            `json:"snapshot_at"`
+	SchemaVersion             int                   `json:"v"`
+	DAGModel                  *fsm.DAGModel         `json:"dag_model"`
+	ExecuteResult             []byte                `json:"execute_result,omitempty"`
+	CompletedNodeIDs          []string              `json:"completed_node_ids,omitempty"`
+	GlobalTaintLevel          types.TaintLevel      `json:"global_taint_level"`
+	HandoffNodeID             string                `json:"handoff_node_id,omitempty"`
+	HandoffTaskIDs            []string              `json:"handoff_task_ids,omitempty"`
+	NamespaceID               string                `json:"namespace_id,omitempty"`
+	SnapshotAt                int64                 `json:"snapshot_at"`
+	LoopHandoffSpawnCallID    map[string][]string   `json:"loop_handoff_spawn_call_id,omitempty"`
+	LoopHandoffToolCalls      []types.InferToolCall `json:"loop_handoff_tool_calls,omitempty"`
+	LoopHandoffPendingResults []types.Message       `json:"loop_handoff_pending_results,omitempty"`
 }
 
 // buildHandoffResumeSnapshot 序列化当前执行期上下文为 JSON 字符串，供
@@ -58,15 +61,18 @@ type HandoffResumeContext struct {
 func (a *Agent) buildHandoffResumeSnapshot() (string, error) {
 	a.sCtx.Mu.RLock()
 	snap := HandoffResumeContext{
-		SchemaVersion:    HandoffResumeContextVersion,
-		DAGModel:         a.sCtx.DAGModel,
-		ExecuteResult:    a.sCtx.ExecuteResult,
-		CompletedNodeIDs: a.sCtx.CompletedNodeIDs,
-		GlobalTaintLevel: a.sCtx.GlobalTaintLevel,
-		HandoffNodeID:    a.sCtx.HandoffTaskID,
-		HandoffTaskIDs:   a.sCtx.HandoffTaskIDs,
-		NamespaceID:      a.sCtx.NamespaceID,
-		SnapshotAt:       time.Now().Unix(),
+		SchemaVersion:             HandoffResumeContextVersion,
+		DAGModel:                  a.sCtx.DAGModel,
+		ExecuteResult:             a.sCtx.ExecuteResult,
+		CompletedNodeIDs:          a.sCtx.CompletedNodeIDs,
+		GlobalTaintLevel:          a.sCtx.GlobalTaintLevel,
+		HandoffNodeID:             a.sCtx.HandoffTaskID,
+		HandoffTaskIDs:            a.sCtx.HandoffTaskIDs,
+		NamespaceID:               a.sCtx.NamespaceID,
+		SnapshotAt:                time.Now().Unix(),
+		LoopHandoffSpawnCallID:    a.sCtx.LoopHandoffSpawnCallID,
+		LoopHandoffToolCalls:      a.sCtx.LoopHandoffToolCalls,
+		LoopHandoffPendingResults: a.sCtx.LoopHandoffPendingResults,
 	}
 	a.sCtx.Mu.RUnlock()
 
@@ -201,6 +207,15 @@ func (a *Agent) ResumeAwaitingHandoff(childTaskID, resumeCtxJSON string) (restor
 	}
 	if snap.NamespaceID != "" {
 		a.sCtx.NamespaceID = snap.NamespaceID
+	}
+	if len(snap.LoopHandoffSpawnCallID) > 0 {
+		a.sCtx.LoopHandoffSpawnCallID = snap.LoopHandoffSpawnCallID
+	}
+	if len(snap.LoopHandoffToolCalls) > 0 {
+		a.sCtx.LoopHandoffToolCalls = snap.LoopHandoffToolCalls
+	}
+	if len(snap.LoopHandoffPendingResults) > 0 {
+		a.sCtx.LoopHandoffPendingResults = snap.LoopHandoffPendingResults
 	}
 	a.sCtx.Mu.Unlock()
 

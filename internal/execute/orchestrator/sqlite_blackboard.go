@@ -59,6 +59,7 @@ type SQLiteBlackboard struct {
 	subMu            sync.RWMutex
 	cancels          map[string]context.CancelFunc            // 记录每个执行中任务的取消函数
 	taskEventSubs    map[string][]chan types.AgentStreamEvent // 任务级事件订阅者（GD-13-001）
+	taskCtrlSubs     map[string][]chan types.TaskControl      // 任务级独立控制通道订阅者（R3-04）
 	taskRetentionTTL time.Duration                            // 终态任务保留时长，默认 24h
 }
 

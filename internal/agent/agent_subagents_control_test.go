@@ -18,6 +18,7 @@ type mockHandoffPosterWithEvents struct {
 	failCalls   []string
 	postedTasks []*types.TaskEntry
 	eventsMap   map[string][]types.AgentStreamEvent
+	controlsMap map[string][]types.TaskControl
 	postErrOnID string
 }
 
@@ -26,6 +27,7 @@ func newMockHandoffPoster() *mockHandoffPosterWithEvents {
 		tasks:       make(map[string]*types.TaskSnapshot),
 		failTaskIDs: make(map[string]bool),
 		eventsMap:   make(map[string][]types.AgentStreamEvent),
+		controlsMap: make(map[string][]types.TaskControl),
 	}
 }
 
@@ -69,6 +71,16 @@ func (m *mockHandoffPosterWithEvents) PublishTaskEvent(taskID string, event type
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.eventsMap[taskID] = append(m.eventsMap[taskID], event)
+}
+
+func (m *mockHandoffPosterWithEvents) SendTaskControl(taskID string, ctrl types.TaskControl) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.controlsMap == nil {
+		m.controlsMap = make(map[string][]types.TaskControl)
+	}
+	m.controlsMap[taskID] = append(m.controlsMap[taskID], ctrl)
+	return true
 }
 
 func (m *mockHandoffPosterWithEvents) FailTask(_ context.Context, taskID, _ string, reason []byte) error {
@@ -223,20 +235,20 @@ func TestR2_14_AgentMessage_SteersSubagent(t *testing.T) {
 		t.Fatalf("unexpected AgentMessage result: %s", res)
 	}
 
-	// 验证 Blackboard 上广播了 SteerAccepted 事件
+	// 验证 Blackboard 控制通道上发送了 steer 控制指令（R3-04）
 	poster.mu.Lock()
-	events := poster.eventsMap[childID]
+	controls := poster.controlsMap[childID]
 	poster.mu.Unlock()
 
-	var gotSteerEvent bool
-	for _, ev := range events {
-		if ev.Type == types.AgentStreamEventSteerAccepted && strings.Contains(ev.Content, "边界条件") {
-			gotSteerEvent = true
+	var gotSteerCtrl bool
+	for _, ctrlMsg := range controls {
+		if ctrlMsg.Kind == types.TaskControlSteer && strings.Contains(ctrlMsg.Text, "边界条件") {
+			gotSteerCtrl = true
 			break
 		}
 	}
-	if !gotSteerEvent {
-		t.Fatalf("Blackboard 上未找到类型为 steer_accepted 的插话事件: %+v", events)
+	if !gotSteerCtrl {
+		t.Fatalf("Blackboard 控制通道上未找到类型为 steer 的指令: %+v", controls)
 	}
 
 	// 验证 subagent controller（Pool）收到了 TrySteer
@@ -275,23 +287,22 @@ func TestR2_14_AgentStop_StopsSubagent(t *testing.T) {
 	// 验证 Blackboard 任务被标记为 failed
 	poster.mu.Lock()
 	snap := poster.tasks[childID]
-	events := poster.eventsMap[childID]
 	poster.mu.Unlock()
 
 	if snap.Status != types.TaskFailed {
 		t.Fatalf("expected task status failed, got: %v", snap.Status)
 	}
 
-	// 验证向 Blackboard 发送了 cancel 状态事件通知 Worker
-	var gotCancelEvent bool
-	for _, ev := range events {
-		if ev.Type == types.AgentStreamEventStatus && ev.Content == "cancel" {
-			gotCancelEvent = true
+	// 验证向 Blackboard 独立控制通道发送了 cancel 控制指令（R3-04）
+	var gotCancelCtrl bool
+	for _, ctrlMsg := range poster.controlsMap[childID] {
+		if ctrlMsg.Kind == types.TaskControlCancel {
+			gotCancelCtrl = true
 			break
 		}
 	}
-	if !gotCancelEvent {
-		t.Fatalf("Blackboard 上未找到 cancel 状态事件: %+v", events)
+	if !gotCancelCtrl {
+		t.Fatalf("Blackboard 控制通道上未找到 cancel 指令: %+v", poster.controlsMap[childID])
 	}
 
 	// 验证 subagent controller（Pool）被调用 StopSession 释放

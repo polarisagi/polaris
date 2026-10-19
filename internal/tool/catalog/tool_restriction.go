@@ -19,7 +19,7 @@ func claudeToolAliases() map[string][]string {
 		"Glob":         {"glob"},
 		"Grep":         {"grep"},
 		"LS":           {"list_dir"},
-		"Bash":         {"bash", "run_command"},
+		"Bash":         {"bash", "run_command", "code_act"},
 		"WebFetch":     {"web_fetch"},
 		"WebSearch":    {"web_search"},
 		"NotebookEdit": {"notebook_edit"},
@@ -146,7 +146,7 @@ func (m *toolMatcher) addMCP(name string) {
 }
 
 func (m *toolMatcher) match(name string, src types.ToolSource) bool {
-	if m.names[name] || (m.allSkills && src == types.ToolSkill) || (m.allCodeAct && strings.HasPrefix(name, codeActPrefix)) {
+	if m.names[name] || (m.allSkills && src == types.ToolSkill) || (m.allCodeAct && (name == "code_act" || strings.HasPrefix(name, codeActPrefix))) {
 		return true
 	}
 	for _, p := range m.prefixes {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -123,5 +124,30 @@ func TestMakeBashFn_FullProfile_HITLAutoApprove(t *testing.T) {
 	}
 	if hitlMock.meta["agent_id"] != "agent-123" {
 		t.Errorf("expected agent_id 'agent-123', got %v", hitlMock.meta["agent_id"])
+	}
+}
+
+func TestMakeBashFn_HardenedProfile_BackgroundAndPersistentRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	pol := policy.ProfilePolicy(policy.ProfileHardened)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", nil, pol)
+	ctx := context.Background()
+
+	// 1. 后台任务模式在 hardened 档下被明确拒绝（R3-08）
+	_, err := fn(ctx, []byte(`{"command":"echo test","background":true}`))
+	if err == nil {
+		t.Fatal("expected error for background job in hardened profile, got nil")
+	}
+	if !strings.Contains(err.Error(), "background jobs are disabled in hardened trust profile") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// 2. 持久终端模式在 hardened 档下被明确拒绝（R3-08）
+	_, err = fn(ctx, []byte(`{"command":"echo test","session_id":"sess-hardened"}`))
+	if err == nil {
+		t.Fatal("expected error for persistent terminal in hardened profile, got nil")
+	}
+	if !strings.Contains(err.Error(), "persistent terminal is disabled in hardened trust profile") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }

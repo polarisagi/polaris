@@ -780,6 +780,13 @@ dim = 2560</code></pre>
                 </div>
               </div>
             </template>
+            <div class="form-control mt-2">
+              <label for="add-custom-is-local" class="label cursor-pointer justify-start gap-4">
+                <input id="add-custom-is-local" name="add-custom-is-local" type="checkbox" class="toggle toggle-primary"
+                  x-model="$store.providers.addForm.is_local">
+                <span class="label-text font-bold">本地部署 (无需 API Key)</span>
+              </label>
+            </div>
           </div>
         </template>
 
@@ -865,6 +872,12 @@ dim = 2560</code></pre>
             <label for="store-providers-form-enabled" class="label cursor-pointer justify-start gap-4">
               <input id="store-providers-form-enabled" name="store-providers-form-enabled" type="checkbox" class="toggle toggle-primary" x-model="$store.providers.form.enabled">
               <span class="label-text font-bold" x-text="$store.i18n.t('providers_enabled')"></span>
+            </label>
+          </div>
+          <div class="form-control mt-2">
+            <label for="store-providers-form-is-local" class="label cursor-pointer justify-start gap-4">
+              <input id="store-providers-form-is-local" name="store-providers-form-is-local" type="checkbox" class="toggle toggle-primary" x-model="$store.providers.form.is_local">
+              <span class="label-text font-bold">本地部署 (无需 API Key)</span>
             </label>
           </div>
         </div>
