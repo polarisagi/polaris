@@ -23,9 +23,7 @@ import (
 // 任务命名空间内已知的真实 PII 值并替换回 token，该操作不会失败（找不到匹配就
 // 原样返回），因此本函数不再需要返回 error。
 func (r *InMemoryToolRegistry) redactOutputsForPII(ctx context.Context, vault *guard.PIITokenVault, execErr error, execRes *sandbox.ExecResult) error {
-	r.mu.RLock()
-	pol := r.policy
-	r.mu.RUnlock()
+	pol := r.EffectivePolicy()
 	if !pol.PIITokenizeEnabled {
 		if execErr != nil {
 			return execErr

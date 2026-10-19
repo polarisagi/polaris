@@ -155,3 +155,37 @@ func TestToolRegistry_FullProfile_PIITokenizeDisabled(t *testing.T) {
 		t.Errorf("full profile should not tokenize PII in output, got: %s", string(res.Output))
 	}
 }
+
+// TestV1_NilPolicy_FallsBackToStandard 验证 InMemoryToolRegistry 未注入策略（nil / 零值）时，
+// 必须严格回落至 ProfileStandard，阻止污点出口与放行风险（fail-closed 兜底，V1 / HE-2）。
+func TestV1_NilPolicy_FallsBackToStandard(t *testing.T) {
+	// 构造裸结构体（未调用 WithPolicy）
+	reg := &InMemoryToolRegistry{}
+
+	pol := reg.EffectivePolicy()
+	if pol.Profile != policy.ProfileStandard {
+		t.Fatalf("未注入策略时期望回落至 Standard 档，实际 got=%q", pol.Profile)
+	}
+	if !pol.TaintEgressBlockEnabled {
+		t.Fatal("未注入策略时 TaintEgressBlockEnabled 必须为 true (fail-closed)")
+	}
+	if !pol.PIITokenizeEnabled {
+		t.Fatal("未注入策略时 PIITokenizeEnabled 必须为 true")
+	}
+	if !pol.RunCmdWhitelistEnabled {
+		t.Fatal("未注入策略时 RunCmdWhitelistEnabled 必须为 true")
+	}
+
+	// 验证未注入策略时 checkTaintEgress 绝不旁路放行
+	checker := &mockEgressChecker{blocked: true}
+	reg.WithTaintEgressChecker(checker)
+	netTool := types.Tool{
+		Name:        "test_tool",
+		SideEffects: []types.SideEffect{types.SideNetworkCall},
+	}
+	err := reg.checkTaintEgress(context.Background(), netTool, types.TaintHigh, []byte("data"))
+	if err == nil {
+		t.Fatal("fail-open 违例：未注入策略时 checkTaintEgress 不得放行被拦截的出口污点！")
+	}
+}
+

@@ -64,9 +64,7 @@ func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.
 		}
 	}
 	if err := checker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {
-		r.mu.RLock()
-		pol := r.policy
-		r.mu.RUnlock()
+		pol := r.EffectivePolicy()
 		if !pol.TaintEgressBlockEnabled {
 			slog.Warn("tool_registry: taint egress blocked by checker, bypassed (audit only, full profile)",
 				"tool", tool.Name, "taint", taintLevel, "err", err)

@@ -49,7 +49,7 @@ type InMemoryToolRegistry struct {
 	sessionEventWriter SessionEventWriter
 	taintEgressChecker TaintEgressChecker    // 可选注入（M04 §3 出口污点检查）
 	exemptionVault     *token.ExemptionVault // 可选注入（HITL 豁免令牌存储）
-	policy             policy.Policy         // 信任档位安全策略（ADR-0115 WP1）
+	policy             *policy.Policy        // 信任档位安全策略（ADR-0115 WP1 / V1）
 	checkpointTrigger  CheckpointTrigger     // 写前快照触发器（ADR-0115 WP1）
 }
 
@@ -110,8 +110,13 @@ func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope, cfg config.M7ToolTh
 			string(types.ToolMCP):     newRateLimiter(int64(cfg.RateLimitMCPQPS)),
 			"shell":                   newRateLimiter(int64(cfg.RateLimitShellQPS)),
 		},
-		policy: policy.ProfilePolicy(policy.ProfileStandard),
+		policy: defaultPolicyPtr(),
 	}
+}
+
+func defaultPolicyPtr() *policy.Policy {
+	p := policy.ProfilePolicy(policy.ProfileStandard)
+	return &p
 }
 
 // Register 注册工具；同名覆盖（热更新 MCP schema 时使用）。

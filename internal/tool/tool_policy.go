@@ -23,8 +23,18 @@ type CheckpointTrigger interface {
 func (r *InMemoryToolRegistry) WithPolicy(p policy.Policy) *InMemoryToolRegistry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.policy = p
+	r.policy = &p
 	return r
+}
+
+// EffectivePolicy 获取当前生效策略，若未注入（nil）则回落至 standard 策略（fail-closed 兜底，V1 / HE-2）。
+func (r *InMemoryToolRegistry) EffectivePolicy() policy.Policy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.policy == nil {
+		return policy.ProfilePolicy(policy.ProfileStandard)
+	}
+	return *r.policy
 }
 
 // WithCheckpointTrigger 注入写前快照触发器（仅 full 档生效，ADR-0115 WP1）。
@@ -50,8 +60,8 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 
 	r.mu.RLock()
 	hitlGw := r.hitl
-	pol := r.policy
 	r.mu.RUnlock()
+	pol := r.EffectivePolicy()
 
 	// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵）
 	if pol.HITLAutoApprove {
@@ -90,8 +100,8 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 func (r *InMemoryToolRegistry) triggerPreExecutionCheckpoint(ctx context.Context, tool types.Tool, execInput []byte, taintLevel types.TaintLevel) {
 	r.mu.RLock()
 	ckpt := r.checkpointTrigger
-	pol := r.policy
 	r.mu.RUnlock()
+	pol := r.EffectivePolicy()
 
 	if pol.CheckpointEnabled && ckpt != nil {
 		if snapErr := ckpt.MaybeSnapshot(ctx, tool.Name, tool.Capability, tool.SideEffects, execInput, taintLevel); snapErr != nil {

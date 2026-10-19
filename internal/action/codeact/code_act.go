@@ -132,6 +132,9 @@ func NewCodeAct(envelope *sandbox.ExecEnvelope, auditor AuditRecorder, opts ...C
 	for _, opt := range opts {
 		opt(ca)
 	}
+	if ca.policy.Profile == "" {
+		ca.policy = policy.ProfilePolicy(policy.ProfileStandard)
+	}
 	return ca
 }
 

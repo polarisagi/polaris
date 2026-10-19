@@ -48,6 +48,9 @@ func MakeBashFn(
 	if len(persistentSbx) > 0 {
 		pSbx = persistentSbx[0]
 	}
+	if pol.Profile == "" {
+		pol = policy.ProfilePolicy(policy.ProfileStandard)
+	}
 	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
 	riskClassifier := classifier.NewDefaultClassifier()
