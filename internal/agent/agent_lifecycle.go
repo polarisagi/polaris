@@ -369,6 +369,13 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 		a.Security.PIIDesensitizer.ReleasePartition(a.sCtx.SessionID)
 	}
 
+	// 清理多模态图片缓存，防止无界累积泄漏内存（V10）
+	if a.sCtx != nil {
+		a.sCtx.Mu.Lock()
+		a.sCtx.ExecuteImageParts = nil
+		a.sCtx.Mu.Unlock()
+	}
+
 	a.refinePersonaAsync(ctx, current)
 	a.archiveEpisodicAsync(ctx)
 	a.emitConsolidateOnce(ctx)

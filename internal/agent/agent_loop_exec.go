@@ -131,7 +131,19 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 
 	if len(res.ImageParts) > 0 {
 		a.sCtx.Mu.Lock()
-		a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts...)
+		if len(a.sCtx.ExecuteImageParts) >= maxExecuteImageParts {
+			slog.Warn("agent: execute image parts limit reached, discarding new images",
+				"limit", maxExecuteImageParts, "discarded", len(res.ImageParts))
+		} else {
+			remaining := maxExecuteImageParts - len(a.sCtx.ExecuteImageParts)
+			if len(res.ImageParts) > remaining {
+				slog.Warn("agent: execute image parts truncated to limit",
+					"limit", maxExecuteImageParts, "kept", remaining, "discarded", len(res.ImageParts)-remaining)
+				a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts[:remaining]...)
+			} else {
+				a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts...)
+			}
+		}
 		a.sCtx.Mu.Unlock()
 	}
 

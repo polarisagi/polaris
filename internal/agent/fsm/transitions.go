@@ -121,6 +121,7 @@ func (sm *StateMachine) registerTransitions() {
 			sCtx.Mu.Lock()
 			sCtx.PreparedReply = ""
 			sCtx.TurnRecall = nil // 召回结果只在回合内复用（ADR-0105 决策四），不得带入下一回合
+			sCtx.ExecuteImageParts = nil
 			sCtx.Mu.Unlock()
 			if bypassEffect := sm.trySystem1Bypass(ctx, sCtx); bypassEffect != nil {
 				return []protocol.Effect{bypassEffect}, nil
