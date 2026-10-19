@@ -163,7 +163,7 @@ func (a *Agent) resumeHandoffInLoop(ctx context.Context) error {
 		a.sCtx.Mu.Unlock()
 	}
 	metrics.RecordLoopRound(ctx)
-	a.persistLoopCheckpoint(ctx)
+	a.persistLoopRoundDelta(ctx)
 
 	a.asyncIntent(types.TriggerLoopExecDone)
 	return nil

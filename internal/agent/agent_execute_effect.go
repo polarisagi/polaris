@@ -548,6 +548,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 						a.sCtx.LoopLastWallSeconds = time.Since(a.sCtx.LoopTurnStartTime).Seconds()
 					}
 					a.sCtx.Mu.Unlock()
+					a.persistLoopRoundDelta(ctx)
 				}
 
 				// GR-4-005 复核修复：仅做可观测性埋点，不在此处改变控制流。

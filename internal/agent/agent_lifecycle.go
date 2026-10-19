@@ -329,14 +329,13 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 		Type:    types.AgentStreamEventStatus,
 		Content: "task_done",
 	})
-
-	// 标记 agentic 循环快照终态为 done（P1 / ADR-0104）
-	if a.sCtx != nil && a.sCtx.LoopRound > 0 {
-		a.markLoopCheckpointDone(ctx)
+	if a.sCtx != nil && a.sCtx.TurnID != "" {
+		st := "aborted"
+		if current == types.AgentStateComplete {
+			st = "done"
+		}
+		a.markLoopTurnStatus(ctx, st)
 	}
-
-	// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）。重规划耗尽转回复的回合
-	// 以 Complete 收尾但目标未达成（ADR-0098 决策九），指标按失败计，不被"有回复"美化。
 	succeeded := current == types.AgentStateComplete && !a.sCtx.TurnDegraded
 	trace.RecordTaskOutcome(ctx, succeeded)
 

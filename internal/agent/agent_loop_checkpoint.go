@@ -5,136 +5,160 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/observability/metrics"
-	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// buildLoopResumeSnapshot 序列化当前 Agentic Loop 执行期上下文快照（P1 / ADR-0104 / HE-6）。
-func (a *Agent) buildLoopResumeSnapshot() (string, error) {
-	a.sCtx.Mu.RLock()
-	msgsCopy := make([]types.Message, len(a.sCtx.LoopMessages))
-	copy(msgsCopy, a.sCtx.LoopMessages)
-	snap := HandoffResumeContext{
-		SchemaVersion:       HandoffResumeContextVersion,
-		GlobalTaintLevel:    a.sCtx.GlobalTaintLevel,
-		LoopRound:           a.sCtx.LoopRound,
-		LoopMessages:        msgsCopy,
-		LoopLastUsageTokens: a.sCtx.LoopLastUsageTokens,
-		LoopLastUsageCost:   a.sCtx.LoopLastUsageCost,
-		LoopLastWallSeconds: a.sCtx.LoopLastWallSeconds,
-		SnapshotAt:          time.Now().Unix(),
-	}
-	a.sCtx.Mu.RUnlock()
-
-	data, err := json.Marshal(snap)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "buildLoopResumeSnapshot: marshal failed", err)
-	}
-	if len(data) > handoffSnapshotMaxBytes {
-		metrics.RecordAgentHandoffSnapshotOversized(context.Background())
-		return "", apperr.New(apperr.CodeResourceExhausted,
-			"buildLoopResumeSnapshot: snapshot exceeds handoffSnapshotMaxBytes")
-	}
-	return string(data), nil
-}
-
-// persistLoopCheckpoint 落盘 agentic 循环每轮增量快照（ADR-0104 / HE-6 / P1）。
-// 每轮结束（LLM 响应已追加、工具结果已追加）时调用。
-func (a *Agent) persistLoopCheckpoint(ctx context.Context) {
-	if a.taskCheckpointRepo == nil || a.sCtx == nil {
-		return
-	}
-	resumeJSON, err := a.buildLoopResumeSnapshot()
-	if err != nil {
-		slog.ErrorContext(ctx, "agentic_loop: build checkpoint snapshot failed",
-			"session_id", a.sCtx.SessionID, "err", err)
+// persistLoopRoundDelta 落盘 agentic 循环当前轮次的新增增量消息与元数据（R2-05 / ADR-0104）。
+// 每轮 LLM 响应生成后、以及工具执行结果追加后调用。
+func (a *Agent) persistLoopRoundDelta(ctx context.Context) {
+	if a == nil || a.extQuerier == nil || a.sCtx == nil {
 		return
 	}
 	a.sCtx.Mu.RLock()
 	round := a.sCtx.LoopRound
 	sessionID := a.sCtx.SessionID
+	turnID := a.sCtx.TurnID
 	globalTaint := a.sCtx.GlobalTaintLevel
+	allMessages := a.sCtx.LoopMessages
 	a.sCtx.Mu.RUnlock()
 
-	nodeID := fmt.Sprintf("loop_round_%d", round)
-	idemKey := string(types.BuildIdempotencyKey("loop", "checkpoint", sessionID, nodeID, 1))
-	cpErr := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
-		TaskID:         sessionID,
-		NodeID:         nodeID,
-		Attempt:        1,
-		Status:         "running",
-		Reason:         "loop_step_done",
-		IdempotencyKey: idemKey,
-		TaintLevel:     globalTaint,
-		ResumeCtxJSON:  resumeJSON,
-		StartedAt:      time.Now().Unix(),
-	})
-	if cpErr != nil {
-		slog.ErrorContext(ctx, "agentic_loop: persist checkpoint failed",
-			"session_id", sessionID, "err", cpErr)
+	if round <= 0 || sessionID == "" || turnID == "" {
+		return
+	}
+
+	// 提取属于本轮的增量消息（第 1 轮包含初始 user 意图与任何前置消息）
+	var delta []types.Message
+	for _, m := range allMessages {
+		if m.Round == round || (round == 1 && m.Round <= 1) {
+			delta = append(delta, m)
+		}
+	}
+	if len(delta) == 0 {
+		return
+	}
+
+	// 数据卫生：对 secret_get 明文结果做持久化脱敏（R2-05）
+	redactedDelta := redactSecretGetForPersistence(delta)
+	deltaBytes, err := json.Marshal(redactedDelta)
+	if err != nil {
+		slog.WarnContext(ctx, "agentic_loop: marshal round delta failed",
+			"session_id", sessionID, "turn_id", turnID, "round", round, "err", err)
+		return
+	}
+
+	nowMs := time.Now().UnixMilli()
+	query := `
+		INSERT INTO agent_loop_rounds (session_id, turn_id, round, status, delta_json, taint_level, created_at)
+		VALUES (?, ?, ?, 'running', ?, ?, ?)
+		ON CONFLICT(session_id, turn_id, round) DO UPDATE SET
+			delta_json = excluded.delta_json,
+			taint_level = excluded.taint_level,
+			status = 'running'`
+	if _, execErr := a.extQuerier.ExecContext(ctx, query, sessionID, turnID, round, string(deltaBytes), int(globalTaint), nowMs); execErr != nil {
+		slog.WarnContext(ctx, "agentic_loop: persist agent_loop_rounds failed",
+			"session_id", sessionID, "turn_id", turnID, "round", round, "err", execErr)
 	}
 }
 
-// markLoopCheckpointDone 标记 agentic 循环快照已完成（P1 / ADR-0104）。
-func (a *Agent) markLoopCheckpointDone(ctx context.Context) {
-	if a.taskCheckpointRepo == nil || a.sCtx == nil {
+// markLoopTurnStatus 将指定 turn 的所有轮次状态更新为 done 或 aborted（R2-05）。
+func (a *Agent) markLoopTurnStatus(ctx context.Context, status string) {
+	if a == nil || a.extQuerier == nil || a.sCtx == nil {
 		return
 	}
 	a.sCtx.Mu.RLock()
-	round := a.sCtx.LoopRound
 	sessionID := a.sCtx.SessionID
-	globalTaint := a.sCtx.GlobalTaintLevel
+	turnID := a.sCtx.TurnID
 	a.sCtx.Mu.RUnlock()
 
-	nodeID := fmt.Sprintf("loop_round_%d", round)
-	if err := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
-		TaskID:      sessionID,
-		NodeID:      nodeID,
-		Attempt:     1,
-		Status:      "done",
-		Reason:      "loop_done",
-		TaintLevel:  globalTaint,
-		CompletedAt: time.Now().Unix(),
-	}); err != nil {
-		slog.WarnContext(ctx, "agentic_loop: mark checkpoint done failed", "err", err)
+	if sessionID == "" || turnID == "" {
+		return
+	}
+
+	query := `UPDATE agent_loop_rounds SET status = ? WHERE session_id = ? AND turn_id = ?`
+	if _, err := a.extQuerier.ExecContext(ctx, query, status, sessionID, turnID); err != nil {
+		slog.WarnContext(ctx, "agentic_loop: update turn status failed",
+			"session_id", sessionID, "turn_id", turnID, "status", status, "err", err)
 	}
 }
 
-// ResumeAgenticLoop 在进程重启后根据快照续跑未完成的 agentic 回合（P1 / ADR-0104 / HE-6）。
-// 将 Agent 就位到 S_LOOP 态，回填 LoopMessages、LoopRound、污点等级与累计计量，
-// 已完成的工具结果在 LoopMessages 中保留，不会被重复执行。
-func (a *Agent) ResumeAgenticLoop(resumeCtxJSON string) (restored bool) {
-	if resumeCtxJSON == "" {
-		return false
+// redactSecretGetForPersistence 将 secret_get 工具调用的明文结果替换为 [secret:<name> redacted]（R2-05）。
+func redactSecretGetForPersistence(messages []types.Message) []types.Message {
+	if len(messages) == 0 {
+		return nil
 	}
-	var snap HandoffResumeContext
-	if err := json.Unmarshal([]byte(resumeCtxJSON), &snap); err != nil {
-		slog.Warn("agent: ResumeAgenticLoop snapshot unmarshal failed",
-			"session_id", a.sCtx.SessionID, "err", err)
-		return false
-	}
-	if snap.SchemaVersion != HandoffResumeContextVersion {
-		slog.Warn("agent: ResumeAgenticLoop schema version mismatch",
-			"session_id", a.sCtx.SessionID, "got", snap.SchemaVersion, "want", HandoffResumeContextVersion)
-		return false
-	}
-	if snap.LoopRound <= 0 || len(snap.LoopMessages) == 0 {
-		return false
+	secretCalls := make(map[string]string)
+	for _, m := range messages {
+		for _, p := range m.Parts {
+			partMap, ok := p.(map[string]any)
+			if !ok || partMap["type"] != "tool_use" {
+				continue
+			}
+			name, _ := partMap["name"].(string)
+			if name != "secret_get" {
+				continue
+			}
+			callID, _ := partMap["id"].(string)
+			secretName := ""
+			if inputMap, ok := partMap["input"].(map[string]any); ok {
+				secretName, _ = inputMap["name"].(string)
+			}
+			if secretName == "" {
+				secretName = "unknown"
+			}
+			if callID != "" {
+				secretCalls[callID] = secretName
+			}
+		}
 	}
 
+	if len(secretCalls) == 0 {
+		return messages
+	}
+
+	redacted := make([]types.Message, len(messages))
+	for i, m := range messages {
+		msgCopy := m
+		if len(m.Parts) > 0 {
+			newParts := make([]any, len(m.Parts))
+			for pi, p := range m.Parts {
+				if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
+					toolCallID, _ := partMap["tool_use_id"].(string)
+					if secName, exists := secretCalls[toolCallID]; exists {
+						repText := fmt.Sprintf("[secret:%s redacted]", secName)
+						newPart := make(map[string]any, len(partMap))
+						for k, v := range partMap {
+							newPart[k] = v
+						}
+						newPart["content"] = repText
+						newParts[pi] = newPart
+						msgCopy.Content = repText
+						continue
+					}
+				}
+				newParts[pi] = p
+			}
+			msgCopy.Parts = newParts
+		}
+		redacted[i] = msgCopy
+	}
+	return redacted
+}
+
+// ResumeAgenticLoop 在恢复时根据消息历史与元数据续跑 agentic 回合（R2-05）。
+func (a *Agent) ResumeAgenticLoop(turnID string, messages []types.Message, taintLevel types.TaintLevel, round int) bool {
+	if turnID == "" || len(messages) == 0 {
+		return false
+	}
 	a.sCtx.Mu.Lock()
-	a.sCtx.LoopRound = snap.LoopRound
-	a.sCtx.LoopMessages = snap.LoopMessages
-	if snap.GlobalTaintLevel > a.sCtx.GlobalTaintLevel {
-		a.sCtx.GlobalTaintLevel = snap.GlobalTaintLevel
+	a.sCtx.TurnID = turnID
+	a.sCtx.LoopRound = round
+	a.sCtx.LoopMessages = messages
+	if taintLevel > a.sCtx.GlobalTaintLevel {
+		a.sCtx.GlobalTaintLevel = taintLevel
 	}
-	a.sCtx.LoopLastUsageTokens = snap.LoopLastUsageTokens
-	a.sCtx.LoopLastUsageCost = snap.LoopLastUsageCost
-	a.sCtx.LoopLastWallSeconds = snap.LoopLastWallSeconds
 	a.sCtx.Mu.Unlock()
 
 	a.sm.ForceState(types.AgentStateLoop)
@@ -142,34 +166,96 @@ func (a *Agent) ResumeAgenticLoop(resumeCtxJSON string) (restored bool) {
 	return true
 }
 
-// ResumeAgenticLoopFromCheckpoint 从 TaskCheckpointRepository 查找最近的 running 快照并续跑。
-//
-//nolint:gocyclo
-func (a *Agent) ResumeAgenticLoopFromCheckpoint(ctx context.Context) (restored bool) {
-	if a.taskCheckpointRepo == nil || a.sCtx == nil {
-		return false
+// CompleteInterruptedToolCalls 检查消息序列尾部是否存在未完成的工具调用；若有，回填执行中断结果（R2-05）。
+func CompleteInterruptedToolCalls(messages []types.Message) []types.Message {
+	if len(messages) == 0 {
+		return messages
 	}
-	cps, err := a.taskCheckpointRepo.ListCheckpointsByTask(ctx, a.sCtx.SessionID)
-	if err != nil || len(cps) == 0 {
-		return false
+	var lastAssistantIdx int = -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			lastAssistantIdx = i
+			break
+		}
 	}
-	// 找到最近一个处于 running 状态且带有 ResumeCtxJSON 的 agentic loop 快照
-	var latest *types.TaskCheckpointRow
-	var latestRound int
-	for i := range cps {
-		row := &cps[i]
-		if row.Status == "running" && strings.HasPrefix(row.NodeID, "loop_round_") && row.ResumeCtxJSON != "" {
-			var snap HandoffResumeContext
-			if err := json.Unmarshal([]byte(row.ResumeCtxJSON), &snap); err == nil && snap.LoopRound > 0 {
-				if latest == nil || snap.LoopRound > latestRound || (snap.LoopRound == latestRound && row.StartedAt > latest.StartedAt) {
-					latest = row
-					latestRound = snap.LoopRound
+	if lastAssistantIdx == -1 {
+		return messages
+	}
+
+	lastAssistant := messages[lastAssistantIdx]
+	var callIDs []string
+	for _, p := range lastAssistant.Parts {
+		if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_use" {
+			if id, ok := partMap["id"].(string); ok && id != "" {
+				callIDs = append(callIDs, id)
+			}
+		}
+	}
+	if len(callIDs) == 0 {
+		return messages
+	}
+
+	existingResults := make(map[string]bool)
+	for i := lastAssistantIdx + 1; i < len(messages); i++ {
+		for _, p := range messages[i].Parts {
+			if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
+				if callID, ok := partMap["tool_use_id"].(string); ok {
+					existingResults[callID] = true
 				}
 			}
 		}
 	}
-	if latest == nil {
-		return false
+
+	result := append([]types.Message(nil), messages...)
+	for _, id := range callIDs {
+		if !existingResults[id] {
+			toolResultMsg := makeToolResultMessage(id, "执行中断，结果未知，请自行检查后决定是否重试")
+			toolResultMsg.Round = lastAssistant.Round
+			result = append(result, toolResultMsg)
+		}
 	}
-	return a.ResumeAgenticLoop(latest.ResumeCtxJSON)
+	return result
+}
+
+// ReconstructAgenticLoopTurn 从 agent_loop_rounds 表中读取指定 running turn 的所有轮次并还原消息序列（R2-05）。
+func ReconstructAgenticLoopTurn(ctx context.Context, q protocol.SQLQuerier, sessionID, turnID string) ([]types.Message, types.TaintLevel, int, error) {
+	query := `SELECT round, delta_json, taint_level FROM agent_loop_rounds WHERE session_id = ? AND turn_id = ? AND status = 'running' ORDER BY round ASC`
+	rows, err := q.QueryContext(ctx, query, sessionID, turnID)
+	if err != nil {
+		return nil, types.TaintNone, 0, err
+	}
+	defer rows.Close()
+
+	var allMessages []types.Message
+	var maxRound int
+	var maxTaint types.TaintLevel
+
+	for rows.Next() {
+		var round int
+		var deltaJSON string
+		var taintInt int
+		if err := rows.Scan(&round, &deltaJSON, &taintInt); err != nil {
+			return nil, types.TaintNone, 0, err
+		}
+		if round > maxRound {
+			maxRound = round
+		}
+		if types.TaintLevel(taintInt) > maxTaint {
+			maxTaint = types.TaintLevel(taintInt)
+		}
+		var delta []types.Message
+		if err := json.Unmarshal([]byte(deltaJSON), &delta); err != nil {
+			return nil, types.TaintNone, 0, err
+		}
+		allMessages = append(allMessages, delta...)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, types.TaintNone, 0, err
+	}
+	if len(allMessages) == 0 {
+		return nil, types.TaintNone, 0, fmt.Errorf("no rounds found for running turn %s", turnID)
+	}
+
+	allMessages = CompleteInterruptedToolCalls(allMessages)
+	return allMessages, maxTaint, maxRound, nil
 }
