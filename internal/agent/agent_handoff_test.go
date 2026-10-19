@@ -247,9 +247,26 @@ func TestWatchHandoffCompletion_IgnoresMismatchedTaskID(t *testing.T) {
 
 // TestWatchHandoffCompletion_SubscribeErrorFallsBackToPolling 验证 Subscribe
 // 失败时不静默放弃，而是退化为轮询兜底且仍能唤醒 + 记录 Warn 日志
+type safeTestLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeTestLogBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeTestLogBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 // （阶段04 A-01：订阅失败不能导致父任务永久挂起）。
 func TestWatchHandoffCompletion_SubscribeErrorFallsBackToPolling(t *testing.T) {
-	var logBuf bytes.Buffer
+	var logBuf safeTestLogBuffer
 	origLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
 	defer slog.SetDefault(origLogger)
