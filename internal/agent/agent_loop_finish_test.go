@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -167,5 +168,105 @@ func TestAgenticFinish_HeadlessDelegation_ProductionAssembly(t *testing.T) {
 	}
 	if res.Output != "subagent task done" {
 		t.Fatalf("expected output 'subagent task done', got %q", res.Output)
+	}
+}
+
+// TestAgenticLoopCompletion_WebhookAuto_FinishesInSingleRound 验证 R4-04：
+// webhook/auto 完成模式下，模型直接给出文本即结束，总共 1 次 LLM 调用。
+func TestAgenticLoopCompletion_WebhookAuto_FinishesInSingleRound(t *testing.T) {
+	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+
+	prov := &loopTestProvider{
+		responses: []*types.ProviderResponse{
+			{Content: "你好，我是客服助手！"},
+		},
+	}
+
+	pool := NewPool(func(sid string) *Agent {
+		a := NewAgentWithDefaults(sid)
+		a.InjectProvider(prov)
+		a.InjectPolicyGate(&allowPolicyGate{})
+		a.InjectToolExecutor(&mockToolExecutor{})
+		return a
+	}, 2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 模拟 webhook 入站（auto 模式，不传 explicit）
+	res, err := pool.AcquireHeadless(ctx, types.Intent{Query: "用户问候"}, types.WithLoopCompletion("auto"))
+	if err != nil {
+		t.Fatalf("AcquireHeadless failed: %v", err)
+	}
+	if res.Output != "你好，我是客服助手！" {
+		t.Fatalf("expected output '你好，我是客服助手！', got %q", res.Output)
+	}
+	if prov.callCount() != 1 {
+		t.Fatalf("auto 模式下直接给文本应在 1 轮内完成，实际调用次数: %d", prov.callCount())
+	}
+}
+
+// TestAgenticLoopCompletion_CronThenInteractive_NoStickyExplicit 验证 R4-04：
+// 同一会话先跑一次 cron 回合（explicit）、再跑一次交互回合，交互回合自动重置为 auto，不发生黏附。
+func TestAgenticLoopCompletion_CronThenInteractive_NoStickyExplicit(t *testing.T) {
+	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+
+	prov := &loopTestProvider{
+		responses: []*types.ProviderResponse{
+			// 回合 1 (cron): 第 1 轮只给文本，不收尾；第 2 轮调用 finish 收尾
+			{Content: "正在执行日常定时统计..."},
+			{
+				ToolCalls: []types.InferToolCall{
+					{
+						ID:    "call_cron_finish",
+						Name:  "finish",
+						Input: []byte(`{"summary":"cron job completed"}`),
+					},
+				},
+			},
+			// 回合 2 (交互): 第 1 轮只给文本，应当直接以 auto 模式收尾（不需要 finish）
+			{Content: "这是交互式问答回复"},
+		},
+	}
+
+	agent := NewAgentWithDefaults("test-sess-cron-then-interactive")
+	agent.InjectProvider(prov)
+	agent.InjectPolicyGate(&allowPolicyGate{})
+	agent.InjectToolExecutor(&mockToolExecutor{})
+
+	// 1. 回合 1：以 cron explicit 模式运行
+	agent.SetLoopCompletion("explicit")
+	agent.SetTaskIntent(taint.NewTaintedString("每日巡检", taint.TaintSource{OriginTaintLevel: types.TaintLow}, "test"))
+	runAgenticTurnWait(t, agent)
+
+	if agent.sCtx.LoopSummary != "cron job completed" {
+		t.Fatalf("expected cron summary 'cron job completed', got %q", agent.sCtx.LoopSummary)
+	}
+
+	// 2. 回合 2：在同一 agent 实例上运行交互回合（不设 explicit，应自动重置为 auto）
+	agent.sm.ForceState(types.AgentStateIdle)
+	agent.SetTaskIntent(taint.NewTaintedString("用户交互咨询", taint.TaintSource{OriginTaintLevel: types.TaintLow}, "test"))
+	runAgenticTurnWait(t, agent)
+
+	// 断言第 2 回合完成，LoopCompletion 为 auto
+	agent.sCtx.Mu.Lock()
+	completionAfter := agent.sCtx.LoopCompletion
+	var finalReply string
+	for i := len(agent.sCtx.ConversationHistory) - 1; i >= 0; i-- {
+		if agent.sCtx.ConversationHistory[i].Role == "assistant" {
+			finalReply = agent.sCtx.ConversationHistory[i].Content
+			break
+		}
+	}
+	agent.sCtx.Mu.Unlock()
+
+	if completionAfter != "auto" {
+		t.Fatalf("交互回合应自动重置为 auto，实际为: %s", completionAfter)
+	}
+	if finalReply != "这是交互式问答回复" {
+		t.Fatalf("预期回复 '这是交互式问答回复'，实际为: %s", finalReply)
+	}
+	if prov.callCount() != 3 {
+		t.Fatalf("预期总共 3 次 LLM 调用（cron 2 次 + 交互 1 次），实际调用: %d", prov.callCount())
 	}
 }

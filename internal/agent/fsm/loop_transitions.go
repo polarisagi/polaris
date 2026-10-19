@@ -99,6 +99,8 @@ func (sm *StateMachine) registerLoopTransitions() {
 					types.Message{Role: "assistant", Content: finalReply},
 				)
 			}
+			sCtx.LoopCompletion = "auto"
+			sCtx.PendingLoopCompletion = ""
 			return nil, nil
 		},
 	})

@@ -291,6 +291,7 @@ type AgenticTurn struct {
 	LoopObservationMaskAfterRounds int
 	LoopObservationMaskBatch       int
 	LoopCompletion                 string
+	PendingLoopCompletion          string
 	LoopTurnStartTime              time.Time
 	LoopSteerQueue                 []string
 	LoopPendingToolCalls           []types.InferToolCall
@@ -307,7 +308,7 @@ type AgenticTurn struct {
 	LoopConsecutiveTextRounds      int
 }
 
-// ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05）。
+// ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05 / R4-04）。
 func (s *StateContext) ResetAgenticTurn() {
 	s.TurnID = uuid.NewString()
 	s.LoopRound = 0
@@ -322,6 +323,14 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopWarningPrompt = ""
 	s.LoopSummary = ""
 	s.LoopConsecutiveTextRounds = 0
+
+	// R4-04: 完成模式重置为 auto，若有预设的下次回合模式则消费它
+	if s.PendingLoopCompletion != "" {
+		s.LoopCompletion = s.PendingLoopCompletion
+		s.PendingLoopCompletion = ""
+	} else {
+		s.LoopCompletion = "auto"
+	}
 
 	s.LoopEnding = false
 	s.LoopHandoffPendingResults = nil

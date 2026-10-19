@@ -232,12 +232,13 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 		// 统一实现，见 internal/gateway/session/orchestrator_headless.go 顶部
 		// 注释。WorkingDir 前缀拼接由 RunTurn 内部处理，此处传原始 a.Prompt。
 		result, runErr := ca.SessionOrch.RunTurn(bgCtx, session.Request{
-			SessionID:  sessionID,
-			Input:      a.Prompt,
-			Channel:    "cron",
-			Headless:   true,
-			WorkingDir: a.WorkingDir,
-			TitleHint:  a.Name,
+			SessionID:      sessionID,
+			Input:          a.Prompt,
+			Channel:        "cron",
+			Headless:       true,
+			WorkingDir:     a.WorkingDir,
+			TitleHint:      a.Name,
+			LoopCompletion: "explicit",
 		}, session.NewBufferSink())
 		if runErr != nil {
 			status = "error"

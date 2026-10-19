@@ -116,6 +116,8 @@ type Request struct {
 	// medium/high），后端未消费。两字段随 wire 协议保留。
 	RunID           string
 	ReasoningEffort string
+	// LoopCompletion 循环完成判定模式（"auto" | "explicit"）；为空时由调用方/Channel决定（R4-04）。
+	LoopCompletion string
 }
 
 // Result 一轮对话的结果。

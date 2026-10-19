@@ -210,7 +210,7 @@ func (a *Agent) buildValidationContext(plan *protocol.DAGPlan) *protocol.DAGVali
 	}
 }
 
-// SetLoopCompletion 设置当前 Agent 会话的循环完成判定模式（"auto" | "explicit"）（R3-07 / WP2）。
+// SetLoopCompletion 设置当前/下一回合的循环完成判定模式（"auto" | "explicit"）（R3-07 / R4-04）。
 func (a *Agent) SetLoopCompletion(mode string) {
 	if a == nil || a.sCtx == nil {
 		return
@@ -218,6 +218,7 @@ func (a *Agent) SetLoopCompletion(mode string) {
 	a.sCtx.Mu.Lock()
 	defer a.sCtx.Mu.Unlock()
 	a.sCtx.LoopCompletion = mode
+	a.sCtx.PendingLoopCompletion = mode
 }
 
 // runLoopRecall 执行 agentic 循环首轮确定性记忆召回与用户首条消息装配（R4-02）。

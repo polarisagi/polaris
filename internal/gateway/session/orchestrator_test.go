@@ -282,11 +282,12 @@ func (a *fakeAgentController) Steer(text string) bool                          {
 // fakeAgentPool：Acquire 返回预置的 fakeAgentController；AcquireHeadless 返回
 // 预置的 AgentResult 或 error。
 type fakeAgentPool struct {
-	ctrl           *fakeAgentController
-	acquireErr     error
-	headlessResult *types.AgentResult
-	headlessErr    error
-	releaseCalled  bool
+	ctrl             *fakeAgentController
+	acquireErr       error
+	headlessResult   *types.AgentResult
+	headlessErr      error
+	releaseCalled    bool
+	lastHeadlessOpts []types.HeadlessOption
 }
 
 func (p *fakeAgentPool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
@@ -297,6 +298,7 @@ func (p *fakeAgentPool) Acquire(ctx context.Context, sessionID string) (protocol
 }
 
 func (p *fakeAgentPool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
+	p.lastHeadlessOpts = opts
 	if p.headlessErr != nil {
 		return nil, p.headlessErr
 	}
