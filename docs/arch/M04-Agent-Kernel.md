@@ -142,6 +142,7 @@ S_IDLE ──(TriggerIntentReceived)──→ S_LOOP ──(TriggerLoopStepDone)
    - 软保护：达到 `LoopWarningRounds` 或首触 USD/Tokens/Wall 预算上限时，向易变区（与 T7 计量行同位）注入 `Role: "user"` 的收尾告警提示词，严禁使用 system 角色或追加至历史末尾，避免污染消息流与破坏 Anthropic 前缀缓存；
    - 硬保护：达到 `RunawayGuardDefaultRounds`（standard 200 轮，hardened 50 轮）或次轮仍未收尾时强行熔断并转移至 `S_FAILED`。
 8. **网关插话与控制**：用户在多轮循环执行期间可随时发送新消息或转向指令，内核在下一步模型调用前合并插话内容，支持流式交互与动态中断。
+9. **代码执行（code_act）与规划器工具收敛（R3-02）**：自主循环模式下，工具列表中下发 `code_act` 工具 schema（支持 Python/Bash 脚本与专用 `polaris.call` 工具桥，仅 print 输出返回），底层由共享方法 `(a *Agent) runCodeAct` 执行并经过 S_VALIDATE 校验（规范化为 `code_act:<lang>`）；同时从工具列表中移除 `spawn_planner`（规划由模型在自主循环中原生驱动完成，无需后台子规划器挂起中断）。
 
 **回合上下文（ADR-0105）**
 

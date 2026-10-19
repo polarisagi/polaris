@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -155,9 +156,21 @@ func toolCallsToDAGPlan(calls []types.InferToolCall, taintLevel types.TaintLevel
 		if id == "" {
 			id = fmt.Sprintf("n%d", i)
 		}
+		toolName := c.Name
+		if toolName == "code_act" {
+			var codeArgs struct {
+				Language string `json:"language"`
+			}
+			_ = json.Unmarshal(c.Input, &codeArgs)
+			lang := codeArgs.Language
+			if lang == "" {
+				lang = "python"
+			}
+			toolName = "code_act:" + lang
+		}
 		nodes[i] = protocol.ExecNode{
 			ID:         id,
-			ToolName:   c.Name,
+			ToolName:   toolName,
 			Args:       c.Input,
 			TaintLevel: taintLevel,
 		}

@@ -54,7 +54,18 @@ func (a *Agent) toolInferOptions(ctx context.Context, state types.AgentState, un
 		return nil
 	}
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
-	return toolOptionsFor(cata.Schemas(toolCtx, types.TrustCommunity), forbid)
+	schemas := cata.Schemas(toolCtx, types.TrustCommunity)
+	if state == types.AgentStateLoop {
+		filtered := make([]types.ToolSchema, 0, len(schemas)+1)
+		for _, s := range schemas {
+			if s.Name != "spawn_planner" {
+				filtered = append(filtered, s)
+			}
+		}
+		filtered = append(filtered, codeActToolSchema())
+		schemas = filtered
+	}
+	return toolOptionsFor(schemas, forbid)
 }
 
 // candidateToolOptions 返回 PRM 候选请求的 tools 选项。候选要求模型输出 JSON DAG（不是原生 tool_calls），

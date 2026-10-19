@@ -177,9 +177,11 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	tok, _ := ca.tokenMgr.Lookup(req.CapabilityID)
 
 	var extraEnv []string
+	var allowedPaths []string
 	if bridgeSrv != nil {
 		extraEnv = append(extraEnv, "POLARIS_BRIDGE_SOCKET="+bridgeSrv.SocketPath())
 		extraEnv = append(extraEnv, "POLARIS_BRIDGE_TOKEN="+bridgeSrv.Token())
+		allowedPaths = append(allowedPaths, filepath.Dir(bridgeSrv.SocketPath()))
 	}
 
 	execReq := sandbox.ExecRequest{
@@ -193,7 +195,8 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 		Input: []byte("{}"), ScriptPath: tmpFile,
 		CapToken:   tok,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
-		ExtraEnv: extraEnv,
+		AllowedPaths: allowedPaths,
+		ExtraEnv:     extraEnv,
 	}
 	if useL4 {
 		// 只有真正按 L4 路径构造了 execCode（未经 pickle 包装）时才要求 Execute()

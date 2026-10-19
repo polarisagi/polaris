@@ -10,13 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/security/taint"
-
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -229,56 +226,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}, nil
 		}
 
-		if strings.HasPrefix(toolName, "code_act:") { //nolint:nestif // code_act 执行路径包含 JIT Token 铸造、沙箱执行、污点降级三个阶段，内聚于此避免多参数传递
-			if a.codeAct == nil {
-				return nil, apperr.New(apperr.CodeInternal,
-					"agent: codeAct engine not injected; cannot execute code_act node")
-			}
+		if strings.HasPrefix(toolName, "code_act:") {
 			lang := strings.TrimPrefix(toolName, "code_act:")
-			// Args JSON 只应包含 {"code":"...","stateful_session":...}——capability_id
-			// 字段仍解析但已废弃采信，见下方 JIT Mint 说明。
-			var codeArgs struct {
-				Code            string           `json:"code"`
-				CapabilityID    string           `json:"capability_id"` // 已废弃：不再采信，见下方 JIT Mint
-				TaintLevel      types.TaintLevel `json:"taint_level"`
-				StatefulSession bool             `json:"stateful_session"` // GD-4-002
-			}
-			if err := json.Unmarshal(args, &codeArgs); err != nil {
-				return nil, apperr.Wrap(apperr.CodeInvalidInput, "code_act: unmarshal args", err)
-			}
-			// JIT 铸造 Capability Token（M04 §4.6 / action.NewJITToken 文档注释：
-			// "LLM决定调用→不签发Token(仅ToolIntent)→Gate1-5通过→JIT Mint Token"）。
-			// 本节点已通过 S_VALIDATE 四层校验，禁止直接采信 LLM tool-call 参数中的
-			// capability_id（可伪造/越权），此处铸造一次性 Token 立即传给沙箱执行入口：
-			// depth=0（顶层铸造非委托），sandboxTier=3 对应 ContainerSandbox/Sbx-L3
-			// （docs/arch/M07-Tool-Action-Layer.md §7.4 inv_global_07 "强制 Sbx-L3"）。
-			jitTok, err := action.NewJITToken(a.ID,
-				[]action.TokenOperation{{ToolName: lang, MaxCalls: 1}}, 3)
-			if err != nil {
-				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: JIT token mint failed", err)
-			}
-			caResult, err := a.codeAct.Execute(protocol.WithProfileChecker(ctx, a), CodeActRequest{
-				Language:     lang,
-				Code:         codeArgs.Code,
-				CapabilityID: jitTok.Claims.TokenID,
-				SessionID:    a.sCtx.SessionID,
-				AgentID:      a.ID,
-				// 不再传 TaintLevel：该字段已删（C-8）。CodeAct 侧对 LLM 生成代码
-				// 恒按 TaintHigh 处理，不采信调用方自报值。
-				StatefulSession: codeArgs.StatefulSession,
-			})
-			if err != nil {
-				return nil, apperr.Wrap(apperr.CodeInternal, "code_act: execute failed", err)
-			}
-			safeOut, err := taint.SanitizeToSafe(caResult.Output)
-			if err != nil {
-				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: taint check failed", err)
-			}
-			return &types.ToolResult{
-				Output:    []byte(safeOut.IntoMessage("").Content),
-				Success:   caResult.ExitCode == 0,
-				LatencyMs: caResult.LatencyMs,
-			}, nil
+			return a.runCodeAct(ctx, lang, args, taintLevel)
 		}
 
 		if toolName == "transfer_to_agent" {

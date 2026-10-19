@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
-	"github.com/stretchr/testify/require"
 )
 
 // TestRequestPrefixGate_Agentic5Rounds 验证 R3-01：
