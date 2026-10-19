@@ -10,7 +10,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 	"github.com/polarisagi/polaris/pkg/util"
@@ -111,8 +110,11 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerIntentReceived,
 		To:      types.AgentStatePerceive,
 		Target: func(ctx context.Context, sCtx *StateContext) types.AgentState {
+			if tryPhaticBypass(sCtx) != nil {
+				return types.AgentStatePerceive
+			}
 			if config.CurrentThresholds().M4Kernel.LoopMode == "agentic" {
-				return types.AgentStateLoop
+				return types.AgentStateLoopRecall
 			}
 			return types.AgentStatePerceive
 		},
@@ -134,22 +136,12 @@ func (sm *StateMachine) registerTransitions() {
 				sCtx.Mu.Lock()
 				sCtx.ResetAgenticTurn()
 				sCtx.LoopRound = 1
-				if !sCtx.RawIntentTS.IsEmpty() {
-					content := taint.Spotlighting(sCtx.RawIntentTS)
-					if sCtx.TurnRecall != nil && sCtx.TurnRecall.Text != "" {
-						content = "## Recalled Context\n" + sCtx.TurnRecall.Text + "\n\n" + content
-					}
-					sCtx.LoopMessages = []types.Message{
-						{
-							Role:       "user",
-							Content:    content,
-							TaintLevel: sCtx.RawIntentTS.Level(),
-							Round:      1,
-						},
-					}
-				}
 				sCtx.Mu.Unlock()
-				return []protocol.Effect{sm.loopEffect(sCtx)}, nil
+				return []protocol.Effect{
+					protocol.DeterministicEffect{
+						Fn: sm.executeLoopRecall,
+					},
+				}, nil
 			}
 			// Unmatched case
 			metrics.RecordSystem1Bypass(ctx, false)

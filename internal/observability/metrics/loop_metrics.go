@@ -41,6 +41,12 @@ func initLoopInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Agentic loop tool executions by execution mode (mode=parallel|serial)"),
 	)
 	ie.capture("polaris.agent.loop_tool_parallel_total", err)
+
+	InstrAgentLoopRecallFailureTotal, err = meter.Int64Counter(
+		"polaris.agent.loop_recall_failure_total",
+		metric.WithDescription("Total agentic loop recall failures degraded to no-recall (R4-02)"),
+	)
+	ie.capture("polaris.agent.loop_recall_failure_total", err)
 }
 
 // RecordLoopRound 记录一次 loop round。
@@ -79,5 +85,12 @@ func RecordLoopToolParallel(ctx context.Context, mode string, count int64) {
 		InstrAgentLoopToolParallelTotal.Add(ctx, count, metric.WithAttributes(
 			attribute.String("mode", mode),
 		))
+	}
+}
+
+// RecordLoopRecallFailure 记录一次 agentic 循环记忆召回失败降级（R4-02）。
+func RecordLoopRecallFailure(ctx context.Context) {
+	if InstrAgentLoopRecallFailureTotal != nil {
+		InstrAgentLoopRecallFailureTotal.Add(ctx, 1)
 	}
 }

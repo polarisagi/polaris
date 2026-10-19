@@ -83,7 +83,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		defer release()
 
 		st := agentCtrl.CurrentState()
-		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec || st == types.AgentStateLoopAwait) && agentCtrl.Steer(req.Input) {
+		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec || st == types.AgentStateLoopAwait || st == types.AgentStateLoopRecall) && agentCtrl.Steer(req.Input) {
 			finalInput, _ := o.buildUserMessage(req)
 			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
 				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)

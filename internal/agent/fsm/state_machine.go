@@ -335,6 +335,24 @@ func (s *StateContext) ResetAgenticTurn() {
 	}
 }
 
+// AppendLoopMessages 是向当前回合追加消息的统一入口（R4-06）。
+// 加锁保护并统一为未设置轮次的消息打上当前 LoopRound。
+func (s *StateContext) AppendLoopMessages(msgs ...types.Message) {
+	if s == nil || len(msgs) == 0 {
+		return
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	round := s.LoopRound
+	for i := range msgs {
+		if msgs[i].Round <= 0 {
+			msgs[i].Round = round
+		}
+	}
+	s.LoopMessages = append(s.LoopMessages, msgs...)
+}
+
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
 type TaskModel struct {
 	Goal        string

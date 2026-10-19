@@ -264,7 +264,7 @@ func TestRecallDedupAgainstHistory(t *testing.T) {
 		{Role: "user", Content: "我想   把配置迁移到\ngoose 工具，然后跑测试"},
 		{Role: "user", Content: "用户刚才说过要把配置迁移到 goose 工具"},
 	}
-	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{episodicQuery: "继续", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{EpisodicQuery: "继续", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.NotContains(t, text, "goose", "已在 L2 历史里的召回应丢弃（规范化空白后包含即算）")
 	require.Contains(t, text, "一条与历史无关的独特记忆")

@@ -122,6 +122,7 @@ func TestSpecParStates(t *testing.T) {
 		"s_loop":        types.AgentStateLoop,
 		"s_loop_exec":   types.AgentStateLoopExec,
 		"s_loop_await":  types.AgentStateLoopAwait,
+		"s_loop_recall": types.AgentStateLoopRecall,
 	}
 	yamlSet := make(map[string]bool, len(spec.Par.States))
 	for _, s := range spec.Par.States {
@@ -269,6 +270,7 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"s_loop":        types.AgentStateLoop,
 		"s_loop_exec":   types.AgentStateLoopExec,
 		"s_loop_await":  types.AgentStateLoopAwait,
+		"s_loop_recall": types.AgentStateLoopRecall,
 	}
 
 	expectedTriggers := map[string]types.AgentTrigger{
@@ -297,6 +299,7 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"loop_step_done":            types.TriggerLoopStepDone,
 		"loop_exec_done":            types.TriggerLoopExecDone,
 		"loop_done":                 types.TriggerLoopDone,
+		"loop_recall_done":          types.TriggerLoopRecallDone,
 	}
 
 	allowedExtraEvents := map[string]bool{

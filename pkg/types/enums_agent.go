@@ -37,6 +37,8 @@ const (
 	AgentStateLoopExec
 	// S_LOOP_AWAIT: agentic 等待子智能体委派完成（ADR-0115 WP4 / R2-03）。
 	AgentStateLoopAwait
+	// S_LOOP_RECALL: agentic 回合自动记忆召回（R4-02）。
+	AgentStateLoopRecall
 )
 
 // AgentTrigger 定义驱动 FSM 状态转移的触发器枚举。
@@ -70,6 +72,7 @@ const (
 	TriggerLoopExecDone      // s_loop_exec -> s_loop（工具执行完成）
 	TriggerLoopDone          // s_loop -> s_complete（完成）
 	TriggerLoopSteer         // 用户在回合中插话
+	TriggerLoopRecallDone    // s_loop_recall -> s_loop（自动记忆召回完成，R4-02）
 )
 
 // InterruptAction 定义中断处理语义。

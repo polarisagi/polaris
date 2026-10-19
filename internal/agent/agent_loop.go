@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"time"
 
+	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -216,4 +218,69 @@ func (a *Agent) SetLoopCompletion(mode string) {
 	a.sCtx.Mu.Lock()
 	defer a.sCtx.Mu.Unlock()
 	a.sCtx.LoopCompletion = mode
+}
+
+// runLoopRecall 执行 agentic 循环首轮确定性记忆召回与用户首条消息装配（R4-02）。
+// 召回在 FSM 锁外执行（满足 make fsm-io-check）。
+func (a *Agent) runLoopRecall(ctx context.Context) error {
+	a.sCtx.Mu.Lock()
+	intentText := a.sCtx.RawIntentTS.UnsafeContent()
+	if a.sCtx.TaskID == "" {
+		a.sCtx.TaskID = a.sCtx.SessionID
+	}
+	a.sCtx.Mu.Unlock()
+
+	var recallText string
+	var recallTaint types.TaintLevel
+	var recallErr error
+	if a.memory != nil && intentText != "" {
+		recallText, recallTaint, recallErr = agentctx.TurnRecallText(
+			ctx,
+			a.memory,
+			a.sCtx.Cognitive,
+			a.sCtx,
+			agentctx.RecallWant{
+				EpisodicQuery: intentText,
+				EpisodicK:     agentctx.PerceiveEpisodicK,
+			},
+			"AgenticLoopRecall",
+		)
+	}
+
+	if recallErr != nil {
+		slog.WarnContext(ctx, "agentic_loop: recall failed, degrading to no recall", "err", recallErr)
+		metrics.RecordLoopRecallFailure(ctx)
+		a.sCtx.Mu.Lock()
+		a.sCtx.TurnRecall = nil
+		a.sCtx.Mu.Unlock()
+		recallText = ""
+		recallTaint = types.TaintNone
+	}
+
+	a.sCtx.Mu.Lock()
+	content := taint.Spotlighting(a.sCtx.RawIntentTS)
+	if recallText != "" {
+		content = "## Recalled Context\n" + recallText + "\n\n" + content
+	}
+	msgTaint := a.sCtx.RawIntentTS.Level()
+	if recallTaint != types.TaintNone {
+		msgTaint = types.PropagateTaint(msgTaint, recallTaint)
+	}
+	a.sCtx.Mu.Unlock()
+
+	if recallTaint > types.TaintNone {
+		a.elevateGlobalTaintLevel(recallTaint)
+	}
+
+	if content != "" {
+		a.appendLoopMessages(types.Message{
+			Role:       "user",
+			Content:    content,
+			TaintLevel: msgTaint,
+			Round:      1,
+		})
+	}
+
+	a.asyncIntent(types.TriggerLoopRecallDone)
+	return nil
 }
