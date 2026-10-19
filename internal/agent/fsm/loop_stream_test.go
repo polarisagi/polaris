@@ -3,6 +3,7 @@ package fsm
 import (
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -53,5 +54,42 @@ func TestResetAgenticTurn_ClearsLoopStream(t *testing.T) {
 	}
 	if !sCtx.BackgroundTurn {
 		t.Error("BackgroundTurn 属回合来源，不应被 ResetAgenticTurn 清掉")
+	}
+}
+
+// TestLoopEffect_ModelPoolFromLoopKey 主循环的模型池取自独立键 model_pool.loop，
+// 不再复用规划池 plan_initial（二者语义不同：规划池参与升级阶梯，主循环不升级）（R5-07）。
+func TestLoopEffect_ModelPoolFromLoopKey(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	prev := config.Get()
+	t.Cleanup(func() { config.Update(prev) })
+
+	cfg := config.Config{}
+	cfg.Thresholds = config.DefaultThresholds()
+	cfg.Thresholds.M4Kernel.ModelPoolPlanInitial = "reasoning" // 调贵规划池不应牵连主循环
+	cfg.Thresholds.M4Kernel.ModelPoolLoop = "general"
+	config.Update(&cfg)
+
+	eff := sm.loopEffect(&StateContext{}).(protocol.LLMFillEffect)
+	if eff.ModelPool != "general" {
+		t.Errorf("ModelPool = %q，期望取自 model_pool.loop=general", eff.ModelPool)
+	}
+
+	cfg.Thresholds.M4Kernel.ModelPoolLoop = ""
+	config.Update(&cfg)
+	eff = sm.loopEffect(&StateContext{}).(protocol.LLMFillEffect)
+	if eff.ModelPool != "default" {
+		t.Errorf("model_pool.loop 为空应回落 default，实际 %q", eff.ModelPool)
+	}
+}
+
+func TestDefaultThresholds_ModelPoolLoopDefault(t *testing.T) {
+	if got := config.DefaultThresholds().M4Kernel.ModelPoolLoop; got != "default" {
+		t.Errorf("model_pool.loop 默认值 = %q，期望 default", got)
+	}
+	bad := config.DefaultThresholds().M4Kernel
+	bad.ModelPoolLoop = "bogus"
+	if err := bad.Validate(); err == nil {
+		t.Error("非法池名应被校验拒绝")
 	}
 }

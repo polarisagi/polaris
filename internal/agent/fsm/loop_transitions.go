@@ -168,7 +168,7 @@ func (sm *StateMachine) LoopEffect(sCtx *StateContext) protocol.Effect {
 // loopEffect 构造单轮 Agentic 调用的 LLMFillEffect。
 func (sm *StateMachine) loopEffect(sCtx *StateContext) protocol.Effect {
 	th := config.CurrentThresholds().M4Kernel
-	modelPool := th.ModelPoolPlanInitial
+	modelPool := th.ModelPoolLoop
 	if modelPool == "" {
 		modelPool = "default"
 	}
