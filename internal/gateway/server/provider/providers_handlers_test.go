@@ -32,6 +32,7 @@ func TestProvidersHandlers(t *testing.T) {
 			location TEXT DEFAULT '',
 			sa_key_json TEXT DEFAULT '',
 			enabled INTEGER DEFAULT 0,
+			is_local INTEGER DEFAULT 0,
 			status TEXT DEFAULT '',
 			catalog_id TEXT DEFAULT '',
 			config_json TEXT DEFAULT '',

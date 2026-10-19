@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"strings"
+
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -9,4 +11,14 @@ import (
 // 禁止在任何业务代码中针对 provider 类型或名称做本地判断的字符串比较。
 func IsLocalProvider(row types.ProviderRow) bool {
 	return row.IsLocal
+}
+
+// InferIsLocal 根据厂商类型推导是否为本地厂商（用于手工创建/更新 API 用户未显式指定 is_local 的场景，R3-03）。
+func InferIsLocal(providerType string) bool {
+	switch strings.ToLower(strings.TrimSpace(providerType)) {
+	case "ollama", "llama_server", "llama_local":
+		return true
+	default:
+		return false
+	}
 }
