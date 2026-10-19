@@ -16,6 +16,25 @@ func (m *mockHITLGateway) RequestApproval(ctx context.Context, action string, re
 	return nil
 }
 
+type mockHITLWithAuditor struct {
+	called bool
+	logged bool
+	action string
+	meta   map[string]any
+}
+
+func (m *mockHITLWithAuditor) RequestApproval(ctx context.Context, action string, req map[string]any) error {
+	m.called = true
+	return nil
+}
+
+func (m *mockHITLWithAuditor) Log(ctx context.Context, action string, meta map[string]any) error {
+	m.logged = true
+	m.action = action
+	m.meta = meta
+	return nil
+}
+
 func TestMakeRunCommandFn_FullProfile_NoWhitelist(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
@@ -50,5 +69,37 @@ func TestMakeRunCommandFn_StandardProfile_WhitelistEnforced(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not in whitelist") {
 		t.Errorf("expected whitelist error, got: %v", err)
+	}
+}
+
+func TestMakeRunCommandFn_FullProfile_HITLAutoApprove(t *testing.T) {
+	tmpDir := t.TempDir()
+	pol := policy.ProfilePolicy(policy.ProfileFull)
+	hitlMock := &mockHITLWithAuditor{}
+
+	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
+	ctx := context.WithValue(context.Background(), protocol.CtxAgentIDKey{}, "agent-rc-1")
+
+	// 高风险命令（pip install 属于 RiskHITL）：full 档下自动放行，写入审计并记录指标
+	// 即使命令因未安装或网络失败，HITL 校验发生在执行前
+	_, _ = fn(ctx, []byte(`{"command":"pip install something"}`))
+
+	if hitlMock.called {
+		t.Error("full profile should auto-approve without invoking RequestApproval")
+	}
+	if !hitlMock.logged {
+		t.Fatal("full profile HITL auto-approve must write audit record (V9 / HE-1)")
+	}
+	if hitlMock.action != "hitl_auto_approved" {
+		t.Errorf("expected action 'hitl_auto_approved', got %q", hitlMock.action)
+	}
+	if hitlMock.meta["checkpoint_type"] != "command_risk" {
+		t.Errorf("expected checkpoint_type 'command_risk', got %v", hitlMock.meta["checkpoint_type"])
+	}
+	if hitlMock.meta["tool"] != "run_command" {
+		t.Errorf("expected tool 'run_command', got %v", hitlMock.meta["tool"])
+	}
+	if hitlMock.meta["agent_id"] != "agent-rc-1" {
+		t.Errorf("expected agent_id 'agent-rc-1', got %v", hitlMock.meta["agent_id"])
 	}
 }

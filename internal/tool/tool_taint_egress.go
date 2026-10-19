@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -68,6 +69,26 @@ func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.
 		if !pol.TaintEgressBlockEnabled {
 			slog.Warn("tool_registry: taint egress blocked by checker, bypassed (audit only, full profile)",
 				"tool", tool.Name, "taint", taintLevel, "err", err)
+			metrics.RecordHITLAutoApproved(ctx, tool.Name, "taint_egress")
+			r.mu.RLock()
+			al := r.auditLogger
+			r.mu.RUnlock()
+			if al != nil {
+				meta := map[string]any{
+					"tool":            tool.Name,
+					"checkpoint_type": "taint_egress",
+					"profile":         pol.Profile,
+					"taint":           taintLevel.String(),
+					"reason":          err.Error(),
+				}
+				if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+					meta["agent_id"] = aid
+				}
+				if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+					meta["session_id"] = sid
+				}
+				_ = al.Log(ctx, "hitl_auto_approved", meta)
+			}
 			return nil
 		}
 		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: taint egress blocked", err)

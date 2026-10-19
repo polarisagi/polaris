@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/policy"
@@ -24,6 +25,14 @@ func (r *InMemoryToolRegistry) WithPolicy(p policy.Policy) *InMemoryToolRegistry
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.policy = &p
+	return r
+}
+
+// WithAuditLogger 注入审计日志记录器（可选，V9 / HE-1 用于 full 档 HITL 自动放行审计）。
+func (r *InMemoryToolRegistry) WithAuditLogger(l protocol.AuditLogger) *InMemoryToolRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auditLogger = l
 	return r
 }
 
@@ -60,13 +69,30 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 
 	r.mu.RLock()
 	hitlGw := r.hitl
+	al := r.auditLogger
 	r.mu.RUnlock()
 	pol := r.EffectivePolicy()
 
-	// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵）
+	// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 	if pol.HITLAutoApprove {
 		slog.Warn("tool_registry: anomaly filter HITL auto-approved (full profile)",
 			"tool", name, "profile", pol.Profile)
+		metrics.RecordHITLAutoApproved(ctx, name, "anomaly_escalation")
+		if al != nil {
+			meta := map[string]any{
+				"tool":            name,
+				"checkpoint_type": "anomaly_escalation",
+				"profile":         pol.Profile,
+				"reason":          "anomaly filter bypass in full profile",
+			}
+			if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+				meta["agent_id"] = aid
+			}
+			if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+				meta["session_id"] = sid
+			}
+			_ = al.Log(ctx, "hitl_auto_approved", meta)
+		}
 		f.Record(name, features)
 		return nil
 	}

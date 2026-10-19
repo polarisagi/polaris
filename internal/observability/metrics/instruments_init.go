@@ -409,6 +409,7 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 
 	initLoopInstruments(meter, ie)
 	initModelRouteInstruments(meter, ie)
+	initHITLAutoApprovedInstruments(meter, ie)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {

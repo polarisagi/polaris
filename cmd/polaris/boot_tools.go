@@ -240,6 +240,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
 	toolReg := polartool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
 	toolReg.WithPolicy(trustPol)
+	toolReg.WithAuditLogger(auditTrailLogAdapter{at: sb.AuditTrail})
 	if trustPol.CheckpointEnabled && len(allowedPaths) > 0 {
 		ckptStore, err := checkpoint.NewStore(sb.Layout.Data, allowedPaths[0], config.CurrentThresholds().M4Kernel.CheckpointRetentionCount)
 		if err == nil {
@@ -375,6 +376,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Cache:   webCache,
 		Limiter: webLimiter,
 	}
+	hitlWithAudit := &hitlGatewayWithAudit{
+		inner: hitlGateway,
+		al:    auditTrailLogAdapter{at: sb.AuditTrail},
+	}
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,
 		sb.Cfg.Sandbox.Enabled,
 		sb.Cfg.Sandbox.NetworkPolicy,
@@ -383,7 +388,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		autoBr,
 		sb.Layout.Workspace,
 		&mcpAsyncTaskAdapter{inner: mcpMgr},
-		hitlGateway,
+		hitlWithAudit,
 		repo.NewSQLiteTodoRepository(sb.Store.DB()),
 		ttsBr.Synthesize,
 		webDeps,

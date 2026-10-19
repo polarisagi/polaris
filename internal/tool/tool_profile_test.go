@@ -189,3 +189,115 @@ func TestV1_NilPolicy_FallsBackToStandard(t *testing.T) {
 	}
 }
 
+type mockAuditLogger struct {
+	logged bool
+	action string
+	meta   map[string]any
+}
+
+func (m *mockAuditLogger) Log(ctx context.Context, action string, meta map[string]any) error {
+	m.logged = true
+	m.action = action
+	m.meta = meta
+	return nil
+}
+
+func TestV9_FullProfile_TaintEgress_AuditedAndMetric(t *testing.T) {
+	reg, sbx := newTestRegistry()
+	sbx.Register("mock_egress_tool", func(ctx context.Context, input []byte) ([]byte, error) {
+		return []byte(`{"ok":true}`), nil
+	})
+	_ = reg.Register(types.Tool{
+		Name:        "mock_egress_tool",
+		SideEffects: []types.SideEffect{types.SideNetworkCall},
+		Capability:  types.CapWriteNetwork,
+		TrustTier:   types.TrustSystem,
+	})
+
+	checker := &mockEgressChecker{blocked: true}
+	reg.WithTaintEgressChecker(checker)
+	reg.WithPolicy(policy.ProfilePolicy(policy.ProfileFull))
+
+	al := &mockAuditLogger{}
+	reg.WithAuditLogger(al)
+
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
+	ctx = context.WithValue(ctx, protocol.CtxAgentIDKey{}, "agent-taint-1")
+	ctx = context.WithValue(ctx, protocol.CtxSessionIDKey{}, "session-taint-1")
+
+	res, err := reg.ExecuteTool(ctx, "mock_egress_tool", []byte(`{"ping":"pong"}`), types.TaintHigh)
+	if err != nil {
+		t.Fatalf("full profile should not return execution error: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected tool success, got err: %s", res.Error)
+	}
+
+	if !al.logged {
+		t.Fatal("full profile taint egress bypass must write audit log (V9 / HE-1)")
+	}
+	if al.action != "hitl_auto_approved" {
+		t.Errorf("expected action 'hitl_auto_approved', got %q", al.action)
+	}
+	if al.meta["checkpoint_type"] != "taint_egress" {
+		t.Errorf("expected checkpoint_type 'taint_egress', got %v", al.meta["checkpoint_type"])
+	}
+	if al.meta["tool"] != "mock_egress_tool" {
+		t.Errorf("expected tool 'mock_egress_tool', got %v", al.meta["tool"])
+	}
+	if al.meta["agent_id"] != "agent-taint-1" {
+		t.Errorf("expected agent_id 'agent-taint-1', got %v", al.meta["agent_id"])
+	}
+}
+
+func TestV9_FullProfile_Anomaly_AuditedAndMetric(t *testing.T) {
+	reg, sbx := newTestRegistry()
+	sbx.Register("echo_tool", func(ctx context.Context, input []byte) ([]byte, error) {
+		return input, nil
+	})
+	_ = reg.Register(types.Tool{
+		Name:      "echo_tool",
+		TrustTier: types.TrustSystem,
+	})
+
+	reg.WithPolicy(policy.ProfilePolicy(policy.ProfileFull))
+	al := &mockAuditLogger{}
+	reg.WithAuditLogger(al)
+
+	filter := guard.NewAnomalyDistanceFilter(3.0)
+	// 训练正常输入基线（至少 30 个样本，且有微小方差）
+	for i := 0; i < 40; i++ {
+		filter.Record("echo_tool", []float64{10.0 + float64(i%3)})
+	}
+
+	// 传入超长输入，触发异常过滤
+	hugeInput := make([]byte, 100000)
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
+	ctx = context.WithValue(ctx, protocol.CtxAnomalyFilterKey{}, filter)
+	ctx = context.WithValue(ctx, protocol.CtxAgentIDKey{}, "agent-anom-1")
+
+	res, err := reg.ExecuteTool(ctx, "echo_tool", hugeInput, types.TaintLow)
+	if err != nil {
+		t.Fatalf("full profile should auto-approve anomalous input: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected tool success, got: %s", res.Error)
+	}
+
+	if !al.logged {
+		t.Fatal("full profile anomaly filter bypass must write audit log (V9 / HE-1)")
+	}
+	if al.action != "hitl_auto_approved" {
+		t.Errorf("expected action 'hitl_auto_approved', got %q", al.action)
+	}
+	if al.meta["checkpoint_type"] != "anomaly_escalation" {
+		t.Errorf("expected checkpoint_type 'anomaly_escalation', got %v", al.meta["checkpoint_type"])
+	}
+	if al.meta["tool"] != "echo_tool" {
+		t.Errorf("expected tool 'echo_tool', got %v", al.meta["tool"])
+	}
+	if al.meta["agent_id"] != "agent-anom-1" {
+		t.Errorf("expected agent_id 'agent-anom-1', got %v", al.meta["agent_id"])
+	}
+}
+

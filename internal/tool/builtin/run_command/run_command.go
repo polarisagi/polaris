@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/classifier"
@@ -69,11 +70,28 @@ func MakeRunCommandFn(
 			return nil, apperr.New(apperr.CodeForbidden,
 				fmt.Sprintf("run_command: command denied: %s", verdict.Reason))
 		case classifier.RiskHITL:
-			// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵）
+			// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 			if pol.HITLAutoApprove {
 				slog.Warn("run_command: HITL auto-approved (full profile)",
 					"cmd", args.Command, "reason", verdict.Reason,
 					"profile", pol.Profile)
+				metrics.RecordHITLAutoApproved(ctx, "run_command", "command_risk")
+				if al, ok := hitlGateway.(Auditor); ok && al != nil {
+					meta := map[string]any{
+						"tool":            "run_command",
+						"checkpoint_type": "command_risk",
+						"command":         args.Command,
+						"reason":          verdict.Reason,
+						"profile":         pol.Profile,
+					}
+					if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+						meta["agent_id"] = aid
+					}
+					if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+						meta["session_id"] = sid
+					}
+					_ = al.Log(ctx, "hitl_auto_approved", meta)
+				}
 			} else {
 				if hitlGateway == nil {
 					return nil, apperr.New(apperr.CodeForbidden, "run_command: HITL gateway is nil, fail-closed for RiskHITL command")

@@ -71,24 +71,57 @@ func TestMakeBashFn_HardenedProfile(t *testing.T) {
 	}
 }
 
+type mockHITLWithAuditor struct {
+	called bool
+	logged bool
+	action string
+	meta   map[string]any
+}
+
+func (m *mockHITLWithAuditor) RequestApproval(ctx context.Context, action string, req map[string]any) error {
+	m.called = true
+	return nil
+}
+
+func (m *mockHITLWithAuditor) Log(ctx context.Context, action string, meta map[string]any) error {
+	m.logged = true
+	m.action = action
+	m.meta = meta
+	return nil
+}
+
 func TestMakeBashFn_FullProfile_HITLAutoApprove(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
-	hitlMock := &mockHITLGateway{}
+	hitlMock := &mockHITLWithAuditor{}
 
 	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), protocol.CtxAgentIDKey{}, "agent-123")
 
-	// 创建测试文件
-	testFile := filepath.Join(tmpDir, "dummy.txt")
+	// 创建测试目录与文件
+	testDir := filepath.Join(tmpDir, "sub")
+	_ = os.MkdirAll(testDir, 0o755)
+	testFile := filepath.Join(testDir, "dummy.txt")
 	_ = os.WriteFile(testFile, []byte("ok"), 0o644)
 
-	// 高风险命令（rm 命令属于 HITL 范围）：full 档下自动放行，无需调用 hitlGateway
-	_, err := fn(ctx, []byte(`{"command":"rm `+testFile+`"}`))
+	// 高风险命令（rm -rf 命令属于 HITL 范围）：full 档下自动放行，写入审计并记录指标
+	_, err := fn(ctx, []byte(`{"command":"rm -rf `+testDir+`"}`))
 	if err != nil {
 		t.Fatalf("rm command should succeed under full profile auto-approval: %v", err)
 	}
 	if hitlMock.called {
-		t.Error("full profile should auto-approve without invoking HITLGateway")
+		t.Error("full profile should auto-approve without invoking RequestApproval")
+	}
+	if !hitlMock.logged {
+		t.Fatal("full profile HITL auto-approve must write audit record (V9 / HE-1)")
+	}
+	if hitlMock.action != "hitl_auto_approved" {
+		t.Errorf("expected action 'hitl_auto_approved', got %q", hitlMock.action)
+	}
+	if hitlMock.meta["checkpoint_type"] != "command_risk" {
+		t.Errorf("expected checkpoint_type 'command_risk', got %v", hitlMock.meta["checkpoint_type"])
+	}
+	if hitlMock.meta["agent_id"] != "agent-123" {
+		t.Errorf("expected agent_id 'agent-123', got %v", hitlMock.meta["agent_id"])
 	}
 }
