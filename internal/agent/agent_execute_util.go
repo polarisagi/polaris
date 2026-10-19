@@ -118,8 +118,13 @@ func extractTaskType(goal string) string {
 // 任何注入，保留调用方传入的 ctx 原样，交由 tokenizeMessagesForLLM 内部继续用空
 // taskID 兜底（等价于 legacy Tokenize/Resolve/Restore 路径）。
 func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
-	if a.sCtx != nil && a.sCtx.SessionID != "" {
-		ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+	if a.sCtx != nil {
+		if a.sCtx.SessionID != "" {
+			ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+		}
+		if a.sCtx.TurnID != "" {
+			ctx = protocol.WithTurnID(ctx, a.sCtx.TurnID)
+		}
 	}
 	// anomalyFilter 恒非 nil（NewAgent 默认构造，见 agent.go），随任务域 ctx 一并
 	// 注入，供 internal/tool/tool.go checkAnomaly 读取（ADR-0062 关联接线）。
