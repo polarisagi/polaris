@@ -299,6 +299,7 @@ type AgenticTurn struct {
 	LoopLastWallSeconds            float64
 	LoopWarningInjected            bool
 	LoopSummary                    string
+	LoopEnding                     bool
 	LoopHandoffPendingResults      []types.Message
 	LoopHandoffToolCalls           []types.InferToolCall
 	LoopHandoffSpawnCallID         string
@@ -317,6 +318,7 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopLastWallSeconds = 0
 	s.LoopWarningInjected = false
 	s.LoopSummary = ""
+	s.LoopEnding = false
 	s.LoopHandoffPendingResults = nil
 	s.LoopHandoffToolCalls = nil
 	s.LoopHandoffSpawnCallID = ""

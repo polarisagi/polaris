@@ -165,3 +165,123 @@ func TestPool_TrySteer(t *testing.T) {
 		t.Fatalf("插话队列内容不符: %v", ag.sCtx.LoopSteerQueue)
 	}
 }
+
+type steerHookProvider struct {
+	*loopTestProvider
+	onInfer func(idx int)
+}
+
+func (p *steerHookProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	if p.onInfer != nil {
+		p.onInfer(p.callCount())
+	}
+	return p.loopTestProvider.StreamInfer(ctx, msgs, opts...)
+}
+
+// TestAgenticLoop_SteerOnDirectTextCompletion 验证模型单轮无工具调用直接收尾时，
+// 插话队列非空不得直接退出，必须注入插话并继续下一轮（R2-12）。
+func TestAgenticLoop_SteerOnDirectTextCompletion(t *testing.T) {
+	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+	agent := NewAgentWithDefaults("test-steer-direct-text")
+	rawProv := &loopTestProvider{
+		responses: []*types.ProviderResponse{
+			{Content: "你好！我是 polaris，请问有什么可以帮助您的？"},
+			{Content: "收到补充说明，已为您处理。"},
+		},
+	}
+	prov := &steerHookProvider{
+		loopTestProvider: rawProv,
+		onInfer: func(idx int) {
+			if idx == 0 {
+				// 在首轮推理执行中（AgentStateLoop 态）注入插话
+				if !agent.Steer("请优先关注错误日志") {
+					t.Error("Loop 态下 Steer 应成功入队")
+				}
+			}
+		},
+	}
+	agent.InjectProvider(prov)
+	agent.InjectPolicyGate(&allowPolicyGate{})
+	agent.InjectToolExecutor(&mockToolExecutor{})
+
+	done := make(chan struct{})
+	go func() {
+		_ = agent.Run(context.Background())
+		close(done)
+	}()
+
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		t.Fatalf("SendIntent failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent run timeout")
+	}
+
+	if st := agent.sm.Current(); st != types.AgentStateComplete {
+		t.Fatalf("agent 最终应完成，当前状态: %v", st)
+	}
+
+	// 必须触发了第 2 轮 LLM 调用来处理插话
+	if prov.callCount() != 2 {
+		t.Fatalf("期望 LLM 调用 2 次（第1轮文本回复+第2轮插话回复），实际调用次数: %d", prov.callCount())
+	}
+
+	agent.sCtx.Mu.Lock()
+	defer agent.sCtx.Mu.Unlock()
+
+	// 断言插话已被消费且进入 LoopMessages
+	var foundSteerMsg bool
+	for _, m := range agent.sCtx.LoopMessages {
+		if m.Role == "user" && strings.Contains(m.Content, "错误日志") {
+			foundSteerMsg = true
+			break
+		}
+	}
+	if !foundSteerMsg {
+		t.Fatalf("LoopMessages 中未找到已消费的插话消息: %+v", agent.sCtx.LoopMessages)
+	}
+}
+
+// TestPool_TrySteer_RaceCondition_TurnEnding 验证回合结束或收尾中时 TrySteer 返回 false（R2-12）。
+func TestPool_TrySteer_RaceCondition_TurnEnding(t *testing.T) {
+	pool := NewPool(func(sessionID string) *Agent {
+		return NewAgentWithDefaults(sessionID)
+	}, 5)
+
+	sessionID := "test-pool-steer-ending"
+	agentCtrl, release, err := pool.Acquire(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("Acquire failed: %v", err)
+	}
+	defer release()
+
+	ag := agentCtrl.(*Agent)
+	ag.sm.ForceState(types.AgentStateLoop)
+
+	// 1. Loop 状态下正常接纳
+	if !pool.TrySteer(sessionID, "steer 1") {
+		t.Fatal("正常 Loop 态应接纳插话")
+	}
+
+	// 2. 模拟回合收尾中（LoopEnding=true）
+	ag.sCtx.Mu.Lock()
+	ag.sCtx.LoopEnding = true
+	ag.sCtx.Mu.Unlock()
+
+	if pool.TrySteer(sessionID, "steer while ending") {
+		t.Fatal("回合收尾中（LoopEnding=true）时 TrySteer 必须返回 false")
+	}
+
+	// 3. 终态（AgentStateComplete）
+	ag.sCtx.Mu.Lock()
+	ag.sCtx.LoopEnding = false
+	ag.sCtx.Mu.Unlock()
+	ag.sm.ForceState(types.AgentStateComplete)
+
+	if pool.TrySteer(sessionID, "steer when complete") {
+		t.Fatal("终态（AgentStateComplete）下 TrySteer 必须返回 false")
+	}
+}

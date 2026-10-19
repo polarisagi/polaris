@@ -98,6 +98,9 @@ func (sm *StateMachine) registerLoopTransitions() {
 		Trigger: types.TriggerLoopSteer,
 		To:      types.AgentStateLoop,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			sCtx.LoopRound++
+			sCtx.Mu.Unlock()
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
@@ -194,6 +197,21 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	return msgs
 }
 
+// drainSteerQueueToMessages 检查并出队插话队列，作为 user 消息注入模型上下文。
+func drainSteerQueueToMessages(sCtx *StateContext) bool {
+	if len(sCtx.LoopSteerQueue) == 0 {
+		return false
+	}
+	for _, st := range sCtx.LoopSteerQueue {
+		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
+			Role:    "user",
+			Content: st,
+		})
+	}
+	sCtx.LoopSteerQueue = nil
+	return true
+}
+
 // onLoopSuccess 处理单轮 LLM 输出判定。
 func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.State, error) {
 	sCtx.Mu.Lock()
@@ -202,6 +220,12 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	// 检查是否有 finish 调用
 	for _, call := range sCtx.LoopPendingToolCalls {
 		if call.Name == "finish" {
+			// 判定完成前先检查插话队列（R2-12）
+			if drainSteerQueueToMessages(sCtx) {
+				sCtx.LoopPendingToolCalls = nil
+				return types.State("S_LOOP_STEER"), nil
+			}
+			sCtx.LoopEnding = true
 			sCtx.LoopSummary = string(call.Input)
 			sCtx.LoopPendingToolCalls = nil
 			return types.State("S_LOOP_DONE"), nil
@@ -214,6 +238,11 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	}
 
 	// 无工具调用且 auto 完成模式下，认为文本输出即收尾回复
+	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12）
+	if drainSteerQueueToMessages(sCtx) {
+		return types.State("S_LOOP_STEER"), nil
+	}
+
 	completion := sCtx.LoopCompletion
 	if completion == "" {
 		completion = config.CurrentThresholds().M4Kernel.LoopCompletion
@@ -227,6 +256,7 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 		return types.State("S_LOOP_STEP_DONE"), nil
 	}
 
+	sCtx.LoopEnding = true
 	return types.State("S_LOOP_DONE"), nil
 }
 

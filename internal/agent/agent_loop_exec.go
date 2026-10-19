@@ -242,11 +242,27 @@ func isConcurrencySafe(tool types.Tool) bool {
 }
 
 // Steer 将用户在回合运行中发送的插话压入插话队列，并在下一轮边界注入。
+// 若回合已结束或正在收尾，返回 false（R2-12）。
 func (a *Agent) Steer(text string) bool {
 	if text == "" {
 		return false
 	}
+	select {
+	case <-a.done:
+		return false
+	default:
+	}
+
+	st := a.sm.Current()
+	if st == types.AgentStateComplete || st == types.AgentStateFailed {
+		return false
+	}
+
 	a.sCtx.Mu.Lock()
+	if a.sCtx.LoopEnding {
+		a.sCtx.Mu.Unlock()
+		return false
+	}
 	a.sCtx.LoopSteerQueue = append(a.sCtx.LoopSteerQueue, text)
 	a.sCtx.Mu.Unlock()
 
