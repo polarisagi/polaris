@@ -188,7 +188,6 @@ func (r *ProviderRegistry) ReplaceAllWithRow(build func(register func(name, disp
 	r.mu.Unlock()
 }
 
-
 // RegisterWithRole 注册带角色标记的 Provider（general | default | reasoning | budget，
 // 唯一 SSoT 见 router.go poolFallbackChain 与 pkg/types.ModelPool）。
 func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p protocol.Provider) {
@@ -364,4 +363,3 @@ func costTier(role string) int {
 		return 0
 	}
 }
-

@@ -235,6 +235,9 @@ func recoverAgenticLoopTurns(ctx context.Context, db *sql.DB, pool protocol.Agen
 			targets = append(targets, t)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("polaris: crash recovery scan agent_loop_rounds rows iteration failed", "err", err)
+	}
 	_ = rows.Close()
 
 	if len(targets) == 0 {
@@ -253,7 +256,9 @@ func recoverOneAgenticLoopTurn(ctx context.Context, db *sql.DB, pool protocol.Ag
 	if err != nil {
 		slog.Warn("polaris: crash recovery failed to reconstruct turn, marking aborted",
 			"session_id", sessionID, "turn_id", turnID, "err", err)
-		_, _ = db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID)
+		if _, aErr := db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID); aErr != nil {
+			slog.Warn("polaris: crash recovery failed to mark aborted", "session_id", sessionID, "turn_id", turnID, "err", aErr)
+		}
 		return
 	}
 
@@ -278,7 +283,9 @@ func recoverOneAgenticLoopTurn(ctx context.Context, db *sql.DB, pool protocol.Ag
 	stream := agentCtrl.SubscribeStream(recoverCtx)
 	if !resumer.ResumeAgenticLoop(turnID, messages, maxTaint, maxRound) {
 		slog.Warn("polaris: failed to resume agentic loop", "session_id", sessionID, "turn_id", turnID)
-		_, _ = db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID)
+		if _, aErr := db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID); aErr != nil {
+			slog.Warn("polaris: crash recovery failed to mark aborted", "session_id", sessionID, "turn_id", turnID, "err", aErr)
+		}
 		return
 	}
 
@@ -295,7 +302,9 @@ func recoverOneAgenticLoopTurn(ctx context.Context, db *sql.DB, pool protocol.Ag
 			}
 		case <-recoverCtx.Done():
 			slog.Warn("polaris: crash recovery agentic loop timed out", "session_id", sessionID, "turn_id", turnID)
-			_, _ = db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID)
+			if _, aErr := db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID); aErr != nil {
+				slog.Warn("polaris: crash recovery failed to mark aborted", "session_id", sessionID, "turn_id", turnID, "err", aErr)
+			}
 			return
 		}
 	}

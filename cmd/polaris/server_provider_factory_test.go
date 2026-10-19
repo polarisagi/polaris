@@ -130,4 +130,3 @@ func TestDBProviderFactory_CreateProvider_DecryptFailureReturnsError(t *testing.
 		t.Fatalf("期望 polaris.llm.credential_decrypt_failed_total 打点递增，before=%d, after=%d", beforeCount, afterCount)
 	}
 }
-

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -89,6 +90,19 @@ func redactSecretGetForPersistence(messages []types.Message) []types.Message {
 	if len(messages) == 0 {
 		return nil
 	}
+	secretCalls := extractSecretCallMap(messages)
+	if len(secretCalls) == 0 {
+		return messages
+	}
+
+	redacted := make([]types.Message, len(messages))
+	for i, m := range messages {
+		redacted[i] = redactMessageSecrets(m, secretCalls)
+	}
+	return redacted
+}
+
+func extractSecretCallMap(messages []types.Message) map[string]string {
 	secretCalls := make(map[string]string)
 	for _, m := range messages {
 		for _, p := range m.Parts {
@@ -113,38 +127,34 @@ func redactSecretGetForPersistence(messages []types.Message) []types.Message {
 			}
 		}
 	}
+	return secretCalls
+}
 
-	if len(secretCalls) == 0 {
-		return messages
+func redactMessageSecrets(m types.Message, secretCalls map[string]string) types.Message {
+	if len(m.Parts) == 0 {
+		return m
 	}
-
-	redacted := make([]types.Message, len(messages))
-	for i, m := range messages {
-		msgCopy := m
-		if len(m.Parts) > 0 {
-			newParts := make([]any, len(m.Parts))
-			for pi, p := range m.Parts {
-				if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
-					toolCallID, _ := partMap["tool_use_id"].(string)
-					if secName, exists := secretCalls[toolCallID]; exists {
-						repText := fmt.Sprintf("[secret:%s redacted]", secName)
-						newPart := make(map[string]any, len(partMap))
-						for k, v := range partMap {
-							newPart[k] = v
-						}
-						newPart["content"] = repText
-						newParts[pi] = newPart
-						msgCopy.Content = repText
-						continue
-					}
+	msgCopy := m
+	newParts := make([]any, len(m.Parts))
+	for pi, p := range m.Parts {
+		if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
+			toolCallID, _ := partMap["tool_use_id"].(string)
+			if secName, exists := secretCalls[toolCallID]; exists {
+				repText := fmt.Sprintf("[secret:%s redacted]", secName)
+				newPart := make(map[string]any, len(partMap))
+				for k, v := range partMap {
+					newPart[k] = v
 				}
-				newParts[pi] = p
+				newPart["content"] = repText
+				newParts[pi] = newPart
+				msgCopy.Content = repText
+				continue
 			}
-			msgCopy.Parts = newParts
 		}
-		redacted[i] = msgCopy
+		newParts[pi] = p
 	}
-	return redacted
+	msgCopy.Parts = newParts
+	return msgCopy
 }
 
 // ResumeAgenticLoop 在恢复时根据消息历史与元数据续跑 agentic 回合（R2-05）。
@@ -171,7 +181,7 @@ func CompleteInterruptedToolCalls(messages []types.Message) []types.Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	var lastAssistantIdx int = -1
+	lastAssistantIdx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "assistant" {
 			lastAssistantIdx = i
@@ -183,29 +193,12 @@ func CompleteInterruptedToolCalls(messages []types.Message) []types.Message {
 	}
 
 	lastAssistant := messages[lastAssistantIdx]
-	var callIDs []string
-	for _, p := range lastAssistant.Parts {
-		if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_use" {
-			if id, ok := partMap["id"].(string); ok && id != "" {
-				callIDs = append(callIDs, id)
-			}
-		}
-	}
+	callIDs := extractToolUseIDs(lastAssistant.Parts)
 	if len(callIDs) == 0 {
 		return messages
 	}
 
-	existingResults := make(map[string]bool)
-	for i := lastAssistantIdx + 1; i < len(messages); i++ {
-		for _, p := range messages[i].Parts {
-			if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
-				if callID, ok := partMap["tool_use_id"].(string); ok {
-					existingResults[callID] = true
-				}
-			}
-		}
-	}
-
+	existingResults := extractToolResultIDs(messages[lastAssistantIdx+1:])
 	result := append([]types.Message(nil), messages...)
 	for _, id := range callIDs {
 		if !existingResults[id] {
@@ -217,12 +210,38 @@ func CompleteInterruptedToolCalls(messages []types.Message) []types.Message {
 	return result
 }
 
+func extractToolUseIDs(parts []any) []string {
+	var callIDs []string
+	for _, p := range parts {
+		if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_use" {
+			if id, ok := partMap["id"].(string); ok && id != "" {
+				callIDs = append(callIDs, id)
+			}
+		}
+	}
+	return callIDs
+}
+
+func extractToolResultIDs(subMessages []types.Message) map[string]bool {
+	existingResults := make(map[string]bool)
+	for _, m := range subMessages {
+		for _, p := range m.Parts {
+			if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
+				if callID, ok := partMap["tool_use_id"].(string); ok {
+					existingResults[callID] = true
+				}
+			}
+		}
+	}
+	return existingResults
+}
+
 // ReconstructAgenticLoopTurn 从 agent_loop_rounds 表中读取指定 running turn 的所有轮次并还原消息序列（R2-05）。
 func ReconstructAgenticLoopTurn(ctx context.Context, q protocol.SQLQuerier, sessionID, turnID string) ([]types.Message, types.TaintLevel, int, error) {
 	query := `SELECT round, delta_json, taint_level FROM agent_loop_rounds WHERE session_id = ? AND turn_id = ? AND status = 'running' ORDER BY round ASC`
 	rows, err := q.QueryContext(ctx, query, sessionID, turnID)
 	if err != nil {
-		return nil, types.TaintNone, 0, err
+		return nil, types.TaintNone, 0, apperr.Wrap(apperr.CodeInternal, "reconstruct turn: query agent_loop_rounds", err)
 	}
 	defer rows.Close()
 
@@ -235,7 +254,7 @@ func ReconstructAgenticLoopTurn(ctx context.Context, q protocol.SQLQuerier, sess
 		var deltaJSON string
 		var taintInt int
 		if err := rows.Scan(&round, &deltaJSON, &taintInt); err != nil {
-			return nil, types.TaintNone, 0, err
+			return nil, types.TaintNone, 0, apperr.Wrap(apperr.CodeInternal, "reconstruct turn: scan round", err)
 		}
 		if round > maxRound {
 			maxRound = round
@@ -245,15 +264,15 @@ func ReconstructAgenticLoopTurn(ctx context.Context, q protocol.SQLQuerier, sess
 		}
 		var delta []types.Message
 		if err := json.Unmarshal([]byte(deltaJSON), &delta); err != nil {
-			return nil, types.TaintNone, 0, err
+			return nil, types.TaintNone, 0, apperr.Wrap(apperr.CodeInternal, "reconstruct turn: unmarshal delta", err)
 		}
 		allMessages = append(allMessages, delta...)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, types.TaintNone, 0, err
+		return nil, types.TaintNone, 0, apperr.Wrap(apperr.CodeInternal, "reconstruct turn: rows iteration", err)
 	}
 	if len(allMessages) == 0 {
-		return nil, types.TaintNone, 0, fmt.Errorf("no rounds found for running turn %s", turnID)
+		return nil, types.TaintNone, 0, apperr.New(apperr.CodeNotFound, fmt.Sprintf("no rounds found for running turn %s", turnID))
 	}
 
 	allMessages = CompleteInterruptedToolCalls(allMessages)

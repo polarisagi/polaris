@@ -29,6 +29,7 @@ func (tp *trackedProvider) Infer(ctx context.Context, msgs []types.Message, opts
 			}
 		})
 	}()
+	//llmopts:exempt 装饰器纯转发上游 opts 到底层 Provider
 	return tp.Provider.Infer(ctx, msgs, opts...) //nolint:wrapcheck
 }
 
@@ -48,5 +49,6 @@ func (tp *trackedProvider) StreamInfer(ctx context.Context, msgs []types.Message
 			}
 		})
 	}()
+	//llmopts:exempt 装饰器纯转发上游 opts 到底层 Provider
 	return tp.Provider.StreamInfer(ctx, msgs, opts...) //nolint:wrapcheck
 }
