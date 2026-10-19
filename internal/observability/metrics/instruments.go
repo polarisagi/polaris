@@ -160,6 +160,9 @@ var (
 	// （internal/agent/agent_overflow_recovery.go）。持续增长说明热路径压缩阈值与实际
 	// Provider 窗口脱节（如小窗口本地模型），应调小 ContextWindowManager 容量。
 	GlobalContextOverflowRecoveryTotal atomic.Int64
+
+	// GlobalCredentialDecryptFailedTotal Provider API Key 解密失败的累计次数（R2-08）。
+	GlobalCredentialDecryptFailedTotal atomic.Int64
 )
 
 // ── InitMetrics ─────────────────────────────────────────────────────────────

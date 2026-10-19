@@ -6,7 +6,6 @@ import (
 
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -63,12 +62,13 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 			continue
 		}
 
-		if vault != nil {
-			if dec, err := vault.Decrypt(apiKeyStr); err == nil {
-				apiKeyStr = dec
-			} else {
-				slog.Warn("polaris: LoadProvidersFromDB failed to decrypt api key", "provider_id", pID, "err", err)
+		if vault != nil && apiKeyStr != "" {
+			dec, err := vault.Decrypt(apiKeyStr)
+			if err != nil {
+				metrics.RecordCredentialDecryptFailed()
+				return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LoadProvidersFromDB: failed to decrypt api key for provider %s", pID), err)
 			}
+			apiKeyStr = dec
 		}
 
 		// 2026-07-12 P1 修复：api_key 列支持按行存放多个 Key（每行一个），

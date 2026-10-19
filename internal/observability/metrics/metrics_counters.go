@@ -28,6 +28,7 @@ func simpleCounters() []counterSpec {
 		{"polaris.factuality.judge_unavailable_total", "Factuality judge unavailable count", &GlobalFactualityJudgeUnavailableTotal},
 		{"polaris.llm.response_cache_hit_total", "Deterministic background LLM calls served from the exact-match response cache", &GlobalLLMResponseCacheHitTotal},
 		{"polaris.llm.response_cache_miss_total", "Cache-eligible LLM calls that missed the exact-match response cache", &GlobalLLMResponseCacheMissTotal},
+		{"polaris.llm.credential_decrypt_failed_total", "Failed credential decryption attempts during provider instantiation or loading", &GlobalCredentialDecryptFailedTotal},
 		{"polaris.audio.tts_proxy_bench_total", "Pre-download TTS proxy benchmarks (SenseVoice RTF x13) that reached a conclusion", &GlobalAudioTTSProxyBenchTotal},
 		{"polaris.audio.tts_proxy_too_slow_total", "Proxy benchmarks that judged this host too slow for server TTS (download skipped)", &GlobalAudioTTSProxyTooSlowTotal},
 		{"polaris.audio.tts_proxy_skipped_total", "Proxy benchmarks without a conclusion (STT unavailable or CPU contended)", &GlobalAudioTTSProxySkippedTotal},

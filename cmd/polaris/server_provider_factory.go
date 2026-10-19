@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -64,11 +63,12 @@ func (f *dbProviderFactory) CreateProvider(ctx context.Context, providerID, mode
 	}
 
 	if f.vault != nil && apiKeyStr != "" {
-		if dec, err := f.vault.Decrypt(apiKeyStr); err == nil {
-			apiKeyStr = dec
-		} else {
-			slog.Warn("dbProviderFactory: failed to decrypt api key", "provider_id", providerID, "err", err)
+		dec, err := f.vault.Decrypt(apiKeyStr)
+		if err != nil {
+			metrics.RecordCredentialDecryptFailed()
+			return nil, "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to decrypt api key for provider %s", providerID), err)
 		}
+		apiKeyStr = dec
 	}
 
 	credPool := llm.NewCredentialPool(splitAPIKeys(apiKeyStr), llm.StrategyRoundRobin)
