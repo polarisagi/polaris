@@ -108,6 +108,7 @@ func (c *trackingAgentCtrl) InjectReplayData(_ []protocol.ReplayLLMCall) {}
 func (c *trackingAgentCtrl) SetConversationHistory(_ []types.Message)    {}
 func (c *trackingAgentCtrl) Steer(_ string) bool                         { return true }
 func (c *trackingAgentCtrl) SetModelLock(_ string)                       {}
+func (c *trackingAgentCtrl) SetLoopCompletion(_ string)                  {}
 func (c *trackingAgentCtrl) SubscribeStream(_ context.Context) <-chan types.AgentStreamEvent {
 	return c.streamCh
 }

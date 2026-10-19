@@ -141,6 +141,8 @@ AgentController interface {
 	Steer(text string) bool
 	// SetModelLock 锁定用户在前端界面手选的模型（ADR-0115 WP3），覆盖 Agent 内部默认路由。
 	SetModelLock(ref string)
+	// SetLoopCompletion 设置循环完成判定模式（"auto" | "explicit"）（ADR-0115 WP2 / R3-07）。
+	SetLoopCompletion(mode string)
 }
 
 // CtxModelSwitcherKey 用于在工具执行上下文传递 ModelSwitcher。

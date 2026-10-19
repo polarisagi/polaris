@@ -74,6 +74,7 @@ func (m *mockAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) {
 func (m *mockAgentController) SetConversationHistory(history []types.Message) {}
 func (m *mockAgentController) Steer(text string) bool                         { return true }
 func (m *mockAgentController) SetModelLock(ref string)                        {}
+func (m *mockAgentController) SetLoopCompletion(mode string)                  {}
 
 // Test_SSE_AgentFSM_Injection 验证 AgentController 接口及桩代码的非阻塞行为。
 func Test_SSE_AgentFSM_Injection(t *testing.T) {

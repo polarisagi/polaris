@@ -304,6 +304,7 @@ type AgenticTurn struct {
 	LoopHandoffPendingResults      []types.Message
 	LoopHandoffToolCalls           []types.InferToolCall
 	LoopHandoffSpawnCallID         map[string][]string
+	LoopConsecutiveTextRounds      int
 }
 
 // ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05）。
@@ -320,6 +321,7 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopWarningInjected = false
 	s.LoopWarningPrompt = ""
 	s.LoopSummary = ""
+	s.LoopConsecutiveTextRounds = 0
 
 	s.LoopEnding = false
 	s.LoopHandoffPendingResults = nil

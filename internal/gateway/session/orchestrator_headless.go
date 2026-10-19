@@ -49,7 +49,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	// 触发命中 Pool 中同一个 per-session Agent 内核实例，而非每轮都新建
 	// 一次性实例（此前 AcquireHeadless 自行生成 headless-<时间戳> 丢弃了
 	// sessionID，见 internal/agent/pool.go AcquireHeadless 注释）。
-	res, err := o.agentPool.AcquireHeadless(ctx, intent, types.WithSessionID(sessionID))
+	res, err := o.agentPool.AcquireHeadless(ctx, intent, types.WithSessionID(sessionID), types.WithLoopCompletion("explicit"))
 	if err != nil {
 		// [2026-08-02 S-06 抽样复查] AgentPool 容量耗尽时 acquireInner 返回
 		// CodeResourceExhausted（应映射 429），此前恒被 CodeInternal 覆盖成 500。
@@ -64,7 +64,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 		}
 		o.finishHeadlessTurn(ctx, req, sessionID, isFirstTurn, res)
 		next, nextErr := o.agentPool.AcquireHeadless(ctx, types.Intent{Query: "<stop-hook>\n" + v.Reason + "\n</stop-hook>",
-			WorkingDir: req.WorkingDir}, types.WithSessionID(sessionID))
+			WorkingDir: req.WorkingDir}, types.WithSessionID(sessionID), types.WithLoopCompletion("explicit"))
 		if nextErr != nil {
 			slog.Warn("session: headless stop-hook continuation failed", "session", sessionID, "err", nextErr)
 			break

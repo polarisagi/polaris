@@ -64,10 +64,13 @@ func (a *Agent) publishPreparedReply() {
 	reply := a.sCtx.PreparedReply
 	a.sCtx.PreparedReply = ""
 	taintLevel := a.sCtx.GlobalTaintLevel
+	turnID := a.sCtx.TurnID
 	a.sCtx.Mu.Unlock()
-	a.publishTurnPhase(types.AgentStateRespond)
 	if reply == "" {
 		return
+	}
+	if turnID == "" {
+		a.publishTurnPhase(types.AgentStateRespond)
 	}
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:       types.AgentStreamEventToken,

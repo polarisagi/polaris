@@ -208,3 +208,13 @@ func (a *Agent) buildValidationContext(plan *protocol.DAGPlan) *protocol.DAGVali
 		TaintAuditor:     a.Security.TaintAuditor,
 	}
 }
+
+// SetLoopCompletion 设置当前 Agent 会话的循环完成判定模式（"auto" | "explicit"）（R3-07 / WP2）。
+func (a *Agent) SetLoopCompletion(mode string) {
+	if a == nil || a.sCtx == nil {
+		return
+	}
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	a.sCtx.LoopCompletion = mode
+}

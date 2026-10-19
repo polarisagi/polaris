@@ -2,9 +2,11 @@ package fsm
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -82,6 +84,7 @@ func (sm *StateMachine) registerLoopTransitions() {
 					}
 				}
 			}
+			sCtx.PreparedReply = finalReply
 			if userQ != "" && finalReply != "" {
 				sCtx.ConversationHistory = append(sCtx.ConversationHistory,
 					types.Message{Role: "user", Content: userQ},
@@ -245,16 +248,28 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 				return types.State("S_LOOP_STEER"), nil
 			}
 			sCtx.LoopEnding = true
-			sCtx.LoopSummary = string(call.Input)
+			var sumArgs struct {
+				Summary string `json:"summary"`
+			}
+			if err := json.Unmarshal(call.Input, &sumArgs); err == nil && sumArgs.Summary != "" {
+				sCtx.LoopSummary = sumArgs.Summary
+			} else {
+				sCtx.LoopSummary = string(call.Input)
+			}
 			sCtx.LoopPendingToolCalls = nil
+			metrics.RecordLoopTermination(context.Background(), "finish")
 			return types.State("S_LOOP_DONE"), nil
 		}
 	}
 
 	// 检查是否有常规工具调用
 	if len(sCtx.LoopPendingToolCalls) > 0 {
+		sCtx.LoopConsecutiveTextRounds = 0
 		return types.State("S_LOOP_STEP_DONE"), nil
 	}
+
+	// 连续纯文本轮次计数（R3-07）
+	sCtx.LoopConsecutiveTextRounds++
 
 	// 无工具调用且 auto 完成模式下，认为文本输出即收尾回复
 	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12）
@@ -267,6 +282,14 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 		completion = config.CurrentThresholds().M4Kernel.LoopCompletion
 	}
 	if completion == "explicit" {
+		// 防浪费兜底：explicit 模式下，模型连续 2 轮只给文本、不调用 finish，就把最后一段文本当作 summary 收尾，并计数 polaris.agent.loop_termination_total{reason="implicit_finish"} (R3-07)。
+		if sCtx.LoopConsecutiveTextRounds >= 2 {
+			sCtx.LoopEnding = true
+			sCtx.LoopSummary = getLastAssistantText(sCtx, fill)
+			metrics.RecordLoopTermination(context.Background(), "implicit_finish")
+			return types.State("S_LOOP_DONE"), nil
+		}
+
 		// 显式模式下未调用 finish 时要求模型确认完成并继续循环
 		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
 			Role:    "user",
@@ -277,12 +300,26 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	}
 
 	sCtx.LoopEnding = true
+	metrics.RecordLoopTermination(context.Background(), "auto")
 	return types.State("S_LOOP_DONE"), nil
 }
 
 // onLoopFailure 处理 LLM 推理失败。
 func (sm *StateMachine) onLoopFailure(sCtx protocol.StateContext, err error) (types.State, error) {
 	return types.State("S_LOOP_FAILED"), err
+}
+
+func getLastAssistantText(sCtx *StateContext, fill []byte) string {
+	if len(fill) > 0 {
+		return string(fill)
+	}
+	if len(sCtx.LoopMessages) > 0 {
+		lastMsg := sCtx.LoopMessages[len(sCtx.LoopMessages)-1]
+		if lastMsg.Role == "assistant" {
+			return lastMsg.Content
+		}
+	}
+	return ""
 }
 
 func formatUsageLine(tokens int, cost float64, wallSeconds float64) string {

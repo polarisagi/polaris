@@ -251,7 +251,13 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		defer cancelSub()
 	}
 
-	opts := []types.HeadlessOption{types.WithSessionID("sub-" + taskID), types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb}
+	opts := []types.HeadlessOption{
+		types.WithSessionID("sub-" + taskID),
+		types.WithSpawnDepth(snap.SpawnDepth),
+		types.WithNamespace(snap.Namespace),
+		types.WithLoopCompletion("explicit"),
+		eventCb,
+	}
 	if snap.Type == PeerDelegationTaskType {
 		if w.peerProfile == nil {
 			w.failTask(taskID, "peer delegation profile not configured on this node (fail-closed)")

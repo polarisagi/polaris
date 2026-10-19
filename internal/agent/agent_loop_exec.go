@@ -84,6 +84,11 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	if call.Name == "transfer_to_agent" {
 		return a.executeLoopTransferToAgent(toolCtx, call)
 	}
+	if call.Name == "finish" {
+		msg := makeToolResultMessage(call.ID, "[Finished]")
+		msg.Round = a.sCtx.LoopRound
+		return msg
+	}
 
 	sCtxMu := &a.sCtx.Mu
 	sCtxMu.RLock()

@@ -44,6 +44,8 @@ type HeadlessOptions struct {
 	SessionID string
 	// Profile 子 Agent 角色规格（ADR-0103 决策三）；nil = 通用 Agent。
 	Profile *AgentProfileSpec
+	// LoopCompletion 循环完成判定模式（"auto" | "explicit"）；空串时遵循系统默认（ADR-0115 WP2 / R3-07）。
+	LoopCompletion string
 }
 
 // WithSpawnDepth 设置本次 headless 执行继承的委派链深度（ADR-0084）。
@@ -73,4 +75,9 @@ func WithSessionID(id string) HeadlessOption {
 // WithAgentProfile 以指定角色规格运行本次 headless 执行（插件/项目/用户定义的子 Agent）。
 func WithAgentProfile(p *AgentProfileSpec) HeadlessOption {
 	return func(o *HeadlessOptions) { o.Profile = p }
+}
+
+// WithLoopCompletion 设置循环完成判定模式（如 "explicit" 用于 headless 委派或自动化任务，R3-07）。
+func WithLoopCompletion(mode string) HeadlessOption {
+	return func(o *HeadlessOptions) { o.LoopCompletion = mode }
 }

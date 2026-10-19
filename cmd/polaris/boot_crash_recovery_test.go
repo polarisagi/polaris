@@ -79,6 +79,7 @@ func (f *fakeAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) {
 func (f *fakeAgentController) SetConversationHistory(history []types.Message)  {}
 func (f *fakeAgentController) Steer(text string) bool                          { return true }
 func (f *fakeAgentController) SetModelLock(ref string)                         {}
+func (f *fakeAgentController) SetLoopCompletion(mode string)                    {}
 func (f *fakeAgentController) SubscribeStream(_ context.Context) <-chan types.AgentStreamEvent {
 	return f.streamCh
 }
