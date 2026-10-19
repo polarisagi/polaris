@@ -247,12 +247,13 @@
               </div>
               <div class="space-y-1.5 font-mono">
                 <template x-for="sa in $store.chat.subagents" :key="sa.id">
-                  <div class="flex items-center justify-between p-1.5 rounded bg-base-200/50">
+                  <div class="flex flex-wrap items-center justify-between p-1.5 rounded bg-base-200/50">
                     <div class="flex items-center gap-2 truncate">
                       <span class="badge badge-xs" :class="sa.parent_id ? 'badge-ghost' : 'badge-primary'" x-text="sa.id.slice(0, 12)"></span>
                       <span class="text-base-content/70 truncate" x-text="sa.message || 'running...'"></span>
                     </div>
                     <span class="badge badge-xs" :class="sa.status === 'ok' ? 'badge-success' : 'badge-info'" x-text="sa.status"></span>
+                    <div class="w-full mt-1 whitespace-pre-wrap break-words text-base-content/60" x-show="sa.output" x-text="sa.output"></div>
                   </div>
                 </template>
               </div>

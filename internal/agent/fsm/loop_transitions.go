@@ -1,6 +1,7 @@
 package fsm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -80,7 +82,11 @@ func (sm *StateMachine) registerLoopTransitions() {
 			sCtx.Mu.Lock()
 			defer sCtx.Mu.Unlock()
 			userQ := sCtx.RawIntentTS.UnsafeContent()
-			finalReply := sCtx.PreparedReply
+			// 已流式推送过文本时，助手回复就是用户实际看到的拼接文本（R5-02）。
+			finalReply := sCtx.LoopStreamedText
+			if finalReply == "" {
+				finalReply = sCtx.PreparedReply
+			}
 			if finalReply == "" {
 				finalReply = sCtx.LoopSummary
 			}
@@ -162,13 +168,20 @@ func (sm *StateMachine) LoopEffect(sCtx *StateContext) protocol.Effect {
 // loopEffect 构造单轮 Agentic 调用的 LLMFillEffect。
 func (sm *StateMachine) loopEffect(sCtx *StateContext) protocol.Effect {
 	th := config.CurrentThresholds().M4Kernel
-	modelPool := th.ModelPoolPlanInitial
+	modelPool := th.ModelPoolLoop
 	if modelPool == "" {
 		modelPool = "default"
 	}
 
+	// 交互回合（用户在读）逐轮流式推送文本与工具进度；委派/后台回合保持回合末一次性发布（R5-02）。
+	audience := protocol.AudienceInternal
+	if sCtx.LoopStreamsToUser() {
+		audience = protocol.AudienceUser
+	}
+
 	return protocol.LLMFillEffect{
 		SchemaRef: "agentic_loop",
+		Audience:  audience,
 		PromptFn: func(pCtx protocol.StateContext) []types.Message {
 			return sm.promptLoop(sCtx, pCtx)
 		},
@@ -239,6 +252,15 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	calls := make([]types.InferToolCall, len(sCtx.LoopPendingToolCalls))
 	copy(calls, sCtx.LoopPendingToolCalls)
 	sCtx.Mu.Unlock()
+
+	// 空输出（DeepSeek 思考模式偶发只出思考链就 stop）：不能把空回复交给用户。
+	// 与 staged 的 planEffect 同口径，每回合重跑一次；仍为空且本回合从未产出过正文才判失败，
+	// 已有正文时沿用既有收尾（取最后一段非空助手文本）。（R5-06）
+	if len(calls) == 0 && len(bytes.TrimSpace(fill)) == 0 {
+		if state, handled, err := sm.onLoopEmptyOutput(sCtx); handled {
+			return state, err
+		}
+	}
 
 	// 检查是否有 finish 调用
 	for _, call := range calls {
@@ -317,6 +339,25 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	sCtx.Mu.Unlock()
 	metrics.RecordLoopTermination(context.Background(), "auto")
 	return types.State("S_LOOP_DONE"), nil
+}
+
+// onLoopEmptyOutput 处理 LLM 本轮空输出；handled=false 表示交回常规收尾流程。
+func (sm *StateMachine) onLoopEmptyOutput(sCtx *StateContext) (state types.State, handled bool, err error) {
+	sCtx.Mu.Lock()
+	if sCtx.LoopEmptyRetries < 1 {
+		sCtx.LoopEmptyRetries++
+		sCtx.Mu.Unlock()
+		return types.State("S_LOOP_STEER"), true, nil
+	}
+	hasText := sCtx.LoopStreamedText != ""
+	for i := len(sCtx.LoopMessages) - 1; i >= 0 && !hasText; i-- {
+		hasText = sCtx.LoopMessages[i].Role == "assistant" && sCtx.LoopMessages[i].Content != ""
+	}
+	sCtx.Mu.Unlock()
+	if hasText {
+		return "", false, nil
+	}
+	return types.State("S_LOOP_FAILED"), true, apperr.New(apperr.CodeInternal, "loop: LLM returned empty output after retry")
 }
 
 // onLoopFailure 处理 LLM 推理失败。

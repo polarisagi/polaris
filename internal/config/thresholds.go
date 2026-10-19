@@ -196,6 +196,9 @@ type M4KernelThresholds struct {
 	ModelPoolReflect     string `toml:"model_pool.reflect"`      // "default"
 	ModelPoolRespond     string `toml:"model_pool.respond"`      // "default"
 	ModelPoolValidate    string `toml:"model_pool.validate"`     // "default"
+	// ModelPoolLoop agentic 主循环每轮调用的模型池（R5-07）。与 plan_initial 分开：规划池参与
+	// 升级阶梯，主循环不升级；二者共用一个键会让调规划池的人无意间改掉默认模式的成本。
+	ModelPoolLoop string `toml:"model_pool.loop"` // "default"
 
 	// PlanReasoningComplexity 规划阶梯起点阈值（ADR-0102 决策六）：Perceive（LLM）给出的
 	// TaskModel.Complexity ≥ 此值时首轮规划即用 model_pool.plan_replan 池 + ThinkingHigh；
@@ -292,6 +295,7 @@ func (t M4KernelThresholds) Validate() error {
 		"model_pool.perceive": t.ModelPoolPerceive, "model_pool.plan_initial": t.ModelPoolPlanInitial,
 		"model_pool.plan_replan": t.ModelPoolPlanReplan, "model_pool.reflect": t.ModelPoolReflect,
 		"model_pool.respond": t.ModelPoolRespond, "model_pool.validate": t.ModelPoolValidate,
+		"model_pool.loop": t.ModelPoolLoop,
 	} {
 		switch types.ModelPool(v) {
 		case types.ModelPoolDefault, types.ModelPoolGeneral, types.ModelPoolReasoning, types.ModelPoolBudget:
@@ -638,6 +642,7 @@ func DefaultThresholds() Thresholds {
 			ModelPoolPlanReplan:            "reasoning",
 			ModelPoolReflect:               "default",
 			ModelPoolRespond:               "default",
+			ModelPoolLoop:                  "default",
 			ModelPoolValidate:              "default",
 			PlanReasoningComplexity:        0.7,
 			ReflectSkipComplexity:          0.4,

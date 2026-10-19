@@ -743,7 +743,12 @@ Alpine.store('chat', {
             sa = { id: data.agent_id, parent_id: data.parent_id || '', status: 'running', message: '' }
             this.subagents.push(sa)
           }
-          if (data.message) sa.message = data.message
+          if (data.type === 'subagent_output') {
+            // 子智能体正文输出不进入助手回复（R5-01），只在树节点下展示
+            sa.output = (sa.output || '') + (data.message || '')
+          } else if (data.message) {
+            sa.message = data.message
+          }
           if (data.type === 'tool_result' || (data.message && data.message.includes('task_done'))) {
             sa.status = 'ok'
           }

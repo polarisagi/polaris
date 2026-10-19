@@ -64,8 +64,8 @@ func makeToolResultMessage(callID string, content string, imageParts ...types.Im
 	}
 }
 
-// executeLoopToolCall 执行单条工具调用，并处理能力令牌与结果投影。
-func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCall) types.Message {
+// executeLoopToolCallRaw 执行单条工具调用，并处理能力令牌与结果投影（进度事件由 executeLoopToolCall 包装发布）。
+func (a *Agent) executeLoopToolCallRaw(ctx context.Context, call types.InferToolCall) types.Message {
 	if a.toolRegistry == nil {
 		msg := makeToolResultMessage(call.ID, "Error: tool registry not configured")
 		msg.Round = a.sCtx.LoopRound

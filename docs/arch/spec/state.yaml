@@ -311,7 +311,11 @@ par:
         Only llm_fill effects with audience=user (currently s_respond only) may publish
         token events to stream subscribers. Internal effects (perceive/plan/reflect) accumulate
         output for structured parsing only. LLMFillEffect.Audience zero value is internal (fail-closed).
-      enforced_by: m4.doStreamInfer + unit_test (ADR-0098)
+        2026-10-20 复核（R5-02，追记）：agentic 循环 s_loop 的 llm_fill 在「交互回合」（loop_completion 非
+        explicit 且非 AcquireHeadless 获取）同样 audience=user——逐轮流式推文本与工具进度；委派/cron/workflow
+        回合仍为 internal，回合末由 publishPreparedReply 一次性发布。已流式推送过的回合（LoopReplyStreamed）
+        终态不得重复发布。原结论（仅 s_respond）对 staged 路径保持有效。
+      enforced_by: m4.doStreamInfer + unit_test (ADR-0098; fsm.TestLoopEffect_AudienceByTurnOrigin)
 
     - id: par_inv_07
       name: complete_only_via_respond
@@ -1020,6 +1024,7 @@ thresholds:
     model_pool_reflect: default # toml:"model_pool.reflect"
     model_pool_respond: default # toml:"model_pool.respond"
     model_pool_validate: default # toml:"model_pool.validate"，L3 看门狗 fail-open
+    model_pool_loop: default # toml:"model_pool.loop"，R5-07：agentic 主循环每轮的模型池（原复用 plan_initial，2026-10-20 拆出）；模型自选 resolveModelRoute 优先级不变
     plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0102 决策六：LLM 判定 complexity ≥ 此值时规划阶梯起点为 level 2（plan_replan 池 + high）
     cache_uniform_tools: false # toml:"cache.uniform_tools"，ADR-0105 决策三实验开关：true 时 Perceive/Reflect/Respond 也下发 Plan 的 tools 并设 tool_choice=none，使四阶段 tools 前缀一致；须以 llm_calls 实测命中/未命中 token 决定是否默认开启（HE-4）
     reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0102 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭

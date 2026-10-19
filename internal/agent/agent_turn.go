@@ -65,8 +65,10 @@ func (a *Agent) publishPreparedReply() {
 	a.sCtx.PreparedReply = ""
 	taintLevel := a.sCtx.GlobalTaintLevel
 	turnID := a.sCtx.TurnID
+	streamed := a.sCtx.LoopReplyStreamed
 	a.sCtx.Mu.Unlock()
-	if reply == "" {
+	// agentic 交互回合已逐轮流式推过正文：再发一遍会让用户看到重复回复（R5-02）
+	if reply == "" || streamed {
 		return
 	}
 	if turnID == "" {

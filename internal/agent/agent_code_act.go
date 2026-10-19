@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -61,9 +64,12 @@ func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintL
 
 	safeOut, err := taint.SanitizeToSafe(caResult.Output)
 	if err != nil {
-		if a.currentSecurityPolicy().CodeActTaintBlockEnabled {
+		pol := a.currentSecurityPolicy()
+		if pol.CodeActTaintBlockEnabled {
 			return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: taint check failed", err)
 		}
+		// full 档自动放行：不阻断，但必须留审计与指标（V9 / HE-1，R5-04）
+		a.recordCodeActTaintBypass(ctx, pol.Profile, err)
 	}
 
 	var outputBytes []byte
@@ -79,6 +85,30 @@ func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintL
 		LatencyMs:  caResult.LatencyMs,
 		TaintLevel: caResult.Output.Level(),
 	}, nil
+}
+
+// recordCodeActTaintBypass 记录 full 档放行 code_act 污点清洗失败的输出：
+// 与 tool_policy.go 的 anomaly 放行同口径——slog 告警 + 审计存储 + hitl_auto_approved_total。
+func (a *Agent) recordCodeActTaintBypass(ctx context.Context, profile policy.TrustProfile, cause error) {
+	slog.WarnContext(ctx, "agent: code_act taint check failed, auto-approved (full profile)",
+		"agent_id", a.ID, "profile", profile, "err", cause)
+	metrics.RecordHITLAutoApproved(ctx, "code_act", "code_act_taint")
+	if a.Security.TaintAuditor == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            "code_act",
+		"checkpoint_type": "code_act_taint",
+		"profile":         string(profile),
+		"reason":          cause.Error(),
+		"agent_id":        a.ID,
+	}
+	if a.sCtx != nil && a.sCtx.SessionID != "" {
+		meta["session_id"] = a.sCtx.SessionID
+	}
+	if err := a.Security.TaintAuditor.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "agent: failed to log code_act taint auto approved audit", "err", err)
+	}
 }
 
 // codeActToolSchema 返回下发给模型的 code_act 工具定义（R3-02）。

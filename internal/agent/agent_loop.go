@@ -237,6 +237,8 @@ func (a *Agent) runLoopRecall(ctx context.Context) error {
 			agentctx.RecallWant{
 				EpisodicQuery: intentText,
 				EpisodicK:     agentctx.PerceiveEpisodicK,
+				// Goal 非空才会查 反思 / L2 / RAG 知识库；缺了它默认模式就用不上知识库（R5-03）。
+				Goal: intentText,
 			},
 			"AgenticLoopRecall",
 		)
@@ -258,11 +260,16 @@ func (a *Agent) runLoopRecall(ctx context.Context) error {
 		content = "## Recalled Context\n" + recallText + "\n\n" + content
 	}
 	msgTaint := a.sCtx.RawIntentTS.Level()
-	if recallTaint != types.TaintNone {
-		msgTaint = types.PropagateTaint(msgTaint, recallTaint)
+	if recallText != "" {
+		// 与 staged 的 writePlanRecall 同口径：召回非空即至少 TaintMedium，
+		// 整条消息的污点取 max(用户意图, Medium, 全局, 已装入召回项)（R5-03）。
+		msgTaint = types.PropagateTaint(msgTaint, types.TaintMedium, a.sCtx.GlobalTaintLevel, recallTaint)
 	}
 	a.sCtx.Mu.Unlock()
 
+	if recallText != "" {
+		a.elevateGlobalTaintLevel(types.TaintMedium)
+	}
 	if recallTaint > types.TaintNone {
 		a.elevateGlobalTaintLevel(recallTaint)
 	}

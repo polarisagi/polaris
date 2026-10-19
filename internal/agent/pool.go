@@ -215,6 +215,7 @@ func (p *Pool) acquireInner(ctx context.Context, sessionID string, background bo
 	entry.lastUsed = time.Now()
 	agent := entry.agent
 	agent.background.Store(background)
+	agent.sCtx.SetBackgroundTurn(background)
 	p.mu.Unlock()
 
 	release := func() {

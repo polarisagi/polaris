@@ -271,6 +271,7 @@ type StateContext struct {
 
 	// Agentic Loop 回合状态（WP2 / ADR-0115 / R2-01）
 	AgenticTurn
+	TurnOrigin // 回合来源（Pool 写入，R5-02）
 
 	// 模型自选与手选锁定（ADR-0115 WP3）
 	UserLockedModel   string // 用户手选锁定的模型引用
@@ -306,6 +307,7 @@ type AgenticTurn struct {
 	LoopHandoffToolCalls           []types.InferToolCall
 	LoopHandoffSpawnCallID         map[string][]string
 	LoopConsecutiveTextRounds      int
+	LoopStream                     // 已流式推送的文本（R5-02）
 }
 
 // ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05 / R4-04）。
@@ -323,6 +325,7 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopWarningPrompt = ""
 	s.LoopSummary = ""
 	s.LoopConsecutiveTextRounds = 0
+	s.LoopStream = LoopStream{}
 
 	// R4-04: 完成模式重置为 auto，若有预设的下次回合模式则消费它；若调用方在此之前显式设置了非 auto 模式则消费它
 	if s.PendingLoopCompletion != "" {

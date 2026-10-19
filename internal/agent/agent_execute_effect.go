@@ -537,6 +537,10 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 						})
 						a.sCtx.Mu.Lock()
 					}
+					if llmEff.Audience == protocol.AudienceUser {
+						// 本轮文本已由 doStreamInfer 以 Token 推给用户，记下以免终态重发（R5-02）
+						a.sCtx.RecordLoopStreamedLocked(resp.Content)
+					}
 					callTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens
 					a.sCtx.LoopLastUsageTokens += callTokens
 					if a.provider != nil {
