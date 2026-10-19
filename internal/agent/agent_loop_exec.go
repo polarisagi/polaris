@@ -129,23 +129,7 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 		rendered = view.render(maxExecResultBytes)
 	}
 
-	if len(res.ImageParts) > 0 {
-		a.sCtx.Mu.Lock()
-		if len(a.sCtx.ExecuteImageParts) >= maxExecuteImageParts {
-			slog.Warn("agent: execute image parts limit reached, discarding new images",
-				"limit", maxExecuteImageParts, "discarded", len(res.ImageParts))
-		} else {
-			remaining := maxExecuteImageParts - len(a.sCtx.ExecuteImageParts)
-			if len(res.ImageParts) > remaining {
-				slog.Warn("agent: execute image parts truncated to limit",
-					"limit", maxExecuteImageParts, "kept", remaining, "discarded", len(res.ImageParts)-remaining)
-				a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts[:remaining]...)
-			} else {
-				a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts...)
-			}
-		}
-		a.sCtx.Mu.Unlock()
-	}
+	a.appendExecuteImageParts(res.ImageParts)
 
 	msg := makeToolResultMessage(call.ID, string(rendered), res.ImageParts...)
 	msg.Round = currentRound
@@ -229,7 +213,7 @@ func collectMaskCandidates(messages []types.Message, currentRound, maskAfter int
 		if strings.HasPrefix(m.Content, "[output masked: full output: read_tool_ref") {
 			continue
 		}
-		if m.Round > 0 && currentRound-m.Round >= maskAfter {
+		if currentRound-m.Round >= maskAfter {
 			candidates = append(candidates, i)
 		}
 	}
@@ -325,4 +309,26 @@ func (a *Agent) broadcastStreamEvent(ev types.AgentStreamEvent) {
 		default:
 		}
 	}
+}
+
+// appendExecuteImageParts 向 sCtx.ExecuteImageParts 安全追加图片并执行单回合上限截断（V10）。
+func (a *Agent) appendExecuteImageParts(parts []types.ImagePart) {
+	if len(parts) == 0 {
+		return
+	}
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	cur := len(a.sCtx.ExecuteImageParts)
+	if cur >= maxExecuteImageParts {
+		slog.Warn("agent: execute image parts limit reached, discarding new images",
+			"limit", maxExecuteImageParts, "discarded", len(parts))
+		return
+	}
+	remaining := maxExecuteImageParts - cur
+	if len(parts) > remaining {
+		slog.Warn("agent: execute image parts truncated to limit",
+			"limit", maxExecuteImageParts, "kept", remaining, "discarded", len(parts)-remaining)
+		parts = parts[:remaining]
+	}
+	a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, parts...)
 }

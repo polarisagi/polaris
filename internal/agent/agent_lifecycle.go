@@ -322,6 +322,7 @@ func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
 	})
 }
 
+//nolint:gocyclo
 func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:    types.AgentStreamEventStatus,

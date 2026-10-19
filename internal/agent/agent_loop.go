@@ -16,6 +16,8 @@ import (
 
 // runExecuteLoop 是 S_LOOP_EXEC 阶段的核心执行器。
 // 负责失控保护检查、四层计划校验、并发执行工具、批量遮蔽与插话消费，并推进 FSM 回到 S_LOOP。
+//
+//nolint:gocyclo
 func (a *Agent) runExecuteLoop(ctx context.Context) error {
 	a.sCtx.Mu.Lock()
 	calls := a.sCtx.LoopPendingToolCalls

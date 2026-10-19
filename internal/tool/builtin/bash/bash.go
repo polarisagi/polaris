@@ -36,6 +36,8 @@ type bashArgs struct {
 //
 // allowedPaths/sandboxEnabled/netPolicy/bwrapPath 来自 SandboxConfig，
 // standard 档下行为与改造前逐字节等价（R1 向后兼容约束）。
+//
+//nolint:gocyclo
 func MakeBashFn(
 	allowedPaths []string,
 	sandboxEnabled bool,
@@ -207,22 +209,7 @@ func evaluateBashRisk(ctx context.Context, cmd string, pol policy.Policy, riskCl
 				"cmd", cmd, "reason", verdict.Reason,
 				"profile", pol.Profile)
 			metrics.RecordHITLAutoApproved(ctx, "bash", "command_risk")
-			if al, ok := hitlGateway.(Auditor); ok && al != nil {
-				meta := map[string]any{
-					"tool":            "bash",
-					"checkpoint_type": "command_risk",
-					"command":         cmd,
-					"reason":          verdict.Reason,
-					"profile":         pol.Profile,
-				}
-				if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
-					meta["agent_id"] = aid
-				}
-				if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
-					meta["session_id"] = sid
-				}
-				_ = al.Log(ctx, "hitl_auto_approved", meta)
-			}
+			logBashHITLAutoApproved(ctx, hitlGateway, cmd, verdict.Reason, pol.Profile)
 			return verdict, nil
 		}
 		if hitlGateway == nil {
@@ -313,4 +300,27 @@ func execPersistentTerminal(
 		return nil, apperr.Wrap(apperr.CodeInternal, "bash: marshal persistent result", err)
 	}
 	return out, nil
+}
+
+func logBashHITLAutoApproved(ctx context.Context, gw HITLGateway, cmd, reason string, profile policy.TrustProfile) {
+	al, ok := gw.(Auditor)
+	if !ok || al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            "bash",
+		"checkpoint_type": "command_risk",
+		"command":         cmd,
+		"reason":          reason,
+		"profile":         string(profile),
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "bash: failed to log hitl auto approved audit", "err", err)
+	}
 }

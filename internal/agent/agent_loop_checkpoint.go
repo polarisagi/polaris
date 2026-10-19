@@ -143,6 +143,8 @@ func (a *Agent) ResumeAgenticLoop(resumeCtxJSON string) (restored bool) {
 }
 
 // ResumeAgenticLoopFromCheckpoint 从 TaskCheckpointRepository 查找最近的 running 快照并续跑。
+//
+//nolint:gocyclo
 func (a *Agent) ResumeAgenticLoopFromCheckpoint(ctx context.Context) (restored bool) {
 	if a.taskCheckpointRepo == nil || a.sCtx == nil {
 		return false

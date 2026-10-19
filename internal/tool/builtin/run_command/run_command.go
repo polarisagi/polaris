@@ -36,6 +36,8 @@ type runCommandArgs struct {
 //   - pol.HITLAutoApprove=true → 高风险命令自动放行（full 档）
 //
 // standard 档行为与改造前逐字节等价（R1 向后兼容约束）。
+//
+//nolint:gocyclo
 func MakeRunCommandFn(
 	allowedPaths []string,
 	sandboxEnabled bool,
@@ -76,22 +78,7 @@ func MakeRunCommandFn(
 					"cmd", args.Command, "reason", verdict.Reason,
 					"profile", pol.Profile)
 				metrics.RecordHITLAutoApproved(ctx, "run_command", "command_risk")
-				if al, ok := hitlGateway.(Auditor); ok && al != nil {
-					meta := map[string]any{
-						"tool":            "run_command",
-						"checkpoint_type": "command_risk",
-						"command":         args.Command,
-						"reason":          verdict.Reason,
-						"profile":         pol.Profile,
-					}
-					if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
-						meta["agent_id"] = aid
-					}
-					if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
-						meta["session_id"] = sid
-					}
-					_ = al.Log(ctx, "hitl_auto_approved", meta)
-				}
+				logRunCmdHITLAutoApproved(ctx, hitlGateway, args.Command, verdict.Reason, pol.Profile)
 			} else {
 				if hitlGateway == nil {
 					return nil, apperr.New(apperr.CodeForbidden, "run_command: HITL gateway is nil, fail-closed for RiskHITL command")
@@ -214,4 +201,27 @@ func parseRunCommandArgs(input []byte, allowedPaths []string, pol policy.Policy)
 	}
 
 	return &args, workDir, timeout, nil
+}
+
+func logRunCmdHITLAutoApproved(ctx context.Context, gw HITLGateway, cmd, reason string, profile policy.TrustProfile) {
+	al, ok := gw.(Auditor)
+	if !ok || al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            "run_command",
+		"checkpoint_type": "command_risk",
+		"command":         cmd,
+		"reason":          reason,
+		"profile":         string(profile),
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "run_command: failed to log hitl auto approved audit", "err", err)
+	}
 }

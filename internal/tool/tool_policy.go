@@ -78,21 +78,7 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 		slog.Warn("tool_registry: anomaly filter HITL auto-approved (full profile)",
 			"tool", name, "profile", pol.Profile)
 		metrics.RecordHITLAutoApproved(ctx, name, "anomaly_escalation")
-		if al != nil {
-			meta := map[string]any{
-				"tool":            name,
-				"checkpoint_type": "anomaly_escalation",
-				"profile":         pol.Profile,
-				"reason":          "anomaly filter bypass in full profile",
-			}
-			if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
-				meta["agent_id"] = aid
-			}
-			if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
-				meta["session_id"] = sid
-			}
-			_ = al.Log(ctx, "hitl_auto_approved", meta)
-		}
+		logAnomalyHITLAutoApproved(ctx, al, name, pol.Profile)
 		f.Record(name, features)
 		return nil
 	}
@@ -133,5 +119,26 @@ func (r *InMemoryToolRegistry) triggerPreExecutionCheckpoint(ctx context.Context
 		if snapErr := ckpt.MaybeSnapshot(ctx, tool.Name, tool.Capability, tool.SideEffects, execInput, taintLevel); snapErr != nil {
 			slog.WarnContext(ctx, "tool_policy: checkpoint snapshot failed", "tool", tool.Name, "err", snapErr)
 		}
+	}
+}
+
+func logAnomalyHITLAutoApproved(ctx context.Context, al protocol.AuditLogger, name string, profile policy.TrustProfile) {
+	if al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            name,
+		"checkpoint_type": "anomaly_escalation",
+		"profile":         string(profile),
+		"reason":          "anomaly filter bypass in full profile",
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "tool_registry: failed to log anomaly hitl auto approved audit", "err", err)
 	}
 }

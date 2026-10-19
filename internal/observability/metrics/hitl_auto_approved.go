@@ -7,11 +7,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-var (
-	// InstrHITLAutoApprovedTotal 记录 full 档位下 HITL 自动放行事件计数（V9 / HE-1）。
-	InstrHITLAutoApprovedTotal metric.Int64Counter
-)
-
 func initHITLAutoApprovedInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	var err error
 	InstrHITLAutoApprovedTotal, err = meter.Int64Counter(

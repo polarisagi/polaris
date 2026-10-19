@@ -5,6 +5,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // hitlGatewayWithAudit 包装 HITLGateway 并附加 protocol.AuditLogger，
@@ -18,12 +19,17 @@ func (h *hitlGatewayWithAudit) RequestApproval(ctx context.Context, action strin
 	if h.inner == nil {
 		return nil
 	}
-	return h.inner.RequestApproval(ctx, action, req)
+	if err := h.inner.RequestApproval(ctx, action, req); err != nil {
+		return apperr.Wrap(apperr.CodeForbidden, "hitlGatewayWithAudit.RequestApproval", err)
+	}
+	return nil
 }
 
 func (h *hitlGatewayWithAudit) Log(ctx context.Context, action string, meta map[string]any) error {
 	if h.al != nil {
-		return h.al.Log(ctx, action, meta)
+		if err := h.al.Log(ctx, action, meta); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "hitlGatewayWithAudit.Log", err)
+		}
 	}
 	return nil
 }
