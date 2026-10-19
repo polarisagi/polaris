@@ -49,11 +49,14 @@ func (a *Agent) countRunningSubagents(ctx context.Context) int {
 func (a *Agent) cascadeCancelSubagents(ctx context.Context, ids []string) {
 	for _, id := range ids {
 		if a.handoffPoster != nil {
-			_ = a.handoffPoster.FailTask(ctx, id, a.ID, []byte("cascade cancelled due to post failure of sibling task"))
+			if fErr := a.handoffPoster.FailTask(ctx, id, a.ID, []byte("cascade cancelled due to post failure of sibling task")); fErr != nil {
+				slog.DebugContext(ctx, "agent_subagents: cascade cancel fail task", "task_id", id, "err", fErr)
+			}
 		}
 		a.updateSubagentStatusCancelled(ctx, id)
 	}
 }
+
 
 // SpawnAgents 派生一个或多个子智能体并发执行（ADR-0115 WP4）。
 func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]string, error) { //nolint:gocyclo
@@ -248,7 +251,9 @@ func (a *Agent) AgentMessage(ctx context.Context, id, text string) (string, erro
 	// 2. 若同节点持有 subagentCtrl（Pool），直连尝试 TrySteer（快速通道，R2-14）
 	if a.subagentCtrl != nil {
 		if !a.subagentCtrl.TrySteer("sub-"+id, text) {
-			_ = a.subagentCtrl.TrySteer(id, text)
+			if ok := a.subagentCtrl.TrySteer(id, text); !ok {
+				slog.DebugContext(ctx, "agent_subagents: direct TrySteer fallback missed", "id", id)
+			}
 		}
 	}
 	return fmt.Sprintf("已成功向子智能体 %s 投递消息", id), nil
@@ -274,12 +279,15 @@ func (a *Agent) AgentStop(ctx context.Context, id string) (string, error) {
 	// 3. 若同节点持有 subagentCtrl（Pool），直连停止子 Agent 并从 Pool 释放（R2-14）
 	if a.subagentCtrl != nil {
 		if !a.subagentCtrl.StopSession("sub-" + id) {
-			_ = a.subagentCtrl.StopSession(id)
+			if ok := a.subagentCtrl.StopSession(id); !ok {
+				slog.DebugContext(ctx, "agent_subagents: direct StopSession fallback missed", "id", id)
+			}
 		}
 	}
 	a.updateSubagentStatusCancelled(ctx, id)
 	return fmt.Sprintf("已成功中止子智能体 %s", id), nil
 }
+
 
 func (a *Agent) currentSecurityPolicy() policy.Policy {
 	prof := policy.ProfileStandard

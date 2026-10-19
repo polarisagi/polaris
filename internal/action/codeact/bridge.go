@@ -85,7 +85,9 @@ func createBridgeListener(explicitDataDir string) (net.Listener, string, error) 
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return nil, "", apperr.Wrap(apperr.CodeInternal, "code_act bridge: mkdir run dir failed", err)
 	}
-	_ = os.Chmod(runDir, 0o700)
+	if cErr := os.Chmod(runDir, 0o700); cErr != nil {
+		slog.Debug("code_act bridge: chmod run dir", "err", cErr)
+	}
 
 	sockPath := filepath.Join(runDir, fmt.Sprintf("pb_%s.sock", uuid.NewString()[:8]))
 	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
@@ -98,9 +100,12 @@ func createBridgeListener(explicitDataDir string) (net.Listener, string, error) 
 
 	if err := os.Chmod(sockPath, 0o600); err != nil {
 		_ = l.Close()
-		_ = os.Remove(sockPath)
+		if rErr := os.Remove(sockPath); rErr != nil {
+			slog.Debug("code_act bridge: remove socket on cleanup", "err", rErr)
+		}
 		return nil, "", apperr.Wrap(apperr.CodeInternal, "code_act bridge: chmod failed", err)
 	}
+
 	return l, sockPath, nil
 }
 

@@ -55,14 +55,19 @@ func (w *limitedLogWriter) Write(p []byte) (int, error) {
 	remain := w.maxBytes - w.written
 	if int64(len(p)) > remain {
 		if remain > 0 {
-			_, _ = w.file.Write(p[:remain])
+			if n, wErr := w.file.Write(p[:remain]); wErr != nil {
+				return n, apperr.Wrap(apperr.CodeInternal, "write log remain", wErr)
+			}
 			w.written += remain
 		}
 		marker := fmt.Sprintf("\n[LOG TRUNCATED: exceeded %d bytes limit]\n", w.maxBytes)
-		_, _ = w.file.Write([]byte(marker))
+		if _, mErr := w.file.Write([]byte(marker)); mErr != nil {
+			return len(p), apperr.Wrap(apperr.CodeInternal, "write log marker", mErr)
+		}
 		w.truncated = true
 		return len(p), nil
 	}
+
 
 	n, err := w.file.Write(p)
 	w.written += int64(n)

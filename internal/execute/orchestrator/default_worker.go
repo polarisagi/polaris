@@ -375,7 +375,9 @@ func (w *DefaultTaskWorker) handleTaskEvent(ev types.AgentStreamEvent, taskID st
 	if ev.Type == types.AgentStreamEventSteerAccepted {
 		if steerable, ok := w.pool.(interface{ TrySteer(string, string) bool }); ok {
 			if !steerable.TrySteer("sub-"+taskID, ev.Content) {
-				_ = steerable.TrySteer(taskID, ev.Content)
+				if ok := steerable.TrySteer(taskID, ev.Content); !ok {
+					slog.Debug("default_worker: steer fallback missed", "task_id", taskID)
+				}
 			}
 		}
 		return
@@ -383,8 +385,12 @@ func (w *DefaultTaskWorker) handleTaskEvent(ev types.AgentStreamEvent, taskID st
 	if ev.Type == types.AgentStreamEventStatus && ev.Content == "cancel" {
 		cancel()
 		if stoppable, ok := w.pool.(interface{ StopSession(string) bool }); ok {
-			_ = stoppable.StopSession("sub-" + taskID)
-			_ = stoppable.StopSession(taskID)
+			if !stoppable.StopSession("sub-" + taskID) {
+				if ok := stoppable.StopSession(taskID); !ok {
+					slog.Debug("default_worker: stop session fallback missed", "task_id", taskID)
+				}
+			}
 		}
 	}
 }
+
