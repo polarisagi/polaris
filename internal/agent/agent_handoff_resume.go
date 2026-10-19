@@ -48,6 +48,13 @@ type HandoffResumeContext struct {
 	HandoffTaskIDs   []string         `json:"handoff_task_ids,omitempty"`
 	NamespaceID      string           `json:"namespace_id,omitempty"`
 	SnapshotAt       int64            `json:"snapshot_at"`
+
+	// Agentic Loop 支持（P1 / ADR-0115 / HE-6）
+	LoopRound           int             `json:"loop_round,omitempty"`
+	LoopMessages        []types.Message `json:"loop_messages,omitempty"`
+	LoopLastUsageTokens int             `json:"loop_last_usage_tokens,omitempty"`
+	LoopLastUsageCost   float64         `json:"loop_last_usage_cost,omitempty"`
+	LoopLastWallSeconds float64         `json:"loop_last_wall_seconds,omitempty"`
 }
 
 // buildHandoffResumeSnapshot 序列化当前执行期上下文为 JSON 字符串，供

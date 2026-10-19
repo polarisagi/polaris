@@ -154,12 +154,9 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		a.sCtx.Mu.Unlock()
 	}
 
-	// 8. 记录指标与持久化事件
+	// 8. 记录指标与持久化增量快照（P1 / ADR-0104 / HE-6）
 	metrics.RecordLoopRound(ctx)
-	if a.sm != nil && a.sCtx != nil {
-		eventID := a.sm.NextEventID(a.sCtx.SessionID, "loop_exec")
-		_ = eventID
-	}
+	a.persistLoopCheckpoint(ctx)
 
 	// 9. 推进状态机回到 S_LOOP 进入下一轮
 	a.asyncIntent(types.TriggerLoopExecDone)

@@ -59,6 +59,16 @@ func (sm *StateMachine) registerLoopTransitions() {
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
+
+	// S_LOOP → S_LOOP: 崩溃恢复唤醒续跑（P1 / ADR-0104 / HE-6）
+	sm.add(Transition{
+		From:    types.AgentStateLoop,
+		Trigger: types.TriggerResume,
+		To:      types.AgentStateLoop,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
+		},
+	})
 }
 
 // executeLoopStep 是 S_LOOP_EXEC 阶段的 DeterministicEffect 存根。
