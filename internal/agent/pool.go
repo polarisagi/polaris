@@ -309,21 +309,7 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	}
 	defer release()
 
-	// ADR-0084：透传委派链深度
-	agent.SetSpawnDepth(opt.SpawnDepth)
-
-	// GD-14-001：透传协同任务共享记忆命名空间
-	agent.SetMemoryNamespace(opt.Namespace)
-	// ADR-0103 决策三：子 Agent 角色
-	agent.SetAgentProfile(opt.Profile)
-	if opt.Profile != nil {
-		metrics.GlobalSubagentRunsTotal.Add(1)
-	}
-
-	// R3-07 / WP2：透传显式完成模式
-	if opt.LoopCompletion != "" {
-		agent.SetLoopCompletion(opt.LoopCompletion)
-	}
+	applyHeadlessOptions(agent, opt)
 
 	intentBytes, err := json.Marshal(intent)
 	if err != nil {
@@ -337,9 +323,33 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	}
 
 	start := time.Now()
+	finalOutput, err := p.consumeHeadlessStream(stream, opt)
+	if err != nil {
+		return nil, err
+	}
+	finalOutput = scanHeadlessOutput(sessionID, finalOutput)
+
+	return &types.AgentResult{
+		Output:    finalOutput,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
+}
+
+func applyHeadlessOptions(agent protocol.AgentController, opt *types.HeadlessOptions) {
+	agent.SetSpawnDepth(opt.SpawnDepth)
+	agent.SetMemoryNamespace(opt.Namespace)
+	agent.SetAgentProfile(opt.Profile)
+	if opt.Profile != nil {
+		metrics.GlobalSubagentRunsTotal.Add(1)
+	}
+	if opt.LoopCompletion != "" {
+		agent.SetLoopCompletion(opt.LoopCompletion)
+	}
+}
+
+func (p *Pool) consumeHeadlessStream(stream <-chan types.AgentStreamEvent, opt *types.HeadlessOptions) (string, error) {
 	var finalOutput string
 	for ev := range stream {
-		// GD-13-001：若注入了事件回调（子 Agent 事件透传），先转发给回调方。
 		if opt.EventCallback != nil {
 			opt.EventCallback(ev)
 		}
@@ -347,26 +357,23 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 			if p.killGate != nil {
 				p.killGate.ReportError()
 			}
-			return nil, apperr.New(apperr.CodeInternal, ev.Content)
+			return "", apperr.New(apperr.CodeInternal, ev.Content)
 		}
 		if ev.Type == types.AgentStreamEventToken {
 			finalOutput += ev.Content
 		}
-		// 收到 task_done 后提前跳出循环
 		if ev.Type == types.AgentStreamEventStatus && ev.Content == "task_done" {
 			break
 		}
 	}
+	return finalOutput, nil
+}
 
-	// [W-2-B] SystemPromptGuard：headless 路径一次性扫描完整 finalOutput
-	if cleaned, scanErr := headlessPromptGuard().Scan(finalOutput, true); scanErr == nil {
-		finalOutput = cleaned
-	} else {
-		slog.Warn("agent pool: system prompt guard scan failed on headless output", "session", sessionID, "err", scanErr)
+func scanHeadlessOutput(sessionID, output string) string {
+	cleaned, scanErr := headlessPromptGuard().Scan(output, true)
+	if scanErr == nil {
+		return cleaned
 	}
-
-	return &types.AgentResult{
-		Output:    finalOutput,
-		LatencyMs: time.Since(start).Milliseconds(),
-	}, nil
+	slog.Warn("agent pool: system prompt guard scan failed on headless output", "session", sessionID, "err", scanErr)
+	return output
 }
