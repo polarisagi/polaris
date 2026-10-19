@@ -72,6 +72,8 @@ func stateToString(s types.AgentState) string {
 		return "s_loop"
 	case types.AgentStateLoopExec:
 		return "s_loop_exec"
+	case types.AgentStateLoopAwait:
+		return "s_loop_await"
 	default:
 		return "unknown"
 	}
@@ -189,10 +191,13 @@ func TestFSM_Spec(t *testing.T) {
 	if config.CurrentThresholds().M4Kernel.LoopMode == "staged" {
 		exemptStates["s_loop"] = true
 		exemptStates["s_loop_exec"] = true
+		exemptStates["s_loop_await"] = true
 		exemptTransitions[trKey{"s_idle", "new_intent", "s_loop"}] = true
 		exemptTransitions[trKey{"s_loop", "loop_step_done", "s_loop_exec"}] = true
 		exemptTransitions[trKey{"s_loop_exec", "loop_exec_done", "s_loop"}] = true
 		exemptTransitions[trKey{"s_loop", "loop_done", "s_complete"}] = true
+		exemptTransitions[trKey{"s_loop_exec", "await_agent", "s_loop_await"}] = true
+		exemptTransitions[trKey{"s_loop_await", "agent_handoff_done", "s_loop_exec"}] = true
 	}
 
 	expectedStates := make(map[string]bool)

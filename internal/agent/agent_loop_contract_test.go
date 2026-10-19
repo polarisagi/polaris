@@ -109,7 +109,7 @@ func TestR2_01_AgenticLoopContract(t *testing.T) {
 	serializeMsgs := func(msgs []types.Message) string {
 		var sb strings.Builder
 		for _, m := range msgs {
-			sb.WriteString(fmt.Sprintf("[%s]:%s\n", m.Role, m.Content))
+			fmt.Fprintf(&sb, "[%s]:%s\n", m.Role, m.Content)
 		}
 		return sb.String()
 	}

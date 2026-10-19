@@ -13,7 +13,7 @@ func (p *Pool) TrySteer(sessionID string, text string) bool {
 		return false
 	}
 	st := entry.agent.sm.Current()
-	if st != types.AgentStateLoop && st != types.AgentStateLoopExec {
+	if st != types.AgentStateLoop && st != types.AgentStateLoopExec && st != types.AgentStateLoopAwait {
 		return false
 	}
 	return entry.agent.Steer(text)

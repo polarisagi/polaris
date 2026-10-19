@@ -153,6 +153,12 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
+	// S_LOOP_AWAIT 阶段拦截：持久化 Handoff 状态并等待子智能体完成唤醒（R2-03）
+	if a.sm.Current() == types.AgentStateLoopAwait {
+		a.persistHandoffWaitCheckpoint(ctx)
+		return "", nil, true
+	}
+
 	// S_RESPOND 的确定性 Effect 只有一种来源：Perceive 已同次产出回复（ADR-0102 决策四 4b′）。
 	// 正文在此以用户受众发布，与 LLM 回复路径经 doStreamInfer 发布的事件同形。
 	if a.sm.Current() == types.AgentStateRespond {

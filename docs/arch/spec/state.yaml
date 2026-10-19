@@ -22,14 +22,14 @@ meta:
   go_package: internal/protocol
 
 # =============================================================================
-# §par: M4 Plan-Act-Reflect 16-state machine (WP2 agentic loop 追加 s_loop, s_loop_exec)
+# §par: M4 Plan-Act-Reflect 17-state machine (WP2 agentic loop 追加 s_loop, s_loop_exec, s_loop_await)
 # =============================================================================
 
 par:
   description: |
     M4 default state machine. Single Agent task lifecycle.
     LLM is co-processor; Go state machine owns control flow (invariant 6).
-    6 main states (perceive/plan/validate/execute/reflect/respond) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended + s_await_agent + 2 agentic loop states (s_loop/s_loop_exec, ADR-0115) = 16 states.
+    6 main states (perceive/plan/validate/execute/reflect/respond) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended + s_await_agent + 3 agentic loop states (s_loop/s_loop_exec/s_loop_await, ADR-0115) = 17 states.
     s_respond 是回合唯一的用户回复出口（ADR-0098）：直答（perceive 判定无需工具 / plan 得空 DAG）
     与执行后（reflect 完成）两路汇入，s_complete 的唯一前驱。只有 s_respond 的 llm_fill 为
     audience=user，其余阶段输出只进结构化解析、不向用户推送 token（par_inv_06）。
@@ -56,6 +56,7 @@ par:
     - s_respond
     - s_loop
     - s_loop_exec
+    - s_loop_await
 
   transitions:
     - from: s_idle
@@ -248,6 +249,14 @@ par:
     - from: s_loop_exec
       event: loop_exec_done
       to: s_loop
+
+    - from: s_loop_exec
+      event: await_agent
+      to: s_loop_await
+
+    - from: s_loop_await
+      event: agent_handoff_done
+      to: s_loop_exec
 
     - from: s_loop
       event: loop_done

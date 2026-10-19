@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -78,6 +79,11 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, taskID)
 	toolCtx = context.WithValue(toolCtx, protocol.CtxModelSwitcherKey{}, a)
 	toolCtx = context.WithValue(toolCtx, protocol.CtxSubagentManagerKey{}, a)
+
+	// transfer_to_agent 在 agentic 模式下统一转调 SpawnAgents(wait=all)（ADR-0115 WP4 / R2-03）
+	if call.Name == "transfer_to_agent" {
+		return a.executeLoopTransferToAgent(toolCtx, call)
+	}
 
 	// JIT 签发能力令牌（必须在 validatedCalls 中），确保无旁路漏洞
 	toolCtx, revoke, err := a.withJITCapability(toolCtx, call.Name, call.Input)
@@ -331,4 +337,54 @@ func (a *Agent) appendExecuteImageParts(parts []types.ImagePart) {
 		parts = parts[:remaining]
 	}
 	a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, parts...)
+}
+
+// executeLoopTransferToAgent 处理 agentic 循环下的 transfer_to_agent 委派调用，统一转调 SpawnAgents(wait=all)。
+func (a *Agent) executeLoopTransferToAgent(ctx context.Context, call types.InferToolCall) types.Message {
+	currentRound := a.sCtx.LoopRound
+	if a.handoffPoster == nil {
+		msg := makeToolResultMessage(call.ID, "Error: transfer_to_agent: handoffPoster not injected (fail-closed)")
+		msg.Round = currentRound
+		return msg
+	}
+
+	var handoffArgs struct {
+		TargetAgentRole string `json:"target_agent_role"`
+		ContextSummary  string `json:"context_summary"`
+	}
+	if err := json.Unmarshal(call.Input, &handoffArgs); err != nil {
+		msg := makeToolResultMessage(call.ID, "Error: transfer_to_agent: unmarshal args: "+err.Error())
+		msg.Round = currentRound
+		return msg
+	}
+	if handoffArgs.TargetAgentRole == "" {
+		msg := makeToolResultMessage(call.ID, "Error: transfer_to_agent: target_agent_role is required")
+		msg.Round = currentRound
+		return msg
+	}
+
+	targetRole := handoffArgs.TargetAgentRole
+	contextSummary := handoffArgs.ContextSummary
+	if strings.HasPrefix(targetRole, mcpA2ATargetPrefix) {
+		contextSummary = a.redactForMCPEgress(ctx, targetRole, contextSummary)
+	}
+
+	childIDs, err := a.SpawnAgents(ctx, types.SpawnAgentsArgs{
+		Tasks: []types.SpawnTaskSpec{
+			{
+				Role:   targetRole,
+				Prompt: contextSummary,
+			},
+		},
+		Wait: "all",
+	})
+	if err != nil {
+		msg := makeToolResultMessage(call.ID, "Error: transfer_to_agent: "+err.Error())
+		msg.Round = currentRound
+		return msg
+	}
+
+	msg := makeToolResultMessage(call.ID, fmt.Sprintf("dispatched to %s (task: %v)", targetRole, childIDs))
+	msg.Round = currentRound
+	return msg
 }

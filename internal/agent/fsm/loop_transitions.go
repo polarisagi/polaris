@@ -41,6 +41,26 @@ func (sm *StateMachine) registerLoopTransitions() {
 		},
 	})
 
+	// S_LOOP_EXEC → S_LOOP_AWAIT: 派生子智能体或委派进入等待（R2-03）
+	sm.add(Transition{
+		From:    types.AgentStateLoopExec,
+		Trigger: types.TriggerAwaitAgent,
+		To:      types.AgentStateLoopAwait,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{protocol.DeterministicEffect{}}, nil
+		},
+	})
+
+	// S_LOOP_AWAIT → S_LOOP_EXEC: 子智能体执行完成唤醒恢复（R2-03）
+	sm.add(Transition{
+		From:    types.AgentStateLoopAwait,
+		Trigger: types.TriggerAgentHandoffDone,
+		To:      types.AgentStateLoopExec,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{protocol.DeterministicEffect{Fn: sm.executeLoopStep}}, nil
+		},
+	})
+
 	// S_LOOP → S_COMPLETE: 循环正常结束（auto 文本回复或模型显式调用 finish）
 	sm.add(Transition{
 		From:    types.AgentStateLoop,

@@ -20,6 +20,14 @@ import (
 //nolint:gocyclo
 func (a *Agent) runExecuteLoop(ctx context.Context) error {
 	a.sCtx.Mu.Lock()
+	isHandoffResume := len(a.sCtx.HandoffTaskIDs) > 0 && a.sCtx.LoopHandoffSpawnCallID != ""
+	a.sCtx.Mu.Unlock()
+
+	if isHandoffResume {
+		return a.resumeHandoffInLoop(ctx)
+	}
+
+	a.sCtx.Mu.Lock()
 	calls := a.sCtx.LoopPendingToolCalls
 	a.sCtx.LoopPendingToolCalls = nil
 	currentRound := a.sCtx.LoopRound
@@ -106,38 +114,15 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		}
 	}
 
-	// 3. 构建单层批 DAGPlan，经过 S_VALIDATE 四层校验链
+	// 3. 构建单层批 DAGPlan，经过 S_VALIDATE 四层校验链并执行
 	if len(calls) > 0 {
-		plan := toolCallsToDAGPlan(calls, a.sCtx.GlobalTaintLevel)
-		if err := a.checkPlanAgainstProfile(plan); err != nil {
-			slog.WarnContext(ctx, "agentic_loop: plan rejected by profile", "err", err)
-			a.appendToolErrorMessages(calls, "Forbidden: tool violates agent profile policy: "+err.Error())
-			a.asyncIntent(types.TriggerLoopExecDone)
+		suspended, err := a.executeBatchWithDelegation(ctx, calls)
+		if err != nil {
+			return err
+		}
+		if suspended {
 			return nil
 		}
-
-		vCtx := a.buildValidationContext(plan)
-		if a.dagValidator == nil {
-			slog.ErrorContext(ctx, "agentic_loop: security validator is missing (fail-closed)")
-			a.appendToolErrorMessages(calls, "Internal: security validator is missing (fail-closed)")
-			a.asyncIntent(types.TriggerLoopExecDone)
-			return nil
-		}
-		if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
-			slog.WarnContext(ctx, "agentic_loop: plan rejected by taint review", "err", err)
-			a.appendToolErrorMessages(calls, "Forbidden: action rejected by security policy: "+err.Error())
-			a.asyncIntent(types.TriggerLoopExecDone)
-			return nil
-		}
-		a.recordValidatedPlan(plan)
-
-		// 4. 并发执行当前批次工具调用
-		toolResults := a.executeToolCallsConcurrently(ctx, calls)
-
-		// 5. 追加 tool 响应消息到上下文
-		a.sCtx.Mu.Lock()
-		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, toolResults...)
-		a.sCtx.Mu.Unlock()
 	}
 
 	// 6. 执行 T3 批量观察遮蔽

@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
-
 	"github.com/google/uuid"
+
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -298,6 +298,9 @@ type AgenticTurn struct {
 	LoopLastWallSeconds            float64
 	LoopWarningInjected            bool
 	LoopSummary                    string
+	LoopHandoffPendingResults      []types.Message
+	LoopHandoffToolCalls           []types.InferToolCall
+	LoopHandoffSpawnCallID         string
 }
 
 // ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05）。
@@ -313,6 +316,11 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopLastWallSeconds = 0
 	s.LoopWarningInjected = false
 	s.LoopSummary = ""
+	s.LoopHandoffPendingResults = nil
+	s.LoopHandoffToolCalls = nil
+	s.LoopHandoffSpawnCallID = ""
+	s.HandoffTaskID = ""
+	s.HandoffTaskIDs = nil
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
