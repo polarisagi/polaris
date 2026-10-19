@@ -112,6 +112,10 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 	case types.AgentStreamEventThinking:
 		_ = sink.Emit(Event{Kind: KindReasoning, Text: ev.Content})
 	case types.AgentStreamEventToken:
+		if ev.IsNested {
+			o.emitSubagentOutput(sink, sessionID, ev, systemPromptGuard)
+			return false
+		}
 		fullText := string(*leakWindow) + ev.Content
 		_, err := systemPromptGuard.Scan(fullText, false)
 		cleaned, _ := systemPromptGuard.Scan(ev.Content, true)
@@ -209,6 +213,32 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 	}
 	return false
+}
+
+// emitSubagentOutput 把子智能体的文本输出转成 subagent_output 进度事件。
+// 为什么不走 KindDelta：子智能体结果已通过 tool_result 回到父智能体上下文，
+// 若再进入 *reply 就会拼进给用户的回复正文并被持久化（R5-01）。泄露扫描仍然
+// 作用于该内容——子智能体同样可能复述系统提示词。
+func (o *orchestrator) emitSubagentOutput(sink Sink, sessionID string, ev types.AgentStreamEvent, g *guard.SystemPromptGuard) {
+	cleaned, err := g.Scan(ev.Content, true)
+	if err != nil {
+		slog.Warn("session: system prompt leak detected in subagent output", "session_id", sessionID, "err", err)
+		cleaned = ""
+	}
+	if cleaned == "" {
+		return
+	}
+	payload := map[string]any{"type": "subagent_output", "message": cleaned}
+	if ev.ChildAgentRole != "" {
+		payload["role"] = ev.ChildAgentRole
+	}
+	if ev.AgentID != "" {
+		payload["agent_id"] = ev.AgentID
+	}
+	if ev.ParentID != "" {
+		payload["parent_id"] = ev.ParentID
+	}
+	_ = sink.Emit(Event{Kind: KindStatus, Payload: payload})
 }
 
 // linkAppViews 把本轮产生的视图关联到刚落库的 assistant 消息（M8f-1）。
