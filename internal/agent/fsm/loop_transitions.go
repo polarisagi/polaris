@@ -114,6 +114,20 @@ func (sm *StateMachine) registerLoopTransitions() {
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
+
+	// S_LOOP → S_FAILED: 循环推理失败，由合法的 TriggerReplanExhausted 转移到失败终态（R2-13）
+	sm.add(Transition{
+		From:    types.AgentStateLoop,
+		Trigger: types.TriggerReplanExhausted,
+		To:      types.AgentStateFailed,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			sCtx.LoopEnding = true
+			sCtx.TurnDegraded = true
+			sCtx.Mu.Unlock()
+			return nil, nil
+		},
+	})
 }
 
 // executeLoopStep 是 S_LOOP_EXEC 阶段的 DeterministicEffect 存根。
@@ -262,7 +276,7 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 
 // onLoopFailure 处理 LLM 推理失败。
 func (sm *StateMachine) onLoopFailure(sCtx protocol.StateContext, err error) (types.State, error) {
-	return types.State("S_FAILED"), err
+	return types.State("S_LOOP_FAILED"), err
 }
 
 func formatUsageLine(tokens int, cost float64, wallSeconds float64) string {

@@ -49,6 +49,7 @@ func stateToTriggerMap() map[types.State]types.AgentTrigger {
 		"S_LOOP_EXEC_DONE": types.TriggerLoopExecDone,
 		"S_LOOP_DONE":      types.TriggerLoopDone,
 		"S_LOOP_STEER":     types.TriggerLoopSteer,
+		"S_LOOP_FAILED":    types.TriggerReplanExhausted,
 	}
 }
 
