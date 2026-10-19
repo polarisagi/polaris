@@ -2,17 +2,13 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 
-	"github.com/polarisagi/polaris/internal/config"
-	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -143,129 +139,103 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	return msg
 }
 
-// executeToolCallsConcurrently 并发执行多个独立的工具调用，并按原序收集结果。
+// executeToolCallsConcurrently 执行多个独立的工具调用，并按原序收集结果。
+// 依据 isConcurrencySafe 区分并发安全性（R2-06）：
+// 按原顺序把连续的并发安全调用合成一组并行执行，其余调用按顺序串行执行。
 func (a *Agent) executeToolCallsConcurrently(ctx context.Context, calls []types.InferToolCall) []types.Message {
 	results := make([]types.Message, len(calls))
 	if len(calls) == 0 {
 		return results
 	}
 	if len(calls) == 1 {
+		metrics.RecordLoopToolParallel(ctx, "serial", 1)
 		results[0] = a.executeLoopToolCall(ctx, calls[0])
 		return results
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(len(calls))
-	for i, c := range calls {
-		idx := i
-		callItem := c
-		concurrent.SafeGo(ctx, "agentic_loop_tool_call", func(subCtx context.Context) {
-			defer wg.Done()
-			results[idx] = a.executeLoopToolCall(subCtx, callItem)
-		})
+	type toolCallItem struct {
+		index int
+		call  types.InferToolCall
 	}
-	wg.Wait()
+	type callBatch struct {
+		safe  bool
+		items []toolCallItem
+	}
+
+	var batches []callBatch
+	for i, c := range calls {
+		safe := a.isCallConcurrencySafe(c)
+		if safe {
+			if len(batches) > 0 && batches[len(batches)-1].safe {
+				batches[len(batches)-1].items = append(batches[len(batches)-1].items, toolCallItem{index: i, call: c})
+			} else {
+				batches = append(batches, callBatch{
+					safe:  true,
+					items: []toolCallItem{{index: i, call: c}},
+				})
+			}
+		} else {
+			batches = append(batches, callBatch{
+				safe:  false,
+				items: []toolCallItem{{index: i, call: c}},
+			})
+		}
+	}
+
+	for _, batch := range batches {
+		if batch.safe && len(batch.items) > 1 {
+			metrics.RecordLoopToolParallel(ctx, "parallel", int64(len(batch.items)))
+			var wg sync.WaitGroup
+			wg.Add(len(batch.items))
+			for _, it := range batch.items {
+				item := it
+				concurrent.SafeGo(ctx, "agentic_loop_tool_call", func(subCtx context.Context) {
+					defer wg.Done()
+					results[item.index] = a.executeLoopToolCall(subCtx, item.call)
+				})
+			}
+			wg.Wait()
+		} else {
+			for _, it := range batch.items {
+				metrics.RecordLoopToolParallel(ctx, "serial", 1)
+				results[it.index] = a.executeLoopToolCall(ctx, it.call)
+			}
+		}
+	}
+
 	return results
 }
 
-// applyLoopObservationMasking 执行 T3 批量观察遮蔽：
-// 超过 observation_mask_after_rounds 的工具输出按批替换为 read_tool_ref 引用，保证批量驱逐点之间前缀稳定。
-func (a *Agent) applyLoopObservationMasking(ctx context.Context) {
-	a.sCtx.Mu.Lock()
-	defer a.sCtx.Mu.Unlock()
-
-	th := config.CurrentThresholds().M4Kernel
-	maskAfter := a.sCtx.LoopObservationMaskAfterRounds
-	if maskAfter <= 0 {
-		maskAfter = th.LoopObservationMaskAfterRounds
+// isCallConcurrencySafe 判断指定工具调用是否满足并发安全条件。
+func (a *Agent) isCallConcurrencySafe(call types.InferToolCall) bool {
+	if isDelegationTool(call.Name) {
+		return false
 	}
-	if maskAfter <= 0 {
-		maskAfter = 6
+	tool, ok := a.toolMeta(call.Name)
+	if !ok {
+		return false
 	}
-
-	batchSize := a.sCtx.LoopObservationMaskBatch
-	if batchSize <= 0 {
-		batchSize = th.LoopObservationMaskBatch
-	}
-	if batchSize <= 0 {
-		batchSize = 4
-	}
-
-	// 收集待遮蔽的工具结果下标
-	candidateIndices := collectMaskCandidates(a.sCtx.LoopMessages, a.sCtx.LoopRound, maskAfter)
-
-	// 只有达到批量大小 batchSize 时才触发批量替换，确保批驱逐点之间前缀字节完全不变
-	if len(candidateIndices) < batchSize {
-		return
-	}
-
-	taskID := a.memoryPartitionKey()
-	for _, idx := range candidateIndices[:batchSize] {
-		maskSingleMessage(ctx, a.toolOffloader, taskID, &a.sCtx.LoopMessages[idx])
-	}
-
-	metrics.RecordObservationMasked(ctx, int64(batchSize))
-	slog.InfoContext(ctx, "agentic_loop: batch observation masking applied",
-		"session", a.sCtx.SessionID, "masked_count", batchSize)
+	return isConcurrencySafe(tool)
 }
 
-// collectMaskCandidates 收集距离当前轮次超过 maskAfter 轮的工具结果下标。
-func collectMaskCandidates(messages []types.Message, currentRound, maskAfter int) []int {
-	var candidates []int
-	for i, m := range messages {
-		if !isToolResultMessage(m) {
-			continue
-		}
-		if strings.HasPrefix(m.Content, "[output masked: full output: read_tool_ref") {
-			continue
-		}
-		if currentRound-m.Round >= maskAfter {
-			candidates = append(candidates, i)
+// isConcurrencySafe 判定工具是否具备并发安全性（R2-06）。
+// 契约：Capability == CapReadOnly，且 SideEffects 为空或只有 SideNone，
+// 且不是 MCP、skill、code_act 来源（这些来源的元数据不可信，fail-closed）。
+func isConcurrencySafe(tool types.Tool) bool {
+	if tool.Capability != types.CapReadOnly {
+		return false
+	}
+	for _, se := range tool.SideEffects {
+		if se != types.SideNone && se != "" {
+			return false
 		}
 	}
-	return candidates
-}
-
-// maskSingleMessage 将单条工具消息的内容及 Parts 替换为 read_tool_ref 掩码引用。
-func maskSingleMessage(ctx context.Context, offloader compact.Offloader, taskID string, targetMsg *types.Message) {
-	contentBytes := []byte(targetMsg.Content)
-	var refID string
-	if offloader != nil {
-		if id, err := offloader.Offload(ctx, taskID, contentBytes); err == nil {
-			refID = id
-		}
+	if tool.Source == types.ToolMCP || tool.Source == types.ToolSkill || tool.Source == "code_act" ||
+		strings.HasPrefix(tool.Name, "code_act:") || strings.HasPrefix(tool.Name, "skill__") ||
+		strings.HasPrefix(tool.Name, "mcp__") || tool.Name == "code_act" || isDelegationTool(tool.Name) {
+		return false
 	}
-	if refID == "" {
-		sum := sha256.Sum256(contentBytes)
-		refID = hex.EncodeToString(sum[:8])
-	}
-	maskText := fmt.Sprintf("[output masked: full output: read_tool_ref(task_id=%q, id=%q)]", taskID, refID)
-	targetMsg.Content = maskText
-	for pi, p := range targetMsg.Parts {
-		if partMap, ok := p.(map[string]any); ok && partMap["type"] == "tool_result" {
-			newPart := make(map[string]any, len(partMap))
-			for k, v := range partMap {
-				newPart[k] = v
-			}
-			newPart["content"] = maskText
-			targetMsg.Parts[pi] = newPart
-		}
-	}
-}
-
-// isToolResultMessage 判断消息是否为工具结果消息。
-func isToolResultMessage(m types.Message) bool {
-	if m.Role == "tool" {
-		return true
-	}
-	for _, p := range m.Parts {
-		if partMap, ok := p.(map[string]any); ok {
-			if partMap["type"] == "tool_result" {
-				return true
-			}
-		}
-	}
-	return false
+	return true
 }
 
 // Steer 将用户在回合运行中发送的插话压入插话队列，并在下一轮边界注入。

@@ -35,6 +35,12 @@ func initLoopInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Total tool observations masked with read_tool_ref"),
 	)
 	ie.capture("polaris.agent.observation_masked_total", err)
+
+	InstrAgentLoopToolParallelTotal, err = meter.Int64Counter(
+		"polaris.agent.loop_tool_parallel_total",
+		metric.WithDescription("Agentic loop tool executions by execution mode (mode=parallel|serial)"),
+	)
+	ie.capture("polaris.agent.loop_tool_parallel_total", err)
 }
 
 // RecordLoopRound 记录一次 loop round。
@@ -64,5 +70,14 @@ func RecordLoopTermination(ctx context.Context, reason string) {
 func RecordObservationMasked(ctx context.Context, count int64) {
 	if InstrAgentObservationMaskedTotal != nil && count > 0 {
 		InstrAgentObservationMaskedTotal.Add(ctx, count)
+	}
+}
+
+// RecordLoopToolParallel 记录工具并发与串行执行指标（R2-06）。
+func RecordLoopToolParallel(ctx context.Context, mode string, count int64) {
+	if InstrAgentLoopToolParallelTotal != nil && count > 0 {
+		InstrAgentLoopToolParallelTotal.Add(ctx, count, metric.WithAttributes(
+			attribute.String("mode", mode),
+		))
 	}
 }

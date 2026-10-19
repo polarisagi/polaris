@@ -238,6 +238,7 @@ var (
 	InstrAgentLoopTurnDurationSeconds metric.Float64Histogram
 	InstrAgentLoopTerminationTotal    metric.Int64Counter // label: reason=auto|finish|budget|guard|interrupt
 	InstrAgentObservationMaskedTotal  metric.Int64Counter
+	InstrAgentLoopToolParallelTotal   metric.Int64Counter // label: mode=parallel|serial
 
 	// HE-1 / V9: full 档 HITL 自动放行计数
 	InstrHITLAutoApprovedTotal metric.Int64Counter
