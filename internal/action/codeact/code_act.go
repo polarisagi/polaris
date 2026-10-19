@@ -213,7 +213,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: sandbox execution failed", err)
 	}
 
-	highestTaint := types.TaintHigh
+	highestTaint := types.TaintLow
 	if bridgeSrv != nil && bridgeSrv.HighestTaint() > highestTaint {
 		highestTaint = bridgeSrv.HighestTaint()
 	}
@@ -323,7 +323,7 @@ func (ca *CodeAct) startBridgeIfEligible(ctx context.Context, req protocol.CodeA
 	if checker := protocol.ProfileCheckerFromContext(ctx); checker != nil {
 		opts = append(opts, WithBridgeProfileChecker(checker))
 	}
-	bs, berr := StartBridgeServer(ctx, ca.toolExec, ca.policy, types.TaintHigh, opts...)
+	bs, berr := StartBridgeServer(ctx, ca.toolExec, ca.policy, types.TaintLow, opts...)
 	if berr != nil {
 		slog.WarnContext(ctx, "codeact: start tool bridge failed, proceeding without bridge", "err", berr)
 		return nil

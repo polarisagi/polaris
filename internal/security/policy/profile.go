@@ -94,6 +94,10 @@ type Policy struct {
 	// full 档 true（放行全部工具）；standard/hardened 档 false（仅允许 CapReadOnly 且幂等的只读工具）。
 	CodeActAllToolsAllowed bool
 
+	// CodeActTaintBlockEnabled code_act 输出的污点清洗失败时是否阻断（R4-01）。
+	// standard/hardened 档阻断（true）；full 档只记录不阻断（false）。
+	CodeActTaintBlockEnabled bool
+
 	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（ADR-0115 WP5）。
 	// full 档默认 false（保留后台进程）；standard/hardened 档默认 true（回收后台进程）。
 	JobsKillOnSessionEnd bool
@@ -145,6 +149,7 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			SubagentMaxConcurrent:     16,    // 并发上限更高
 			DelegationChainMaxDepth:   8,     // 深度上限更高
 			CodeActAllToolsAllowed:    true,  // full 档允许在 code_act 里调用全部工具
+			CodeActTaintBlockEnabled:  false, // full 档只记录不阻断
 			JobsKillOnSessionEnd:      false, // full 档默认保留后台进程
 			SleepTimeEnabled:          true,  // full 档默认开启 sleep-time 后台自改进
 			SleepTimeIdleMinutes:      10,    // 默认空闲 10 分钟触发
@@ -168,6 +173,7 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			SubagentMaxConcurrent:     2,     // 严格并发限制
 			DelegationChainMaxDepth:   2,     // 严格深度限制
 			CodeActAllToolsAllowed:    false, // 只允许 CapReadOnly 幂等工具
+			CodeActTaintBlockEnabled:  true,  // 强化阻断污点清洗失败
 			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
 			SleepTimeEnabled:          false, // hardened 档默认关闭后台自改进
 			SleepTimeIdleMinutes:      10,
@@ -191,6 +197,7 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			SubagentMaxConcurrent:     6,     // 默认并发限制
 			DelegationChainMaxDepth:   3,     // 默认深度限制（inv_M8_06）
 			CodeActAllToolsAllowed:    false, // 只允许 CapReadOnly 幂等工具
+			CodeActTaintBlockEnabled:  true,  // 标准阻断污点清洗失败
 			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
 			SleepTimeEnabled:          false, // standard 档默认关闭后台自改进
 			SleepTimeIdleMinutes:      10,

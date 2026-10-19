@@ -6,6 +6,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -59,8 +60,22 @@ func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintL
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: execute failed", err)
 	}
 
+	safeOut, err := taint.SanitizeToSafe(caResult.Output)
+	if err != nil {
+		if a.currentSecurityPolicy().CodeActTaintBlockEnabled {
+			return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: taint check failed", err)
+		}
+	}
+
+	var outputBytes []byte
+	if err == nil {
+		outputBytes = []byte(safeOut.IntoMessage("").Content)
+	} else {
+		outputBytes = []byte(caResult.Output.UnsafeContent())
+	}
+
 	return &types.ToolResult{
-		Output:     []byte(caResult.Output.UnsafeContent()),
+		Output:     outputBytes,
 		Success:    caResult.ExitCode == 0,
 		LatencyMs:  caResult.LatencyMs,
 		TaintLevel: caResult.Output.Level(),
