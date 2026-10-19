@@ -357,9 +357,9 @@ func TestV7_DeepSeek_ReasoningContentMultiTurnRoundtrip(t *testing.T) {
 			ReasoningContent: "I need to check the auth log first",
 			Parts: []any{
 				map[string]any{
-					"type": "tool_use",
-					"id":   "call_1",
-					"name": "read_file",
+					"type":  "tool_use",
+					"id":    "call_1",
+					"name":  "read_file",
 					"input": map[string]any{"path": "auth.log"},
 				},
 			},

@@ -10,4 +10,3 @@ type HITLGateway interface {
 type Auditor interface {
 	Log(ctx context.Context, action string, meta map[string]any) error
 }
-

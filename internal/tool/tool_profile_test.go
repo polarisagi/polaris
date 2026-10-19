@@ -300,4 +300,3 @@ func TestV9_FullProfile_Anomaly_AuditedAndMetric(t *testing.T) {
 		t.Errorf("expected agent_id 'agent-anom-1', got %v", al.meta["agent_id"])
 	}
 }
-
