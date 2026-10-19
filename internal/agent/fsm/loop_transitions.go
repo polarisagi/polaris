@@ -173,10 +173,14 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 		sCtx.LoopRound = 1
 	}
 	if len(sCtx.LoopMessages) == 0 && !sCtx.RawIntentTS.IsEmpty() {
+		content := taint.Spotlighting(sCtx.RawIntentTS)
+		if sCtx.TurnRecall != nil && sCtx.TurnRecall.Text != "" {
+			content = "## Recalled Context\n" + sCtx.TurnRecall.Text + "\n\n" + content
+		}
 		sCtx.LoopMessages = []types.Message{
 			{
 				Role:       "user",
-				Content:    taint.Spotlighting(sCtx.RawIntentTS),
+				Content:    content,
 				TaintLevel: sCtx.RawIntentTS.Level(),
 				Round:      1,
 			},
@@ -329,9 +333,6 @@ func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx 
 	sCtx.Mu.RLock()
 	warnPrompt := sCtx.LoopWarningPrompt
 	sCtx.Mu.RUnlock()
-	if warnPrompt != "" {
-		b.WritePhaseUser(warnPrompt)
-	}
 
 	if len(roundMsgs) == 0 {
 		sCtx.Mu.RLock()
@@ -340,10 +341,10 @@ func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx 
 		if !intent.IsEmpty() {
 			b.WriteUserData(intent)
 		}
-		return FinishLayered(b, mem)
+		return FinishAgenticLayered(b, mem, "", warnPrompt)
 	}
 	for _, m := range roundMsgs {
 		b.WriteTurnMessage(m)
 	}
-	return FinishLayered(b, mem)
+	return FinishAgenticLayered(b, mem, "", warnPrompt)
 }

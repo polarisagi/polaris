@@ -135,10 +135,14 @@ func (sm *StateMachine) registerTransitions() {
 				sCtx.ResetAgenticTurn()
 				sCtx.LoopRound = 1
 				if !sCtx.RawIntentTS.IsEmpty() {
+					content := taint.Spotlighting(sCtx.RawIntentTS)
+					if sCtx.TurnRecall != nil && sCtx.TurnRecall.Text != "" {
+						content = "## Recalled Context\n" + sCtx.TurnRecall.Text + "\n\n" + content
+					}
 					sCtx.LoopMessages = []types.Message{
 						{
 							Role:       "user",
-							Content:    taint.Spotlighting(sCtx.RawIntentTS),
+							Content:    content,
 							TaintLevel: sCtx.RawIntentTS.Level(),
 							Round:      1,
 						},
