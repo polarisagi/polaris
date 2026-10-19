@@ -124,7 +124,27 @@
 
 
 
+### 症状 20：agentic 第二轮答非所问 / 丢失用户意图
+- **症状特征**：在 agentic 循环模式下，第一轮正常响应，第二轮及后续轮次模型丢失初始用户提问，出现自言自语或答非所问。
+- **归类模块**：M04
+- **根因类别**：回合首轮未将 RawIntent 注入为 Round 1 意图消息，或新回合开始时瞬态状态未跨回合隔离清理（ResetAgenticTurn / AgenticTurn 缺失）。
+- **排查起点**：`docs/arch/M04-Agent-Kernel.md §1.2`、`internal/agent/fsm/state_machine.go` (`ResetAgenticTurn`) 与 `internal/agent/fsm/loop_transitions.go` (`promptLoop`)；修复见 R2-01。
+
+### 症状 21：子智能体结果不回来 / 任务挂起不恢复
+- **症状特征**：通过 `spawn_subagent` 委派后台子智能体（wait=all）后，父智能体陷入挂起或无法接收子任务执行完成的结果，状态丢失。
+- **归类模块**：M04 / M08
+- **根因类别**：agentic 模式下缺少专门的异步等待状态（S_LOOP_AWAIT）或 watcher 异步协程数据竞争，导致唤醒恢复与结果回填通路失效。
+- **排查起点**：`docs/arch/M04-Agent-Kernel.md §1.2`、`internal/agent/fsm/state_machine.go` (`S_LOOP_AWAIT`) 与 `internal/agent/agent_loop_handoff.go`；修复见 R2-03 / R2-04。
+
+### 症状 22：后台命令逃出沙箱 / 宿主机意外执行
+- **症状特征**：bash 工具执行 `is_background: true` 或 `run_persistent: true` 命令时，绕过了配置的沙箱防护（standard/hardened 档），直接在宿主机执行。
+- **归类模块**：M07 / M11
+- **根因类别**：bash 工具在解析后台任务与持久终端时，未对当前 TrustProfile 档位与沙箱支持进行强制门控拦截。
+- **排查起点**：`docs/arch/M07-Tool-Action-Layer.md`、`internal/tool/builtin/bash/bash.go`；修复见 R2-02。
+
+
 **维护规范**：
+
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。
 - 相似症状合并成一项（用"/"列举变体）。
 - 超过 ~30 项时按"归类模块"用 `###` 分组，不拆新文件——保持单一入口。
