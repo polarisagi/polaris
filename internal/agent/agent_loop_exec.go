@@ -217,7 +217,7 @@ func collectMaskCandidates(messages []types.Message, currentRound, maskAfter int
 		if strings.HasPrefix(m.Content, "[output masked: full output: read_tool_ref") {
 			continue
 		}
-		if currentRound-1 >= maskAfter {
+		if m.Round > 0 && currentRound-m.Round >= maskAfter {
 			candidates = append(candidates, i)
 		}
 	}

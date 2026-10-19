@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -137,3 +138,143 @@ func TestP4_ToolResultTaint_PropagateToGlobalTaintLevel(t *testing.T) {
 		t.Fatalf("tool 消息的 TaintLevel 未标记为 TaintHigh，got=%v", lastMsg.TaintLevel)
 	}
 }
+
+// TestP3_ObservationMasking_PreservesRecentRounds 验证批量观察遮蔽永不遮蔽最近 maskAfter 轮的结果，
+// 且只有 currentRound - msgRound >= maskAfter 的旧结果才成为候选。
+func TestP3_ObservationMasking_PreservesRecentRounds(t *testing.T) {
+	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+	agent := NewAgentWithDefaults("test-p3-masking")
+	agent.sCtx.LoopObservationMaskAfterRounds = 6
+	agent.sCtx.LoopObservationMaskBatch = 4
+
+	// 前 4 轮输出已在之前批次被遮蔽
+	for r := 1; r <= 4; r++ {
+		agent.sCtx.LoopMessages = append(agent.sCtx.LoopMessages, types.Message{
+			Role:    "user",
+			Content: fmt.Sprintf("[output masked: full output: read_tool_ref(task_id=\"test\", id=\"ref-%d\")]", r),
+			Round:   r,
+			Parts: []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": fmt.Sprintf("call-%d", r),
+					"content":     fmt.Sprintf("[output masked: full output: read_tool_ref(task_id=\"test\", id=\"ref-%d\")]", r),
+				},
+			},
+		})
+	}
+
+	// 轮次 5, 6, 7 以及刚产生的第 8 轮未遮蔽输出
+	for r := 5; r <= 8; r++ {
+		agent.sCtx.LoopMessages = append(agent.sCtx.LoopMessages, types.Message{
+			Role:    "user",
+			Content: fmt.Sprintf("raw output of round %d", r),
+			Round:   r,
+			Parts: []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": fmt.Sprintf("call-%d", r),
+					"content":     fmt.Sprintf("raw output of round %d", r),
+				},
+			},
+		})
+	}
+
+	// 第 8 轮结束调用遮蔽逻辑
+	agent.sCtx.LoopRound = 8
+	agent.applyLoopObservationMasking(context.Background())
+
+	agent.sCtx.Mu.Lock()
+	msgs := make([]types.Message, len(agent.sCtx.LoopMessages))
+	copy(msgs, agent.sCtx.LoopMessages)
+	agent.sCtx.Mu.Unlock()
+
+	// 最近 6 轮（轮次 5~8，尤其是刚产生的第 8 轮）绝对不可被遮蔽！
+	for _, m := range msgs {
+		if m.Round >= 5 {
+			if strings.Contains(m.Content, "[output masked:") {
+				t.Fatalf("违背 P3：最近 6 轮的消息（round=%d）被错误遮蔽！内容: %s", m.Round, m.Content)
+			}
+		}
+	}
+}
+
+// TestP5_LoopTurnBudgets_USD_Tokens_WallSeconds 验证三种预算的生效逻辑：
+// 触发后首轮注入告警，次轮未收尾硬熔断并 abortTurn。
+func TestP5_LoopTurnBudgets_USD_Tokens_WallSeconds(t *testing.T) {
+	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+
+	t.Run("USD_Budget", func(t *testing.T) {
+		agent := NewAgentWithDefaults("test-p5-usd")
+		agent.InjectPolicyGate(&allowPolicyGate{})
+		agent.sCtx.LoopTurnBudgetUSD = 0.50
+		agent.sCtx.LoopLastUsageCost = 0.60
+		agent.sCtx.LoopRound = 1
+
+		// 首触：注入易变告警
+		err := agent.runExecuteLoop(context.Background())
+		if err != nil {
+			t.Fatalf("首触预算上限不应直接失败，应给一轮缓冲: %v", err)
+		}
+		if !agent.sCtx.LoopWarningInjected {
+			t.Fatal("首触 USD 预算上限必须将 LoopWarningInjected 置为 true")
+		}
+
+		// 次轮仍超限：硬熔断
+		err = agent.runExecuteLoop(context.Background())
+		if err == nil {
+			t.Fatal("次轮未收尾必须返回硬熔断错误")
+		}
+		if !strings.Contains(err.Error(), "turn budget USD exceeded") {
+			t.Fatalf("错误信息必须包含 turn budget USD exceeded: %v", err)
+		}
+	})
+
+	t.Run("Tokens_Budget", func(t *testing.T) {
+		agent := NewAgentWithDefaults("test-p5-tokens")
+		agent.InjectPolicyGate(&allowPolicyGate{})
+		agent.sCtx.LoopTurnBudgetTokens = 1000
+		agent.sCtx.LoopLastUsageTokens = 1200
+		agent.sCtx.LoopRound = 1
+
+		err := agent.runExecuteLoop(context.Background())
+		if err != nil {
+			t.Fatalf("首触预算上限不应直接失败: %v", err)
+		}
+		if !agent.sCtx.LoopWarningInjected {
+			t.Fatal("首触 Tokens 预算上限必须置位 LoopWarningInjected")
+		}
+
+		err = agent.runExecuteLoop(context.Background())
+		if err == nil {
+			t.Fatal("次轮仍超限必须硬熔断")
+		}
+		if !strings.Contains(err.Error(), "turn budget tokens exceeded") {
+			t.Fatalf("错误信息必须包含 turn budget tokens exceeded: %v", err)
+		}
+	})
+
+	t.Run("WallSeconds_Budget", func(t *testing.T) {
+		agent := NewAgentWithDefaults("test-p5-wall")
+		agent.InjectPolicyGate(&allowPolicyGate{})
+		agent.sCtx.LoopTurnWallSeconds = 10
+		agent.sCtx.LoopLastWallSeconds = 15
+		agent.sCtx.LoopRound = 1
+
+		err := agent.runExecuteLoop(context.Background())
+		if err != nil {
+			t.Fatalf("首触墙钟上限不应直接失败: %v", err)
+		}
+		if !agent.sCtx.LoopWarningInjected {
+			t.Fatal("首触墙钟上限必须置位 LoopWarningInjected")
+		}
+
+		err = agent.runExecuteLoop(context.Background())
+		if err == nil {
+			t.Fatal("次轮仍超限必须硬熔断")
+		}
+		if !strings.Contains(err.Error(), "turn wall time exceeded") {
+			t.Fatalf("错误信息必须包含 turn wall time exceeded: %v", err)
+		}
+	})
+}
+

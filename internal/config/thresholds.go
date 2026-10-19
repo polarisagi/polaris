@@ -249,9 +249,6 @@ type M4KernelThresholds struct {
 	// AgentsMaxConcurrent 并发子 Agent 上限（full 档 loop_mode 下的并发协程数上限）。
 	// standard/hardened 档该字段备查，由上层 M4 调度器决定是否引用。
 	AgentsMaxConcurrent int `toml:"agents_max_concurrent"` // 4
-	// LoopMaxIterations 自主循环模式（loop_mode）单次任务最大迭代轮数。0 = 不限。
-	// 防止无终止条件时无限循环消耗 token。
-	LoopMaxIterations int `toml:"loop.max_iterations"` // 0
 	// SecretGetMaxPerTurn full 档 secret_get 工具单回合最多读取凭据条数（防止批量泄露）。
 	SecretGetMaxPerTurn int `toml:"secret_get.max_per_turn"` // 5
 
@@ -659,7 +656,6 @@ func DefaultThresholds() Thresholds {
 			CheckpointThrottleMaxPerTurn: 20,
 			CheckpointRetentionCount:     10,
 			AgentsMaxConcurrent:          4,
-			LoopMaxIterations:            0,
 			SecretGetMaxPerTurn:          5,
 			// WP2 agentic 循环内核阈值默认值
 			LoopMode:                       defaultLoopMode(),

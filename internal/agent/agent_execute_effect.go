@@ -521,17 +521,32 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 							})
 						}
 						a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-							Role:    "assistant",
-							Content: resp.Content,
-							Parts:   parts,
+							Role:             "assistant",
+							Content:          resp.Content,
+							Parts:            parts,
+							ReasoningContent: resp.ReasoningContent,
+							Round:            a.sCtx.LoopRound,
 						})
 					} else if resp.Content != "" {
 						a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-							Role:    "assistant",
-							Content: resp.Content,
+							Role:             "assistant",
+							Content:          resp.Content,
+							ReasoningContent: resp.ReasoningContent,
+							Round:            a.sCtx.LoopRound,
 						})
 					}
-					a.sCtx.LoopLastUsageTokens = resp.Usage.InputTokens + resp.Usage.OutputTokens
+					callTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens
+					a.sCtx.LoopLastUsageTokens += callTokens
+					if a.provider != nil {
+						caps := a.provider.Capabilities()
+						callCost := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
+							float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
+							float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+						a.sCtx.LoopLastUsageCost += callCost
+					}
+					if !a.sCtx.LoopTurnStartTime.IsZero() {
+						a.sCtx.LoopLastWallSeconds = time.Since(a.sCtx.LoopTurnStartTime).Seconds()
+					}
 					a.sCtx.Mu.Unlock()
 				}
 
