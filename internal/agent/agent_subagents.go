@@ -164,16 +164,25 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 		return childIDs, nil
 	}
 
-	// wait=all 场景：将子智能体集合写入上下文并挂起当前 Agent
+	// wait=all 场景：将子智能体集合写入上下文并挂起当前 Agent（R3-05）
 	a.sCtx.Mu.Lock()
-	a.sCtx.HandoffTaskIDs = childIDs
-	if len(childIDs) > 0 {
+	a.sCtx.HandoffTaskIDs = append(a.sCtx.HandoffTaskIDs, childIDs...)
+	if a.sCtx.HandoffTaskID == "" && len(childIDs) > 0 {
 		a.sCtx.HandoffTaskID = childIDs[0] // 兼容既有单值检查点
 	}
+	if callID := getToolCallID(ctx); callID != "" {
+		if a.sCtx.LoopHandoffSpawnCallID == nil {
+			a.sCtx.LoopHandoffSpawnCallID = make(map[string][]string)
+		}
+		a.sCtx.LoopHandoffSpawnCallID[callID] = append(a.sCtx.LoopHandoffSpawnCallID[callID], childIDs...)
+	}
+	inBatch := ctx.Value(ctxInBatchDelegationKey{}) != nil
 	a.sCtx.Mu.Unlock()
 
-	a.watchSubagentsCompletion(childIDs)
-	a.asyncIntent(types.TriggerAwaitAgent)
+	if !inBatch {
+		a.watchSubagentsCompletion(childIDs)
+		a.asyncIntent(types.TriggerAwaitAgent)
+	}
 
 	return childIDs, nil
 }

@@ -21,7 +21,7 @@ import (
 //nolint:gocyclo
 func (a *Agent) runExecuteLoop(ctx context.Context) error {
 	a.sCtx.Mu.Lock()
-	isHandoffResume := len(a.sCtx.HandoffTaskIDs) > 0 && a.sCtx.LoopHandoffSpawnCallID != ""
+	isHandoffResume := len(a.sCtx.HandoffTaskIDs) > 0 && len(a.sCtx.LoopHandoffSpawnCallID) > 0
 	a.sCtx.Mu.Unlock()
 
 	if isHandoffResume {

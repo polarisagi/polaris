@@ -78,6 +78,7 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	}
 	toolCtx = context.WithValue(toolCtx, protocol.CtxModelSwitcherKey{}, a)
 	toolCtx = context.WithValue(toolCtx, protocol.CtxSubagentManagerKey{}, a)
+	toolCtx = withToolCallID(toolCtx, call.ID)
 
 	// transfer_to_agent 在 agentic 模式下统一转调 SpawnAgents(wait=all)（ADR-0115 WP4 / R2-03）
 	if call.Name == "transfer_to_agent" {
