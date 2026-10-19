@@ -135,3 +135,15 @@ func (a *Agent) markTaintReviewDenied(key string) {
 func taintReviewKey(node protocol.ExecNode) string {
 	return toolCallKey(node.ToolName, node.Args)
 }
+
+// elevateGlobalTaintLevel 将污点等级安全并入 GlobalTaintLevel（只升不降，加锁保护，ADR-0007 / P4）。
+func (a *Agent) elevateGlobalTaintLevel(level types.TaintLevel) {
+	if a.sCtx == nil {
+		return
+	}
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	if level > a.sCtx.GlobalTaintLevel {
+		a.sCtx.GlobalTaintLevel = level
+	}
+}

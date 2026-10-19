@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -44,6 +45,13 @@ func (f *dbProviderFactory) CreateProvider(ctx context.Context, providerID, mode
 	var pName, typ, baseURL, apiKeyStr, projectID, location string
 	if err := row.Scan(&pName, &typ, &baseURL, &apiKeyStr, &projectID, &location); err != nil {
 		return nil, "", apperr.Wrap(apperr.CodeNotFound, "provider not found or disabled", err)
+	}
+
+	if cfg := config.Get(); cfg != nil && cfg.Security.LocalOnlyMode {
+		isLocal := typ == "ollama" || typ == "llama_local"
+		if !isLocal {
+			return nil, "", apperr.New(apperr.CodeForbidden, fmt.Sprintf("local_only_mode is enabled: provider type %q for model %q is not local", typ, modelID))
+		}
 	}
 
 	if f.vault != nil && apiKeyStr != "" {

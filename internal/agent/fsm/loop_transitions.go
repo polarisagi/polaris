@@ -33,6 +33,9 @@ func (sm *StateMachine) registerLoopTransitions() {
 		Trigger: types.TriggerLoopExecDone,
 		To:      types.AgentStateLoop,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			sCtx.LoopRound++
+			sCtx.Mu.Unlock()
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
@@ -56,12 +59,27 @@ func (sm *StateMachine) registerLoopTransitions() {
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
+
+	// S_LOOP → S_LOOP: 崩溃恢复唤醒续跑（P1 / ADR-0104 / HE-6）
+	sm.add(Transition{
+		From:    types.AgentStateLoop,
+		Trigger: types.TriggerResume,
+		To:      types.AgentStateLoop,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
+		},
+	})
 }
 
 // executeLoopStep 是 S_LOOP_EXEC 阶段的 DeterministicEffect 存根。
 // 真实工具执行在 Agent.executeDeterministicEffect 中拦截，保证与五防线和校验链一致。
 func (sm *StateMachine) executeLoopStep(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
 	return types.State("S_LOOP_EXEC_DONE"), nil
+}
+
+// LoopEffect 构造单轮 Agentic 调用的 LLMFillEffect（WP2 / ADR-0115）。
+func (sm *StateMachine) LoopEffect(sCtx *StateContext) protocol.Effect {
+	return sm.loopEffect(sCtx)
 }
 
 // loopEffect 构造单轮 Agentic 调用的 LLMFillEffect。
@@ -92,8 +110,9 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	defer cancel()
 
 	sCtx.Mu.Lock()
-	sCtx.LoopRound++
-	round := sCtx.LoopRound
+	if sCtx.LoopRound == 0 {
+		sCtx.LoopRound = 1
+	}
 	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
 	copy(roundMsgs, sCtx.LoopMessages)
 
@@ -120,7 +139,6 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 		sCtx.Mu.Unlock()
 	}
 
-	_ = round
 	return msgs
 }
 

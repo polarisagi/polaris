@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/classifier"
@@ -35,6 +36,8 @@ type runCommandArgs struct {
 //   - pol.HITLAutoApprove=true → 高风险命令自动放行（full 档）
 //
 // standard 档行为与改造前逐字节等价（R1 向后兼容约束）。
+//
+//nolint:gocyclo
 func MakeRunCommandFn(
 	allowedPaths []string,
 	sandboxEnabled bool,
@@ -43,6 +46,9 @@ func MakeRunCommandFn(
 	hitlGateway HITLGateway,
 	pol policy.Policy,
 ) sandbox.InProcessFn {
+	if pol.Profile == "" {
+		pol = policy.ProfilePolicy(policy.ProfileStandard)
+	}
 	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
 	riskClassifier := classifier.NewDefaultClassifier()
@@ -66,11 +72,13 @@ func MakeRunCommandFn(
 			return nil, apperr.New(apperr.CodeForbidden,
 				fmt.Sprintf("run_command: command denied: %s", verdict.Reason))
 		case classifier.RiskHITL:
-			// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵）
+			// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 			if pol.HITLAutoApprove {
 				slog.Warn("run_command: HITL auto-approved (full profile)",
 					"cmd", args.Command, "reason", verdict.Reason,
 					"profile", pol.Profile)
+				metrics.RecordHITLAutoApproved(ctx, "run_command", "command_risk")
+				logRunCmdHITLAutoApproved(ctx, hitlGateway, args.Command, verdict.Reason, pol.Profile)
 			} else {
 				if hitlGateway == nil {
 					return nil, apperr.New(apperr.CodeForbidden, "run_command: HITL gateway is nil, fail-closed for RiskHITL command")
@@ -193,4 +201,27 @@ func parseRunCommandArgs(input []byte, allowedPaths []string, pol policy.Policy)
 	}
 
 	return &args, workDir, timeout, nil
+}
+
+func logRunCmdHITLAutoApproved(ctx context.Context, gw HITLGateway, cmd, reason string, profile policy.TrustProfile) {
+	al, ok := gw.(Auditor)
+	if !ok || al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            "run_command",
+		"checkpoint_type": "command_risk",
+		"command":         cmd,
+		"reason":          reason,
+		"profile":         string(profile),
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "run_command: failed to log hitl auto approved audit", "err", err)
+	}
 }

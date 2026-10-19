@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"strings"
+
+	"github.com/polarisagi/polaris/internal/config"
 )
 
 // InjectProviderFactory 注入动态 Provider 工厂，用于按需实例化实时目录或未预注册的模型。
@@ -20,6 +22,18 @@ func (r *ProviderRegistry) InjectProviderFactory(f ProviderFactory) {
 func (r *ProviderRegistry) PickEntryByRef(ctx context.Context, ref string, acquire bool) *providerEntry {
 	if ref == "" {
 		return nil
+	}
+
+	// local_only_mode 隐私模式：严格拦截并拒绝非本地厂商模型
+	if cfg := config.Get(); cfg != nil && cfg.Security.LocalOnlyMode {
+		providerPart := ref
+		if strings.Contains(ref, "/") {
+			providerPart = strings.SplitN(ref, "/", 2)[0]
+		}
+		lower := strings.ToLower(providerPart)
+		if !strings.HasPrefix(lower, "ollama") && !strings.HasPrefix(lower, "llama") && !strings.Contains(lower, "local") {
+			return nil
+		}
 	}
 
 	if !strings.Contains(ref, "/") {

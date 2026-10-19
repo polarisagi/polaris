@@ -112,10 +112,9 @@ func (a *Agent) applyModelValidation(ctx context.Context, dec *modelRouteDecisio
 	if strings.Contains(vErr.Error(), "local_only_mode") {
 		dec.Fallback = "local_only"
 		metrics.RecordAgentModelRoute(ctx, dec.Source, dec.Fallback)
-		slog.WarnContext(ctx, "agent: non-local model rejected by local_only_mode, falling back to default pool",
+		slog.WarnContext(ctx, "agent: non-local model rejected by local_only_mode",
 			"ref", dec.Ref, "source", dec.Source)
-		dec.Ref = ""
-		return nil
+		return vErr
 	}
 	if strings.Contains(vErr.Error(), "max_output_price_per_mtok") {
 		dec.Fallback = "cost_limit"
@@ -148,6 +147,10 @@ func (a *Agent) SwitchModel(ref, pool, thinking string) (string, error) {
 	}
 	if target == "" {
 		return "", apperr.New(apperr.CodeInvalidInput, "必须指定 ref 或 pool")
+	}
+
+	if err := a.validateModelSelection(context.Background(), target); err != nil {
+		return "", err
 	}
 
 	a.sCtx.NextRoundModelRef = target

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/policy"
@@ -23,8 +24,26 @@ type CheckpointTrigger interface {
 func (r *InMemoryToolRegistry) WithPolicy(p policy.Policy) *InMemoryToolRegistry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.policy = p
+	r.policy = &p
 	return r
+}
+
+// WithAuditLogger 注入审计日志记录器（可选，V9 / HE-1 用于 full 档 HITL 自动放行审计）。
+func (r *InMemoryToolRegistry) WithAuditLogger(l protocol.AuditLogger) *InMemoryToolRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auditLogger = l
+	return r
+}
+
+// EffectivePolicy 获取当前生效策略，若未注入（nil）则回落至 standard 策略（fail-closed 兜底，V1 / HE-2）。
+func (r *InMemoryToolRegistry) EffectivePolicy() policy.Policy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.policy == nil {
+		return policy.ProfilePolicy(policy.ProfileStandard)
+	}
+	return *r.policy
 }
 
 // WithCheckpointTrigger 注入写前快照触发器（仅 full 档生效，ADR-0115 WP1）。
@@ -50,13 +69,16 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 
 	r.mu.RLock()
 	hitlGw := r.hitl
-	pol := r.policy
+	al := r.auditLogger
 	r.mu.RUnlock()
+	pol := r.EffectivePolicy()
 
-	// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵）
+	// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 	if pol.HITLAutoApprove {
 		slog.Warn("tool_registry: anomaly filter HITL auto-approved (full profile)",
 			"tool", name, "profile", pol.Profile)
+		metrics.RecordHITLAutoApproved(ctx, name, "anomaly_escalation")
+		logAnomalyHITLAutoApproved(ctx, al, name, pol.Profile)
 		f.Record(name, features)
 		return nil
 	}
@@ -90,12 +112,33 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 func (r *InMemoryToolRegistry) triggerPreExecutionCheckpoint(ctx context.Context, tool types.Tool, execInput []byte, taintLevel types.TaintLevel) {
 	r.mu.RLock()
 	ckpt := r.checkpointTrigger
-	pol := r.policy
 	r.mu.RUnlock()
+	pol := r.EffectivePolicy()
 
 	if pol.CheckpointEnabled && ckpt != nil {
 		if snapErr := ckpt.MaybeSnapshot(ctx, tool.Name, tool.Capability, tool.SideEffects, execInput, taintLevel); snapErr != nil {
 			slog.WarnContext(ctx, "tool_policy: checkpoint snapshot failed", "tool", tool.Name, "err", snapErr)
 		}
+	}
+}
+
+func logAnomalyHITLAutoApproved(ctx context.Context, al protocol.AuditLogger, name string, profile policy.TrustProfile) {
+	if al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            name,
+		"checkpoint_type": "anomaly_escalation",
+		"profile":         string(profile),
+		"reason":          "anomaly filter bypass in full profile",
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "tool_registry: failed to log anomaly hitl auto approved audit", "err", err)
 	}
 }

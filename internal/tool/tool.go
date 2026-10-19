@@ -49,8 +49,9 @@ type InMemoryToolRegistry struct {
 	sessionEventWriter SessionEventWriter
 	taintEgressChecker TaintEgressChecker    // 可选注入（M04 §3 出口污点检查）
 	exemptionVault     *token.ExemptionVault // 可选注入（HITL 豁免令牌存储）
-	policy             policy.Policy         // 信任档位安全策略（ADR-0115 WP1）
+	policy             *policy.Policy        // 信任档位安全策略（ADR-0115 WP1 / V1）
 	checkpointTrigger  CheckpointTrigger     // 写前快照触发器（ADR-0115 WP1）
+	auditLogger        protocol.AuditLogger  // 审计日志记录器（V9 / HE-1 用于 full 档 HITL 自动放行审计）
 }
 
 // TaintEgressChecker/WithTaintEgressChecker/WithExemptionVault/checkTaintEgress
@@ -110,8 +111,13 @@ func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope, cfg config.M7ToolTh
 			string(types.ToolMCP):     newRateLimiter(int64(cfg.RateLimitMCPQPS)),
 			"shell":                   newRateLimiter(int64(cfg.RateLimitShellQPS)),
 		},
-		policy: policy.ProfilePolicy(policy.ProfileStandard),
+		policy: defaultPolicyPtr(),
 	}
+}
+
+func defaultPolicyPtr() *policy.Policy {
+	p := policy.ProfilePolicy(policy.ProfileStandard)
+	return &p
 }
 
 // Register 注册工具；同名覆盖（热更新 MCP schema 时使用）。
@@ -381,9 +387,7 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 	return input, nil, nil
 }
 
-// isFileWriteTool/isShellTool/isReversible、lruCache、rateLimiter、
-// ErrToolNotFound 见 tool_helpers.go（R7 拆分）。
-
-// checkAnomaly 见 tool_policy.go（R7 拆分自 tool.go，接入 ADR-0115 WP1 HITL 自动放行）。
-
-// redactOutputsForPII 见 tool_pii.go（R7 拆分）。
+// 拆分文件说明（R7 治理）：
+// - isFileWriteTool/isShellTool/isReversible、lruCache、rateLimiter、ErrToolNotFound 见 tool_helpers.go
+// - checkAnomaly、WithPolicy、EffectivePolicy、WithAuditLogger 见 tool_policy.go
+// - redactOutputsForPII 见 tool_pii.go

@@ -102,6 +102,9 @@ func RegisterBuiltinTools(
 			return time.Duration(config.CurrentThresholds().M7Tool.WebFetchHostMinIntervalMs) * time.Millisecond
 		})
 	}
+	if pol.Profile == "" {
+		pol = policy.ProfilePolicy(policy.ProfileStandard)
+	}
 
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。

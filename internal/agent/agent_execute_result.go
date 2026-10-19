@@ -88,6 +88,9 @@ func aggregateDAGResults(results []protocol.NodeResult) []byte {
 // maxExecResultBytes 注入 LLM 的工具执行结果最大字节数（≈ 2000 token × 4 bytes/token）。
 const maxExecResultBytes = 8000
 
+// maxExecuteImageParts 单回合累积的多模态图片上限（防 OOM 与 prompt 超限，V10）。
+const maxExecuteImageParts = 10
+
 // execResultView 一轮 DAG 执行结果的模型可见投影。ExecuteResult（≤8KB，供反思/回复）
 // 与观察（≤4KB，供下一轮规划）按各自上限截断，但共享同一份卸载全文。
 type execResultView struct {

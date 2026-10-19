@@ -171,3 +171,36 @@ func TestOverlayManager_GetToolNotes(t *testing.T) {
 		t.Errorf("expected empty string for missing note, got %q", missing)
 	}
 }
+
+// TestV6_HarnessOverlay_ProtectedSurfaces_RejectsEvalConfigAndTrustProfile 验证 harness 覆盖层
+// 严格限制可编辑面，拒绝评测配置、回归集与 trust_profile 等敏感路径（V6 / C4）。
+func TestV6_HarnessOverlay_ProtectedSurfaces_RejectsEvalConfigAndTrustProfile(t *testing.T) {
+	mgr := harnessoverlay.New(t.TempDir())
+	ctx := context.Background()
+	if err := mgr.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	sensitivePaths := []string{
+		"eval/test_cases.json",
+		"eval/holdout/cases.json",
+		"regression/benchmark.json",
+		"configs/defaults.toml",
+		"configs/trust_profile.toml",
+		"trust_profile/policy.cedar",
+		"core/agent.go",
+	}
+
+	for _, p := range sensitivePaths {
+		if err := mgr.ValidatePath(p); err == nil {
+			t.Fatalf("V6 缺陷：ValidatePath 必须拒绝敏感面路径 %q", p)
+		}
+		_, err := mgr.WriteAndCommit(ctx, map[string][]byte{p: []byte("tamper")}, "malicious", "")
+		if err == nil {
+			t.Fatalf("V6 缺陷：WriteAndCommit 必须拒绝写入敏感面路径 %q", p)
+		}
+		if apperr.CodeOf(err) != apperr.CodeForbidden {
+			t.Errorf("expected CodeForbidden for %q, got: %v", p, err)
+		}
+	}
+}

@@ -69,7 +69,9 @@ func makeToolResultMessage(callID string, content string, imageParts ...types.Im
 // executeLoopToolCall 执行单条工具调用，并处理能力令牌与结果投影。
 func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCall) types.Message {
 	if a.toolRegistry == nil {
-		return makeToolResultMessage(call.ID, "Error: tool registry not configured")
+		msg := makeToolResultMessage(call.ID, "Error: tool registry not configured")
+		msg.Round = a.sCtx.LoopRound
+		return msg
 	}
 
 	taskID := a.sCtx.SessionID
@@ -81,27 +83,42 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 	toolCtx, revoke, err := a.withJITCapability(toolCtx, call.Name, call.Input)
 	if err != nil {
 		slog.WarnContext(ctx, "agentic_loop: capability token mint failed", "tool", call.Name, "err", err)
-		return makeToolResultMessage(call.ID, "Error: "+err.Error())
+		msg := makeToolResultMessage(call.ID, "Error: "+err.Error())
+		msg.Round = a.sCtx.LoopRound
+		return msg
 	}
 	defer revoke()
 
 	sCtxMu := &a.sCtx.Mu
 	sCtxMu.RLock()
 	globalTaint := a.sCtx.GlobalTaintLevel
+	currentRound := a.sCtx.LoopRound
 	sCtxMu.RUnlock()
 
 	res, err := a.toolRegistry.ExecuteWithTaint(toolCtx, call.Name, call.Input, globalTaint)
 	if err != nil {
 		slog.WarnContext(ctx, "agentic_loop: tool execution error", "tool", call.Name, "err", err)
-		return makeToolResultMessage(call.ID, "Error: "+err.Error())
+		msg := makeToolResultMessage(call.ID, "Error: "+err.Error())
+		msg.Round = currentRound
+		return msg
 	}
 
 	if res == nil {
-		return makeToolResultMessage(call.ID, "[Success (Empty Output)]")
+		msg := makeToolResultMessage(call.ID, "[Success (Empty Output)]")
+		msg.Round = currentRound
+		return msg
+	}
+
+	// P4: 工具结果污点加锁并入 GlobalTaintLevel（只升不降，ADR-0007）
+	if res.TaintLevel > types.TaintNone {
+		a.elevateGlobalTaintLevel(res.TaintLevel)
 	}
 
 	if res.Error != "" {
-		return makeToolResultMessage(call.ID, "Error: "+res.Error)
+		msg := makeToolResultMessage(call.ID, "Error: "+res.Error)
+		msg.Round = currentRound
+		msg.TaintLevel = res.TaintLevel
+		return msg
 	}
 
 	// 投影输出：超限时卸载到工作区并给出 read_tool_ref
@@ -112,13 +129,12 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 		rendered = view.render(maxExecResultBytes)
 	}
 
-	if len(res.ImageParts) > 0 {
-		a.sCtx.Mu.Lock()
-		a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, res.ImageParts...)
-		a.sCtx.Mu.Unlock()
-	}
+	a.appendExecuteImageParts(res.ImageParts)
 
-	return makeToolResultMessage(call.ID, string(rendered), res.ImageParts...)
+	msg := makeToolResultMessage(call.ID, string(rendered), res.ImageParts...)
+	msg.Round = currentRound
+	msg.TaintLevel = res.TaintLevel
+	return msg
 }
 
 // executeToolCallsConcurrently 并发执行多个独立的工具调用，并按原序收集结果。
@@ -197,7 +213,7 @@ func collectMaskCandidates(messages []types.Message, currentRound, maskAfter int
 		if strings.HasPrefix(m.Content, "[output masked: full output: read_tool_ref") {
 			continue
 		}
-		if currentRound-1 >= maskAfter {
+		if currentRound-m.Round >= maskAfter {
 			candidates = append(candidates, i)
 		}
 	}
@@ -293,4 +309,26 @@ func (a *Agent) broadcastStreamEvent(ev types.AgentStreamEvent) {
 		default:
 		}
 	}
+}
+
+// appendExecuteImageParts 向 sCtx.ExecuteImageParts 安全追加图片并执行单回合上限截断（V10）。
+func (a *Agent) appendExecuteImageParts(parts []types.ImagePart) {
+	if len(parts) == 0 {
+		return
+	}
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	cur := len(a.sCtx.ExecuteImageParts)
+	if cur >= maxExecuteImageParts {
+		slog.Warn("agent: execute image parts limit reached, discarding new images",
+			"limit", maxExecuteImageParts, "discarded", len(parts))
+		return
+	}
+	remaining := maxExecuteImageParts - cur
+	if len(parts) > remaining {
+		slog.Warn("agent: execute image parts truncated to limit",
+			"limit", maxExecuteImageParts, "kept", remaining, "discarded", len(parts)-remaining)
+		parts = parts[:remaining]
+	}
+	a.sCtx.ExecuteImageParts = append(a.sCtx.ExecuteImageParts, parts...)
 }

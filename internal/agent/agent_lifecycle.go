@@ -322,11 +322,17 @@ func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
 	})
 }
 
+//nolint:gocyclo
 func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:    types.AgentStreamEventStatus,
 		Content: "task_done",
 	})
+
+	// 标记 agentic 循环快照终态为 done（P1 / ADR-0104）
+	if a.sCtx != nil && a.sCtx.LoopRound > 0 {
+		a.markLoopCheckpointDone(ctx)
+	}
 
 	// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）。重规划耗尽转回复的回合
 	// 以 Complete 收尾但目标未达成（ADR-0098 决策九），指标按失败计，不被"有回复"美化。
@@ -362,6 +368,13 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 	// 设计说明）。
 	if a.Security.PIIDesensitizer != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
 		a.Security.PIIDesensitizer.ReleasePartition(a.sCtx.SessionID)
+	}
+
+	// 清理多模态图片缓存，防止无界累积泄漏内存（V10）
+	if a.sCtx != nil {
+		a.sCtx.Mu.Lock()
+		a.sCtx.ExecuteImageParts = nil
+		a.sCtx.Mu.Unlock()
 	}
 
 	a.refinePersonaAsync(ctx, current)

@@ -566,6 +566,11 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			imgs = append(imgs, r.ImageParts...)
 		}
 	}
+	if len(imgs) > maxExecuteImageParts {
+		slog.Warn("agent: staged execute image parts truncated to limit",
+			"limit", maxExecuteImageParts, "kept", maxExecuteImageParts, "discarded", len(imgs)-maxExecuteImageParts)
+		imgs = imgs[:maxExecuteImageParts]
+	}
 	a.sCtx.ExecuteImageParts = imgs
 
 	// Inject Taint Warning if any node is highly tainted
@@ -591,9 +596,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			maxNodeTaint = r.TaintLevel
 		}
 	}
-	if maxNodeTaint > a.sCtx.GlobalTaintLevel {
-		a.sCtx.GlobalTaintLevel = maxNodeTaint
-	}
+	a.elevateGlobalTaintLevel(maxNodeTaint)
 
 	a.sCtx.Mu.Lock()
 	a.sCtx.ExecAllSucceeded = nodeFailures.Load() == 0 && !degradedReplan

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -291,4 +292,49 @@ func TestSubagents_CompletionWake(t *testing.T) {
 	ch, _ := poster.Subscribe(context.Background())
 	_ = ch
 	time.Sleep(50 * time.Millisecond)
+}
+
+// TestSpawnAgents_LocalOnlyMode_RejectsRemoteModel 验证 local_only_mode 下派生子智能体时若指定云端模型则硬拦截（V3）。
+func TestSpawnAgents_LocalOnlyMode_RejectsRemoteModel(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	origCfg := config.Get()
+	defer config.Update(origCfg)
+
+	var newCfg config.Config
+	if origCfg != nil {
+		newCfg = *origCfg
+	}
+	newCfg.Security.LocalOnlyMode = true
+	config.Update(&newCfg)
+
+	// 1. 指定云端模型：被拦截
+	_, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{
+		Tasks: []types.SpawnTaskSpec{
+			{Prompt: "test remote", Model: "openai/gpt-4o"},
+		},
+		Wait: "none",
+	})
+	if err == nil {
+		t.Fatal("V3 缺陷：local_only_mode 下 spawn_agents 必须拒绝云端模型")
+	}
+	if !strings.Contains(err.Error(), "local_only_mode") {
+		t.Fatalf("期望包含 local_only_mode 错误，实际: %v", err)
+	}
+
+	// 2. 指定本地模型：正常放行
+	childIDs, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{
+		Tasks: []types.SpawnTaskSpec{
+			{Prompt: "test local", Model: "ollama/llama3"},
+		},
+		Wait: "none",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error with local model: %v", err)
+	}
+	if len(childIDs) != 1 {
+		t.Fatalf("expected 1 child ID, got %d", len(childIDs))
+	}
 }

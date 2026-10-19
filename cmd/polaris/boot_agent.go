@@ -1069,13 +1069,18 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	slog.Info("polaris: background task scheduler started", "auto_curriculum", sb.Cfg.SelfImprove.AutoCurriculum)
 
 	// ─── Sleep-Time & Self-Improvement 闭环 (ADR-0115 WP6) ───────────────────
+	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
 	var harnessAudit *harnessAuditAdapter
 	if sb.AuditTrail != nil {
 		harnessAudit = &harnessAuditAdapter{at: sb.AuditTrail}
 	}
 	var sleepCaller sleeptime.RouterInferCaller
 	if sb.Router != nil {
-		sleepCaller = &routerInferCallerAdapter{router: sb.Router}
+		sleepCaller = &routerInferCallerAdapter{
+			router: sb.Router,
+			vault:  tb.PIITokenVault,
+			policy: trustPol,
+		}
 	}
 	sleepProposer := sleeptime.NewDefaultProposer(sleepCaller, tb.HarnessOverlayMgr)
 	evalAdapter := &harnessEvaluatorAdapter{runner: evalRunner}
@@ -1086,8 +1091,6 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			return tb.ConsolidationPipeline.Run(ctx, sessionID)
 		}
 	}
-
-	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
 	coordinator := sleeptime.NewCoordinator(sleeptime.CoordinatorConfig{
 		OverlayMgr:      tb.HarnessOverlayMgr,
 		Evaluator:       evalAdapter,

@@ -23,6 +23,9 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 	if a.handoffPoster == nil {
 		return nil, apperr.New(apperr.CodeInternal, "spawn_agents: handoffPoster not injected (fail-closed)")
 	}
+	if p := a.agentProfile(); p != nil && !p.AllowDelegation {
+		return nil, apperr.New(apperr.CodeForbidden, "spawn_agents: subagents with AllowDelegation=false cannot spawn agents (security boundary)")
+	}
 	if len(args.Tasks) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidInput, "spawn_agents: tasks cannot be empty")
 	}
@@ -67,6 +70,13 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 			model = parentModel
 		}
 		task.Model = model
+
+		// local_only_mode 校验：子智能体模型不得为云端模型
+		if model != "" {
+			if err := a.validateModelSelection(ctx, model); err != nil {
+				return nil, apperr.Wrap(apperr.CodeForbidden, fmt.Sprintf("spawn_agents: task[%d] model %q rejected by policy", i, model), err)
+			}
+		}
 
 		childID := fmt.Sprintf("subagent-%s-%d-%s", a.ID, i, uuid.NewString()[:8])
 		childIDs = append(childIDs, childID)

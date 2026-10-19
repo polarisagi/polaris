@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/classifier"
@@ -35,6 +36,8 @@ type bashArgs struct {
 //
 // allowedPaths/sandboxEnabled/netPolicy/bwrapPath 来自 SandboxConfig，
 // standard 档下行为与改造前逐字节等价（R1 向后兼容约束）。
+//
+//nolint:gocyclo
 func MakeBashFn(
 	allowedPaths []string,
 	sandboxEnabled bool,
@@ -47,6 +50,9 @@ func MakeBashFn(
 	var pSbx *sandbox.PersistentSandbox
 	if len(persistentSbx) > 0 {
 		pSbx = persistentSbx[0]
+	}
+	if pol.Profile == "" {
+		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
 	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
@@ -197,11 +203,13 @@ func evaluateBashRisk(ctx context.Context, cmd string, pol policy.Policy, riskCl
 		return verdict, apperr.New(apperr.CodeForbidden,
 			fmt.Sprintf("bash: command denied: %s", verdict.Reason))
 	case classifier.RiskHITL:
-		// full 档：自动放行 + 记录审计日志（ADR-0115 WP1 行为矩阵）
+		// full 档：自动放行 + 记录审计日志（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 		if pol.HITLAutoApprove {
 			slog.Warn("bash: HITL auto-approved (full profile)",
 				"cmd", cmd, "reason", verdict.Reason,
 				"profile", pol.Profile)
+			metrics.RecordHITLAutoApproved(ctx, "bash", "command_risk")
+			logBashHITLAutoApproved(ctx, hitlGateway, cmd, verdict.Reason, pol.Profile)
 			return verdict, nil
 		}
 		if hitlGateway == nil {
@@ -292,4 +300,27 @@ func execPersistentTerminal(
 		return nil, apperr.Wrap(apperr.CodeInternal, "bash: marshal persistent result", err)
 	}
 	return out, nil
+}
+
+func logBashHITLAutoApproved(ctx context.Context, gw HITLGateway, cmd, reason string, profile policy.TrustProfile) {
+	al, ok := gw.(Auditor)
+	if !ok || al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            "bash",
+		"checkpoint_type": "command_risk",
+		"command":         cmd,
+		"reason":          reason,
+		"profile":         string(profile),
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "bash: failed to log hitl auto approved audit", "err", err)
+	}
 }

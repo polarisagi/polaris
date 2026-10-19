@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -63,16 +65,42 @@ func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.
 			exemption = vault.Lookup(agentID, input)
 		}
 	}
-	if err := checker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {
-		r.mu.RLock()
-		pol := r.policy
-		r.mu.RUnlock()
-		if !pol.TaintEgressBlockEnabled {
-			slog.Warn("tool_registry: taint egress blocked by checker, bypassed (audit only, full profile)",
-				"tool", tool.Name, "taint", taintLevel, "err", err)
-			return nil
-		}
-		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: taint egress blocked", err)
+	err := checker.CheckEgressWithExemption(input, taintLevel, exemption)
+	if err == nil {
+		return nil
 	}
-	return nil
+	pol := r.EffectivePolicy()
+	if !pol.TaintEgressBlockEnabled {
+		slog.Warn("tool_registry: taint egress blocked by checker, bypassed (audit only, full profile)",
+			"tool", tool.Name, "taint", taintLevel, "err", err)
+		metrics.RecordHITLAutoApproved(ctx, tool.Name, "taint_egress")
+		r.mu.RLock()
+		al := r.auditLogger
+		r.mu.RUnlock()
+		logTaintEgressAutoApproved(ctx, al, tool.Name, pol.Profile, taintLevel.String(), err.Error())
+		return nil
+	}
+	return apperr.Wrap(apperr.CodeForbidden, "tool_registry: taint egress blocked", err)
+}
+
+func logTaintEgressAutoApproved(ctx context.Context, al protocol.AuditLogger, toolName string, profile policy.TrustProfile, taint, reason string) {
+	if al == nil {
+		return
+	}
+	meta := map[string]any{
+		"tool":            toolName,
+		"checkpoint_type": "taint_egress",
+		"profile":         string(profile),
+		"reason":          reason,
+		"taint":           taint,
+	}
+	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
+		meta["agent_id"] = aid
+	}
+	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
+		meta["session_id"] = sid
+	}
+	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
+		slog.ErrorContext(ctx, "tool_registry: failed to log taint egress hitl auto approved audit", "err", err)
+	}
 }

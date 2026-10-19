@@ -113,6 +113,10 @@ type Message struct {
 	// cache_control 断点；其余适配器忽略，不参与任何序列化。无任何消息置位时适配器回退到
 	// 内置启发式（首块 system + 末块 system + 最近 2 条消息）。
 	CacheBreakpoint bool
+	// Round 记录该消息产生时的 agentic 循环轮次（结构化字段，用于生命周期管理与观察遮蔽判定）。
+	Round int
+	// TaintLevel 记录该消息所携带的污点等级（ADR-0007 / P4）。
+	TaintLevel TaintLevel
 }
 type VideoPart struct {
 	Type      string // "video"

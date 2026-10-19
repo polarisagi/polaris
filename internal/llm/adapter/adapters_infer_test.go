@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	llmparent "github.com/polarisagi/polaris/internal/llm"
@@ -324,5 +325,61 @@ func TestDisableDeepSeekThinking(t *testing.T) {
 	disableDeepSeekThinking(maxReq, types.ThinkingMax)
 	if maxReq.Thinking == nil || maxReq.Thinking.Type != "enabled" {
 		t.Fatalf("ThinkingMax 不应被改写，got %+v", maxReq.Thinking)
+	}
+}
+
+// TestV7_DeepSeek_ReasoningContentMultiTurnRoundtrip 验证多轮对话中 assistant 消息携带
+// reasoning_content 字段在 buildOpenAIRequest 序列化时能够准确送往 DeepSeek 服务端（V7）。
+func TestV7_DeepSeek_ReasoningContentMultiTurnRoundtrip(t *testing.T) {
+	var sentPayload []byte
+	client := &http.Client{
+		Transport: &MockTransport{
+			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
+				sentPayload, _ = io.ReadAll(req.Body)
+				mockResp := map[string]interface{}{
+					"id":      "chatcmpl-456",
+					"choices": []map[string]interface{}{{"message": map[string]interface{}{"role": "assistant", "content": "done"}}},
+				}
+				b, _ := json.Marshal(mockResp)
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewBuffer(b)), Header: make(http.Header)}, nil
+			},
+		},
+	}
+
+	credPool := llmparent.NewCredentialPool([]string{"key"}, llmparent.StrategyFillFirst)
+	adapter := NewDeepSeekAdapter(credPool, client, "deepseek-reasoner", nil)
+
+	msgs := []types.Message{
+		{Role: "user", Content: "check logs"},
+		{
+			Role:             "assistant",
+			Content:          "",
+			ReasoningContent: "I need to check the auth log first",
+			Parts: []any{
+				map[string]any{
+					"type":  "tool_use",
+					"id":    "call_1",
+					"name":  "read_file",
+					"input": map[string]any{"path": "auth.log"},
+				},
+			},
+		},
+		{
+			Role:    "user",
+			Content: "log contents",
+			Parts: []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "call_1", "content": "error 401"},
+			},
+		},
+	}
+
+	_, err := adapter.Infer(context.Background(), msgs)
+	if err != nil {
+		t.Fatalf("Infer failed: %v", err)
+	}
+
+	sentStr := string(sentPayload)
+	if !strings.Contains(sentStr, `"reasoning_content":"I need to check the auth log first"`) {
+		t.Fatalf("V7 缺陷：发送给 DeepSeek 的请求未包含 reasoning_content 回传！发送内容: %s", sentStr)
 	}
 }

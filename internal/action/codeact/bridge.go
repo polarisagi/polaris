@@ -77,6 +77,9 @@ func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol pol
 	if toolExec == nil {
 		return nil, apperr.New(apperr.CodeInvalidInput, "code_act bridge: tool executor is nil")
 	}
+	if pol.Profile == "" {
+		pol = policy.ProfilePolicy(policy.ProfileStandard)
+	}
 
 	// Unix domain socket 路径长度限制（macOS 104 字节，Linux 108 字节），使用简短前缀
 	sockPath := filepath.Join("/tmp", fmt.Sprintf("pb_%s.sock", uuid.NewString()[:8]))

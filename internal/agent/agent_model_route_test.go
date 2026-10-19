@@ -89,24 +89,56 @@ func TestAgent_ResolveModelRoute_LocalOnlyMode(t *testing.T) {
 	newCfg.Security.LocalOnlyMode = true
 	config.Update(&newCfg)
 
-	// 非 local 模型被拦截，并回退到默认池
+	// 非 local 模型在 local_only_mode 下被硬拦截，拒绝执行（V3 / 隐私保护）
 	a.SetModelLock("anthropic/claude-3-7-sonnet")
-	ref, pool, _, err := a.resolveModelRoute(ctx, "default", "none")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, _, _, err := a.resolveModelRoute(ctx, "default", "none")
+	if err == nil {
+		t.Fatal("V3 缺陷：local_only_mode 必须拒绝云端模型引用，不能静默放行或回退")
 	}
-	if ref != "" || pool != "default" {
-		t.Fatalf("expected non-local model to fallback to default pool, got ref=%q, pool=%q", ref, pool)
+	if !strings.Contains(err.Error(), "local_only_mode") {
+		t.Fatalf("期望 local_only_mode 错误，实际: %v", err)
 	}
 
 	// 本地模型（如 ollama/llama3）应正常放行
 	a.SetModelLock("ollama/llama3")
-	ref, _, _, err = a.resolveModelRoute(ctx, "default", "none")
+	ref, _, _, err := a.resolveModelRoute(ctx, "default", "none")
 	if err != nil {
 		t.Fatalf("unexpected error on local model: %v", err)
 	}
 	if ref != "ollama/llama3" {
 		t.Fatalf("expected local model to be permitted, got ref=%q", ref)
+	}
+}
+
+func TestAgent_SwitchModel_LocalOnlyMode(t *testing.T) {
+	a := NewAgentWithDefaults("sess-switch-local")
+
+	origCfg := config.Get()
+	defer config.Update(origCfg)
+
+	var newCfg config.Config
+	if origCfg != nil {
+		newCfg = *origCfg
+	}
+	newCfg.Security.LocalOnlyMode = true
+	config.Update(&newCfg)
+
+	// 1. 尝试切换到云端模型：必须被拦截
+	_, err := a.SwitchModel("openai/gpt-4o", "", "")
+	if err == nil {
+		t.Fatal("V3 缺陷：SwitchModel 在 local_only_mode 下应拒绝切换到云端模型")
+	}
+	if !strings.Contains(err.Error(), "local_only_mode") {
+		t.Fatalf("期望包含 local_only_mode 错误，实际: %v", err)
+	}
+
+	// 2. 切换到本地模型：正常通过
+	msg, err := a.SwitchModel("ollama/llama3", "", "none")
+	if err != nil {
+		t.Fatalf("unexpected error switching to local model: %v", err)
+	}
+	if !strings.Contains(msg, "ollama/llama3") {
+		t.Fatalf("expected switch confirmation, got %s", msg)
 	}
 }
 
