@@ -23,6 +23,9 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 	if a.handoffPoster == nil {
 		return nil, apperr.New(apperr.CodeInternal, "spawn_agents: handoffPoster not injected (fail-closed)")
 	}
+	if p := a.agentProfile(); p != nil && !p.AllowDelegation {
+		return nil, apperr.New(apperr.CodeForbidden, "spawn_agents: subagents with AllowDelegation=false cannot spawn agents (security boundary)")
+	}
 	if len(args.Tasks) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidInput, "spawn_agents: tasks cannot be empty")
 	}

@@ -127,3 +127,52 @@ func TestAgentProfile_FileRootConfinesTaskCtx(t *testing.T) {
 		t.Fatalf("profile FileRoot must reach tool ctx, got %q %v", root, ok)
 	}
 }
+
+// TestAgentProfile_AllowDelegationFalse_BlocksSpawnAgentsAndSubagentTools 验证跨节点/禁用委派的子任务
+// 严格禁止调用 spawn_agents、agent_message、agent_status、agent_stop、agent_result（V4 / 安全边界）。
+func TestAgentProfile_AllowDelegationFalse_BlocksSpawnAgentsAndSubagentTools(t *testing.T) {
+	a := NewAgentWithDefaults("peer-non-delegating-agent")
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	cat := catalog.NewMemoryCatalog()
+	tools := []string{
+		"spawn_agents", "agent_message", "agent_status", "agent_stop", "agent_result",
+		catalog.DelegateToolName, catalog.ListAgentsToolName, "read_file",
+	}
+	for _, n := range tools {
+		cat.Register(protocol.CatalogEntry{Name: n, Source: types.ToolBuiltin, TrustTier: types.TrustSystem})
+	}
+	a.InjectCatalog(cat)
+	executorTools := make(capToolExecutor)
+	for _, n := range tools {
+		executorTools[n] = types.CapReadOnly
+	}
+	a.InjectToolExecutor(executorTools)
+
+	// AllowDelegation: false（如跨节点 mesh / MCP 委派任务）
+	a.SetAgentProfile(&types.AgentProfileSpec{Name: "mesh-peer", AllowDelegation: false})
+
+	// 1. visibleCatalog 不应包含任何委派与子智能体管理工具
+	visible := a.visibleCatalog().List(context.Background(), types.TrustUntrusted)
+	for _, e := range visible {
+		if isDelegationTool(e.Name) {
+			t.Fatalf("V4 缺陷：AllowDelegation=false 的角色在工具列表中看到了委派工具 %s", e.Name)
+		}
+	}
+
+	// 2. checkProfileTool 硬拦截这些工具
+	for _, dt := range []string{"spawn_agents", "agent_message", "agent_status", "agent_stop", "agent_result"} {
+		if err := a.checkProfileTool(dt, ""); err == nil {
+			t.Fatalf("V4 缺陷：AllowDelegation=false 必须拒绝工具 %s，但 checkProfileTool 放行了", dt)
+		}
+	}
+
+	// 3. 直接调用 a.SpawnAgents 也被拦截
+	_, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{
+		Tasks: []types.SpawnTaskSpec{{Prompt: "nested agent"}},
+	})
+	if err == nil {
+		t.Fatal("V4 缺陷：AllowDelegation=false 下 SpawnAgents 必须拒绝执行")
+	}
+}
