@@ -2,7 +2,7 @@
 
 > Go 状态机持有控制流，LLM 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 > 代码位置：`internal/agent/`（FSM 在 `internal/agent/fsm/`；DAG 执行器与 S_VALIDATE 四层校验物理实现在 `internal/execute/dag/`，ADR-0046；FSM 经 `internal/agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口驱动，唯一决定何时进入 S_EXECUTE/S_VALIDATE）。
-<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:162 Suspend-on-Idle / 3:178 S_VALIDATE / 4:217 DAG（Directed Acyclic Graph，有向无环图） / 5:287 System1/2 / 6:311 WorldModel / 7:319 推理预算 / 8:366 CrashRecovery / 8-bis:403 Handoff唤醒事件化+无损续跑 / 12:413 已知Bug修复记录 / 13:419 (SOFT)降级 / 14:436 481 跨模块契约 / 15:460 505 默认参数 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:166 Suspend-on-Idle / 3:182 S_VALIDATE / 4:221 DAG（Directed Acyclic Graph，有向无环图） / 5:291 System1/2 / 6:315 WorldModel / 7:323 推理预算 / 8:370 CrashRecovery / 8-bis:407 Handoff唤醒事件化+无损续跑 / 12:417 已知Bug修复记录 / 13:423 (SOFT)降级 / 14:440 481 跨模块契约 / 15:464 505 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
