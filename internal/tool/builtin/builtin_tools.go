@@ -102,7 +102,7 @@ func RegisterBuiltinTools(
 			return time.Duration(config.CurrentThresholds().M7Tool.WebFetchHostMinIntervalMs) * time.Millisecond
 		})
 	}
-	if pol.Profile == "" {
+	if pol.IsZero() {
 		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
 

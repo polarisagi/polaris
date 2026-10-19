@@ -77,44 +77,111 @@ func isExempt(rel string) bool {
 	return false
 }
 
-// checkBinaryExpr 检查 `x == "full"` / `x != "hardened"` 形式的档位比较。
+// trustProfileIdentNames 档位常量标识符（无论裸写还是通过 package policy 引用）。
+var trustProfileIdentNames = map[string]bool{
+	"ProfileStandard": true,
+	"ProfileFull":     true,
+	"ProfileHardened": true,
+}
+
+// checkBinaryExpr 检查 `x == "full"` / `pol.Profile == policy.ProfileHardened` 形式的档位比较。
 func checkBinaryExpr(r *lintutil.Reporter, f lintutil.File, expr *ast.BinaryExpr) {
 	if expr.Op != token.EQL && expr.Op != token.NEQ {
 		return
 	}
-	if isTrustProfileLiteral(expr.X) || isTrustProfileLiteral(expr.Y) {
+
+	// 1. 任一侧为档位值（字面量如 "hardened"，或常量如 policy.ProfileHardened）
+	if isTrustProfileValue(expr.X) || isTrustProfileValue(expr.Y) {
 		pos := f.Fset.Position(expr.Pos())
 		r.Violation(
 			filepath.ToSlash(pos.Filename)+":"+itoa(pos.Line),
-			"[L-20] 禁止在 ProfilePolicy 外直接比较 TrustProfile 字符串字面量；"+
-				"应通过 policy.Policy 的字段访问安全行为（ADR-0115 WP1）",
+			"[L-20] 禁止在 ProfilePolicy 外直接比较 TrustProfile 档位值；"+
+				"应通过 policy.Policy 的字段访问安全行为（ADR-0115 WP1 / R3-08）",
+		)
+		return
+	}
+
+	// 2. 任一侧为 .Profile 字段，且另一侧非 nil（捕获对 .Profile 字段的 == / != 比较，R3-08）
+	if (isProfileField(expr.X) && !isNil(expr.Y)) || (isProfileField(expr.Y) && !isNil(expr.X)) {
+		pos := f.Fset.Position(expr.Pos())
+		r.Violation(
+			filepath.ToSlash(pos.Filename)+":"+itoa(pos.Line),
+			"[L-20] 禁止在 ProfilePolicy 外直接对 .Profile 字段进行 ==/!= 比较；"+
+				"应通过 policy.Policy 的字段访问安全行为（ADR-0115 WP1 / R3-08）",
 		)
 	}
 }
 
-// checkSwitchStmt 检查 switch 语句中 case 值含多个档位字面量的情形。
-// ≥2 个档位字面量出现在同一 switch body → 很可能是在重复 ProfilePolicy 的映射逻辑。
+// checkSwitchStmt 检查 switch 语句中以 .Profile 字段为条件或 case 值含档位常量的分支。
 func checkSwitchStmt(r *lintutil.Reporter, f lintutil.File, sw *ast.SwitchStmt) {
-	hitCount := 0
+	// 1. switch tag 为 .Profile 字段（如 switch pol.Profile { ... }，R3-08）
+	if sw.Tag != nil && isProfileField(sw.Tag) {
+		pos := f.Fset.Position(sw.Pos())
+		r.Violation(
+			filepath.ToSlash(pos.Filename)+":"+itoa(pos.Line),
+			"[L-20] 禁止在 ProfilePolicy 外对 .Profile 字段做 switch 分支；"+
+				"应通过 policy.Policy 字段访问（ADR-0115 WP1 / R3-08）",
+		)
+		return
+	}
+
+	// 2. case 子句中出现档位常量或字面量
+	hitConstCount := 0
+	hitLitCount := 0
 	for _, stmt := range sw.Body.List {
 		cc, ok := stmt.(*ast.CaseClause)
 		if !ok {
 			continue
 		}
 		for _, expr := range cc.List {
+			if isTrustProfileIdentOrConst(expr) {
+				hitConstCount++
+			}
 			if isTrustProfileLiteral(expr) {
-				hitCount++
+				hitLitCount++
 			}
 		}
 	}
-	if hitCount >= 2 {
+	if hitConstCount >= 1 || hitLitCount >= 2 {
 		pos := f.Fset.Position(sw.Pos())
 		r.Violation(
 			filepath.ToSlash(pos.Filename)+":"+itoa(pos.Line),
-			"[L-20] 禁止在 ProfilePolicy 外用 switch/case 分支多个档位字面量；"+
-				"应通过 policy.Policy 字段访问（ADR-0115 WP1）",
+			"[L-20] 禁止在 ProfilePolicy 外用 switch/case 分支档位值；"+
+				"应通过 policy.Policy 字段访问（ADR-0115 WP1 / R3-08）",
 		)
 	}
+}
+
+// isTrustProfileIdentOrConst 判断表达式是否为档位常量标识符（如 policy.ProfileHardened 或 ProfileHardened）。
+func isTrustProfileIdentOrConst(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		return trustProfileIdentNames[e.Sel.Name]
+	case *ast.Ident:
+		return trustProfileIdentNames[e.Name]
+	}
+	return false
+}
+
+// isTrustProfileValue 判断表达式是否为档位字面量或常量。
+func isTrustProfileValue(expr ast.Expr) bool {
+	return isTrustProfileLiteral(expr) || isTrustProfileIdentOrConst(expr)
+}
+
+// isProfileField 判断表达式是否访问了 .Profile 字段（如 pol.Profile）。
+func isProfileField(expr ast.Expr) bool {
+	if sel, ok := expr.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "Profile"
+	}
+	return false
+}
+
+// isNil 判断表达式是否为 nil。
+func isNil(expr ast.Expr) bool {
+	if id, ok := expr.(*ast.Ident); ok {
+		return id.Name == "nil"
+	}
+	return false
 }
 
 // isTrustProfileLiteral 判断表达式是否为档位字符串字面量（含类型转换形式）。

@@ -56,6 +56,12 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	if p.SleepTimeIdleMinutes != 10 {
 		t.Errorf("standard: SleepTimeIdleMinutes should be 10, got %d", p.SleepTimeIdleMinutes)
 	}
+	if !p.BackgroundJobsAllowed {
+		t.Error("standard: BackgroundJobsAllowed should be true")
+	}
+	if !p.PersistentTerminalAllowed {
+		t.Error("standard: PersistentTerminalAllowed should be true")
+	}
 }
 
 func TestProfilePolicy_Full(t *testing.T) {
@@ -112,6 +118,12 @@ func TestProfilePolicy_Full(t *testing.T) {
 	if p.SleepTimeIdleMinutes != 10 {
 		t.Errorf("full: SleepTimeIdleMinutes should be 10, got %d", p.SleepTimeIdleMinutes)
 	}
+	if !p.BackgroundJobsAllowed {
+		t.Error("full: BackgroundJobsAllowed should be true")
+	}
+	if !p.PersistentTerminalAllowed {
+		t.Error("full: PersistentTerminalAllowed should be true")
+	}
 }
 
 func TestProfilePolicy_Hardened(t *testing.T) {
@@ -163,6 +175,12 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if p.SleepTimeIdleMinutes != 10 {
 		t.Errorf("hardened: SleepTimeIdleMinutes should be 10, got %d", p.SleepTimeIdleMinutes)
+	}
+	if p.BackgroundJobsAllowed {
+		t.Error("hardened: BackgroundJobsAllowed should be false")
+	}
+	if p.PersistentTerminalAllowed {
+		t.Error("hardened: PersistentTerminalAllowed should be false")
 	}
 }
 

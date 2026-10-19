@@ -105,6 +105,19 @@ type Policy struct {
 	// SleepTimeIdleMinutes 会话空闲触发阈值（分钟）（ADR-0115 WP6）。
 	// 默认 10 分钟。
 	SleepTimeIdleMinutes int
+
+	// BackgroundJobsAllowed 是否允许运行后台作业（bash args.Background）。
+	// full / standard 档为 true；hardened 档为 false（WP5 ADR-0115 / R3-08）。
+	BackgroundJobsAllowed bool
+
+	// PersistentTerminalAllowed 是否允许运行持久终端会话（bash args.SessionID != ""）。
+	// full / standard 档为 true；hardened 档为 false（WP5 ADR-0115 / R3-08）。
+	PersistentTerminalAllowed bool
+}
+
+// IsZero 判断策略是否为空（未初始化）。
+func (p Policy) IsZero() bool {
+	return p.Profile == ""
 }
 
 // ProfilePolicy 将信任档位映射为安全策略快照（ADR-0115 WP1 决策二）。
@@ -135,6 +148,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			JobsKillOnSessionEnd:      false, // full 档默认保留后台进程
 			SleepTimeEnabled:          true,  // full 档默认开启 sleep-time 后台自改进
 			SleepTimeIdleMinutes:      10,    // 默认空闲 10 分钟触发
+			BackgroundJobsAllowed:     true,  // full 档允许后台进程
+			PersistentTerminalAllowed: true,  // full 档允许持久终端
 		}
 	case ProfileHardened:
 		return Policy{
@@ -156,6 +171,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
 			SleepTimeEnabled:          false, // hardened 档默认关闭后台自改进
 			SleepTimeIdleMinutes:      10,
+			BackgroundJobsAllowed:     false, // hardened 档禁止后台进程
+			PersistentTerminalAllowed: false, // hardened 档禁止持久终端
 		}
 	default: // ProfileStandard
 		return Policy{
@@ -177,6 +194,8 @@ func ProfilePolicy(profile TrustProfile) Policy {
 			JobsKillOnSessionEnd:      true,  // 会话结束自动杀后台任务
 			SleepTimeEnabled:          false, // standard 档默认关闭后台自改进
 			SleepTimeIdleMinutes:      10,
+			BackgroundJobsAllowed:     true, // standard 档允许沙箱后台进程
+			PersistentTerminalAllowed: true, // standard 档允许沙箱持久终端
 		}
 	}
 }

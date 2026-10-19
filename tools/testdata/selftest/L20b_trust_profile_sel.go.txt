@@ -1,0 +1,12 @@
+package zztrust
+
+import "github.com/polarisagi/polaris/internal/security/policy"
+
+type mockPolicyHolder struct {
+	Profile policy.TrustProfile
+}
+
+func selftestTrustProfileSelector(h mockPolicyHolder) bool {
+	// 负向用例：对 .Profile 字段比较 policy.ProfileHardened（R3-08 门控盲区形态）
+	return h.Profile == policy.ProfileHardened
+}
