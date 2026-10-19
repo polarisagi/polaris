@@ -37,10 +37,10 @@ func (s *StateContext) LoopStreamsToUser() bool {
 }
 
 // RecordLoopStreamedLocked 记录一轮已流式推送的文本。调用方须持有 s.Mu 写锁。
-func (s *StateContext) RecordLoopStreamedLocked(text string) {
-	if text == "" {
+func (s *StateContext) RecordLoopStreamedLocked(chunk string) {
+	if chunk == "" {
 		return
 	}
 	s.LoopReplyStreamed = true
-	s.LoopStreamedText += text
+	s.LoopStreamedText += chunk
 }
