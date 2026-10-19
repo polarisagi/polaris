@@ -293,7 +293,7 @@ type AgenticTurn struct {
 	LoopCompletion                 string
 	PendingLoopCompletion          string
 	LoopTurnStartTime              time.Time
-	LoopSteerQueue                 []string
+	LoopSteerQueue                 []taint.TaintedString
 	LoopPendingToolCalls           []types.InferToolCall
 	LoopLastUsageTokens            int
 	LoopLastUsageCost              float64
@@ -324,10 +324,12 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopSummary = ""
 	s.LoopConsecutiveTextRounds = 0
 
-	// R4-04: 完成模式重置为 auto，若有预设的下次回合模式则消费它
+	// R4-04: 完成模式重置为 auto，若有预设的下次回合模式则消费它；若调用方在此之前显式设置了非 auto 模式则消费它
 	if s.PendingLoopCompletion != "" {
 		s.LoopCompletion = s.PendingLoopCompletion
 		s.PendingLoopCompletion = ""
+	} else if s.LoopCompletion != "" && s.LoopCompletion != "auto" {
+		// 消费外部直接设置的完成模式，回合结束时由 TriggerLoopDone 清回 auto
 	} else {
 		s.LoopCompletion = "auto"
 	}
@@ -360,6 +362,39 @@ func (s *StateContext) AppendLoopMessages(msgs ...types.Message) {
 		}
 	}
 	s.LoopMessages = append(s.LoopMessages, msgs...)
+}
+
+// DrainSteerQueueToMessages 检查并出队插话队列，作为带污点（TaintHigh）的 Spotlighting 清洗 user 消息注入模型上下文（R4-05）。
+// 所有注入点统一收敛至此方法。
+func (s *StateContext) DrainSteerQueueToMessages() bool {
+	if s == nil {
+		return false
+	}
+	s.Mu.Lock()
+	if len(s.LoopSteerQueue) == 0 {
+		s.Mu.Unlock()
+		return false
+	}
+	steers := make([]taint.TaintedString, len(s.LoopSteerQueue))
+	copy(steers, s.LoopSteerQueue)
+	s.LoopSteerQueue = nil
+	round := s.LoopRound
+	if s.GlobalTaintLevel < types.TaintHigh {
+		s.GlobalTaintLevel = types.TaintHigh
+	}
+	s.Mu.Unlock()
+
+	msgs := make([]types.Message, 0, len(steers))
+	for _, st := range steers {
+		msgs = append(msgs, types.Message{
+			Role:       "user",
+			Content:    taint.Spotlighting(st),
+			TaintLevel: st.Level(),
+			Round:      round,
+		})
+	}
+	s.AppendLoopMessages(msgs...)
+	return true
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。

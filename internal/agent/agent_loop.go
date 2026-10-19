@@ -128,14 +128,8 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 	// 6. 执行 T3 批量观察遮蔽
 	a.applyLoopObservationMasking(ctx)
 
-	// 7. 消费插话队列（Steer），在轮次边界注入为 user 消息
-	steers := a.drainSteerQueue()
-	for _, st := range steers {
-		a.appendLoopMessages(types.Message{
-			Role:    "user",
-			Content: st,
-		})
-	}
+	// 7. 消费插话队列（Steer），在轮次边界注入为 user 消息（R4-05）
+	a.sCtx.DrainSteerQueueToMessages()
 
 	// 8. 记录指标与持久化增量快照（P1 / ADR-0104 / HE-6）
 	metrics.RecordLoopRound(ctx)

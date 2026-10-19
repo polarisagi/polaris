@@ -178,7 +178,7 @@ func TestAgenticLoop_MultiRound_ConcurrentTools(t *testing.T) {
 func TestAgenticLoop_ExplicitCompletion_FinishTool(t *testing.T) {
 	t.Setenv("POLARIS_LOOP_MODE", "agentic")
 	agent := NewAgentWithDefaults("test-loop-explicit")
-	agent.sCtx.LoopCompletion = "explicit"
+	agent.SetLoopCompletion("explicit")
 
 	prov := &loopTestProvider{
 		responses: []*types.ProviderResponse{

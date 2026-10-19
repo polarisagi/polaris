@@ -233,29 +233,6 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	return msgs
 }
 
-// drainSteerQueueToMessages 检查并出队插话队列，作为 user 消息注入模型上下文。
-func drainSteerQueueToMessages(sCtx *StateContext) bool {
-	sCtx.Mu.Lock()
-	if len(sCtx.LoopSteerQueue) == 0 {
-		sCtx.Mu.Unlock()
-		return false
-	}
-	steers := make([]string, len(sCtx.LoopSteerQueue))
-	copy(steers, sCtx.LoopSteerQueue)
-	sCtx.LoopSteerQueue = nil
-	round := sCtx.LoopRound
-	sCtx.Mu.Unlock()
-
-	for _, st := range steers {
-		sCtx.AppendLoopMessages(types.Message{
-			Role:    "user",
-			Content: st,
-			Round:   round,
-		})
-	}
-	return true
-}
-
 // onLoopSuccess 处理单轮 LLM 输出判定。
 func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.State, error) {
 	sCtx.Mu.Lock()
@@ -266,8 +243,8 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	// 检查是否有 finish 调用
 	for _, call := range calls {
 		if call.Name == "finish" {
-			// 判定完成前先检查插话队列（R2-12）
-			if drainSteerQueueToMessages(sCtx) {
+			// 判定完成前先检查插话队列（R2-12 / R4-05）
+			if sCtx.DrainSteerQueueToMessages() {
 				sCtx.Mu.Lock()
 				sCtx.LoopPendingToolCalls = nil
 				sCtx.Mu.Unlock()
@@ -307,8 +284,8 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	sCtx.Mu.Unlock()
 
 	// 无工具调用且 auto 完成模式下，认为文本输出即收尾回复
-	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12）
-	if drainSteerQueueToMessages(sCtx) {
+	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12 / R4-05）
+	if sCtx.DrainSteerQueueToMessages() {
 		return types.State("S_LOOP_STEER"), nil
 	}
 
