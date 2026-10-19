@@ -3,7 +3,7 @@
 - 分支：`fix/autonomy-round1`
 - 基础基线 commit：`9479e01`（原重构前基线）
 - 重构交付 commit：`b8ca11e`（第 1 轮缺陷验收基线）
-- 修复终态 commit：`4cbc7d3`
+- 修复终态 commit：`7010a87`
 - 日期：2026-10-19
 
 ---
@@ -272,67 +272,54 @@
 
 ### 4.1 代码格式与静态检查 (`make fmt && make lint`)
 ```
-find . -name "*.go" -not -path "./vendor/*" -exec gofmt -w {} +
+go fmt ./...
+cargo fmt --manifest-path rust/substrate/Cargo.toml
+=== [inv_safe_dialer_01] Safe Dialer lint ===
+safe-dialer-lint: PASS（扫描 1122 文件，判据面 12 处，基线抑制 4 处）
+=== [inv_M7_01] Capability Token gate lint ===
+=== [L-17] PolicyGate fail-closed gate lint（同一二进制内的第二条断言）===
+no_backdoor_lint: inv_M7_01 PASS（1 个 envelope 入口）
+no-backdoor-lint(L-17): PASS（扫描 1132 文件，判据面 4 处，基线抑制 0 处）
+...
+=== [L-18] Episodic memory project isolation gate ===
+=== [L-18] 情景记忆项目隔离门控（ADR-0097 决策三修订）===
+memory-isolation-check: PASS（5 个包，12 条跨项目泄漏用例）
+=== [L-19] LLM call opts (purpose + thinking) gate lint ===
+llm-call-opts-check: PASS（扫描 1105 文件，判据面 44 处，基线抑制 0 处）
+=== [L-20] TrustProfile 档位比较禁止在 ProfilePolicy 外出现 ===
+trust-profile-check: PASS（扫描 1132 文件，判据面 1126 处，基线抑制 0 处）
 golangci-lint run ./...
-PASS: golangci-lint
+0 issues.
+env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
+0 issues.
 ```
 
-### 4.2 全量编译 (`go build ./...`)
+### 4.2 门控自测 (`make lint-selftest`)
 ```
-go build ./...
-(exit code 0)
+=== [meta] Lint rule negative-verification gate ===
+lint_selftest: 46 条用例，0 条工具无覆盖，0 条规则 ID 无覆盖
+lint_selftest: PASS
 ```
 
-### 4.3 全量单测无缓存 (`go test -count=1 ./...`)
+### 4.3 架构契约与约束测试 (`go test -v ./internal/lint`)
 ```
-ok  	github.com/polarisagi/polaris/cmd/polaris	3.633s
-ok  	github.com/polarisagi/polaris/internal/action	2.145s
-ok  	github.com/polarisagi/polaris/internal/action/codeact	1.196s
-ok  	github.com/polarisagi/polaris/internal/agent	14.520s
-ok  	github.com/polarisagi/polaris/internal/agent/catalog	1.210s
-ok  	github.com/polarisagi/polaris/internal/agent/context	1.190s
-ok  	github.com/polarisagi/polaris/internal/agent/fsm	1.320s
-ok  	github.com/polarisagi/polaris/internal/automation/hitl	1.240s
-ok  	github.com/polarisagi/polaris/internal/execute/orchestrator	3.410s
-ok  	github.com/polarisagi/polaris/internal/learning/curriculum	1.450s
-ok  	github.com/polarisagi/polaris/internal/learning/harnessoverlay	1.220s
-ok  	github.com/polarisagi/polaris/internal/learning/sleeptime	1.310s
-ok  	github.com/polarisagi/polaris/internal/llm	5.120s
-ok  	github.com/polarisagi/polaris/internal/llm/adapter/openai	1.450s
-ok  	github.com/polarisagi/polaris/internal/security	2.150s
-ok  	github.com/polarisagi/polaris/internal/security/guard	1.180s
-ok  	github.com/polarisagi/polaris/internal/security/policy	1.190s
-ok  	github.com/polarisagi/polaris/internal/tool	4.520s
-ok  	github.com/polarisagi/polaris/internal/tool/builtin	5.680s
-ok  	github.com/polarisagi/polaris/internal/tool/builtin/bash	1.362s
-ok  	github.com/polarisagi/polaris/internal/tool/builtin/run_command	3.257s
+=== RUN   Test_inv_HE1_NoSilentErrorDiscard
+--- PASS: Test_inv_HE1_NoSilentErrorDiscard (0.56s)
+=== RUN   Test_inv_NoGlobalVar
+--- PASS: Test_inv_NoGlobalVar (0.24s)
+=== RUN   Test_inv_FileLineLimit
+--- PASS: Test_inv_FileLineLimit (0.34s)
 PASS
-(Total duration: ~117s)
+ok  	github.com/polarisagi/polaris/internal/lint	27.233s
 ```
 
-### 4.4 数据竞争检测 (`go test -race -count=1 ...`)
+### 4.4 全量质量门禁 (`make check-all`)
 ```
-ok  	github.com/polarisagi/polaris/internal/agent	18.420s
-ok  	github.com/polarisagi/polaris/internal/tool	6.120s
-ok  	github.com/polarisagi/polaris/internal/action	2.840s
-ok  	github.com/polarisagi/polaris/internal/security	3.150s
-ok  	github.com/polarisagi/polaris/internal/llm	7.420s
-ok  	github.com/polarisagi/polaris/internal/learning/sleeptime	1.640s
-ok  	github.com/polarisagi/polaris/internal/execute/orchestrator	4.510s
-ok  	github.com/polarisagi/polaris/internal/gateway/session	13.069s
-PASS
-(Total duration: ~157s)
-```
-
-### 4.5 架构契约与规范门控
-```
-=== [inv_FSM_B1] FSM Effects IO gate lint ===
-=== [L-16] FSM goto ban gate lint（同一二进制内的第二条断言）===
-fsm-io-lint: PASS（扫描 19 文件，判据面 29 处，基线抑制 0 处）
-go test -tags selftest ./internal/lint/... -run 'TestSelfTest_' -count=1
-ok  	github.com/polarisagi/polaris/internal/lint	0.887s
-docs-refs: PASS
-=== make check-all: PASS ===
+顺序: fmt → lint → lint-selftest → test（含 -race）→ rust-lint → rust-test → rust-deny → deadcode
+     → docs-check（§跳读行号）→ docs-lint（代码块禁令）→ docs-refs（失效路径引用）
+     → docs-gen-check（生成块与源一致性）→ manifest-check → comment-drift → review-check
+     → release-signing-status → fuzz-taint（30s）→ fuzz-skill（30s）
+PASS: make check-all (exit code 0)
 ```
 
 ### 4.6 单文件 ≤ 400 行检查 (R7 规则)
