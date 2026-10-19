@@ -31,6 +31,11 @@ type Blackboard interface {
 	SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func())
 	// PublishTaskEvent 向指定任务的所有订阅者广播事件（GD-13-001）。
 	PublishTaskEvent(taskID string, event types.AgentStreamEvent)
+	// SendTaskControl 向指定任务投递控制指令（插话 / 中止，R3-04）。
+	// 返回布尔值表示是否有活跃订阅者接收了控制指令。
+	SendTaskControl(taskID string, ctrl types.TaskControl) bool
+	// SubscribeTaskControl 订阅指定任务的控制指令通道（R3-04）。
+	SubscribeTaskControl(taskID string) (<-chan types.TaskControl, func())
 	// UpdateTaskTokens 记录本任务的 token 消耗（Gap-A, HE-Rule-1）。
 	// 由 Worker.tryClaimAndExecute 在 AgentKernel.Run 返回后调用。
 	// 幂等：多次调用以最后一次写入为准（覆盖，不累加）。

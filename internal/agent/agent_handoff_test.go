@@ -41,6 +41,10 @@ func (f *fakeHandoffPoster) SubscribeTaskEvents(taskID string) (<-chan types.Age
 
 func (f *fakeHandoffPoster) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
 
+func (f *fakeHandoffPoster) SendTaskControl(taskID string, ctrl types.TaskControl) bool {
+	return true
+}
+
 func (f *fakeHandoffPoster) FailTask(_ context.Context, taskID, _ string, reason []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

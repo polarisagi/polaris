@@ -103,3 +103,9 @@ func (b *mockBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentS
 	return nil, func() {}
 }
 func (b *mockBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
+
+func (b *mockBlackboard) SendTaskControl(taskID string, ctrl types.TaskControl) bool { return true }
+func (b *mockBlackboard) SubscribeTaskControl(taskID string) (<-chan types.TaskControl, func()) {
+	ch := make(chan types.TaskControl, 10)
+	return ch, func() {}
+}

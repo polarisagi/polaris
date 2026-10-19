@@ -232,59 +232,77 @@ func (a *Agent) AgentResult(ctx context.Context, id string) (string, error) {
 	return a.truncateAndOffloadResult(ctx, id, resStr, 4000), nil
 }
 
-// AgentMessage 向指定子智能体发送插话消息（ADR-0115 WP4 / WP2 steer 机制）。
+// AgentMessage 向指定子智能体发送插话消息（ADR-0115 WP4 / WP2 steer 机制，R3-04）。
 func (a *Agent) AgentMessage(ctx context.Context, id, text string) (string, error) {
 	if a.handoffPoster == nil {
 		return "", apperr.New(apperr.CodeInternal, "agent_message: handoffPoster not injected")
 	}
-	// 1. 经 Blackboard 投递 steer 事件，供 Worker 监听并在轮次边界消费（R2-14）
-	ev := types.AgentStreamEvent{
-		Type:     types.AgentStreamEventSteerAccepted,
-		Content:  text,
-		AgentID:  id,
-		ParentID: a.ID,
-		IsNested: true,
+	snap, err := a.handoffPoster.PeekTask(ctx, id)
+	if err != nil || snap == nil {
+		return fmt.Sprintf("子智能体 %s 未找到", id), nil //nolint:nilerr // 任务未找到或读取失败作为业务提示返回
 	}
-	a.handoffPoster.PublishTaskEvent(id, ev)
+	if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
+		return fmt.Sprintf("子智能体 %s 已结束", id), nil
+	}
 
-	// 2. 若同节点持有 subagentCtrl（Pool），直连尝试 TrySteer（快速通道，R2-14）
+	delivered := false
+	// 1. 直连尝试（同节点快速通道，R2-14/R3-04）
 	if a.subagentCtrl != nil {
-		if !a.subagentCtrl.TrySteer("sub-"+id, text) {
-			if ok := a.subagentCtrl.TrySteer(id, text); !ok {
-				slog.DebugContext(ctx, "agent_subagents: direct TrySteer fallback missed", "id", id)
-			}
+		if a.subagentCtrl.TrySteer("sub-"+id, text) {
+			delivered = true
+		} else if a.subagentCtrl.TrySteer(id, text) {
+			delivered = true
 		}
 	}
-	return fmt.Sprintf("已成功向子智能体 %s 投递消息", id), nil
+	// 2. 经 Blackboard 独立控制通道广播（R3-04），不走事件流消除回环
+	if a.handoffPoster.SendTaskControl(id, types.TaskControl{
+		Kind: types.TaskControlSteer,
+		Text: text,
+	}) {
+		delivered = true
+	}
+
+	if delivered {
+		return fmt.Sprintf("已成功向子智能体 %s 送达消息", id), nil
+	}
+	return fmt.Sprintf("子智能体 %s 未找到活跃执行器", id), nil
 }
 
-// AgentStop 中止指定子智能体。
+// AgentStop 中止指定子智能体（R3-04）。
 func (a *Agent) AgentStop(ctx context.Context, id string) (string, error) {
 	if a.handoffPoster == nil {
 		return "", apperr.New(apperr.CodeInternal, "agent_stop: handoffPoster not injected")
 	}
-	// 1. 经 Blackboard 发送 cancel 状态事件通知 Worker 取消执行 ctx（R2-14）
-	a.handoffPoster.PublishTaskEvent(id, types.AgentStreamEvent{
-		Type:     types.AgentStreamEventStatus,
-		Content:  "cancel",
-		AgentID:  id,
-		ParentID: a.ID,
-		IsNested: true,
+	snap, err := a.handoffPoster.PeekTask(ctx, id)
+	if err != nil || snap == nil {
+		return fmt.Sprintf("子智能体 %s 未找到", id), nil //nolint:nilerr // 任务未找到或读取失败作为业务提示返回
+	}
+	if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
+		return fmt.Sprintf("子智能体 %s 已结束", id), nil
+	}
+
+	// 1. 经 Blackboard 独立控制通道发送 cancel（R3-04）
+	delivered := a.handoffPoster.SendTaskControl(id, types.TaskControl{
+		Kind: types.TaskControlCancel,
 	})
-	// 2. 将 Blackboard 任务置为 Failed
+	// 2. 直连停止子 Agent 并从 Pool 释放（R2-14/R3-04）
+	if a.subagentCtrl != nil {
+		if a.subagentCtrl.StopSession("sub-" + id) {
+			delivered = true
+		} else if a.subagentCtrl.StopSession(id) {
+			delivered = true
+		}
+	}
+	// 3. 将 Blackboard 任务置为 Failed
 	if err := a.handoffPoster.FailTask(ctx, id, a.ID, []byte("cancelled by parent agent")); err != nil {
 		return "", apperr.Wrap(apperr.CodeOf(err), "agent_stop: cancel failed", err)
 	}
-	// 3. 若同节点持有 subagentCtrl（Pool），直连停止子 Agent 并从 Pool 释放（R2-14）
-	if a.subagentCtrl != nil {
-		if !a.subagentCtrl.StopSession("sub-" + id) {
-			if ok := a.subagentCtrl.StopSession(id); !ok {
-				slog.DebugContext(ctx, "agent_subagents: direct StopSession fallback missed", "id", id)
-			}
-		}
-	}
 	a.updateSubagentStatusCancelled(ctx, id)
-	return fmt.Sprintf("已成功中止子智能体 %s", id), nil
+
+	if delivered {
+		return fmt.Sprintf("已成功中止子智能体 %s", id), nil
+	}
+	return fmt.Sprintf("子智能体 %s 未找到活跃执行器，已标记中止", id), nil
 }
 
 func (a *Agent) currentSecurityPolicy() policy.Policy {

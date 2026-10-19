@@ -85,6 +85,12 @@ func (b *fakeA2ABlackboard) SubscribeTaskEvents(taskID string) (<-chan types.Age
 	return nil, func() {}
 }
 func (b *fakeA2ABlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
+func (b *fakeA2ABlackboard) SendTaskControl(taskID string, ctrl types.TaskControl) bool {
+	return true
+}
+func (b *fakeA2ABlackboard) SubscribeTaskControl(taskID string) (<-chan types.TaskControl, func()) {
+	return nil, func() {}
+}
 func (b *fakeA2ABlackboard) PeekTask(ctx context.Context, taskID string) (*types.TaskSnapshot, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

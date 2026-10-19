@@ -45,6 +45,20 @@ type TaskSnapshot struct {
 	ParentTaskID string
 }
 
+// TaskControlKind 控制指令类型（R3-04）。
+type TaskControlKind string
+
+const (
+	TaskControlSteer  TaskControlKind = "steer"
+	TaskControlCancel TaskControlKind = "cancel"
+)
+
+// TaskControl 承载父 Agent 发给子 Agent 的控制指令（插话 / 中止，R3-04）。
+type TaskControl struct {
+	Kind TaskControlKind `json:"kind"`
+	Text string          `json:"text,omitempty"`
+}
+
 type
 
 // TaskHint 技能选择启发（供 SkillSelector 使用）。

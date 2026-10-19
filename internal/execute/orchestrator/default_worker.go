@@ -247,11 +247,11 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 
 	taskCtx, taskCancel := context.WithCancel(bgCtx)
 	defer taskCancel()
-	if cancelSub := w.subscribeTaskEvents(taskCtx, taskID, taskCancel); cancelSub != nil {
+	if cancelSub := w.subscribeTaskControl(taskCtx, taskID, taskCancel); cancelSub != nil {
 		defer cancelSub()
 	}
 
-	opts := []types.HeadlessOption{types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb}
+	opts := []types.HeadlessOption{types.WithSessionID("sub-" + taskID), types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb}
 	if snap.Type == PeerDelegationTaskType {
 		if w.peerProfile == nil {
 			w.failTask(taskID, "peer delegation profile not configured on this node (fail-closed)")
@@ -348,25 +348,4 @@ func (w *DefaultTaskWorker) failTask(taskID, msg string) {
 	if err := w.bb.FailTask(context.Background(), taskID, defaultTaskWorkerAgentID, []byte(msg)); err != nil {
 		slog.Warn("default task worker: FailTask failed", "task_id", taskID, "err", err)
 	}
-}
-
-func (w *DefaultTaskWorker) subscribeTaskEvents(ctx context.Context, taskID string, cancel context.CancelFunc) func() {
-	if w.bb == nil {
-		return nil
-	}
-	eventsCh, cancelSub := w.bb.SubscribeTaskEvents(taskID)
-	concurrent.SafeGo(ctx, "default_worker.task_event_listener", func(runCtx context.Context) {
-		for {
-			select {
-			case <-runCtx.Done():
-				return
-			case ev, ok := <-eventsCh:
-				if !ok {
-					return
-				}
-				w.handleTaskEvent(ev, taskID, cancel)
-			}
-		}
-	})
-	return cancelSub
 }
