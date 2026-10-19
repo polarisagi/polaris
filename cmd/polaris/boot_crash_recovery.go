@@ -41,6 +41,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/security/taint"
 
+	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -97,6 +98,10 @@ func recoverCrashedSessions(ctx context.Context, sb *SubstrateBundle, ab *AgentB
 	if scanErr != nil {
 		slog.Warn("polaris: crash recovery scan iteration failed", "err", scanErr)
 	}
+
+	// R2-05: 扫描并恢复未完成的 agentic loop 轮次（与 ADR-0104 录像回放并列）
+	recoverAgenticLoopTurns(ctx, sb.Store.DB(), ab.AgentPool)
+
 	if len(sessionIDs) == 0 {
 		return
 	}
@@ -205,4 +210,102 @@ func lastUserMessage(ctx context.Context, db *sql.DB, sessionID string) (string,
 		return "", apperr.Wrap(apperr.CodeInternal, "lastUserMessage: scan", err)
 	}
 	return content, nil
+}
+
+// recoverAgenticLoopTurns 扫描 agent_loop_rounds 表中 status='running' 的 turn 并无损续跑（R2-05 / ADR-0104）。
+func recoverAgenticLoopTurns(ctx context.Context, db *sql.DB, pool protocol.AgentPool) {
+	if db == nil || pool == nil {
+		return
+	}
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT session_id, turn_id FROM agent_loop_rounds WHERE status = 'running'`)
+	if err != nil {
+		slog.Warn("polaris: crash recovery scan agent_loop_rounds failed", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	type turnTarget struct {
+		sessionID string
+		turnID    string
+	}
+	var targets []turnTarget
+	for rows.Next() {
+		var t turnTarget
+		if err := rows.Scan(&t.sessionID, &t.turnID); err == nil {
+			targets = append(targets, t)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("polaris: crash recovery scan agent_loop_rounds rows iteration failed", "err", err)
+	}
+	_ = rows.Close()
+
+	if len(targets) == 0 {
+		return
+	}
+
+	slog.Warn("polaris: crash recovery detected unfinished agentic loop turns", "count", len(targets))
+	for _, tgt := range targets {
+		recoverOneAgenticLoopTurn(ctx, db, pool, tgt.sessionID, tgt.turnID)
+	}
+}
+
+// recoverOneAgenticLoopTurn 恢复单个未完成的 agentic loop 回合（R2-05）。
+func recoverOneAgenticLoopTurn(ctx context.Context, db *sql.DB, pool protocol.AgentPool, sessionID, turnID string) {
+	messages, maxTaint, maxRound, err := agent.ReconstructAgenticLoopTurn(ctx, db, sessionID, turnID)
+	if err != nil {
+		slog.Warn("polaris: crash recovery failed to reconstruct turn, marking aborted",
+			"session_id", sessionID, "turn_id", turnID, "err", err)
+		if _, aErr := db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID); aErr != nil {
+			slog.Warn("polaris: crash recovery failed to mark aborted", "session_id", sessionID, "turn_id", turnID, "err", aErr)
+		}
+		return
+	}
+
+	agentCtrl, release, err := pool.Acquire(ctx, sessionID)
+	if err != nil {
+		slog.Warn("polaris: crash recovery failed to acquire agent for turn", "session_id", sessionID, "err", err)
+		return
+	}
+	defer release()
+
+	resumer, ok := agentCtrl.(interface {
+		ResumeAgenticLoop(turnID string, messages []types.Message, taintLevel types.TaintLevel, round int) bool
+	})
+	if !ok {
+		slog.Warn("polaris: agent controller does not implement ResumeAgenticLoop", "session_id", sessionID)
+		return
+	}
+
+	recoverCtx, cancel := context.WithTimeout(ctx, recoverySessionTimeout)
+	defer cancel()
+
+	stream := agentCtrl.SubscribeStream(recoverCtx)
+	if !resumer.ResumeAgenticLoop(turnID, messages, maxTaint, maxRound) {
+		slog.Warn("polaris: failed to resume agentic loop", "session_id", sessionID, "turn_id", turnID)
+		if _, aErr := db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID); aErr != nil {
+			slog.Warn("polaris: crash recovery failed to mark aborted", "session_id", sessionID, "turn_id", turnID, "err", aErr)
+		}
+		return
+	}
+
+	for {
+		select {
+		case ev, ok := <-stream:
+			if !ok {
+				slog.Info("polaris: crash recovery agentic loop completed", "session_id", sessionID, "turn_id", turnID)
+				return
+			}
+			if ev.Type == types.AgentStreamEventError {
+				slog.Warn("polaris: crash recovery agentic loop ended with error", "session_id", sessionID, "turn_id", turnID, "detail", ev.Content)
+				return
+			}
+		case <-recoverCtx.Done():
+			slog.Warn("polaris: crash recovery agentic loop timed out", "session_id", sessionID, "turn_id", turnID)
+			if _, aErr := db.ExecContext(ctx, `UPDATE agent_loop_rounds SET status = 'aborted' WHERE session_id = ? AND turn_id = ?`, sessionID, turnID); aErr != nil {
+				slog.Warn("polaris: crash recovery failed to mark aborted", "session_id", sessionID, "turn_id", turnID, "err", aErr)
+			}
+			return
+		}
+	}
 }

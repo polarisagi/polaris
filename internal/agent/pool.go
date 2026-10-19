@@ -130,7 +130,6 @@ func NewPool(factory func(sessionID string) *Agent, maxSize int) *Pool {
 }
 
 // releaseWaitTimeout release() 等待内核 Run() 循环真正退出的上限（GD-13-006）。
-// 超时仍会归还容量令牌（避免异常场景下永久占用池容量），但会记录警告日志。
 const releaseWaitTimeout = 3 * time.Second
 
 // newPoolEntry 创建 sessionID 对应的全新 Agent 实例，并立即以其自身生命周期
@@ -151,6 +150,7 @@ const releaseWaitTimeout = 3 * time.Second
 // 该 goroutine（见下方 GC 注释），否则会从"FSM 从不运行"变成"goroutine 泄漏"。
 func (p *Pool) newPoolEntry(sessionID string) *poolEntry {
 	ag := p.factory(sessionID)
+	ag.InjectSubagentController(p)
 	concurrent.SafeGo(ag.ctx, "agent-pool.kernel."+sessionID, func(ctx context.Context) {
 		if err := ag.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("agent pool: kernel Run() exited with error", "session", sessionID, "err", err)

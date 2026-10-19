@@ -35,6 +35,8 @@ const (
 	AgentStateLoop
 	// S_LOOP_EXEC: agentic 工具执行态（ADR-0115 WP2）：并发执行工具并等待结果。
 	AgentStateLoopExec
+	// S_LOOP_AWAIT: agentic 等待子智能体委派完成（ADR-0115 WP4 / R2-03）。
+	AgentStateLoopAwait
 )
 
 // AgentTrigger 定义驱动 FSM 状态转移的触发器枚举。

@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 	"github.com/polarisagi/polaris/pkg/util"
@@ -131,8 +132,17 @@ func (sm *StateMachine) registerTransitions() {
 			}
 			if config.CurrentThresholds().M4Kernel.LoopMode == "agentic" {
 				sCtx.Mu.Lock()
-				if sCtx.LoopRound == 0 {
-					sCtx.LoopRound = 1
+				sCtx.ResetAgenticTurn()
+				sCtx.LoopRound = 1
+				if !sCtx.RawIntentTS.IsEmpty() {
+					sCtx.LoopMessages = []types.Message{
+						{
+							Role:       "user",
+							Content:    taint.Spotlighting(sCtx.RawIntentTS),
+							TaintLevel: sCtx.RawIntentTS.Level(),
+							Round:      1,
+						},
+					}
 				}
 				sCtx.Mu.Unlock()
 				return []protocol.Effect{sm.loopEffect(sCtx)}, nil

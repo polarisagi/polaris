@@ -269,19 +269,38 @@ func TestAgenticLoop_RunawayGuard_WarningAndHardAbort(t *testing.T) {
 	}
 
 	agent.sCtx.Mu.Lock()
-	defer agent.sCtx.Mu.Unlock()
-	if !agent.sCtx.LoopWarningInjected {
+	warned := agent.sCtx.LoopWarningInjected
+	warnPrompt := agent.sCtx.LoopWarningPrompt
+	loopMsgs := agent.sCtx.LoopMessages
+	agent.sCtx.Mu.Unlock()
+	if !warned {
 		t.Fatal("必须触发并记录 LoopWarningInjected")
 	}
-	foundWarning := false
-	for _, m := range agent.sCtx.LoopMessages {
-		if strings.Contains(m.Content, "失控保护告警") {
-			foundWarning = true
+	if !strings.Contains(warnPrompt, "失控保护告警") {
+		t.Fatalf("必须记录失控保护告警易变提示，实际: %q", warnPrompt)
+	}
+	prov.mu.Lock()
+	var foundVolatileUserWarning bool
+	for _, hist := range prov.history {
+		for _, m := range hist {
+			if m.Role == "user" && strings.Contains(m.Content, "失控保护告警") {
+				foundVolatileUserWarning = true
+				break
+			}
+		}
+		if foundVolatileUserWarning {
 			break
 		}
 	}
-	if !foundWarning {
-		t.Fatal("必须向模型上下文注入失控保护告警消息")
+	prov.mu.Unlock()
+
+	if !foundVolatileUserWarning {
+		t.Fatal("必须向模型上下文注入 user 角色的易变收尾告警消息")
+	}
+	for _, m := range loopMsgs {
+		if m.Role == "system" {
+			t.Fatalf("LoopMessages 中严禁追加 system 角色消息: %+v", m)
+		}
 	}
 }
 

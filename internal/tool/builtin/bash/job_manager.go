@@ -1,17 +1,14 @@
 package bash
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -75,9 +72,17 @@ func (proc *jobProcess) handleWaitResult(waitErr error) {
 }
 
 type JobManager struct {
-	mu      sync.RWMutex
-	jobsDir string
-	jobs    map[string]*jobProcess
+	mu          sync.RWMutex
+	jobsDir     string
+	jobs        map[string]*jobProcess
+	maxLogBytes int64
+}
+
+// SetMaxLogBytes 设置单个后台任务日志上限（R2-16）。
+func (jm *JobManager) SetMaxLogBytes(max int64) {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	jm.maxLogBytes = max
 }
 
 var (
@@ -105,8 +110,9 @@ func NewJobManager(dir string) *JobManager {
 		slog.Warn("bash job_manager: mkdir failed", "dir", dir, "err", err)
 	}
 	return &JobManager{
-		jobsDir: dir,
-		jobs:    make(map[string]*jobProcess),
+		jobsDir:     dir,
+		jobs:        make(map[string]*jobProcess),
+		maxLogBytes: defaultMaxLogBytes,
 	}
 }
 
@@ -123,7 +129,7 @@ func (jm *JobManager) StartJob(
 	}
 
 	rawID := uuid.NewString()
-	jobID := "job_" + rawID[:8]
+	jobID := "job_" + rawID
 	jobPath := filepath.Join(jm.jobsDir, jobID)
 	if err := os.MkdirAll(jobPath, 0o700); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "job_manager: create job dir", err)
@@ -135,11 +141,17 @@ func (jm *JobManager) StartJob(
 		return nil, apperr.Wrap(apperr.CodeInternal, "job_manager: create log file", err)
 	}
 
+	jm.mu.RLock()
+	maxLog := jm.maxLogBytes
+	jm.mu.RUnlock()
+	writer := newLimitedLogWriter(logFile, maxLog)
+
 	cmd := exec.Command("bash", "-c", cmdStr)
 	cmd.Dir = workDir
 	cmd.Env = env
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	setProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -213,8 +225,8 @@ func loadDiskJob(jobID, jobsDir string) (*JobMeta, error) {
 
 // GetJob 获取单个任务元数据。
 func (jm *JobManager) GetJob(jobID string) (*JobMeta, error) {
-	if jobID == "" {
-		return nil, apperr.New(apperr.CodeInvalidInput, "job_manager: job_id is required")
+	if err := validateJobID(jobID); err != nil {
+		return nil, err
 	}
 
 	jm.mu.RLock()
@@ -273,10 +285,10 @@ func (jm *JobManager) ListJobs(sessionID string) ([]JobMeta, error) {
 	return out, nil
 }
 
-// GetJobOutput 获取指定任务的尾部日志内容（tail）。
+// GetJobOutput 获取指定任务的尾部日志内容（tail，R2-16 从尾部按字节倒读）。
 func (jm *JobManager) GetJobOutput(jobID string, tailLines int) (string, error) {
-	if jobID == "" {
-		return "", apperr.New(apperr.CodeInvalidInput, "job_manager: job_id is required")
+	if err := validateJobID(jobID); err != nil {
+		return "", err
 	}
 	if tailLines <= 0 {
 		tailLines = 200
@@ -289,27 +301,13 @@ func (jm *JobManager) GetJobOutput(jobID string, tailLines int) (string, error) 
 	}
 	defer file.Close()
 
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > tailLines*2 {
-			lines = lines[len(lines)-tailLines:]
-		}
-	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return "", apperr.Wrap(apperr.CodeInternal, "job_manager: read log", err)
-	}
-	if len(lines) > tailLines {
-		lines = lines[len(lines)-tailLines:]
-	}
-	return strings.Join(lines, "\n"), nil
+	return readTailLines(file, tailLines)
 }
 
 // KillJob 终止一个正在运行的后台任务。
 func (jm *JobManager) KillJob(jobID string) (*JobMeta, error) {
-	if jobID == "" {
-		return nil, apperr.New(apperr.CodeInvalidInput, "job_manager: job_id is required")
+	if err := validateJobID(jobID); err != nil {
+		return nil, err
 	}
 
 	jm.mu.RLock()
@@ -328,8 +326,8 @@ func (jm *JobManager) KillJob(jobID string) (*JobMeta, error) {
 	defer proc.mu.Unlock()
 
 	if proc.meta.Status == JobStatusRunning {
-		if proc.cmd != nil && proc.cmd.Process != nil {
-			if kErr := proc.cmd.Process.Kill(); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
+		if proc.cmd != nil {
+			if kErr := killProcessGroup(proc.cmd); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
 				slog.Debug("bash job_manager: kill process failed", "job_id", jobID, "err", kErr)
 			}
 		}
@@ -364,8 +362,8 @@ func (jm *JobManager) CleanupSessionJobs(sessionID string) {
 	for _, proc := range toKill {
 		proc.mu.Lock()
 		if proc.meta.Status == JobStatusRunning {
-			if proc.cmd != nil && proc.cmd.Process != nil {
-				if kErr := proc.cmd.Process.Kill(); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
+			if proc.cmd != nil {
+				if kErr := killProcessGroup(proc.cmd); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
 					slog.Debug("bash job_manager: kill session process failed", "job_id", proc.meta.JobID, "err", kErr)
 				}
 			}

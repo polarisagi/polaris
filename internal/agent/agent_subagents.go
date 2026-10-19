@@ -13,10 +13,49 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
-	"github.com/polarisagi/polaris/pkg/util"
 )
+
+// SubagentController 允许父 Agent 在同节点或经 Blackboard 对子 Agent 进行插话和中止控制（R2-14）。
+type SubagentController interface {
+	TrySteer(sessionID, text string) bool
+	StopSession(sessionID string) bool
+}
+
+// InjectSubagentController 注入子智能体控制器（Pool 实现），支持同节点直接插话与中止（R2-14）。
+func (a *Agent) InjectSubagentController(ctrl SubagentController) {
+	a.subagentCtrl = ctrl
+}
+
+func (a *Agent) countRunningSubagents(ctx context.Context) int {
+	a.subagentIDsMu.Lock()
+	defer a.subagentIDsMu.Unlock()
+	if a.handoffPoster == nil || len(a.spawnedSubagentIDs) == 0 {
+		return 0
+	}
+	running := 0
+	active := make([]string, 0, len(a.spawnedSubagentIDs))
+	for _, id := range a.spawnedSubagentIDs {
+		snap, err := a.handoffPoster.PeekTask(ctx, id)
+		if err == nil && snap != nil && snap.Status != types.TaskDone && snap.Status != types.TaskFailed {
+			running++
+			active = append(active, id)
+		}
+	}
+	a.spawnedSubagentIDs = active
+	return running
+}
+
+func (a *Agent) cascadeCancelSubagents(ctx context.Context, ids []string) {
+	for _, id := range ids {
+		if a.handoffPoster != nil {
+			if fErr := a.handoffPoster.FailTask(ctx, id, a.ID, []byte("cascade cancelled due to post failure of sibling task")); fErr != nil {
+				slog.DebugContext(ctx, "agent_subagents: cascade cancel fail task", "task_id", id, "err", fErr)
+			}
+		}
+		a.updateSubagentStatusCancelled(ctx, id)
+	}
+}
 
 // SpawnAgents 派生一个或多个子智能体并发执行（ADR-0115 WP4）。
 func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]string, error) { //nolint:gocyclo
@@ -32,12 +71,13 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 
 	pol := a.currentSecurityPolicy()
 
-	// 1. 并发上限检查
+	// 1. 并发上限检查（按当前运行中的子智能体总数 + 本次新增任务数计算，R2-14）
 	maxConcurrent := pol.SubagentMaxConcurrent
-	if maxConcurrent > 0 && len(args.Tasks) > maxConcurrent {
+	runningCount := a.countRunningSubagents(ctx)
+	if maxConcurrent > 0 && runningCount+len(args.Tasks) > maxConcurrent {
 		return nil, apperr.New(apperr.CodeForbidden,
-			fmt.Sprintf("spawn_agents: task count %d exceeds concurrency limit %d for profile %s",
-				len(args.Tasks), maxConcurrent, pol.Profile))
+			fmt.Sprintf("spawn_agents: running subagents %d + new tasks %d exceeds concurrency limit %d for profile %s",
+				runningCount, len(args.Tasks), maxConcurrent, pol.Profile))
 	}
 
 	// 2. 委派链深度检查
@@ -58,6 +98,7 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 	}
 
 	childIDs := make([]string, 0, len(args.Tasks))
+	var postedIDs []string
 	for i, task := range args.Tasks {
 		role := strings.TrimSpace(task.Role)
 		if role == "" {
@@ -74,15 +115,16 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 		// local_only_mode 校验：子智能体模型不得为云端模型
 		if model != "" {
 			if err := a.validateModelSelection(ctx, model); err != nil {
+				a.cascadeCancelSubagents(ctx, postedIDs)
 				return nil, apperr.Wrap(apperr.CodeForbidden, fmt.Sprintf("spawn_agents: task[%d] model %q rejected by policy", i, model), err)
 			}
 		}
 
 		childID := fmt.Sprintf("subagent-%s-%d-%s", a.ID, i, uuid.NewString()[:8])
-		childIDs = append(childIDs, childID)
 
 		payload, err := json.Marshal(task)
 		if err != nil {
+			a.cascadeCancelSubagents(ctx, postedIDs)
 			return nil, apperr.Wrap(apperr.CodeInternal, "spawn_agents: marshal task spec", err)
 		}
 
@@ -98,11 +140,23 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 		}
 
 		if pErr := a.handoffPoster.PostTask(ctx, entry); pErr != nil {
-			return nil, apperr.Wrap(apperr.CodeOf(pErr), "spawn_agents: post task", pErr)
+			a.cascadeCancelSubagents(ctx, postedIDs)
+			cancelMsg := fmt.Sprintf("spawn_agents: post task failed on %s", childID)
+			if len(postedIDs) > 0 {
+				cancelMsg = fmt.Sprintf("spawn_agents: post task failed on %s (sibling tasks cancelled: %s)",
+					childID, strings.Join(postedIDs, ", "))
+			}
+			return nil, apperr.Wrap(apperr.CodeOf(pErr), cancelMsg, pErr)
 		}
 
+		postedIDs = append(postedIDs, childID)
+		childIDs = append(childIDs, childID)
 		a.recordSubagentRun(ctx, childID, role, model, task.Thinking, task.Prompt)
 	}
+
+	a.subagentIDsMu.Lock()
+	a.spawnedSubagentIDs = append(a.spawnedSubagentIDs, childIDs...)
+	a.subagentIDsMu.Unlock()
 
 	// 3. wait 模式处理
 	waitMode := strings.ToLower(strings.TrimSpace(args.Wait))
@@ -183,14 +237,24 @@ func (a *Agent) AgentMessage(ctx context.Context, id, text string) (string, erro
 	if a.handoffPoster == nil {
 		return "", apperr.New(apperr.CodeInternal, "agent_message: handoffPoster not injected")
 	}
+	// 1. 经 Blackboard 投递 steer 事件，供 Worker 监听并在轮次边界消费（R2-14）
 	ev := types.AgentStreamEvent{
-		Type:     types.AgentStreamEventNotice,
+		Type:     types.AgentStreamEventSteerAccepted,
 		Content:  text,
 		AgentID:  id,
 		ParentID: a.ID,
 		IsNested: true,
 	}
 	a.handoffPoster.PublishTaskEvent(id, ev)
+
+	// 2. 若同节点持有 subagentCtrl（Pool），直连尝试 TrySteer（快速通道，R2-14）
+	if a.subagentCtrl != nil {
+		if !a.subagentCtrl.TrySteer("sub-"+id, text) {
+			if ok := a.subagentCtrl.TrySteer(id, text); !ok {
+				slog.DebugContext(ctx, "agent_subagents: direct TrySteer fallback missed", "id", id)
+			}
+		}
+	}
 	return fmt.Sprintf("已成功向子智能体 %s 投递消息", id), nil
 }
 
@@ -199,8 +263,25 @@ func (a *Agent) AgentStop(ctx context.Context, id string) (string, error) {
 	if a.handoffPoster == nil {
 		return "", apperr.New(apperr.CodeInternal, "agent_stop: handoffPoster not injected")
 	}
+	// 1. 经 Blackboard 发送 cancel 状态事件通知 Worker 取消执行 ctx（R2-14）
+	a.handoffPoster.PublishTaskEvent(id, types.AgentStreamEvent{
+		Type:     types.AgentStreamEventStatus,
+		Content:  "cancel",
+		AgentID:  id,
+		ParentID: a.ID,
+		IsNested: true,
+	})
+	// 2. 将 Blackboard 任务置为 Failed
 	if err := a.handoffPoster.FailTask(ctx, id, a.ID, []byte("cancelled by parent agent")); err != nil {
 		return "", apperr.Wrap(apperr.CodeOf(err), "agent_stop: cancel failed", err)
+	}
+	// 3. 若同节点持有 subagentCtrl（Pool），直连停止子 Agent 并从 Pool 释放（R2-14）
+	if a.subagentCtrl != nil {
+		if !a.subagentCtrl.StopSession("sub-" + id) {
+			if ok := a.subagentCtrl.StopSession(id); !ok {
+				slog.DebugContext(ctx, "agent_subagents: direct StopSession fallback missed", "id", id)
+			}
+		}
 	}
 	a.updateSubagentStatusCancelled(ctx, id)
 	return fmt.Sprintf("已成功中止子智能体 %s", id), nil
@@ -241,114 +322,4 @@ func (a *Agent) updateSubagentStatusCancelled(ctx context.Context, id string) {
 		nowMs, id, id); err != nil {
 		slog.WarnContext(ctx, "agent: update subagent_runs cancelled failed", "id", id, "err", err)
 	}
-}
-
-func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
-	if a.handoffPoster == nil || len(childIDs) == 0 {
-		return
-	}
-	concurrent.SafeGo(a.ctx, "agent.subagents_watcher", func(parentCtx context.Context) {
-		watchCtx, cancel := context.WithCancel(parentCtx)
-		defer cancel()
-
-		for _, cid := range childIDs {
-			cID := cid
-			cEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(cID)
-			defer cancelSub()
-			concurrent.SafeGo(watchCtx, "agent.subagents_event_forwarder", func(subCtx context.Context) {
-				for {
-					select {
-					case <-subCtx.Done():
-						return
-					case ev, ok := <-cEvents:
-						if !ok {
-							return
-						}
-						a.publishStreamEvent(ev)
-					}
-				}
-			})
-		}
-
-		events, err := a.handoffPoster.Subscribe(watchCtx)
-		if err != nil {
-			a.pollSubagentsCompletion(watchCtx, childIDs)
-			return
-		}
-
-		if a.peekAllSubagentsDone(watchCtx, childIDs) {
-			a.asyncIntent(types.TriggerAgentHandoffDone)
-			return
-		}
-
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-watchCtx.Done():
-				return
-			case <-events:
-				if a.peekAllSubagentsDone(watchCtx, childIDs) {
-					a.asyncIntent(types.TriggerAgentHandoffDone)
-					return
-				}
-			case <-ticker.C:
-				if a.peekAllSubagentsDone(watchCtx, childIDs) {
-					a.asyncIntent(types.TriggerAgentHandoffDone)
-					return
-				}
-			}
-		}
-	})
-}
-
-func (a *Agent) pollSubagentsCompletion(ctx context.Context, childIDs []string) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if a.peekAllSubagentsDone(ctx, childIDs) {
-				a.asyncIntent(types.TriggerAgentHandoffDone)
-				return
-			}
-		}
-	}
-}
-
-func (a *Agent) peekAllSubagentsDone(ctx context.Context, childIDs []string) bool {
-	for _, id := range childIDs {
-		snap, err := a.handoffPoster.PeekTask(ctx, id)
-		if err != nil || snap == nil {
-			return false
-		}
-		if snap.Status != types.TaskDone && snap.Status != types.TaskFailed {
-			return false
-		}
-	}
-	return true
-}
-
-func (a *Agent) truncateAndOffloadResult(ctx context.Context, taskID, resStr string, maxChars int) string {
-	if maxChars <= 0 {
-		maxChars = 4000
-	}
-	if len(resStr) <= maxChars {
-		return resStr
-	}
-
-	header := fmt.Sprintf("[output truncated: %d chars total; full output not retained]\n", len(resStr))
-	if a.toolOffloader != nil {
-		partKey := a.memoryPartitionKey()
-		if offID, err := a.toolOffloader.Offload(ctx, partKey, []byte(resStr)); err == nil {
-			ref := fmt.Sprintf("read_tool_ref(task_id=%q, id=%q)", partKey, offID)
-			header = fmt.Sprintf("[output truncated: %d chars total; full output: %s]\n", len(resStr), ref)
-		} else {
-			slog.WarnContext(ctx, "agent: subagent result offload failed", "task_id", taskID, "err", err)
-		}
-	}
-	return header + util.ElideMiddle(resStr, maxChars-len(header))
 }

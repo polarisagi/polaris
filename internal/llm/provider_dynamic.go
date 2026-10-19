@@ -24,24 +24,33 @@ func (r *ProviderRegistry) PickEntryByRef(ctx context.Context, ref string, acqui
 		return nil
 	}
 
-	// local_only_mode 隐私模式：严格拦截并拒绝非本地厂商模型
-	if cfg := config.Get(); cfg != nil && cfg.Security.LocalOnlyMode {
-		providerPart := ref
-		if strings.Contains(ref, "/") {
-			providerPart = strings.SplitN(ref, "/", 2)[0]
-		}
-		lower := strings.ToLower(providerPart)
-		if !strings.HasPrefix(lower, "ollama") && !strings.HasPrefix(lower, "llama") && !strings.Contains(lower, "local") {
-			return nil
-		}
-	}
+	cfg := config.Get()
+	localOnly := cfg != nil && cfg.Security.LocalOnlyMode
 
 	if !strings.Contains(ref, "/") {
-		return r.pickByRecordIDSuffix(ref, acquire)
+		e := r.pickByRecordIDSuffix(ref, acquire)
+		if e == nil {
+			return nil
+		}
+		if localOnly && !IsLocalProvider(e.row) {
+			return nil
+		}
+		return e
 	}
 
 	if e, found := r.pickFromRegisteredOrCached(ref, acquire); found {
+		if e == nil {
+			return nil
+		}
+		if localOnly && !IsLocalProvider(e.row) {
+			return nil
+		}
 		return e
+	}
+
+	if localOnly {
+		// local_only_mode 模式下按需实例化路径被拒，防云端或未经校验模型被动态拉起（R2-07）
+		return nil
 	}
 
 	return r.instantiateDynamicEntry(ctx, ref, acquire)

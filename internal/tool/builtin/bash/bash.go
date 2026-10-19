@@ -79,13 +79,31 @@ func MakeBashFn(
 			workDir = paths[0]
 		}
 
-		// 1. 后台进程模式（WP5 ADR-0115）：返回 job_id，日志与元数据落盘
+		// 1. 后台进程模式（WP5 ADR-0115 / R2-02）：
+		// - full 档（pol.SandboxDisabled == true）：直接在宿主机运行；
+		// - standard 档：后台命令必须走沙箱执行器，若无沙箱支持则明确拒绝，不得回落到宿主；
+		// - hardened 档：拒绝后台模式。
 		if args.Background {
+			if pol.Profile == policy.ProfileHardened || pol.ForceContainerSandbox {
+				return nil, apperr.New(apperr.CodeForbidden, "bash: background jobs are disabled in hardened trust profile")
+			}
+			if !pol.SandboxDisabled {
+				return nil, apperr.New(apperr.CodeForbidden, "background jobs require full trust profile or a sandbox backend that supports detached execution")
+			}
 			return execBackgroundJob(ctx, args.Command, args.SessionID, workDir)
 		}
 
-		// 2. 持久终端模式（WP5 ADR-0115）：复用 sandbox_persistent 长驻进程
+		// 2. 持久终端模式（WP5 ADR-0115 / R2-02）：
+		// - hardened 档：拒绝持久终端模式；
+		// - standard 档：若无持久沙箱可用，明确拒绝，不得在宿主直接执行；
+		// - full 档：允许宿主持久沙箱执行。
 		if args.SessionID != "" {
+			if pol.Profile == policy.ProfileHardened || pol.ForceContainerSandbox {
+				return nil, apperr.New(apperr.CodeForbidden, "bash: persistent terminal is disabled in hardened trust profile")
+			}
+			if !pol.SandboxDisabled && (pSbx == nil || !pSbx.Available()) {
+				return nil, apperr.New(apperr.CodeForbidden, "persistent terminal requires full trust profile or a sandbox backend that supports persistent sessions")
+			}
 			return execPersistentTerminal(ctx, pSbx, args, paths, workDir, pol)
 		}
 

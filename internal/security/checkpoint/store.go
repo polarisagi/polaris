@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
+
+var validCommitHashRe = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // Store 管理一个项目目录的影子 git 快照仓库。
 type Store struct {
@@ -139,7 +142,8 @@ func (s *Store) List(ctx context.Context, n int) ([]Snapshot, error) {
 	return snaps, nil
 }
 
-// Restore 把工作树恢复到指定快照（git checkout <hash> -- .）。
+// Restore 把工作树恢复到指定快照。
+// 恢复采用 git read-tree --reset -u 检出目标快照，并使用 git clean -fd 清理快照后新增的文件与目录（严格遵守 .gitignore）。
 // 这是不可逆操作，调用方（checkpoint_restore 工具）应已取得用户确认或 full 档自动许可。
 func (s *Store) Restore(ctx context.Context, hash string) error {
 	ctx, span := otel.Tracer("polaris/checkpoint").Start(ctx, "checkpoint.Restore")
@@ -149,13 +153,23 @@ func (s *Store) Restore(ctx context.Context, hash string) error {
 		attribute.String("work_tree", s.workTree),
 	)
 
+	if !validCommitHashRe.MatchString(hash) {
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("checkpoint: invalid commit hash format: %q", hash))
+	}
+	if err := s.git(ctx, "cat-file", "-e", hash+"^{commit}"); err != nil {
+		return apperr.Wrap(apperr.CodeNotFound, fmt.Sprintf("checkpoint: commit not found: %s", hash), err)
+	}
+
 	// 先做一次快照，保留恢复前状态
 	if _, sErr := s.Create(ctx, fmt.Sprintf("pre-restore: before restoring to %s", hash[:min8(hash)])); sErr != nil {
 		slog.Warn("checkpoint: pre-restore backup failed", "err", sErr)
 	}
 
-	if err := s.git(ctx, "checkout", hash, "--", "."); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("checkpoint: restore to %s", hash), err)
+	if err := s.git(ctx, "read-tree", "--reset", "-u", hash); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("checkpoint: restore read-tree to %s", hash), err)
+	}
+	if err := s.git(ctx, "clean", "-fd"); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("checkpoint: restore clean for %s", hash), err)
 	}
 	slog.Info("checkpoint: restored", "hash", hash, "work_tree", s.workTree)
 	return nil

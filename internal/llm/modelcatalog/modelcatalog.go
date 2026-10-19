@@ -6,11 +6,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -47,14 +47,11 @@ type ProviderInfo struct {
 type CatalogManager struct {
 	db         protocol.SQLQuerier
 	vault      *credential.Vault
-	httpClient *http.Client
+	httpClient network.SafeHTTPClient
 }
 
 // NewCatalogManager 构造模型目录管理器。
-func NewCatalogManager(db protocol.SQLQuerier, vault *credential.Vault, httpClient *http.Client) *CatalogManager {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
-	}
+func NewCatalogManager(db protocol.SQLQuerier, vault *credential.Vault, httpClient network.SafeHTTPClient) *CatalogManager {
 	return &CatalogManager{
 		db:         db,
 		vault:      vault,
@@ -72,7 +69,10 @@ func (m *CatalogManager) RefreshProvider(ctx context.Context, providerID string)
 		return nil, apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("provider %s is disabled", providerID))
 	}
 
-	models, err := ProbeProviderModels(ctx, m.httpClient, *prov)
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	models, err := ProbeProviderModels(probeCtx, m.httpClient, *prov)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,9 @@ func (m *CatalogManager) RefreshAll(ctx context.Context) (map[string]int, error)
 
 	res := make(map[string]int)
 	for _, p := range provs {
-		models, err := ProbeProviderModels(ctx, m.httpClient, p)
+		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		models, err := ProbeProviderModels(probeCtx, m.httpClient, p)
+		cancel()
 		if err != nil {
 			slog.WarnContext(ctx, "modelcatalog: probe provider models failed", "provider_id", p.ID, "err", err)
 			continue

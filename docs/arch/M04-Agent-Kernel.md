@@ -2,7 +2,7 @@
 
 > Go 状态机持有控制流，LLM 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 > 代码位置：`internal/agent/`（FSM 在 `internal/agent/fsm/`；DAG 执行器与 S_VALIDATE 四层校验物理实现在 `internal/execute/dag/`，ADR-0046；FSM 经 `internal/agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口驱动，唯一决定何时进入 S_EXECUTE/S_VALIDATE）。
-<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:155 Suspend-on-Idle / 3:171 S_VALIDATE / 4:210 DAG（Directed Acyclic Graph，有向无环图） / 5:280 System1/2 / 6:304 WorldModel / 7:312 推理预算 / 8:359 CrashRecovery / 8-bis:396 Handoff唤醒事件化+无损续跑 / 12:406 已知Bug修复记录 / 13:412 463 (SOFT)降级 / 14:429 481 跨模块契约 / 15:453 505 默认参数 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:162 Suspend-on-Idle / 3:178 S_VALIDATE / 4:217 DAG（Directed Acyclic Graph，有向无环图） / 5:287 System1/2 / 6:311 WorldModel / 7:319 推理预算 / 8:366 CrashRecovery / 8-bis:403 Handoff唤醒事件化+无损续跑 / 12:413 已知Bug修复记录 / 13:419 (SOFT)降级 / 14:436 481 跨模块契约 / 15:460 505 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -124,17 +124,24 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
 
 ```text
 S_IDLE ──(TriggerIntentReceived)──→ S_LOOP ──(TriggerLoopStepDone)──→ S_LOOP_EXEC ──(TriggerLoopExecDone)──→ S_LOOP ──(TriggerLoopDone)──→ S_COMPLETE
+                                      │                                  │                                     ↑
+                                      │                                  ├──(spawn_subagent wait=all)          │
+                                      │                                  ↓                                     │
+                                      │                             S_LOOP_AWAIT ──(TriggerLoopHandoffResume)──┘
                                       │                                                                        ↑
                                       └──(无工具调用 / 最终回答)────────────────────────────────────────────────┘
 ```
 
-1. **单层批并发执行**：模型在单个响应中可同时发出多个工具调用（如并发读取多个文件），内核并发执行所有工具调用，收集结果并按 `tool_result` 单调追加回会话历史，再驱动下一轮模型推理。
-2. **前缀缓存友好（KV Cache）**：严格保持不可变稳定核（`ImmutableCoreFields`），System Prompt、工具元数据与覆盖层提示词（`prompt_addenda`）在会话生命周期内前缀完全一致，多轮调用单调追加，KV Cache 命中率由 staged 的 12% 跃升至 50%~65%，端到端成本降低近 90%（详见 `local_playground/upgrade/EVAL-RESULT.md`）。
-3. **安全闸门不旁路**：循环中每个工具调用严格经过 `S_VALIDATE`，执行参数校验、路径守卫（`path_guard`）、Cedar 策略评估以及出站污点检查，高风险操作需持有 HITL 豁免令牌；所有工具执行结果与版本回滚均写入审计事件轨迹。
-4. **双重失控保护**：
-   - 软保护：达到 `LoopWarningRounds`（默认 20 轮）时向模型注入失控告警提示词，促使模型及时收敛；
-   - 硬保护：达到 `RunawayGuardDefaultRounds`（standard 200 轮，hardened 50 轮）时强行熔断并转移至 `S_FAILED`。
-5. **网关插话与控制**：用户在多轮循环执行期间可随时发送新消息或转向指令，内核在下一步模型调用前合并插话内容，支持流式交互与动态中断。
+1. **回合结构与跨轮隔离（AgenticTurn，R2-01）**：引入结构化 `AgenticTurn`，首轮自动将用户意图（`RawIntentTS`）作为 Round 1 user 消息注入模型上下文。回合生命周期由 `ResetAgenticTurn()` 统一管理，每回合清零瞬态轮次、消息列表、待执行调用、预算计数、警告标记与插话队列，并派发新的 `TurnID`，彻底防止跨回合状态残留与答非所问。
+2. **工具并发安全规则与分组调度（R2-06）**：单轮中多个工具调用根据 `ConcurrentSafe(toolName)` 进行语义分组——只读与纯计算工具（如 `read_file`, `web_search`）作为只读组由 `concurrent.SafeGo` 并发执行；并发不安全工具（写状态、bash 持久会话等）严格按批次单调串行执行，阻断数据竞争与状态混乱。
+3. **子智能体挂起等待（S_LOOP_AWAIT，R2-03）**：当模型在自主循环中调用 `spawn_subagent` 且指定 `wait=all` 时，智能体从 `S_LOOP_EXEC` 自动挂起并转移至 `S_LOOP_AWAIT`（状态码 16）。内核启动后台 Blackboard Watcher 异步监听任务终态，并在所有子任务完成后触发 `TriggerLoopHandoffResume` 唤醒父智能体切回 `S_LOOP`，将子任务输出原语精确回填为对应 `tool_result`。
+4. **轮次增量持久化（agent_loop_rounds，R2-05）**：摒弃静态单条快照方案，按 `(session_id, turn_id, round)` 表粒度增量记录每轮推理与执行的 delta（含脱敏后消息与污点定级），配合 `ResumeAgenticTurn` 提供进程崩溃后的精确无损续跑能力。
+5. **前缀缓存友好（KV Cache）**：严格保持不可变稳定核（`ImmutableCoreFields`），System Prompt、工具元数据与覆盖层提示词（`prompt_addenda`）在会话生命周期内前缀完全一致，多轮调用单调追加，KV Cache 命中率由 staged 的 12% 跃升至 50%~65%，端到端成本降低近 90%（详见 `local_playground/upgrade/EVAL-RESULT.md`）。
+6. **安全闸门不旁路**：循环中每个工具调用严格经过 `S_VALIDATE`，执行参数校验、路径守卫（`path_guard`）、Cedar 策略评估以及出站污点检查，高风险操作需持有 HITL 豁免令牌；所有工具执行结果与版本回滚均写入审计事件轨迹。
+7. **双重失控保护与易变收尾提示（R2-17）**：
+   - 软保护：达到 `LoopWarningRounds` 或首触 USD/Tokens/Wall 预算上限时，向易变区（与 T7 计量行同位）注入 `Role: "user"` 的收尾告警提示词，严禁使用 system 角色或追加至历史末尾，避免污染消息流与破坏 Anthropic 前缀缓存；
+   - 硬保护：达到 `RunawayGuardDefaultRounds`（standard 200 轮，hardened 50 轮）或次轮仍未收尾时强行熔断并转移至 `S_FAILED`。
+8. **网关插话与控制**：用户在多轮循环执行期间可随时发送新消息或转向指令，内核在下一步模型调用前合并插话内容，支持流式交互与动态中断。
 
 **回合上下文（ADR-0105）**
 

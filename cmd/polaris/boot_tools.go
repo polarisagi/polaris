@@ -403,7 +403,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		// WP4 接入 NamedSecretRepo 后替换此 nil
 		nil,
 		sb.Store.DB(),
-		modelcatalog.NewCatalogManager(sb.Store.DB(), sb.Vault, sb.SafeHTTP),
+		modelcatalog.NewCatalogManager(sb.Store.DB(), sb.Vault, sb.SafeHTTPClient),
 		persistentSandbox,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)

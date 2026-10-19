@@ -7,6 +7,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -40,12 +41,53 @@ func (sm *StateMachine) registerLoopTransitions() {
 		},
 	})
 
+	// S_LOOP_EXEC → S_LOOP_AWAIT: 派生子智能体或委派进入等待（R2-03）
+	sm.add(Transition{
+		From:    types.AgentStateLoopExec,
+		Trigger: types.TriggerAwaitAgent,
+		To:      types.AgentStateLoopAwait,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{protocol.DeterministicEffect{}}, nil
+		},
+	})
+
+	// S_LOOP_AWAIT → S_LOOP_EXEC: 子智能体执行完成唤醒恢复（R2-03）
+	sm.add(Transition{
+		From:    types.AgentStateLoopAwait,
+		Trigger: types.TriggerAgentHandoffDone,
+		To:      types.AgentStateLoopExec,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{protocol.DeterministicEffect{Fn: sm.executeLoopStep}}, nil
+		},
+	})
+
 	// S_LOOP → S_COMPLETE: 循环正常结束（auto 文本回复或模型显式调用 finish）
 	sm.add(Transition{
 		From:    types.AgentStateLoop,
 		Trigger: types.TriggerLoopDone,
 		To:      types.AgentStateComplete,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			defer sCtx.Mu.Unlock()
+			userQ := sCtx.RawIntentTS.UnsafeContent()
+			finalReply := sCtx.PreparedReply
+			if finalReply == "" {
+				finalReply = sCtx.LoopSummary
+			}
+			if finalReply == "" {
+				for i := len(sCtx.LoopMessages) - 1; i >= 0; i-- {
+					if sCtx.LoopMessages[i].Role == "assistant" && sCtx.LoopMessages[i].Content != "" {
+						finalReply = sCtx.LoopMessages[i].Content
+						break
+					}
+				}
+			}
+			if userQ != "" && finalReply != "" {
+				sCtx.ConversationHistory = append(sCtx.ConversationHistory,
+					types.Message{Role: "user", Content: userQ},
+					types.Message{Role: "assistant", Content: finalReply},
+				)
+			}
 			return nil, nil
 		},
 	})
@@ -56,6 +98,9 @@ func (sm *StateMachine) registerLoopTransitions() {
 		Trigger: types.TriggerLoopSteer,
 		To:      types.AgentStateLoop,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			sCtx.LoopRound++
+			sCtx.Mu.Unlock()
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
 		},
 	})
@@ -67,6 +112,20 @@ func (sm *StateMachine) registerLoopTransitions() {
 		To:      types.AgentStateLoop,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
 			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
+		},
+	})
+
+	// S_LOOP → S_FAILED: 循环推理失败，由合法的 TriggerReplanExhausted 转移到失败终态（R2-13）
+	sm.add(Transition{
+		From:    types.AgentStateLoop,
+		Trigger: types.TriggerReplanExhausted,
+		To:      types.AgentStateFailed,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			sCtx.LoopEnding = true
+			sCtx.TurnDegraded = true
+			sCtx.Mu.Unlock()
+			return nil, nil
 		},
 	})
 }
@@ -113,6 +172,16 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	if sCtx.LoopRound == 0 {
 		sCtx.LoopRound = 1
 	}
+	if len(sCtx.LoopMessages) == 0 && !sCtx.RawIntentTS.IsEmpty() {
+		sCtx.LoopMessages = []types.Message{
+			{
+				Role:       "user",
+				Content:    taint.Spotlighting(sCtx.RawIntentTS),
+				TaintLevel: sCtx.RawIntentTS.Level(),
+				Round:      1,
+			},
+		}
+	}
 	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
 	copy(roundMsgs, sCtx.LoopMessages)
 
@@ -142,6 +211,21 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	return msgs
 }
 
+// drainSteerQueueToMessages 检查并出队插话队列，作为 user 消息注入模型上下文。
+func drainSteerQueueToMessages(sCtx *StateContext) bool {
+	if len(sCtx.LoopSteerQueue) == 0 {
+		return false
+	}
+	for _, st := range sCtx.LoopSteerQueue {
+		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
+			Role:    "user",
+			Content: st,
+		})
+	}
+	sCtx.LoopSteerQueue = nil
+	return true
+}
+
 // onLoopSuccess 处理单轮 LLM 输出判定。
 func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.State, error) {
 	sCtx.Mu.Lock()
@@ -150,6 +234,12 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	// 检查是否有 finish 调用
 	for _, call := range sCtx.LoopPendingToolCalls {
 		if call.Name == "finish" {
+			// 判定完成前先检查插话队列（R2-12）
+			if drainSteerQueueToMessages(sCtx) {
+				sCtx.LoopPendingToolCalls = nil
+				return types.State("S_LOOP_STEER"), nil
+			}
+			sCtx.LoopEnding = true
 			sCtx.LoopSummary = string(call.Input)
 			sCtx.LoopPendingToolCalls = nil
 			return types.State("S_LOOP_DONE"), nil
@@ -162,6 +252,11 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 	}
 
 	// 无工具调用且 auto 完成模式下，认为文本输出即收尾回复
+	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12）
+	if drainSteerQueueToMessages(sCtx) {
+		return types.State("S_LOOP_STEER"), nil
+	}
+
 	completion := sCtx.LoopCompletion
 	if completion == "" {
 		completion = config.CurrentThresholds().M4Kernel.LoopCompletion
@@ -175,12 +270,13 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 		return types.State("S_LOOP_STEP_DONE"), nil
 	}
 
+	sCtx.LoopEnding = true
 	return types.State("S_LOOP_DONE"), nil
 }
 
 // onLoopFailure 处理 LLM 推理失败。
 func (sm *StateMachine) onLoopFailure(sCtx protocol.StateContext, err error) (types.State, error) {
-	return types.State("S_FAILED"), err
+	return types.State("S_LOOP_FAILED"), err
 }
 
 func formatUsageLine(tokens int, cost float64, wallSeconds float64) string {
@@ -230,6 +326,13 @@ func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx 
 		slog.WarnContext(ctx, "agentic_loop: WriteSessionLayer fallback failed", "err", wErr)
 	}
 	WriteConversationHistory(b, sCtx)
+	sCtx.Mu.RLock()
+	warnPrompt := sCtx.LoopWarningPrompt
+	sCtx.Mu.RUnlock()
+	if warnPrompt != "" {
+		b.WritePhaseUser(warnPrompt)
+	}
+
 	if len(roundMsgs) == 0 {
 		sCtx.Mu.RLock()
 		intent := sCtx.RawIntentTS

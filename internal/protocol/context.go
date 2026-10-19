@@ -176,3 +176,32 @@ func ProjectIDFrom(ctx context.Context) string {
 	id, _ := ctx.Value(CtxProjectIDKey{}).(string)
 	return id
 }
+
+// TaskIDFrom 从 context 中读取任务/会话 ID（由 CtxTaskIDKey 注入）。
+func TaskIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(CtxTaskIDKey{}).(string)
+	return id
+}
+
+// CtxTurnIDKey 用于在 context 中传递回合 ID (TurnID)。
+type CtxTurnIDKey struct{}
+
+// WithTurnID 注入回合 ID；id 为空时原样返回。
+func WithTurnID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxTurnIDKey{}, id)
+}
+
+// TurnIDFrom 读取回合 ID；未注入返回空串。
+func TurnIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(CtxTurnIDKey{}).(string)
+	return id
+}

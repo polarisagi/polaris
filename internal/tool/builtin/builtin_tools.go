@@ -163,7 +163,7 @@ func RegisterBuiltinTools(
 	}...)
 
 	defs = append(defs, automationToolDefs(autoSvc)...)
-	defs = append(defs, fullProfileToolDefs(pol, checkpointDataDir, checkpointProjects, secretReader)...)
+	defs = append(defs, fullProfileToolDefs(pol, checkpointDataDir, checkpointProjects)...)
 
 	for _, d := range defs {
 		meta, err := tool.GetBuiltinToolMeta(d.name)
@@ -175,6 +175,18 @@ func RegisterBuiltinTools(
 		if err := toolReg.Register(meta); err != nil {
 			return apperr.Wrap(apperr.CodeInternal,
 				fmt.Sprintf("builtin_tools: register %q", d.name), err)
+		}
+	}
+
+	if pol.SecretGetEnabled && secretReader != nil {
+		maxPerTurn := config.CurrentThresholds().M4Kernel.SecretGetMaxPerTurn
+		meta, err := tool.GetBuiltinToolMeta("secret_get")
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "builtin_tools: load meta for secret_get", err)
+		}
+		sbx.RegisterWithTaint(meta.Name, secret_get.MakeSecretGetFn(secretReader, maxPerTurn), types.TaintHigh)
+		if err := toolReg.Register(meta); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "builtin_tools: register secret_get", err)
 		}
 	}
 
@@ -223,7 +235,6 @@ func fullProfileToolDefs(
 	pol policy.Policy,
 	checkpointDataDir string,
 	checkpointProjects []string,
-	secretReader secret_get.NamedSecretReader,
 ) []builtinDef {
 	var out []builtinDef
 	if pol.CheckpointEnabled && checkpointDataDir != "" && len(checkpointProjects) > 0 {
@@ -233,11 +244,6 @@ func fullProfileToolDefs(
 			{"checkpoint_list", checkpoint_list.MakeCheckpointListFn(checkpointDataDir, projectDir, retentionCount)},
 			{"checkpoint_restore", checkpoint_restore.MakeCheckpointRestoreFn(checkpointDataDir, projectDir, retentionCount)},
 		}...)
-	}
-	if pol.SecretGetEnabled && secretReader != nil {
-		maxPerTurn := config.CurrentThresholds().M4Kernel.SecretGetMaxPerTurn
-		fn, _ := secret_get.MakeSecretGetFn(secretReader, maxPerTurn)
-		out = append(out, builtinDef{"secret_get", fn})
 	}
 	return out
 }

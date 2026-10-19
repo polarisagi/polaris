@@ -153,7 +153,8 @@ func TestInferenceRouter_ProviderRef_Fallback(t *testing.T) {
 	}
 }
 
-// TestProviderRegistry_PickEntryByRef_LocalOnlyMode 验证 local_only_mode 下 PickEntryByRef 拒绝解析与实例化非本地模型（V3）。
+// TestProviderRegistry_PickEntryByRef_LocalOnlyMode 验证 local_only_mode 下 PickEntryByRef 的判定逻辑（R2-07）。
+// 测试覆盖：本地记录 ID 引用放行；名称含 local 的云端厂商被拒；按需实例化路径被拒。
 func TestProviderRegistry_PickEntryByRef_LocalOnlyMode(t *testing.T) {
 	cfg := config.CurrentThresholds().M1Router
 	reg := NewProviderRegistry(cfg)
@@ -172,15 +173,59 @@ func TestProviderRegistry_PickEntryByRef_LocalOnlyMode(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. 云端模型：直接拒绝返回 nil
-	entry := reg.PickEntryByRef(ctx, "openai/gpt-4o", true)
-	if entry != nil {
-		t.Fatal("V3 缺陷：local_only_mode 下 PickEntryByRef 必须拒绝非本地厂商模型")
+	// 1. 本地记录 ID 引用放行
+	localProv := &mockProvider{}
+	reg.RegisterWithRow("ollama/loc12345", "Ollama Local", localProv, types.ProviderRow{
+		ID:      "ollama",
+		Type:    "ollama",
+		IsLocal: true,
+	})
+	localByRecordID := reg.PickEntryByRef(ctx, "loc12345", true)
+	if localByRecordID == nil {
+		t.Fatal("R2-07 缺陷：local_only_mode 下本地记录 ID 引用必须放行")
 	}
 
-	// 2. 本地模型：正常允许实例化
-	localEntry := reg.PickEntryByRef(ctx, "ollama/llama3", true)
-	if localEntry == nil {
-		t.Fatal("local_only_mode 下应正常放行本地模型 ollama/llama3")
+	// 云端记录 ID 引用必须拒绝
+	cloudProv := &mockProvider{}
+	reg.RegisterWithRow("openai/cld12345", "OpenAI Cloud", cloudProv, types.ProviderRow{
+		ID:      "openai",
+		Type:    "openai_compat",
+		IsLocal: false,
+	})
+	cloudByRecordID := reg.PickEntryByRef(ctx, "cld12345", true)
+	if cloudByRecordID != nil {
+		t.Fatal("R2-07 缺陷：local_only_mode 下云端记录 ID 引用必须拒绝")
+	}
+
+	// 2. 名称含 local 的云端厂商被拒
+	reg.RegisterWithRow("my-local-cloud/gpt-4o", "My Local Cloud", cloudProv, types.ProviderRow{
+		ID:      "my-local-cloud",
+		Name:    "my-local-cloud",
+		Type:    "openai_compat",
+		IsLocal: false,
+	})
+	nameWithLocal := reg.PickEntryByRef(ctx, "my-local-cloud/gpt-4o", true)
+	if nameWithLocal != nil {
+		t.Fatal("R2-07 缺陷：名称含 local 的云端厂商必须被拒绝，不能靠名称子串放行")
+	}
+
+	// 已预注册的真正本地模型（完整引用）放行
+	reg.RegisterWithRow("ollama/llama3", "Ollama Llama 3", localProv, types.ProviderRow{
+		ID:      "ollama",
+		Type:    "ollama",
+		IsLocal: true,
+	})
+	registeredLocal := reg.PickEntryByRef(ctx, "ollama/llama3", true)
+	if registeredLocal == nil {
+		t.Fatal("local_only_mode 下预注册的本地模型 ollama/llama3 必须正常放行")
+	}
+
+	// 3. 按需实例化路径被拒（未预注册的外部引用无论名字如何都不能动态实例化）
+	dynamicRef := reg.PickEntryByRef(ctx, "unregistered-ollama/llama3", true)
+	if dynamicRef != nil {
+		t.Fatal("R2-07 缺陷：local_only_mode 下按需实例化路径必须被拒绝")
+	}
+	if fac.created["unregistered-ollama/llama3"] > 0 {
+		t.Fatal("local_only_mode 下按需实例化不应触发工厂创建调用")
 	}
 }

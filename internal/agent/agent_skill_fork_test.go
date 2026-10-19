@@ -44,7 +44,9 @@ func TestTryForkSkill_DelegatesAndResumesWithoutRerender(t *testing.T) {
 		t.Fatalf("posted: %+v", poster.lastPosted)
 	}
 	// 恢复分支：子任务完成后重入，不得再次渲染（渲染会重复执行动态注入命令）。
+	poster.mu.Lock()
 	poster.tasks[a.sCtx.HandoffTaskID] = &types.TaskSnapshot{ID: a.sCtx.HandoffTaskID, Status: types.TaskDone, Result: []byte("found it")}
+	poster.mu.Unlock()
 	res, _, err = a.tryForkSkill(ctx, "research", nil, types.TaintLow)
 	if err != nil || string(res.Output) != "found it" || forker.renders != 1 {
 		t.Fatalf("resume: %+v %v renders=%d", res, err, forker.renders)

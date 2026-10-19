@@ -93,6 +93,9 @@ func newTestHandoffAgent(t *testing.T) *Agent {
 	t.Helper()
 	a := NewAgent("handoff-test-agent", nil, nil)
 	a.sCtx.SessionID = "session-1"
+	t.Cleanup(func() {
+		a.Close()
+	})
 	return a
 }
 

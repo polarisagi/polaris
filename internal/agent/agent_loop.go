@@ -20,6 +20,14 @@ import (
 //nolint:gocyclo
 func (a *Agent) runExecuteLoop(ctx context.Context) error {
 	a.sCtx.Mu.Lock()
+	isHandoffResume := len(a.sCtx.HandoffTaskIDs) > 0 && a.sCtx.LoopHandoffSpawnCallID != ""
+	a.sCtx.Mu.Unlock()
+
+	if isHandoffResume {
+		return a.resumeHandoffInLoop(ctx)
+	}
+
+	a.sCtx.Mu.Lock()
 	calls := a.sCtx.LoopPendingToolCalls
 	a.sCtx.LoopPendingToolCalls = nil
 	currentRound := a.sCtx.LoopRound
@@ -88,13 +96,10 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		a.sCtx.Mu.Unlock()
 
 		if !warned {
-			// 首触上限：注入易变收尾提示消息，再给一轮机会
+			// 首触上限：记录易变收尾提示（user 角色易变区，不追加为 system 污染历史与破坏缓存，R2-17）
 			a.sCtx.Mu.Lock()
 			a.sCtx.LoopWarningInjected = true
-			a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-				Role:    "system",
-				Content: "预算/失控保护告警：" + exceededReason + "，请在本轮立即总结当前进度并给出最终回复或收尾。",
-			})
+			a.sCtx.LoopWarningPrompt = "预算/失控保护告警：" + exceededReason + "，请在本轮立即总结当前进度并给出最终回复或收尾。"
 			a.sCtx.Mu.Unlock()
 			slog.WarnContext(ctx, "agentic_loop: budget/runaway guard warning injected", "reason", exceededReason)
 		} else {
@@ -106,38 +111,15 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		}
 	}
 
-	// 3. 构建单层批 DAGPlan，经过 S_VALIDATE 四层校验链
+	// 3. 构建单层批 DAGPlan，经过 S_VALIDATE 四层校验链并执行
 	if len(calls) > 0 {
-		plan := toolCallsToDAGPlan(calls, a.sCtx.GlobalTaintLevel)
-		if err := a.checkPlanAgainstProfile(plan); err != nil {
-			slog.WarnContext(ctx, "agentic_loop: plan rejected by profile", "err", err)
-			a.appendToolErrorMessages(calls, "Forbidden: tool violates agent profile policy: "+err.Error())
-			a.asyncIntent(types.TriggerLoopExecDone)
+		suspended, err := a.executeBatchWithDelegation(ctx, calls)
+		if err != nil {
+			return err
+		}
+		if suspended {
 			return nil
 		}
-
-		vCtx := a.buildValidationContext(plan)
-		if a.dagValidator == nil {
-			slog.ErrorContext(ctx, "agentic_loop: security validator is missing (fail-closed)")
-			a.appendToolErrorMessages(calls, "Internal: security validator is missing (fail-closed)")
-			a.asyncIntent(types.TriggerLoopExecDone)
-			return nil
-		}
-		if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
-			slog.WarnContext(ctx, "agentic_loop: plan rejected by taint review", "err", err)
-			a.appendToolErrorMessages(calls, "Forbidden: action rejected by security policy: "+err.Error())
-			a.asyncIntent(types.TriggerLoopExecDone)
-			return nil
-		}
-		a.recordValidatedPlan(plan)
-
-		// 4. 并发执行当前批次工具调用
-		toolResults := a.executeToolCallsConcurrently(ctx, calls)
-
-		// 5. 追加 tool 响应消息到上下文
-		a.sCtx.Mu.Lock()
-		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, toolResults...)
-		a.sCtx.Mu.Unlock()
 	}
 
 	// 6. 执行 T3 批量观察遮蔽
@@ -158,7 +140,7 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 
 	// 8. 记录指标与持久化增量快照（P1 / ADR-0104 / HE-6）
 	metrics.RecordLoopRound(ctx)
-	a.persistLoopCheckpoint(ctx)
+	a.persistLoopRoundDelta(ctx)
 
 	// 9. 推进状态机回到 S_LOOP 进入下一轮
 	a.asyncIntent(types.TriggerLoopExecDone)

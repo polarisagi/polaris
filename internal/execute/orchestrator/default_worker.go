@@ -245,6 +245,12 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		w.bb.PublishTaskEvent(taskID, ev)
 	})
 
+	taskCtx, taskCancel := context.WithCancel(bgCtx)
+	defer taskCancel()
+	if cancelSub := w.subscribeTaskEvents(taskCtx, taskID, taskCancel); cancelSub != nil {
+		defer cancelSub()
+	}
+
 	opts := []types.HeadlessOption{types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb}
 	if snap.Type == PeerDelegationTaskType {
 		if w.peerProfile == nil {
@@ -253,7 +259,7 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		}
 		opts = append(opts, types.WithAgentProfile(w.peerProfile(snap)))
 	}
-	output, err := w.execute(bgCtx, snap, prompt, opts, spec)
+	output, err := w.execute(taskCtx, snap, prompt, opts, spec)
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())
@@ -342,4 +348,25 @@ func (w *DefaultTaskWorker) failTask(taskID, msg string) {
 	if err := w.bb.FailTask(context.Background(), taskID, defaultTaskWorkerAgentID, []byte(msg)); err != nil {
 		slog.Warn("default task worker: FailTask failed", "task_id", taskID, "err", err)
 	}
+}
+
+func (w *DefaultTaskWorker) subscribeTaskEvents(ctx context.Context, taskID string, cancel context.CancelFunc) func() {
+	if w.bb == nil {
+		return nil
+	}
+	eventsCh, cancelSub := w.bb.SubscribeTaskEvents(taskID)
+	concurrent.SafeGo(ctx, "default_worker.task_event_listener", func(runCtx context.Context) {
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case ev, ok := <-eventsCh:
+				if !ok {
+					return
+				}
+				w.handleTaskEvent(ev, taskID, cancel)
+			}
+		}
+	})
+	return cancelSub
 }

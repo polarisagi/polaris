@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -156,15 +157,14 @@ func (a *Agent) toolMeta(name string) (types.Tool, bool) {
 	return types.Tool{}, false
 }
 
-// writesState 只读角色（Codex sandbox_mode=read-only）只放行能力等级 ≤ CapReadOnly 的工具
-// （与 S_VALIDATE isReadOnlyTool 同一判据）；code_act 恒视为可写（任意代码），技能可能携带
-// 沙箱脚本、目录条目无能力等级，同样视为可写；元数据缺失的未知工具 fail-closed 视为可写。
-//
-// MCP 工具同样视为可写：注册时不带能力等级（零值恰好是 CapReadOnly），不 fail-closed 的话只读角色
-// 会放行任意 MCP 服务器的写操作（如文件系统类 MCP），对端委派任务也就能借道写本机。
+// CheckProfileTool 导出给 CodeAct 工具桥或外部组件校验子 Agent 角色工具限制（R2-15）。
+func (a *Agent) CheckProfileTool(toolName, delegateTarget string) error {
+	return a.checkProfileTool(toolName, delegateTarget)
+}
+
+// writesState 复用 policy.WritesState 统一判定（R2-15）。
 func writesState(name string, tool types.Tool, known bool) bool {
-	return strings.HasPrefix(name, "code_act:") || !known || tool.Source == types.ToolSkill || tool.Source == types.ToolMCP ||
-		tool.Capability > types.CapReadOnly
+	return policy.WritesState(name, tool, known)
 }
 
 // delegateTarget 委派调用的目标名（仅用于 Agent(a, b) 白名单判定）；解析失败返回空串，

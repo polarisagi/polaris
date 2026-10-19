@@ -75,7 +75,7 @@ test-ci:
 	$(GO) test $(GO_TEST_FLAGS) -v -coverprofile=coverage.out $(GO_TEST_PKGS)
 	$(GO) tool cover -func=coverage.out
 
-lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check chan-send-guard-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check memory-isolation-check llm-call-opts-check trust-profile-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check chan-send-guard-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check memory-isolation-check llm-call-opts-check trust-profile-check local-provider-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
 
@@ -130,6 +130,10 @@ llm-call-opts-check:
 trust-profile-check:
 	@echo "=== [L-20] TrustProfile 档位比较禁止在 ProfilePolicy 外出现 ==="
 	@env GOOS= GOARCH= $(GO) run tools/trust_profile_check.go
+
+local-provider-check:
+	@echo "=== [L-21] Local Provider 判定禁止在 llm.IsLocalProvider 外出现 ==="
+	@env GOOS= GOARCH= $(GO) run tools/local_provider_check.go
 
 # lint-selftest 是「门控的门控」：逐条注入违规样例，证明每条规则确实能报红。
 # 不并入 lint（它会临时改写工作区文件，不适合与并发的编辑同跑），只挂 check-all。

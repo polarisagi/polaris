@@ -9,7 +9,15 @@ import (
 	"testing"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/polarisagi/polaris/internal/security/network"
 )
+
+func testSafeClient(c *http.Client) network.SafeHTTPClient {
+	safe := network.NewSafeHTTPClient(nil)
+	safe.Client = c
+	return safe
+}
 
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -79,7 +87,7 @@ func TestProbeOpenAICompat(t *testing.T) {
 		APIKey:  "test-key",
 	}
 
-	models, err := ProbeProviderModels(context.Background(), ts.Client(), p)
+	models, err := ProbeProviderModels(context.Background(), testSafeClient(ts.Client()), p)
 	if err != nil {
 		t.Fatalf("ProbeProviderModels failed: %v", err)
 	}
@@ -147,7 +155,7 @@ func TestProbeAnthropic(t *testing.T) {
 		APIKey:  "anth-key",
 	}
 
-	models, err := ProbeProviderModels(context.Background(), ts.Client(), p)
+	models, err := ProbeProviderModels(context.Background(), testSafeClient(ts.Client()), p)
 	if err != nil {
 		t.Fatalf("ProbeProviderModels anthropic failed: %v", err)
 	}
@@ -196,7 +204,7 @@ func TestProbeGoogle(t *testing.T) {
 		}),
 	}
 
-	models, err := ProbeProviderModels(context.Background(), client, p)
+	models, err := ProbeProviderModels(context.Background(), testSafeClient(client), p)
 	if err != nil {
 		t.Fatalf("ProbeProviderModels google failed: %v", err)
 	}
@@ -230,7 +238,7 @@ func TestProbeOllama(t *testing.T) {
 		BaseURL: ts.URL,
 	}
 
-	models, err := ProbeProviderModels(context.Background(), ts.Client(), p)
+	models, err := ProbeProviderModels(context.Background(), testSafeClient(ts.Client()), p)
 	if err != nil {
 		t.Fatalf("ProbeProviderModels ollama failed: %v", err)
 	}
@@ -258,7 +266,7 @@ func TestCatalogManager_RefreshAndList(t *testing.T) {
 
 	_, _ = db.Exec(`INSERT INTO providers (id, name, type, base_url, api_key, enabled) VALUES ('p1', 'OpenAI', 'openai_compat', ?, 'key', 1)`, ts.URL)
 
-	mgr := NewCatalogManager(db, nil, ts.Client())
+	mgr := NewCatalogManager(db, nil, testSafeClient(ts.Client()))
 
 	ctx := context.Background()
 	discovered, err := mgr.RefreshProvider(ctx, "p1")

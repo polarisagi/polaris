@@ -33,7 +33,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	db.SetMaxOpenConns(1)
 
 	_, err = db.Exec(`
-		CREATE TABLE providers (id TEXT, name TEXT, type TEXT, enabled INTEGER);
+		CREATE TABLE providers (id TEXT, name TEXT, type TEXT, enabled INTEGER, is_local INTEGER DEFAULT 0);
 		CREATE TABLE provider_models (id TEXT, provider_id TEXT, model_id TEXT, name TEXT, role TEXT, enabled INTEGER);
 		CREATE TABLE provider_discovered_models (
 			provider_id TEXT, model_id TEXT, display_name TEXT,
@@ -42,8 +42,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			input_price_per_mtok REAL, output_price_per_mtok REAL
 		);
 
-		INSERT INTO providers VALUES ('prov_openai', 'OpenAI', 'openai_compat', 1);
-		INSERT INTO providers VALUES ('prov_ollama', 'Local Ollama', 'ollama', 1);
+		INSERT INTO providers VALUES ('prov_openai', 'OpenAI', 'openai_compat', 1, 0);
+		INSERT INTO providers VALUES ('prov_ollama', 'Local Ollama', 'ollama', 1, 1);
 
 		INSERT INTO provider_models VALUES ('m1', 'prov_openai', 'gpt-4o', 'GPT-4o', 'general', 1);
 		INSERT INTO provider_discovered_models VALUES (

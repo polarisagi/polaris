@@ -1,0 +1,8 @@
+package internal
+
+// 负向用例：直接比较 provider 类型字符串字面量或做启发式匹配。
+// L-21 规则必须在此文件中检测到违规并报红。
+
+func selftestLocalProviderHeuristic(typ string) bool {
+	return typ == "ollama" || typ == "llama_local"
+}

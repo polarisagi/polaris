@@ -104,8 +104,11 @@ func (m *mockToolRegistryForBridge) ExecuteTool(_ context.Context, name string, 
 	}
 }
 
-func sendBridgeRequest(sockPath string, req map[string]any) (map[string]any, error) {
-	conn, err := net.Dial("unix", sockPath)
+func sendBridgeRequest(srv *codeact.BridgeServer, req map[string]any) (map[string]any, error) {
+	if srv.Token() != "" {
+		req["token"] = srv.Token()
+	}
+	conn, err := net.Dial("unix", srv.SocketPath())
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +143,7 @@ func TestBridge_RoundTrip_ReadFileAndGrep(t *testing.T) {
 	defer srv.Close()
 
 	// 1. 调用 read_file
-	readResp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	readResp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "call",
 		"tool":   "read_file",
 		"args":   map[string]any{"path": "config.json"},
@@ -157,7 +160,7 @@ func TestBridge_RoundTrip_ReadFileAndGrep(t *testing.T) {
 	}
 
 	// 2. 调用 grep
-	grepResp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	grepResp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "call",
 		"tool":   "grep",
 		"args":   map[string]any{"pattern": "admin"},
@@ -191,7 +194,7 @@ func TestBridge_TaintPropagation(t *testing.T) {
 	}
 
 	// 调用 secret_scanner，返回 TaintSecret
-	resp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	resp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "call",
 		"tool":   "secret_scanner",
 		"args":   map[string]any{},
@@ -220,7 +223,7 @@ func TestBridge_ProfileRestrictions(t *testing.T) {
 	}
 	defer stdSrv.Close()
 
-	writeResp, err := sendBridgeRequest(stdSrv.SocketPath(), map[string]any{
+	writeResp, err := sendBridgeRequest(stdSrv, map[string]any{
 		"action": "call",
 		"tool":   "write_file",
 		"args":   map[string]any{"path": "test.txt", "data": "hello"},
@@ -240,7 +243,7 @@ func TestBridge_ProfileRestrictions(t *testing.T) {
 	}
 	defer fullSrv.Close()
 
-	fullWriteResp, err := sendBridgeRequest(fullSrv.SocketPath(), map[string]any{
+	fullWriteResp, err := sendBridgeRequest(fullSrv, map[string]any{
 		"action": "call",
 		"tool":   "write_file",
 		"args":   map[string]any{"path": "test.txt", "data": "hello"},
@@ -264,7 +267,7 @@ func TestBridge_CallMany(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	resp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "call_many",
 		"calls": []map[string]any{
 			{"tool": "read_file", "args": map[string]any{"path": "a.txt"}},
@@ -295,7 +298,7 @@ func TestBridge_ToolsListing(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := sendBridgeRequest(srv.SocketPath(), map[string]any{
+	resp, err := sendBridgeRequest(srv, map[string]any{
 		"action": "tools",
 	})
 	if err != nil {

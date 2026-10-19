@@ -138,6 +138,7 @@ func (a *Agent) reportUnusableFill(ctx context.Context, next types.State, err er
 // Pool 只对 Complete/Failed 换新实例，下一轮 SendIntent 投给已无 Run() 消费的
 // 旧实例。强制进 S_FAILED 并走 handleTerminalState，三个问题一并收口。
 func (a *Agent) abortTurn(ctx context.Context, err error) {
+	a.cancelHandoffWatcher()
 	slog.WarnContext(ctx, "kernel: turn aborted", "agent_id", a.ID, "session", a.sCtx.SessionID,
 		"state", a.sm.Current(), "err", err)
 	a.publishStreamEvent(types.AgentStreamEvent{

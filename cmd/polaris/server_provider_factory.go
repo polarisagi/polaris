@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -12,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 type dbProviderFactory struct {
@@ -38,28 +38,37 @@ func (f *dbProviderFactory) CreateProvider(ctx context.Context, providerID, mode
 	}
 
 	row := f.db.QueryRowContext(ctx, `
-		SELECT name, type, COALESCE(base_url, ''), COALESCE(api_key, ''), COALESCE(project_id, ''), COALESCE(location, '')
+		SELECT name, type, COALESCE(base_url, ''), COALESCE(api_key, ''), COALESCE(project_id, ''), COALESCE(location, ''),
+		       COALESCE(is_local, 0)
 		  FROM providers
 		 WHERE id = ? AND enabled = 1`, providerID)
 
 	var pName, typ, baseURL, apiKeyStr, projectID, location string
-	if err := row.Scan(&pName, &typ, &baseURL, &apiKeyStr, &projectID, &location); err != nil {
+	var isLocalInt int
+	if err := row.Scan(&pName, &typ, &baseURL, &apiKeyStr, &projectID, &location, &isLocalInt); err != nil {
 		return nil, "", apperr.Wrap(apperr.CodeNotFound, "provider not found or disabled", err)
 	}
 
+	pRow := types.ProviderRow{
+		ID:      providerID,
+		Name:    pName,
+		Type:    typ,
+		IsLocal: isLocalInt == 1,
+	}
+
 	if cfg := config.Get(); cfg != nil && cfg.Security.LocalOnlyMode {
-		isLocal := typ == "ollama" || typ == "llama_local"
-		if !isLocal {
+		if !llm.IsLocalProvider(pRow) {
 			return nil, "", apperr.New(apperr.CodeForbidden, fmt.Sprintf("local_only_mode is enabled: provider type %q for model %q is not local", typ, modelID))
 		}
 	}
 
 	if f.vault != nil && apiKeyStr != "" {
-		if dec, err := f.vault.Decrypt(apiKeyStr); err == nil {
-			apiKeyStr = dec
-		} else {
-			slog.Warn("dbProviderFactory: failed to decrypt api key", "provider_id", providerID, "err", err)
+		dec, err := f.vault.Decrypt(apiKeyStr)
+		if err != nil {
+			metrics.RecordCredentialDecryptFailed()
+			return nil, "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to decrypt api key for provider %s", providerID), err)
 		}
+		apiKeyStr = dec
 	}
 
 	credPool := llm.NewCredentialPool(splitAPIKeys(apiKeyStr), llm.StrategyRoundRobin)

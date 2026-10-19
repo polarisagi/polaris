@@ -6,7 +6,6 @@ import (
 
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -16,12 +15,13 @@ import (
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // providerReplacer LoadProvidersFromDB 所需的注册表能力：整体原子替换（GD-13-002）。
 // 实现：*llm.ProviderRegistry。
 type providerReplacer interface {
-	ReplaceAll(build func(register func(name, displayName, role string, p protocol.Provider)))
+	ReplaceAllWithRow(build func(register func(name, displayName, role string, p protocol.Provider, row types.ProviderRow)))
 }
 
 // LoadProvidersFromDB 从 providers + provider_models 两表 JOIN，
@@ -29,6 +29,7 @@ type providerReplacer interface {
 func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg providerReplacer, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT p.id, p.name, p.type, COALESCE(p.base_url, ''), COALESCE(p.api_key, ''), COALESCE(p.project_id, ''), COALESCE(p.location, ''),
+		       COALESCE(p.is_local, 0),
 		       m.id, COALESCE(m.name, ''), m.model_id, m.role
 		  FROM providers p
 		  JOIN provider_models m ON m.provider_id = p.id
@@ -45,26 +46,29 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 	type staged struct {
 		name, displayName, role string
 		p                       protocol.Provider
+		row                     types.ProviderRow
 	}
 	var next []staged
-	stage := func(name, displayName, role string, p protocol.Provider) {
-		next = append(next, staged{name, displayName, role, p})
+	stage := func(name, displayName, role string, p protocol.Provider, row types.ProviderRow) {
+		next = append(next, staged{name, displayName, role, p, row})
 	}
 
 	for rows.Next() {
 		var pID, pName, typ, baseURL, apiKeyStr, projectID, location string
+		var isLocalInt int
 		var mID, mName, modelID, role string
-		if err := rows.Scan(&pID, &pName, &typ, &baseURL, &apiKeyStr, &projectID, &location,
+		if err := rows.Scan(&pID, &pName, &typ, &baseURL, &apiKeyStr, &projectID, &location, &isLocalInt,
 			&mID, &mName, &modelID, &role); err != nil {
 			continue
 		}
 
-		if vault != nil {
-			if dec, err := vault.Decrypt(apiKeyStr); err == nil {
-				apiKeyStr = dec
-			} else {
-				slog.Warn("polaris: LoadProvidersFromDB failed to decrypt api key", "provider_id", pID, "err", err)
+		if vault != nil && apiKeyStr != "" {
+			dec, err := vault.Decrypt(apiKeyStr)
+			if err != nil {
+				metrics.RecordCredentialDecryptFailed()
+				return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LoadProvidersFromDB: failed to decrypt api key for provider %s", pID), err)
 			}
+			apiKeyStr = dec
 		}
 
 		// 2026-07-12 P1 修复：api_key 列支持按行存放多个 Key（每行一个），
@@ -86,23 +90,30 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 		}
 		displayName = fmt.Sprintf("[%s] %s", pName, displayName)
 
-		// ADR-0109 D6：本地对话模型（ollama / llama_local）未填 role 时默认 general，
+		pRow := types.ProviderRow{
+			ID:      pID,
+			Name:    pName,
+			Type:    typ,
+			IsLocal: isLocalInt == 1,
+		}
+
+		// ADR-0109 D6：本地对话模型未填 role 时默认 general，
 		// 避免空 role 落入 costTier=0 与 default 对话模型同档竞争、把后台调用路由到本地。
 		// 远程 Provider 保持原语义（空 role = 单 Provider 部署的便宜档），不得改动。
-		if role == "" && (typ == "ollama" || typ == "llama_local") {
+		if role == "" && llm.IsLocalProvider(pRow) {
 			role = "general"
 		}
 
 		if p := buildProviderAdapter(typ, baseURL, modelID, projectID, location, credPool, httpClient, tbr); p != nil {
-			stage(name, displayName, role, p)
+			stage(name, displayName, role, p, pRow)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "rows error", err)
 	}
-	reg.ReplaceAll(func(register func(name, displayName, role string, p protocol.Provider)) {
+	reg.ReplaceAllWithRow(func(register func(name, displayName, role string, p protocol.Provider, row types.ProviderRow)) {
 		for _, e := range next {
-			register(e.name, e.displayName, e.role, e.p)
+			register(e.name, e.displayName, e.role, e.p, e.row)
 		}
 	})
 	return nil

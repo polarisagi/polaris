@@ -257,7 +257,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: JIT token mint failed", err)
 			}
-			caResult, err := a.codeAct.Execute(ctx, CodeActRequest{
+			caResult, err := a.codeAct.Execute(protocol.WithProfileChecker(ctx, a), CodeActRequest{
 				Language:     lang,
 				Code:         codeArgs.Code,
 				CapabilityID: jitTok.Claims.TokenID,
