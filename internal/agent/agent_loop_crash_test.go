@@ -223,7 +223,7 @@ func TestAgenticLoop_200Rounds_NoSizeLimitDrop(t *testing.T) {
 	// 模拟写入 200 轮，每轮 10KB
 	for r := 1; r <= 200; r++ {
 		agent.sCtx.LoopRound = r
-		agent.sCtx.LoopMessages = append(agent.sCtx.LoopMessages, types.Message{
+		agent.appendLoopMessages(types.Message{
 			Role:    "assistant",
 			Content: fmt.Sprintf("round %d %s", r, payload10KB),
 			Round:   r,

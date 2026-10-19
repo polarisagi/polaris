@@ -79,9 +79,7 @@ func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.In
 
 	if len(delegatingCalls) == 0 {
 		toolResults := a.executeToolCallsConcurrently(ctx, calls)
-		a.sCtx.Mu.Lock()
-		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, toolResults...)
-		a.sCtx.Mu.Unlock()
+		a.appendLoopMessages(toolResults...)
 		return false, nil
 	}
 
@@ -125,9 +123,7 @@ func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.In
 	a.sCtx.Mu.Unlock()
 
 	batchMessages := assembleResumeBatchMessages(calls, delMsgs, nonDelegatingResults)
-	a.sCtx.Mu.Lock()
-	a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, batchMessages...)
-	a.sCtx.Mu.Unlock()
+	a.appendLoopMessages(batchMessages...)
 	return false, nil
 }
 
@@ -172,8 +168,8 @@ func (a *Agent) resumeHandoffInLoop(ctx context.Context) error {
 	finalBatchMessages := assembleResumeBatchMessages(origCalls, spawnMsgs, pendingResults)
 
 	a.cancelHandoffWatcher()
+	a.appendLoopMessages(finalBatchMessages...)
 	a.sCtx.Mu.Lock()
-	a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, finalBatchMessages...)
 	a.sCtx.HandoffTaskIDs = nil
 	a.sCtx.HandoffTaskID = ""
 	a.sCtx.LoopHandoffPendingResults = nil
@@ -183,15 +179,11 @@ func (a *Agent) resumeHandoffInLoop(ctx context.Context) error {
 
 	a.applyLoopObservationMasking(ctx)
 	steers := a.drainSteerQueue()
-	if len(steers) > 0 {
-		a.sCtx.Mu.Lock()
-		for _, st := range steers {
-			a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-				Role:    "user",
-				Content: st,
-			})
-		}
-		a.sCtx.Mu.Unlock()
+	for _, st := range steers {
+		a.appendLoopMessages(types.Message{
+			Role:    "user",
+			Content: st,
+		})
 	}
 	metrics.RecordLoopRound(ctx)
 	a.persistLoopRoundDelta(ctx)

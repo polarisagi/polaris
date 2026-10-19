@@ -128,15 +128,11 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 
 	// 7. 消费插话队列（Steer），在轮次边界注入为 user 消息
 	steers := a.drainSteerQueue()
-	if len(steers) > 0 {
-		a.sCtx.Mu.Lock()
-		for _, st := range steers {
-			a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
-				Role:    "user",
-				Content: st,
-			})
-		}
-		a.sCtx.Mu.Unlock()
+	for _, st := range steers {
+		a.appendLoopMessages(types.Message{
+			Role:    "user",
+			Content: st,
+		})
 	}
 
 	// 8. 记录指标与持久化增量快照（P1 / ADR-0104 / HE-6）
@@ -183,14 +179,10 @@ func toolCallsToDAGPlan(calls []types.InferToolCall, taintLevel types.TaintLevel
 
 // appendToolErrorMessages 为因校验未通过而被拦截的调用构造错误响应。
 func (a *Agent) appendToolErrorMessages(calls []types.InferToolCall, errText string) {
-	a.sCtx.Mu.Lock()
-	defer a.sCtx.Mu.Unlock()
-	round := a.sCtx.LoopRound
 	for _, c := range calls {
-		a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, types.Message{
+		a.appendLoopMessages(types.Message{
 			Role:    "user",
 			Content: errText,
-			Round:   round,
 			Parts: []any{
 				map[string]any{
 					"type":        "tool_result",

@@ -224,6 +224,7 @@ func drainSteerQueueToMessages(sCtx *StateContext) bool {
 		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
 			Role:    "user",
 			Content: st,
+			Round:   sCtx.LoopRound,
 		})
 	}
 	sCtx.LoopSteerQueue = nil
@@ -270,6 +271,7 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
 			Role:    "user",
 			Content: "系统提示：当前任务模式要求显式完成，请调用 finish 工具提供总结并结束任务。",
+			Round:   sCtx.LoopRound,
 		})
 		return types.State("S_LOOP_STEP_DONE"), nil
 	}
