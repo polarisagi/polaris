@@ -49,7 +49,6 @@ surprise_hint_threshold = 0.6
 'checkpoint.throttle_max_per_turn' = 20
 'checkpoint.retention_count' = 10
 agents_max_concurrent = 4
-'loop.max_iterations' = 0
 'secret_get.max_per_turn' = 5
 loop_mode = 'agentic'
 'loop.runaway_guard_rounds' = 200
