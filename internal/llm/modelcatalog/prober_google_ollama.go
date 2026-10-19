@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -26,7 +27,7 @@ type googleModelsResp struct {
 	Models []googleModelItem `json:"models"`
 }
 
-func probeGoogle(ctx context.Context, client *http.Client, p ProviderInfo) ([]DiscoveredModel, error) {
+func probeGoogle(ctx context.Context, client network.SafeHTTPClient, p ProviderInfo) ([]DiscoveredModel, error) {
 	if p.APIKey == "" {
 		return nil, apperr.New(apperr.CodeInvalidInput, "google_agent_platform requires api_key for models.list")
 	}
@@ -41,7 +42,7 @@ func probeGoogle(ctx context.Context, client *http.Client, p ProviderInfo) ([]Di
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "probeGoogle request failed", err)
 	}
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxResponseBodyBytes))
 	_ = resp.Body.Close()
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "probeGoogle read body", err)
@@ -102,7 +103,7 @@ type ollamaModelsResp struct {
 	Models []ollamaModelItem `json:"models"`
 }
 
-func probeOllama(ctx context.Context, client *http.Client, p ProviderInfo) ([]DiscoveredModel, error) {
+func probeOllama(ctx context.Context, client network.SafeHTTPClient, p ProviderInfo) ([]DiscoveredModel, error) {
 	baseURL := strings.TrimRight(p.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
@@ -118,7 +119,7 @@ func probeOllama(ctx context.Context, client *http.Client, p ProviderInfo) ([]Di
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "probeOllama request failed", err)
 	}
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxResponseBodyBytes))
 	_ = resp.Body.Close()
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "probeOllama read body", err)

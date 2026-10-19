@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
-	"time"
 
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+// DefaultMaxResponseBodyBytes 探测响应体大小上限（8MB，R2-09）。
+const DefaultMaxResponseBodyBytes = 8 * 1024 * 1024
+
 // ProbeProviderModels 按厂商类型探测并返回其实时模型清单（ADR-0115 WP3）。
-func ProbeProviderModels(ctx context.Context, client *http.Client, p ProviderInfo) ([]DiscoveredModel, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+func ProbeProviderModels(ctx context.Context, client network.SafeHTTPClient, p ProviderInfo) ([]DiscoveredModel, error) {
+	if !client.IsSafe() || client.Client == nil {
+		return nil, apperr.New(apperr.CodeInvalidInput, "modelcatalog: SafeHTTPClient is required")
 	}
 
 	switch p.Type {
@@ -44,7 +48,7 @@ type openAIModelsResp struct {
 	Data []openAIModelItem `json:"data"`
 }
 
-func probeOpenAICompat(ctx context.Context, client *http.Client, p ProviderInfo) ([]DiscoveredModel, error) {
+func probeOpenAICompat(ctx context.Context, client network.SafeHTTPClient, p ProviderInfo) ([]DiscoveredModel, error) {
 	baseURL := strings.TrimRight(p.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
@@ -76,7 +80,7 @@ func probeOpenAICompat(ctx context.Context, client *http.Client, p ProviderInfo)
 			lastErr = err
 			continue
 		}
-		b, rErr := io.ReadAll(resp.Body)
+		b, rErr := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxResponseBodyBytes))
 		_ = resp.Body.Close()
 		if rErr != nil {
 			lastErr = rErr
@@ -140,7 +144,7 @@ type anthropicModelsResp struct {
 	LastID  string               `json:"last_id"`
 }
 
-func probeAnthropic(ctx context.Context, client *http.Client, p ProviderInfo) ([]DiscoveredModel, error) {
+func probeAnthropic(ctx context.Context, client network.SafeHTTPClient, p ProviderInfo) ([]DiscoveredModel, error) {
 	baseURL := strings.TrimRight(p.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
@@ -148,8 +152,14 @@ func probeAnthropic(ctx context.Context, client *http.Client, p ProviderInfo) ([
 
 	var allItems []anthropicModelItem
 	afterID := ""
+	const maxAnthropicPages = 50
+	pageCount := 0
 
 	for {
+		pageCount++
+		if pageCount > maxAnthropicPages {
+			break
+		}
 		page, err := fetchAnthropicPage(ctx, client, baseURL, afterID, p.APIKey)
 		if err != nil {
 			return nil, err
@@ -164,10 +174,10 @@ func probeAnthropic(ctx context.Context, client *http.Client, p ProviderInfo) ([
 	return convertAnthropicItems(allItems, p.ID), nil
 }
 
-func fetchAnthropicPage(ctx context.Context, client *http.Client, baseURL, afterID, apiKey string) (*anthropicModelsResp, error) {
+func fetchAnthropicPage(ctx context.Context, client network.SafeHTTPClient, baseURL, afterID, apiKey string) (*anthropicModelsResp, error) {
 	reqURL := baseURL + "/v1/models"
 	if afterID != "" {
-		reqURL += "?after_id=" + afterID
+		reqURL += "?after_id=" + url.QueryEscape(afterID)
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
@@ -180,7 +190,7 @@ func fetchAnthropicPage(ctx context.Context, client *http.Client, baseURL, after
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "probeAnthropic request failed", err)
 	}
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxResponseBodyBytes))
 	_ = resp.Body.Close()
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "probeAnthropic read response", err)
