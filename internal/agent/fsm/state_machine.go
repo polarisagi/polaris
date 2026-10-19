@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/google/uuid"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
@@ -267,7 +268,19 @@ type StateContext struct {
 	// 终态截断。正常（非恢复）路径下保持为空，无行为变化。
 	CompletedNodeIDs []string
 
-	// Agentic Loop 状态字段（WP2 / ADR-0115）
+	// Agentic Loop 回合状态（WP2 / ADR-0115 / R2-01）
+	AgenticTurn
+
+	// 模型自选与手选锁定（ADR-0115 WP3）
+	UserLockedModel   string // 用户手选锁定的模型引用
+	NextRoundModelRef string // 循环中 switch_model 请求在下一轮使用的模型引用
+	NextRoundThinking string // 循环中 switch_model 请求在下一轮使用的思考档位
+	CurrentModelRef   string // 当前轮次裁定生效的模型引用（ADR-0115 WP3）
+}
+
+// AgenticTurn 承载 agentic 循环单个回合的全部瞬态状态（R2-01 / ADR-0115）。
+type AgenticTurn struct {
+	TurnID                         string
 	LoopRound                      int
 	LoopMessages                   []types.Message
 	LoopRunawayLimit               int
@@ -285,12 +298,21 @@ type StateContext struct {
 	LoopLastWallSeconds            float64
 	LoopWarningInjected            bool
 	LoopSummary                    string
+}
 
-	// 模型自选与手选锁定（ADR-0115 WP3）
-	UserLockedModel   string // 用户手选锁定的模型引用
-	NextRoundModelRef string // 循环中 switch_model 请求在下一轮使用的模型引用
-	NextRoundThinking string // 循环中 switch_model 请求在下一轮使用的思考档位
-	CurrentModelRef   string // 当前轮次裁定生效的模型引用（ADR-0115 WP3）
+// ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05）。
+func (s *StateContext) ResetAgenticTurn() {
+	s.TurnID = uuid.NewString()
+	s.LoopRound = 0
+	s.LoopMessages = nil
+	s.LoopTurnStartTime = time.Time{}
+	s.LoopSteerQueue = nil
+	s.LoopPendingToolCalls = nil
+	s.LoopLastUsageTokens = 0
+	s.LoopLastUsageCost = 0
+	s.LoopLastWallSeconds = 0
+	s.LoopWarningInjected = false
+	s.LoopSummary = ""
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。

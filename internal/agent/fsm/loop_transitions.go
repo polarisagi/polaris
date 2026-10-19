@@ -7,6 +7,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -46,6 +47,27 @@ func (sm *StateMachine) registerLoopTransitions() {
 		Trigger: types.TriggerLoopDone,
 		To:      types.AgentStateComplete,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			sCtx.Mu.Lock()
+			defer sCtx.Mu.Unlock()
+			userQ := sCtx.RawIntentTS.UnsafeContent()
+			finalReply := sCtx.PreparedReply
+			if finalReply == "" {
+				finalReply = sCtx.LoopSummary
+			}
+			if finalReply == "" {
+				for i := len(sCtx.LoopMessages) - 1; i >= 0; i-- {
+					if sCtx.LoopMessages[i].Role == "assistant" && sCtx.LoopMessages[i].Content != "" {
+						finalReply = sCtx.LoopMessages[i].Content
+						break
+					}
+				}
+			}
+			if userQ != "" && finalReply != "" {
+				sCtx.ConversationHistory = append(sCtx.ConversationHistory,
+					types.Message{Role: "user", Content: userQ},
+					types.Message{Role: "assistant", Content: finalReply},
+				)
+			}
 			return nil, nil
 		},
 	})
@@ -112,6 +134,16 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	sCtx.Mu.Lock()
 	if sCtx.LoopRound == 0 {
 		sCtx.LoopRound = 1
+	}
+	if len(sCtx.LoopMessages) == 0 && !sCtx.RawIntentTS.IsEmpty() {
+		sCtx.LoopMessages = []types.Message{
+			{
+				Role:       "user",
+				Content:    taint.Spotlighting(sCtx.RawIntentTS),
+				TaintLevel: sCtx.RawIntentTS.Level(),
+				Round:      1,
+			},
+		}
 	}
 	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
 	copy(roundMsgs, sCtx.LoopMessages)
