@@ -242,6 +242,7 @@ var (
 	InstrAgentLoopTerminationTotal    metric.Int64Counter // label: reason=auto|finish|budget|guard|interrupt
 	InstrAgentObservationMaskedTotal  metric.Int64Counter
 	InstrAgentLoopToolParallelTotal   metric.Int64Counter // label: mode=parallel|serial
+	InstrAgentLoopRecallFailureTotal  metric.Int64Counter // label: polaris.agent.loop_recall_failure_total (R4-02)
 
 	// HE-1 / V9: full 档 HITL 自动放行计数
 	InstrHITLAutoApprovedTotal metric.Int64Counter

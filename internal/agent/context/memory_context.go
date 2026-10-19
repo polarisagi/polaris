@@ -61,8 +61,8 @@ func BuildPerceiveContext( //nolint:gocyclo
 		episodicQuery = intent
 	}
 	recalled, recallTaint, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
-		episodicQuery: episodicQuery,
-		episodicK:     perceiveEpisodicK,
+		EpisodicQuery: episodicQuery,
+		EpisodicK:     perceiveEpisodicK,
 	}, "BuildPerceiveContext")
 	if err != nil {
 		return nil, err
@@ -190,9 +190,9 @@ func writePlanRecall(
 	// 复用本回合 Perceive 的召回：情景记忆已查过则不再查，只用已解析的 Goal 补 反思/L2/RAG；
 	// Perceive 被跳过或召回被放弃、且 Goal 非空时才补查情景（ADR-0105 决策四）。
 	recalled, recallTaint, err := turnRecallText(ctx, memory, cognitive, sCtx, recallWant{
-		episodicQuery: queryStr,
-		episodicK:     planEpisodicK,
-		goal:          queryStr,
+		EpisodicQuery: queryStr,
+		EpisodicK:     planEpisodicK,
+		Goal:          queryStr,
 	}, "BuildPlanContext")
 	if err != nil {
 		return err

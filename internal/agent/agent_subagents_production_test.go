@@ -156,7 +156,7 @@ func TestSubagentControl_ProductionAssembly(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			subAgent.sCtx.Mu.Lock()
 			for _, msg := range subAgent.sCtx.LoopSteerQueue {
-				if msg == steerText {
+				if msg.UnsafeContent() == steerText {
 					foundSteer = true
 					break
 				}

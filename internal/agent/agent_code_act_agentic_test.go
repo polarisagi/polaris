@@ -267,9 +267,20 @@ except Exception as e:
 	}
 }
 
-// TestAgenticCodeAct_TaintPropagation 验证脚本读到 TaintHigh 结果后，code_act 结果与全局污点为 High。
+// TestAgenticCodeAct_TaintPropagation 验证在 full 档（不阻断高污点）下，脚本读到 TaintHigh 结果后，code_act 结果与全局污点为 High。
 func TestAgenticCodeAct_TaintPropagation(t *testing.T) {
 	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+	origCfg := config.Get()
+	defer config.Update(origCfg)
+
+	var newCfg config.Config
+	if origCfg != nil {
+		newCfg = *origCfg
+	}
+	newCfg.Security.TrustProfile = "full"
+	newCfg.Thresholds.M4Kernel.LoopMode = "agentic"
+	config.Update(&newCfg)
+
 	bridgeExec := newCodeActTestBridgeExecutor()
 	caAdapter := setupCodeActProductionEngine(t, bridgeExec)
 

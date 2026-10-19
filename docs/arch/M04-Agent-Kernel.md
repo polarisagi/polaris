@@ -2,7 +2,7 @@
 
 > Go 状态机持有控制流，LLM 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 > 代码位置：`internal/agent/`（FSM 在 `internal/agent/fsm/`；DAG 执行器与 S_VALIDATE 四层校验物理实现在 `internal/execute/dag/`，ADR-0046；FSM 经 `internal/agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口驱动，唯一决定何时进入 S_EXECUTE/S_VALIDATE）。
-<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:166 Suspend-on-Idle / 3:182 S_VALIDATE / 4:221 DAG（Directed Acyclic Graph，有向无环图） / 5:291 System1/2 / 6:315 WorldModel / 7:323 推理预算 / 8:370 CrashRecovery / 8-bis:407 Handoff唤醒事件化+无损续跑 / 12:417 已知Bug修复记录 / 13:423 (SOFT)降级 / 14:440 481 跨模块契约 / 15:464 505 默认参数 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:167 Suspend-on-Idle / 3:183 S_VALIDATE / 4:222 DAG（Directed Acyclic Graph，有向无环图） / 5:292 System1/2 / 6:316 WorldModel / 7:324 推理预算 / 8:371 CrashRecovery / 8-bis:408 Handoff唤醒事件化+无损续跑 / 12:418 已知Bug修复记录 / 13:424 (SOFT)降级 / 14:441 481 跨模块契约 / 15:465 505 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -40,9 +40,9 @@ System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath�
 > 经典阶段式状态机（staged 模式：S_PERCEIVE → S_PLAN → S_VALIDATE → S_EXECUTE → S_REFLECT → S_RESPOND）已**冻结**，保留作为程序兜底机制与对比基线。
 > 默认运行模式为自主循环架构（agentic 模式：见 §1.2），由模型原生驱动工具调用，程序保证安全闸门与失控熔断。
 
-状态枚举权威定义：`pkg/types/enums_agent.go`（AgentState 共 **14 态**：Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed/Respond；Respond 追加在枚举尾部以保持落盘状态值不变，ADR-0098 决策二）。转移注册：`internal/agent/fsm/transitions.go` + `internal/agent/fsm/transitions_respond.go`。`[HE-Rule-5]` LLM 结构化填空三态输出：TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)；S_RESPOND 是唯一面向用户的自由文本态（§1.1）。
+状态枚举权威定义：`pkg/types/enums_agent.go`（AgentState 共 **18 态**：Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Complete/Failed/Interrupt/Suspended/AwaitAgent/Respond/Loop/LoopExec/LoopAwait/LoopRecall，ADR-0098 决策二 / ADR-0115 / R4-02）。转移注册：`internal/agent/fsm/transitions.go` + `internal/agent/fsm/transitions_respond.go` + `internal/agent/fsm/loop_transitions.go`。`[HE-Rule-5]` LLM 结构化填空三态输出：TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)；S_RESPOND 是唯一面向用户的自由文本态（§1.1）。
 
-分类：6 主执行态（Perceive/Plan/Validate/Execute/Reflect/Respond）、2 恢复态（Replan/Rollback）、1 中断态（Interrupt）、1 挂起态（Suspended：Suspend-on-Idle 与 provider_exhausted）、1 等待态（AwaitAgent：Handoff 子任务终态前阻塞，`TriggerAwaitAgent` 进 / `TriggerAgentHandoffDone` 出）、2 终态（Complete/Failed）、Idle。
+分类：6 经典主执行态（Perceive/Plan/Validate/Execute/Reflect/Respond）、2 经典恢复态（Replan/Rollback）、1 中断态（Interrupt）、1 挂起态（Suspended：Suspend-on-Idle 与 provider_exhausted）、1 经典等待态（AwaitAgent：Handoff 子任务终态前阻塞，`TriggerAwaitAgent` 进 / `TriggerAgentHandoffDone` 出）、2 终态（Complete/Failed）、Idle、4 自主循环态（Loop/LoopExec/LoopAwait/LoopRecall）。
 
 `ReflectionModel` = `{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后 `Learnings` 非空则逐条写入 episodic（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断流转。
 
@@ -123,13 +123,13 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
 自主循环内核采用「模型驱动、程序兜底」架构（ADR-0115），模型直接面对会话上下文生成文本或发起工具调用：
 
 ```text
-S_IDLE ──(TriggerIntentReceived)──→ S_LOOP ──(TriggerLoopStepDone)──→ S_LOOP_EXEC ──(TriggerLoopExecDone)──→ S_LOOP ──(TriggerLoopDone)──→ S_COMPLETE
-                                      │                                  │                                     ↑
-                                      │                                  ├──(spawn_subagent wait=all)          │
-                                      │                                  ↓                                     │
-                                      │                             S_LOOP_AWAIT ──(TriggerLoopHandoffResume)──┘
-                                      │                                                                        ↑
-                                      └──(无工具调用 / 最终回答)────────────────────────────────────────────────┘
+S_IDLE ──(TriggerIntentReceived)──→ S_LOOP_RECALL ──(TriggerLoopRecallDone)──→ S_LOOP ──(TriggerLoopStepDone)──→ S_LOOP_EXEC ──(TriggerLoopExecDone)──→ S_LOOP ──(TriggerLoopDone)──→ S_COMPLETE
+                                                                                 │                                  │                                     ↑
+                                                                                 │                                  ├──(spawn_subagent wait=all)          │
+                                                                                 │                                  ↓                                     │
+                                                                                 │                             S_LOOP_AWAIT ──(TriggerLoopHandoffResume)──┘
+                                                                                 │                                                                        ↑
+                                                                                 └──(无工具调用 / 最终回答)────────────────────────────────────────────────┘
 ```
 
 1. **回合结构与跨轮隔离（AgenticTurn，R2-01）**：引入结构化 `AgenticTurn`，首轮自动将用户意图（`RawIntentTS`）作为 Round 1 user 消息注入模型上下文。回合生命周期由 `ResetAgenticTurn()` 统一管理，每回合清零瞬态轮次、消息列表、待执行调用、预算计数、警告标记与插话队列，并派发新的 `TurnID`，彻底防止跨回合状态残留与答非所问。
@@ -141,11 +141,12 @@ S_IDLE ──(TriggerIntentReceived)──→ S_LOOP ──(TriggerLoopStepDone)
 7. **双重失控保护与易变收尾提示（R2-17）**：
    - 软保护：达到 `LoopWarningRounds` 或首触 USD/Tokens/Wall 预算上限时，向易变区（与 T7 计量行同位）注入 `Role: "user"` 的收尾告警提示词，严禁使用 system 角色或追加至历史末尾，避免污染消息流与破坏 Anthropic 前缀缓存；
    - 硬保护：达到 `RunawayGuardDefaultRounds`（standard 200 轮，hardened 50 轮）或次轮仍未收尾时强行熔断并转移至 `S_FAILED`。
-8. **网关插话与控制**：用户在多轮循环执行期间可随时发送新消息或转向指令，内核在下一步模型调用前合并插话内容，支持流式交互与动态中断。
-9. **代码执行（code_act）与规划器工具收敛（R3-02）**：自主循环模式下，工具列表中下发 `code_act` 工具 schema（支持 Python/Bash 脚本与专用 `polaris.call` 工具桥，仅 print 输出返回），底层由共享方法 `(a *Agent) runCodeAct` 执行并经过 S_VALIDATE 校验（规范化为 `code_act:<lang>`），通过本地 Unix Socket 目录 `0700` 与每次运行独立的 Bearer Token 进行双向鉴权与 Cedar 权限拦截；同时从工具列表中永久移除 `spawn_planner`（规划由模型在自主循环中原生驱动完成，无需后台子规划器挂起中断）。
+8. **网关插话与污点定级（R4-05）**：用户在多轮循环执行期间可随时发送新消息或转向指令（Steer）。内核将插话在入队时封装为 `taint.TaintedString`（`OriginTaintLevel: TaintHigh`），在主循环单线程消费注入时统一执行 Spotlighting 并提升全局污点等级，确保下一轮任何写类或网络类工具调用均受到严格的 TaintHigh 权限拦截与审计。
+9. **代码执行（code_act）与持久会话（R3-02, R4-01, R4-03）**：自主循环模式下，工具列表中下发 `code_act` 工具 schema（支持 Python/Bash 脚本与专用 `polaris.call` 工具桥，仅 print 输出返回）。执行结果严格执行 `taint.SanitizeToSafe` 污点清洗；schema 明确声明 `session_id`（string）参数，当调用方传入非空 `session_id` 时自动开启持久会话，隔离键限定于当前 Agent 会话空间（`agentSessionID:session_id`），杜绝跨会话串用与变量污染。
 10. **控制通道与事件流解耦（R3-04）**：子智能体（如 Headless Worker、Subagent Runner）的控制通道与事件流彻底解耦。控制指令（Stop / Cancel / Interrupt）经由独立的专用控制 channel 发送，严格通过正确的全局会话标识路由；业务事件流（StreamCallback / EventCallback）仅用于向下游或父 Agent 投递感知、执行与输出事件。彻底杜绝将控制信令注入事件流或会话名混淆引起的死锁与回环。
-11. **显式任务完成与双重防浪费兜底（finish 工具，R3-07）**：委派任务、Headless 任务及后台自动化任务默认启用显式完成判定（`LoopCompletion="explicit"`）。在此模式下，内核向模型下发 `finish{summary: string}` 工具 schema，模型必须通过调用 `finish` 提交任务总结并结束循环；若模型在 explicit 模式下出现指令遵循退化，连续 2 轮仅输出纯文本而未调用 `finish`，内核自动触发防浪费兜底（`implicit_finish`），提取最后一段文本作为任务总结，打点 `polaris.agent.loop_termination_total{reason="implicit_finish"}` 并安全收尾，避免消耗至 200 轮硬熔断上限导致 token 巨额浪费。
-12. **统一轮次追加入口与后台异步崩溃恢复（R3-06）**：内核收敛所有循环消息追加入口至 `appendLoopMessages`，加锁统一标记当前轮次 `Round`，杜绝遗漏轮次标记导致的增量持久化丢失；启动路径上的崩溃循环恢复（`recoverAgenticLoopTurns`）移至后台受限并发（≤ 2）运行，启动函数 1 秒内非阻塞返回，避免海量悬停任务阻塞系统启动主路径。
+11. **回合级完成模式与防浪费兜底（finish 工具，R3-07, R4-04）**：完成模式（`LoopCompletion`）从会话级彻底下沉为回合级字段（`AgenticTurn.LoopCompletion`），回合默认值为 `auto`（模型直接给出文本即自然完成），解除按会话复用 Agent 实例时对人类对话渠道的错误黏附。仅由调用方（`default_worker`、`cron`、`workflow`）显式声明时才开启 `explicit` 模式并下发 `finish{summary: string}` 工具；若模型在 explicit 模式下连续 2 轮仅输出纯文本而未调用 `finish`，内核自动触发防浪费兜底（`implicit_finish`），提取最后一段文本作为任务总结，打点 `polaris.agent.loop_termination_total{reason="implicit_finish"}` 并安全收尾，避免消耗至 200 轮硬熔断上限导致 token 巨额浪费。
+12. **统一轮次追加入口与后台异步崩溃恢复（R3-06, R4-06）**：内核将所有循环消息追加入口统一下沉至 `fsm.StateContext.AppendLoopMessages`，加锁统一标记当前轮次 `Round`，杜绝遗漏轮次标记导致的增量持久化丢失；门控测试全域递归扫描禁止直接改写 `LoopMessages`。启动路径上的崩溃循环恢复（`recoverAgenticLoopTurns`）移至后台受限并发（≤ 2）运行，启动函数 1 秒内非阻塞返回，避免海量悬停任务阻塞系统启动主路径。
+13. **回合自动记忆召回（S_LOOP_RECALL，R4-02）**：自主循环回合起点引入确定性 Effect 步骤 `S_IDLE → S_LOOP_RECALL（状态 17）→ S_LOOP`。在 FSM 锁外调用统一记忆召回管线（`TurnRecallText`），召回情景记忆与知识库，结果以 `## Recalled Context` 注入本回合首条 user 消息，并合并污点定级（`TaintLevel`）。若召回失败，自动降级为无召回并记录指标 `polaris.agent.loop_recall_failure_total`，不阻断回合。寒暄快路（`tryPhaticBypass`）跳过召回。
 
 **回合上下文（ADR-0105）**
 

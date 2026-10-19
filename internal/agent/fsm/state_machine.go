@@ -291,8 +291,9 @@ type AgenticTurn struct {
 	LoopObservationMaskAfterRounds int
 	LoopObservationMaskBatch       int
 	LoopCompletion                 string
+	PendingLoopCompletion          string
 	LoopTurnStartTime              time.Time
-	LoopSteerQueue                 []string
+	LoopSteerQueue                 []taint.TaintedString
 	LoopPendingToolCalls           []types.InferToolCall
 	LoopLastUsageTokens            int
 	LoopLastUsageCost              float64
@@ -307,7 +308,7 @@ type AgenticTurn struct {
 	LoopConsecutiveTextRounds      int
 }
 
-// ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05）。
+// ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05 / R4-04）。
 func (s *StateContext) ResetAgenticTurn() {
 	s.TurnID = uuid.NewString()
 	s.LoopRound = 0
@@ -323,6 +324,16 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopSummary = ""
 	s.LoopConsecutiveTextRounds = 0
 
+	// R4-04: 完成模式重置为 auto，若有预设的下次回合模式则消费它；若调用方在此之前显式设置了非 auto 模式则消费它
+	if s.PendingLoopCompletion != "" {
+		s.LoopCompletion = s.PendingLoopCompletion
+		s.PendingLoopCompletion = ""
+	} else if s.LoopCompletion != "" && s.LoopCompletion != "auto" {
+		// 消费外部直接设置的完成模式，回合结束时由 TriggerLoopDone 清回 auto
+	} else {
+		s.LoopCompletion = "auto"
+	}
+
 	s.LoopEnding = false
 	s.LoopHandoffPendingResults = nil
 	s.LoopHandoffToolCalls = nil
@@ -333,6 +344,57 @@ func (s *StateContext) ResetAgenticTurn() {
 		s.HandoffWatchCancel()
 		s.HandoffWatchCancel = nil
 	}
+}
+
+// AppendLoopMessages 是向当前回合追加消息的统一入口（R4-06）。
+// 加锁保护并统一为未设置轮次的消息打上当前 LoopRound。
+func (s *StateContext) AppendLoopMessages(msgs ...types.Message) {
+	if s == nil || len(msgs) == 0 {
+		return
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	round := s.LoopRound
+	for i := range msgs {
+		if msgs[i].Round <= 0 {
+			msgs[i].Round = round
+		}
+	}
+	s.LoopMessages = append(s.LoopMessages, msgs...)
+}
+
+// DrainSteerQueueToMessages 检查并出队插话队列，作为带污点（TaintHigh）的 Spotlighting 清洗 user 消息注入模型上下文（R4-05）。
+// 所有注入点统一收敛至此方法。
+func (s *StateContext) DrainSteerQueueToMessages() bool {
+	if s == nil {
+		return false
+	}
+	s.Mu.Lock()
+	if len(s.LoopSteerQueue) == 0 {
+		s.Mu.Unlock()
+		return false
+	}
+	steers := make([]taint.TaintedString, len(s.LoopSteerQueue))
+	copy(steers, s.LoopSteerQueue)
+	s.LoopSteerQueue = nil
+	round := s.LoopRound
+	if s.GlobalTaintLevel < types.TaintHigh {
+		s.GlobalTaintLevel = types.TaintHigh
+	}
+	s.Mu.Unlock()
+
+	msgs := make([]types.Message, 0, len(steers))
+	for _, st := range steers {
+		msgs = append(msgs, types.Message{
+			Role:       "user",
+			Content:    taint.Spotlighting(st),
+			TaintLevel: st.Level(),
+			Round:      round,
+		})
+	}
+	s.AppendLoopMessages(msgs...)
+	return true
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。

@@ -3,11 +3,9 @@ package fsm
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
-	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -16,6 +14,16 @@ import (
 // registerLoopTransitions 注册 Agentic 循环所需的状态机转移（ADR-0115 / WP2）。
 // 包含 S_LOOP 与 S_LOOP_EXEC 的双向推进及完成退出。
 func (sm *StateMachine) registerLoopTransitions() {
+	// S_LOOP_RECALL → S_LOOP: 记忆召回完成，首条 user 消息已种入，进入第 1 轮 LLM 推理
+	sm.add(Transition{
+		From:    types.AgentStateLoopRecall,
+		Trigger: types.TriggerLoopRecallDone,
+		To:      types.AgentStateLoop,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{sm.loopEffect(sCtx)}, nil
+		},
+	})
+
 	// S_LOOP → S_LOOP_EXEC: 模型返回了工具调用，进入执行阶段
 	sm.add(Transition{
 		From:    types.AgentStateLoop,
@@ -91,6 +99,8 @@ func (sm *StateMachine) registerLoopTransitions() {
 					types.Message{Role: "assistant", Content: finalReply},
 				)
 			}
+			sCtx.LoopCompletion = "auto"
+			sCtx.PendingLoopCompletion = ""
 			return nil, nil
 		},
 	})
@@ -131,6 +141,11 @@ func (sm *StateMachine) registerLoopTransitions() {
 			return nil, nil
 		},
 	})
+}
+
+// executeLoopRecall 是 S_LOOP_RECALL 阶段的 DeterministicEffect 存根（在 Agent 拦截）。
+func (sm *StateMachine) executeLoopRecall(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
+	return types.State("S_LOOP_RECALL_DONE"), nil
 }
 
 // executeLoopStep 是 S_LOOP_EXEC 阶段的 DeterministicEffect 存根。
@@ -175,20 +190,20 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	if sCtx.LoopRound == 0 {
 		sCtx.LoopRound = 1
 	}
-	if len(sCtx.LoopMessages) == 0 && !sCtx.RawIntentTS.IsEmpty() {
-		content := taint.Spotlighting(sCtx.RawIntentTS)
-		if sCtx.TurnRecall != nil && sCtx.TurnRecall.Text != "" {
-			content = "## Recalled Context\n" + sCtx.TurnRecall.Text + "\n\n" + content
-		}
-		sCtx.LoopMessages = []types.Message{
-			{
-				Role:       "user",
-				Content:    content,
-				TaintLevel: sCtx.RawIntentTS.Level(),
-				Round:      1,
-			},
-		}
+	rawTS := sCtx.RawIntentTS
+	hasMsgs := len(sCtx.LoopMessages) > 0
+	sCtx.Mu.Unlock()
+
+	if !hasMsgs && !rawTS.IsEmpty() {
+		sCtx.AppendLoopMessages(types.Message{
+			Role:       "user",
+			Content:    taint.Spotlighting(rawTS),
+			TaintLevel: rawTS.Level(),
+			Round:      1,
+		})
 	}
+
+	sCtx.Mu.Lock()
 	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
 	copy(roundMsgs, sCtx.LoopMessages)
 
@@ -218,35 +233,24 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	return msgs
 }
 
-// drainSteerQueueToMessages 检查并出队插话队列，作为 user 消息注入模型上下文。
-func drainSteerQueueToMessages(sCtx *StateContext) bool {
-	if len(sCtx.LoopSteerQueue) == 0 {
-		return false
-	}
-	for _, st := range sCtx.LoopSteerQueue {
-		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
-			Role:    "user",
-			Content: st,
-			Round:   sCtx.LoopRound,
-		})
-	}
-	sCtx.LoopSteerQueue = nil
-	return true
-}
-
 // onLoopSuccess 处理单轮 LLM 输出判定。
 func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.State, error) {
 	sCtx.Mu.Lock()
-	defer sCtx.Mu.Unlock()
+	calls := make([]types.InferToolCall, len(sCtx.LoopPendingToolCalls))
+	copy(calls, sCtx.LoopPendingToolCalls)
+	sCtx.Mu.Unlock()
 
 	// 检查是否有 finish 调用
-	for _, call := range sCtx.LoopPendingToolCalls {
+	for _, call := range calls {
 		if call.Name == "finish" {
-			// 判定完成前先检查插话队列（R2-12）
-			if drainSteerQueueToMessages(sCtx) {
+			// 判定完成前先检查插话队列（R2-12 / R4-05）
+			if sCtx.DrainSteerQueueToMessages() {
+				sCtx.Mu.Lock()
 				sCtx.LoopPendingToolCalls = nil
+				sCtx.Mu.Unlock()
 				return types.State("S_LOOP_STEER"), nil
 			}
+			sCtx.Mu.Lock()
 			sCtx.LoopEnding = true
 			var sumArgs struct {
 				Summary string `json:"summary"`
@@ -257,49 +261,60 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 				sCtx.LoopSummary = string(call.Input)
 			}
 			sCtx.LoopPendingToolCalls = nil
+			sCtx.Mu.Unlock()
 			metrics.RecordLoopTermination(context.Background(), "finish")
 			return types.State("S_LOOP_DONE"), nil
 		}
 	}
 
 	// 检查是否有常规工具调用
-	if len(sCtx.LoopPendingToolCalls) > 0 {
+	if len(calls) > 0 {
+		sCtx.Mu.Lock()
 		sCtx.LoopConsecutiveTextRounds = 0
+		sCtx.Mu.Unlock()
 		return types.State("S_LOOP_STEP_DONE"), nil
 	}
 
 	// 连续纯文本轮次计数（R3-07）
+	sCtx.Mu.Lock()
 	sCtx.LoopConsecutiveTextRounds++
+	consecutiveText := sCtx.LoopConsecutiveTextRounds
+	completion := sCtx.LoopCompletion
+	round := sCtx.LoopRound
+	sCtx.Mu.Unlock()
 
 	// 无工具调用且 auto 完成模式下，认为文本输出即收尾回复
-	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12）
-	if drainSteerQueueToMessages(sCtx) {
+	// 判定完成之前先检查插话队列，非空时不结束，注入插话后继续下一轮（R2-12 / R4-05）
+	if sCtx.DrainSteerQueueToMessages() {
 		return types.State("S_LOOP_STEER"), nil
 	}
 
-	completion := sCtx.LoopCompletion
 	if completion == "" {
 		completion = config.CurrentThresholds().M4Kernel.LoopCompletion
 	}
 	if completion == "explicit" {
 		// 防浪费兜底：explicit 模式下，模型连续 2 轮只给文本、不调用 finish，就把最后一段文本当作 summary 收尾，并计数 polaris.agent.loop_termination_total{reason="implicit_finish"} (R3-07)。
-		if sCtx.LoopConsecutiveTextRounds >= 2 {
+		if consecutiveText >= 2 {
+			sCtx.Mu.Lock()
 			sCtx.LoopEnding = true
 			sCtx.LoopSummary = getLastAssistantText(sCtx, fill)
+			sCtx.Mu.Unlock()
 			metrics.RecordLoopTermination(context.Background(), "implicit_finish")
 			return types.State("S_LOOP_DONE"), nil
 		}
 
 		// 显式模式下未调用 finish 时要求模型确认完成并继续循环
-		sCtx.LoopMessages = append(sCtx.LoopMessages, types.Message{
+		sCtx.AppendLoopMessages(types.Message{
 			Role:    "user",
 			Content: "系统提示：当前任务模式要求显式完成，请调用 finish 工具提供总结并结束任务。",
-			Round:   sCtx.LoopRound,
+			Round:   round,
 		})
 		return types.State("S_LOOP_STEP_DONE"), nil
 	}
 
+	sCtx.Mu.Lock()
 	sCtx.LoopEnding = true
+	sCtx.Mu.Unlock()
 	metrics.RecordLoopTermination(context.Background(), "auto")
 	return types.State("S_LOOP_DONE"), nil
 }
@@ -307,83 +322,4 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 // onLoopFailure 处理 LLM 推理失败。
 func (sm *StateMachine) onLoopFailure(sCtx protocol.StateContext, err error) (types.State, error) {
 	return types.State("S_LOOP_FAILED"), err
-}
-
-func getLastAssistantText(sCtx *StateContext, fill []byte) string {
-	if len(fill) > 0 {
-		return string(fill)
-	}
-	if len(sCtx.LoopMessages) > 0 {
-		lastMsg := sCtx.LoopMessages[len(sCtx.LoopMessages)-1]
-		if lastMsg.Role == "assistant" {
-			return lastMsg.Content
-		}
-	}
-	return ""
-}
-
-func formatUsageLine(tokens int, cost float64, wallSeconds float64) string {
-	return "[usage] tokens=" + itoa(tokens) + " cost≈$" + formatCost(cost) + " wall=" + itoa(int(wallSeconds)) + "s"
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b [20]byte
-	bp := len(b)
-	neg := i < 0
-	u := uint(i)
-	if neg {
-		u = uint(-i)
-	}
-	for u > 0 {
-		bp--
-		b[bp] = byte('0' + u%10)
-		u /= 10
-	}
-	if neg {
-		bp--
-		b[bp] = '-'
-	}
-	return string(b[bp:])
-}
-
-func formatCost(c float64) string {
-	if c <= 0 {
-		return "0.0000"
-	}
-	cents := int(c * 10000)
-	intPart := cents / 10000
-	fracPart := cents % 10000
-	fracStr := itoa(fracPart)
-	for len(fracStr) < 4 {
-		fracStr = "0" + fracStr
-	}
-	return itoa(intPart) + "." + fracStr
-}
-
-func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx *StateContext, roundMsgs []types.Message) []types.Message {
-	b := prompt.NewPromptBuilder()
-	if wErr := WriteSessionLayer(ctx, b, mem, sCtx); wErr != nil {
-		slog.WarnContext(ctx, "agentic_loop: WriteSessionLayer fallback failed", "err", wErr)
-	}
-	WriteConversationHistory(b, sCtx)
-	sCtx.Mu.RLock()
-	warnPrompt := sCtx.LoopWarningPrompt
-	sCtx.Mu.RUnlock()
-
-	if len(roundMsgs) == 0 {
-		sCtx.Mu.RLock()
-		intent := sCtx.RawIntentTS
-		sCtx.Mu.RUnlock()
-		if !intent.IsEmpty() {
-			b.WriteUserData(intent)
-		}
-		return FinishAgenticLayered(b, mem, "", warnPrompt)
-	}
-	for _, m := range roundMsgs {
-		b.WriteTurnMessage(m)
-	}
-	return FinishAgenticLayered(b, mem, "", warnPrompt)
 }

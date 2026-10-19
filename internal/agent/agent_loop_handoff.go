@@ -48,7 +48,6 @@ func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.In
 	if err := a.checkPlanAgainstProfile(plan); err != nil {
 		slog.WarnContext(ctx, "agentic_loop: plan rejected by profile", "err", err)
 		a.appendToolErrorMessages(calls, "Forbidden: tool violates agent profile policy: "+err.Error())
-		a.asyncIntent(types.TriggerLoopExecDone)
 		return false, nil
 	}
 
@@ -56,13 +55,11 @@ func (a *Agent) executeBatchWithDelegation(ctx context.Context, calls []types.In
 	if a.dagValidator == nil {
 		slog.ErrorContext(ctx, "agentic_loop: security validator is missing (fail-closed)")
 		a.appendToolErrorMessages(calls, "Internal: security validator is missing (fail-closed)")
-		a.asyncIntent(types.TriggerLoopExecDone)
 		return false, nil
 	}
 	if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
 		slog.WarnContext(ctx, "agentic_loop: plan rejected by taint review", "err", err)
 		a.appendToolErrorMessages(calls, "Forbidden: action rejected by security policy: "+err.Error())
-		a.asyncIntent(types.TriggerLoopExecDone)
 		return false, nil
 	}
 	a.recordValidatedPlan(plan)
@@ -178,13 +175,8 @@ func (a *Agent) resumeHandoffInLoop(ctx context.Context) error {
 	a.sCtx.Mu.Unlock()
 
 	a.applyLoopObservationMasking(ctx)
-	steers := a.drainSteerQueue()
-	for _, st := range steers {
-		a.appendLoopMessages(types.Message{
-			Role:    "user",
-			Content: st,
-		})
-	}
+	// 消费插话队列（Steer），在轮次边界注入为 user 消息（R4-05）
+	a.sCtx.DrainSteerQueueToMessages()
 	metrics.RecordLoopRound(ctx)
 	a.persistLoopRoundDelta(ctx)
 

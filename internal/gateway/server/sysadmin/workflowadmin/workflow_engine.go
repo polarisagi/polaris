@@ -355,6 +355,7 @@ func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, 
 		WorkingDir:      workingDir,
 		TitleHint:       name,
 		ReasoningEffort: reasoningEffort,
+		LoopCompletion:  "explicit",
 	}
 	res, err := h.SessionOrch.RunTurn(ctx, req, session.NewBufferSink())
 	if err != nil {

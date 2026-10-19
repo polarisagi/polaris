@@ -22,14 +22,14 @@ meta:
   go_package: internal/protocol
 
 # =============================================================================
-# §par: M4 Plan-Act-Reflect 17-state machine (WP2 agentic loop 追加 s_loop, s_loop_exec, s_loop_await)
+# §par: M4 Plan-Act-Reflect 18-state machine (WP2 agentic loop 追加 s_loop, s_loop_exec, s_loop_await, s_loop_recall)
 # =============================================================================
 
 par:
   description: |
     M4 default state machine. Single Agent task lifecycle.
     LLM is co-processor; Go state machine owns control flow (invariant 6).
-    6 main states (perceive/plan/validate/execute/reflect/respond) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended + s_await_agent + 3 agentic loop states (s_loop/s_loop_exec/s_loop_await, ADR-0115) = 17 states.
+    6 main states (perceive/plan/validate/execute/reflect/respond) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended + s_await_agent + 4 agentic loop states (s_loop/s_loop_exec/s_loop_await/s_loop_recall, ADR-0115) = 18 states.
     s_respond 是回合唯一的用户回复出口（ADR-0098）：直答（perceive 判定无需工具 / plan 得空 DAG）
     与执行后（reflect 完成）两路汇入，s_complete 的唯一前驱。只有 s_respond 的 llm_fill 为
     audience=user，其余阶段输出只进结构化解析、不向用户推送 token（par_inv_06）。
@@ -57,6 +57,7 @@ par:
     - s_loop
     - s_loop_exec
     - s_loop_await
+    - s_loop_recall
 
   transitions:
     - from: s_idle
@@ -235,11 +236,16 @@ par:
       to: s_idle
       effect: { kind: deterministic, fn: write_session_error_event }
 
-    # Agentic Loop (ADR-0115, WP2)
+    # Agentic Loop (ADR-0115, WP2 / R4-02)
     - from: s_idle
       event: new_intent
-      to: s_loop
+      to: s_loop_recall
       guard: { fn: loop_mode_is_agentic }
+      effect: { kind: deterministic, fn: loop_recall }
+
+    - from: s_loop_recall
+      event: loop_recall_done
+      to: s_loop
 
     - from: s_loop
       event: loop_step_done

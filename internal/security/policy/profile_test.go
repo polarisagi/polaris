@@ -47,6 +47,9 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	if p.CodeActAllToolsAllowed {
 		t.Error("standard: CodeActAllToolsAllowed should be false")
 	}
+	if !p.CodeActTaintBlockEnabled {
+		t.Error("standard: CodeActTaintBlockEnabled should be true")
+	}
 	if !p.JobsKillOnSessionEnd {
 		t.Error("standard: JobsKillOnSessionEnd should be true")
 	}
@@ -109,6 +112,9 @@ func TestProfilePolicy_Full(t *testing.T) {
 	if !p.CodeActAllToolsAllowed {
 		t.Error("full: CodeActAllToolsAllowed should be true")
 	}
+	if p.CodeActTaintBlockEnabled {
+		t.Error("full: CodeActTaintBlockEnabled should be false")
+	}
 	if p.JobsKillOnSessionEnd {
 		t.Error("full: JobsKillOnSessionEnd should be false")
 	}
@@ -166,6 +172,9 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if p.CodeActAllToolsAllowed {
 		t.Error("hardened: CodeActAllToolsAllowed should be false")
+	}
+	if !p.CodeActTaintBlockEnabled {
+		t.Error("hardened: CodeActTaintBlockEnabled should be true")
 	}
 	if !p.JobsKillOnSessionEnd {
 		t.Error("hardened: JobsKillOnSessionEnd should be true")

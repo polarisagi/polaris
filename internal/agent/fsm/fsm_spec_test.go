@@ -74,6 +74,8 @@ func stateToString(s types.AgentState) string {
 		return "s_loop_exec"
 	case types.AgentStateLoopAwait:
 		return "s_loop_await"
+	case types.AgentStateLoopRecall:
+		return "s_loop_recall"
 	default:
 		return "unknown"
 	}
@@ -133,6 +135,8 @@ func triggerToString(t types.AgentTrigger) string {
 		return "loop_done"
 	case types.TriggerLoopSteer:
 		return "loop_steer"
+	case types.TriggerLoopRecallDone:
+		return "loop_recall_done"
 	default:
 		return "unknown"
 	}
@@ -192,7 +196,10 @@ func TestFSM_Spec(t *testing.T) {
 		exemptStates["s_loop"] = true
 		exemptStates["s_loop_exec"] = true
 		exemptStates["s_loop_await"] = true
+		exemptStates["s_loop_recall"] = true
 		exemptTransitions[trKey{"s_idle", "new_intent", "s_loop"}] = true
+		exemptTransitions[trKey{"s_idle", "new_intent", "s_loop_recall"}] = true
+		exemptTransitions[trKey{"s_loop_recall", "loop_recall_done", "s_loop"}] = true
 		exemptTransitions[trKey{"s_loop", "loop_step_done", "s_loop_exec"}] = true
 		exemptTransitions[trKey{"s_loop_exec", "loop_exec_done", "s_loop"}] = true
 		exemptTransitions[trKey{"s_loop", "loop_done", "s_complete"}] = true

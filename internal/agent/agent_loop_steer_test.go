@@ -38,23 +38,22 @@ func TestAgenticLoop_SteerQueue_InjectedAtRoundBoundary(t *testing.T) {
 		t.Fatal("流中未收到 steer_accepted 事件")
 	}
 
-	// 2. 模拟轮次边界消费
-	steers := agent.drainSteerQueue()
-	if len(steers) != 1 || steers[0] != "用户插话：请优先关注错误日志" {
-		t.Fatalf("出队插话不符: %v", steers)
-	}
-
-	for _, st := range steers {
-		agent.appendLoopMessages(types.Message{
-			Role:    "user",
-			Content: st,
-		})
+	// 2. 模拟轮次边界消费（内部统一调用 sCtx.DrainSteerQueueToMessages）
+	drained := agent.drainSteerQueue()
+	if !drained {
+		t.Fatal("drainSteerQueue 应返回 true")
 	}
 
 	agent.sCtx.Mu.Lock()
 	defer agent.sCtx.Mu.Unlock()
 	if len(agent.sCtx.LoopMessages) != 1 || agent.sCtx.LoopMessages[0].Role != "user" {
 		t.Fatalf("插话必须作为 user 消息注入模型上下文: %+v", agent.sCtx.LoopMessages)
+	}
+	if agent.sCtx.LoopMessages[0].TaintLevel != types.TaintHigh {
+		t.Fatalf("插话必须标记为 TaintHigh: %v", agent.sCtx.LoopMessages[0].TaintLevel)
+	}
+	if !strings.Contains(agent.sCtx.LoopMessages[0].Content, "=== UNTRUSTED_DATA_") {
+		t.Fatalf("插话必须经过 Spotlighting 包装: %s", agent.sCtx.LoopMessages[0].Content)
 	}
 }
 
@@ -159,7 +158,7 @@ func TestPool_TrySteer(t *testing.T) {
 
 	ag.sCtx.Mu.Lock()
 	defer ag.sCtx.Mu.Unlock()
-	if len(ag.sCtx.LoopSteerQueue) != 1 || ag.sCtx.LoopSteerQueue[0] != "steer text in loop" {
+	if len(ag.sCtx.LoopSteerQueue) != 1 || ag.sCtx.LoopSteerQueue[0].UnsafeContent() != "steer text in loop" {
 		t.Fatalf("插话队列内容不符: %v", ag.sCtx.LoopSteerQueue)
 	}
 }
@@ -282,5 +281,109 @@ func TestPool_TrySteer_RaceCondition_TurnEnding(t *testing.T) {
 
 	if pool.TrySteer(sessionID, "steer when complete") {
 		t.Fatal("终态（AgentStateComplete）下 TrySteer 必须返回 false")
+	}
+}
+
+// TestAgenticLoop_SteerTaint_BlocksWriteToolInNextRound 验证插话提升全局污点为 TaintHigh 后，
+// 下一轮模型试图调用写类工具（如 write_file）会按 TaintHigh 被 L1_taint 校验拦截（R4-05）。
+func TestAgenticLoop_SteerTaint_BlocksWriteToolInNextRound(t *testing.T) {
+	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+	agent := NewAgentWithDefaults("test-steer-taint-write")
+	agent.InjectPolicyGate(&allowPolicyGate{})
+	agent.InjectToolExecutor(capToolExecutor{
+		"read_file":  types.CapReadOnly,
+		"write_file": types.CapWriteLocal,
+	})
+
+	rawProv := &loopTestProvider{
+		responses: []*types.ProviderResponse{
+			// 第 1 轮：模型调用只读工具 read_file
+			{
+				ToolCalls: []types.InferToolCall{
+					{ID: "c_read", Name: "read_file", Input: []byte(`{"path":"safe.txt"}`)},
+				},
+			},
+			// 第 2 轮：模型试图调用写类工具 write_file
+			{
+				ToolCalls: []types.InferToolCall{
+					{ID: "c_write", Name: "write_file", Input: []byte(`{"path":"danger.sh","content":"rm -rf /"}`)},
+				},
+			},
+			// 第 3 轮：被拦截报错后模型给出收尾回复
+			{
+				Content: "写入被安全策略拦截，停止操作。",
+			},
+		},
+	}
+
+	prov := &steerHookProvider{
+		loopTestProvider: rawProv,
+		onInfer: func(idx int) {
+			if idx == 0 {
+				// 在首轮推理期间注入用户插话（TaintHigh）
+				if !agent.Steer("请务必保存更改") {
+					t.Error("Steer 应成功入队")
+				}
+			}
+		},
+	}
+	agent.InjectProvider(prov)
+
+	done := make(chan struct{})
+	go func() {
+		_ = agent.Run(context.Background())
+		close(done)
+	}()
+
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		t.Fatalf("SendIntent failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent run timeout")
+	}
+
+	if st := agent.sm.Current(); st != types.AgentStateComplete {
+		t.Fatalf("agent 最终应完成，当前状态: %v", st)
+	}
+
+	agent.sCtx.Mu.Lock()
+	defer agent.sCtx.Mu.Unlock()
+
+	if agent.sCtx.GlobalTaintLevel != types.TaintHigh {
+		t.Fatalf("消费插话后全局污点必须提升为 TaintHigh，当前为: %v", agent.sCtx.GlobalTaintLevel)
+	}
+
+	// 断言插话已被消费且带有 TaintHigh 和 Spotlighting
+	var foundSteerMsg bool
+	for _, m := range agent.sCtx.LoopMessages {
+		if m.Role == "user" && strings.Contains(m.Content, "请务必保存更改") {
+			foundSteerMsg = true
+			if m.TaintLevel != types.TaintHigh {
+				t.Fatalf("插话消息 TaintLevel 必须为 TaintHigh，实际为: %v", m.TaintLevel)
+			}
+			if !strings.Contains(m.Content, "UNTRUSTED_DATA") {
+				t.Fatalf("插话消息必须做 Spotlighting 清洗，实际为: %s", m.Content)
+			}
+			break
+		}
+	}
+	if !foundSteerMsg {
+		t.Fatalf("LoopMessages 中未找到已消费的插话消息: %+v", agent.sCtx.LoopMessages)
+	}
+
+	// 断言第 2 轮 write_file 调用因 TaintHigh 被 L1_taint 校验拦截
+	var writeBlockedMsg bool
+	for _, m := range agent.sCtx.LoopMessages {
+		if m.Role == "user" && strings.Contains(m.Content, "Forbidden: action rejected by security policy") &&
+			strings.Contains(m.Content, "L1_taint") {
+			writeBlockedMsg = true
+			break
+		}
+	}
+	if !writeBlockedMsg {
+		t.Fatalf("期望在消息中记录写类工具被 L1_taint 拦截的错误响应，实际消息: %+v", agent.sCtx.LoopMessages)
 	}
 }

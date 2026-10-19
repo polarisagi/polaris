@@ -3,14 +3,16 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// runCodeAct 执行代码执行沙箱节点，staged 与 agentic 模式共用（R3-02）。
+// runCodeAct 执行代码执行沙箱节点，staged 与 agentic 模式共用（R3-02, R4-03）。
 func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 	if a.codeAct == nil {
 		return nil, apperr.New(apperr.CodeInternal,
@@ -22,6 +24,7 @@ func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintL
 		Code            string           `json:"code"`
 		CapabilityID    string           `json:"capability_id"`
 		TaintLevel      types.TaintLevel `json:"taint_level"`
+		SessionID       string           `json:"session_id"`
 		StatefulSession bool             `json:"stateful_session"`
 	}
 	if err := json.Unmarshal(args, &codeArgs); err != nil {
@@ -42,25 +45,36 @@ func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintL
 		return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: JIT token mint failed", err)
 	}
 
-	sessionID := ""
-	if a.sCtx != nil {
-		sessionID = a.sCtx.SessionID
-	}
+	targetSessionID, stateful := a.resolveCodeActSessionID(codeArgs.SessionID, codeArgs.StatefulSession)
 
 	caResult, err := a.codeAct.Execute(protocol.WithProfileChecker(ctx, a), CodeActRequest{
 		Language:        lang,
 		Code:            codeArgs.Code,
 		CapabilityID:    jitTok.Claims.TokenID,
-		SessionID:       sessionID,
+		SessionID:       targetSessionID,
 		AgentID:         a.ID,
-		StatefulSession: codeArgs.StatefulSession,
+		StatefulSession: stateful,
 	})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: execute failed", err)
 	}
 
+	safeOut, err := taint.SanitizeToSafe(caResult.Output)
+	if err != nil {
+		if a.currentSecurityPolicy().CodeActTaintBlockEnabled {
+			return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: taint check failed", err)
+		}
+	}
+
+	var outputBytes []byte
+	if err == nil {
+		outputBytes = []byte(safeOut.IntoMessage("").Content)
+	} else {
+		outputBytes = []byte(caResult.Output.UnsafeContent())
+	}
+
 	return &types.ToolResult{
-		Output:     []byte(caResult.Output.UnsafeContent()),
+		Output:     outputBytes,
 		Success:    caResult.ExitCode == 0,
 		LatencyMs:  caResult.LatencyMs,
 		TaintLevel: caResult.Output.Level(),
@@ -92,4 +106,31 @@ func codeActToolSchema() types.ToolSchema {
 			"required": []string{"language", "code"},
 		},
 	}
+}
+
+// resolveCodeActSessionID 解析并规范化 code_act 会话键与持久化状态标记（R4-03）。
+func (a *Agent) resolveCodeActSessionID(sessionID string, statefulSession bool) (string, bool) {
+	agentSessionID := ""
+	if a.sCtx != nil {
+		agentSessionID = a.sCtx.SessionID
+	}
+	if agentSessionID == "" {
+		agentSessionID = a.ID
+	}
+
+	stateful := statefulSession
+	targetSessionID := agentSessionID
+	if sessionID != "" {
+		stateful = true
+		cleanSub := filepath.Base(filepath.Clean(sessionID))
+		if cleanSub == "" || cleanSub == "." || cleanSub == string(filepath.Separator) {
+			cleanSub = "default"
+		}
+		if agentSessionID != "" {
+			targetSessionID = agentSessionID + ":" + cleanSub
+		} else {
+			targetSessionID = cleanSub
+		}
+	}
+	return targetSessionID, stateful
 }

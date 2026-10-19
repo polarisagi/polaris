@@ -87,6 +87,12 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
+	// S_LOOP_RECALL 阶段拦截：执行 agentic 循环首轮记忆召回与首条消息种入（R4-02）
+	if a.sm.Current() == types.AgentStateLoopRecall {
+		recallErr := a.runLoopRecall(ctx)
+		return "", recallErr, true
+	}
+
 	// S_LOOP_EXEC 阶段拦截：调用 Agent 层循环工具执行与校验
 	if a.sm.Current() == types.AgentStateLoopExec {
 		execErr := a.runExecuteLoop(ctx)

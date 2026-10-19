@@ -47,9 +47,23 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	intent := types.Intent{Query: withHookContext(req.Input, hookContext), WorkingDir: req.WorkingDir}
 	// GD-13-001：透传真实业务 SessionID，使同一会话跨多轮 Cron/Workflow/Webhook
 	// 触发命中 Pool 中同一个 per-session Agent 内核实例，而非每轮都新建
-	// 一次性实例（此前 AcquireHeadless 自行生成 headless-<时间戳> 丢弃了
-	// sessionID，见 internal/agent/pool.go AcquireHeadless 注释）。
-	res, err := o.agentPool.AcquireHeadless(ctx, intent, types.WithSessionID(sessionID), types.WithLoopCompletion("explicit"))
+	// R4-04: 完成模式下沉为回合级，由调用方声明或按 Channel 区分：
+	// 仅无人实时阅读结果的任务（cron、workflow、委派）使用 explicit；
+	// 人类对话渠道（webhook、web）与评测使用 auto。
+	completionMode := req.LoopCompletion
+	if completionMode == "" {
+		if req.Channel == "cron" || req.Channel == "workflow" {
+			completionMode = "explicit"
+		} else {
+			completionMode = "auto"
+		}
+	}
+	headlessOpts := []types.HeadlessOption{
+		types.WithSessionID(sessionID),
+		types.WithLoopCompletion(completionMode),
+	}
+
+	res, err := o.agentPool.AcquireHeadless(ctx, intent, headlessOpts...)
 	if err != nil {
 		// [2026-08-02 S-06 抽样复查] AgentPool 容量耗尽时 acquireInner 返回
 		// CodeResourceExhausted（应映射 429），此前恒被 CodeInternal 覆盖成 500。
@@ -64,7 +78,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 		}
 		o.finishHeadlessTurn(ctx, req, sessionID, isFirstTurn, res)
 		next, nextErr := o.agentPool.AcquireHeadless(ctx, types.Intent{Query: "<stop-hook>\n" + v.Reason + "\n</stop-hook>",
-			WorkingDir: req.WorkingDir}, types.WithSessionID(sessionID), types.WithLoopCompletion("explicit"))
+			WorkingDir: req.WorkingDir}, headlessOpts...)
 		if nextErr != nil {
 			slog.Warn("session: headless stop-hook continuation failed", "session", sessionID, "err", nextErr)
 			break

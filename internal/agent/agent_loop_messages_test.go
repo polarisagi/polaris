@@ -10,31 +10,61 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// TestGate_SingleAppendLoopMessagesEntry 门控测试：
-// 扫描 internal/agent/*.go，断言除 agent_loop_messages.go 外，任何文件不得出现 LoopMessages = append (R3-06)。
+// TestGate_SingleAppendLoopMessagesEntry 门控测试（R3-06 / R4-06）：
+// 递归扫描 internal/agent/... 所有 Go 代码，断言除 fsm/state_machine.go 外，任何生产文件不得出现 LoopMessages = append。
 func TestGate_SingleAppendLoopMessagesEntry(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("Glob *.go failed: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatal("no go files found in internal/agent")
+	root := "."
+	if _, err := os.Stat("agent_loop_messages.go"); err != nil {
+		// 若当前在仓库根目录运行测试
+		root = "internal/agent"
 	}
 
-	for _, f := range files {
-		if f == "agent_loop_messages.go" || f == "agent_loop_messages_test.go" {
-			continue
-		}
-		content, err := os.ReadFile(f)
+	var scanned int
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			t.Fatalf("ReadFile %s failed: %v", f, err)
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// 允许测试文件中的测试数据装配，生产代码严格拦截
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		// 只允许 fsm/state_machine.go (AppendLoopMessages / ResetAgenticTurn) 和 agent_loop_checkpoint.go (ResumeAgenticLoop) 改写该字段
+		base := filepath.Base(path)
+		if base == "state_machine.go" || base == "agent_loop_checkpoint.go" {
+			return nil
+		}
+
+		scanned++
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
 		}
 		lines := strings.Split(string(content), "\n")
 		for lineIdx, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
 			if strings.Contains(line, "LoopMessages = append") {
-				t.Errorf("%s:%d contains 'LoopMessages = append'; all message additions must go through appendLoopMessages", f, lineIdx+1)
+				t.Errorf("%s:%d contains 'LoopMessages = append'; all message additions must go through sCtx.AppendLoopMessages", path, lineIdx+1)
+			}
+			if strings.Contains(line, "LoopMessages =") {
+				t.Errorf("%s:%d directly mutates LoopMessages; all message modifications must go through ResetAgenticTurn or AppendLoopMessages", path, lineIdx+1)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Walk %s failed: %v", root, err)
+	}
+	if scanned < 10 {
+		t.Fatalf("expected >= 10 production go files scanned under %s, got %d", root, scanned)
 	}
 }
 

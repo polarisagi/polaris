@@ -11,6 +11,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -279,7 +280,8 @@ func (a *Agent) Steer(text string) bool {
 		a.sCtx.Mu.Unlock()
 		return false
 	}
-	a.sCtx.LoopSteerQueue = append(a.sCtx.LoopSteerQueue, text)
+	ts := taint.NewTaintedString(text, taint.TaintSource{Module: "session", OriginTaintLevel: types.TaintHigh}, "steer")
+	a.sCtx.LoopSteerQueue = append(a.sCtx.LoopSteerQueue, ts)
 	a.sCtx.Mu.Unlock()
 
 	// 广播 steer_accepted SSE 事件
@@ -297,17 +299,12 @@ func (a *Agent) SetModelLock(ref string) {
 	a.sCtx.UserLockedModel = ref
 }
 
-// drainSteerQueue 出队当前所有插话消息。
-func (a *Agent) drainSteerQueue() []string {
-	a.sCtx.Mu.Lock()
-	defer a.sCtx.Mu.Unlock()
-	if len(a.sCtx.LoopSteerQueue) == 0 {
-		return nil
+// drainSteerQueue 出队当前所有插话消息并作为带污点 user 消息注入模型上下文（R4-05）。
+func (a *Agent) drainSteerQueue() bool {
+	if a == nil || a.sCtx == nil {
+		return false
 	}
-	steers := make([]string, len(a.sCtx.LoopSteerQueue))
-	copy(steers, a.sCtx.LoopSteerQueue)
-	a.sCtx.LoopSteerQueue = nil
-	return steers
+	return a.sCtx.DrainSteerQueueToMessages()
 }
 
 // broadcastStreamEvent 向所有流式订阅者分发事件。

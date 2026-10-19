@@ -48,7 +48,7 @@ func TestEpisodicRecall_RanksByFTSRelevance(t *testing.T) {
 	cog := &episodicCog{hits: []fsm.CogResult{{DocID: "e3", Score: 9}, {DocID: "e1", Score: 5}, {DocID: "e2", Score: 1}}}
 	sCtx := newTurnCtx("部署服务", "")
 
-	text, _, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{episodicQuery: "部署服务", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{EpisodicQuery: "部署服务", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Equal(t, []string{"- [2026-09-01] t: 最相关", "- [2026-09-01] t: 中等相关", "- [2026-09-01] t: 最不相关"}, episodicLines(text))
 	require.Equal(t, "部署服务", cog.lastQuery, "以本轮查询词走 FTS")
@@ -69,14 +69,14 @@ func TestEpisodicRecall_KCapsAndMinScore(t *testing.T) {
 	cog := &episodicCog{hits: []fsm.CogResult{{DocID: "a", Score: 9}, {DocID: "b", Score: 5}, {DocID: "c", Score: 1}, {DocID: "d", Score: 0.5}}}
 	sCtx := newTurnCtx("x", "")
 
-	text, _, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{episodicQuery: "x", episodicK: 2}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{EpisodicQuery: "x", EpisodicK: 2}, "test")
 	require.NoError(t, err)
 	require.Len(t, episodicLines(text), 2, "条数受 K 约束")
 
 	// 绝对下限：低于 recall.min_score 的命中在取正文之前就丢弃。
 	withThresholds(t, func(th *config.Thresholds) { th.M4Kernel.RecallMinScore = 2 })
 	mem2, sCtx2 := epMem(proj, mem.events...), newTurnCtx("x", "")
-	text, _, err = turnRecallText(context.Background(), mem2, cog, sCtx2, recallWant{episodicQuery: "x", episodicK: 4}, "test")
+	text, _, err = turnRecallText(context.Background(), mem2, cog, sCtx2, recallWant{EpisodicQuery: "x", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Len(t, episodicLines(text), 2)
 	require.NotContains(t, text, "丙")
@@ -97,7 +97,7 @@ func TestEpisodicRecall_ProjectIsolationAndNonEpisodicHits(t *testing.T) {
 	sCtx := newTurnCtx("x", "")
 	sCtx.ProjectID = "prj_me"
 
-	text, _, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{episodicQuery: "x", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{EpisodicQuery: "x", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Contains(t, text, "本项目情景")
 	require.NotContains(t, text, "他项目机密情景")
@@ -115,7 +115,7 @@ func TestEpisodicRecall_TaintFailClosed(t *testing.T) {
 	sCtx.RawIntentTS = taint.NewTaintedString("x", taint.TaintSource{OriginTaintLevel: types.TaintLow}, "test")
 
 	// countingMem 不按污点过滤（模拟不遵守 MaxTaintLevel 的存储实现）：召回侧必须自己再判一次。
-	text, tl, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{episodicQuery: "x", episodicK: 4}, "test")
+	text, tl, err := turnRecallText(context.Background(), mem, cog, sCtx, recallWant{EpisodicQuery: "x", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Contains(t, text, "低污点情景")
 	require.NotContains(t, text, "高污点情景")
@@ -127,7 +127,7 @@ func TestEpisodicRecall_Degrades(t *testing.T) {
 	newMem := func() *countingMem {
 		return epMem(map[string]string{"e1": types.DefaultProjectID}, epEvent("e1", day, types.TaintNone, "情景"))
 	}
-	want := recallWant{episodicQuery: "x", episodicK: 4}
+	want := recallWant{EpisodicQuery: "x", EpisodicK: 4}
 
 	t.Run("FTS 失败：无情景、不报错、仍标记已覆盖", func(t *testing.T) {
 		mem, sCtx := newMem(), newTurnCtx("x", "")

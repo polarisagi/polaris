@@ -251,7 +251,7 @@ func TestTurnRecall_RerankGateEndToEnd(t *testing.T) {
 	sCtx := newTurnCtx("查询", "")
 	sCtx.RecallReranker = &fakeReranker{probs: []float64{0.8, 0.1}}
 
-	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{episodicQuery: "查询", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{EpisodicQuery: "查询", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Contains(t, text, "相关的情景事件")
 	require.NotContains(t, text, "不相关的情景事件")
@@ -261,7 +261,7 @@ func TestTurnRecall_NoRerankerMeansNoGate(t *testing.T) {
 	mem := newCountingMem()
 	mem.events = []types.ScoredEvent{scoredEvent("t", "情景甲", time.Now()), scoredEvent("t", "情景乙", time.Now())}
 	sCtx := newTurnCtx("查询", "")
-	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{episodicQuery: "查询", episodicK: 4}, "test")
+	text, _, err := turnRecallText(context.Background(), mem, mem.cog(), sCtx, recallWant{EpisodicQuery: "查询", EpisodicK: 4}, "test")
 	require.NoError(t, err)
 	require.Contains(t, text, "情景甲")
 	require.Contains(t, text, "情景乙")
@@ -299,7 +299,7 @@ func TestTurnRecall_SurpriseGatesRAGDepth(t *testing.T) {
 			kb := &recordingKB{hits: []fsm.KnowledgeResult{{Content: "知识片段", Source: "doc", Score: 1}}}
 			sCtx := newTurnCtx("x", "部署")
 			sCtx.KnowledgeSearcher = kb
-			text, _, err := turnRecallText(context.Background(), newCountingMem(), nil, sCtx, recallWant{goal: "部署"}, "test")
+			text, _, err := turnRecallText(context.Background(), newCountingMem(), nil, sCtx, recallWant{Goal: "部署"}, "test")
 			require.NoError(t, err)
 			require.Equal(t, c.wantTopK, kb.calls)
 			if c.wantTopK == nil {
@@ -344,7 +344,7 @@ func TestTurnRecall_MaxTaintFiltersEverySource(t *testing.T) {
 		}}
 		return mem, sCtx, kb, cog
 	}
-	want := recallWant{episodicQuery: "x", episodicK: 5, goal: "部署"}
+	want := recallWant{EpisodicQuery: "x", EpisodicK: 5, Goal: "部署"}
 
 	t.Run("意图来源污点 Low：Medium 以上一律不得进入召回", func(t *testing.T) {
 		mem, sCtx, _, cog := setup(types.TaintLow)
