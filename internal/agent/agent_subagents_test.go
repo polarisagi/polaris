@@ -264,9 +264,11 @@ func TestSubagents_CompletionWake(t *testing.T) {
 	a.InjectHandoffPoster(poster)
 
 	childIDs := []string{"child-1", "child-2"}
+	poster.mu.Lock()
 	for _, id := range childIDs {
 		poster.tasks[id] = &types.TaskSnapshot{ID: id, Status: types.TaskExecuting}
 	}
+	poster.mu.Unlock()
 
 	a.sCtx.HandoffTaskIDs = childIDs
 	a.watchSubagentsCompletion(childIDs)

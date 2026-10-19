@@ -200,9 +200,11 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 	if a.handoffPoster == nil || childTaskID == "" {
 		return
 	}
-	concurrent.SafeGo(a.ctx, "agent.handoff_watcher", func(parentCtx context.Context) {
-		watchCtx, cancel := context.WithCancel(parentCtx)
-		defer cancel()
+	watchCtx, cancel := context.WithCancel(a.ctx)
+	a.registerHandoffWatcher(cancel)
+
+	concurrent.SafeGo(watchCtx, "agent.handoff_watcher", func(ctx context.Context) {
+		defer a.cancelHandoffWatcher()
 
 		// GD-13-001：订阅子 Agent 事件流，透传至父 Agent 的 Stream Channel。
 		// 必须**先于** Subscribe/peekAndWake 完成注册：子任务在 PostTask 之后
@@ -213,24 +215,24 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 		childEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(childTaskID)
 		defer cancelSub()
 
-		events, err := a.handoffPoster.Subscribe(watchCtx)
+		events, err := a.handoffPoster.Subscribe(ctx)
 		if err != nil {
 			// 订阅失败时不能静默放弃（会导致父任务永久挂在 S_AWAIT_AGENT）：
 			// 退回纯轮询兜底，并显式告警说明已降级。降级路径仍然透传子事件流
 			// ——GD-13-001 的可观测性收益不应因黑板事件订阅不可用而一并丢失。
-			slog.WarnContext(watchCtx, "agent: handoff subscribe failed, falling back to polling",
+			slog.WarnContext(ctx, "agent: handoff subscribe failed, falling back to polling",
 				"task_id", childTaskID, "err", err)
-			a.pollHandoffCompletion(watchCtx, childTaskID, handoffWatchPollInterval, childEvents)
+			a.pollHandoffCompletion(ctx, childTaskID, handoffWatchPollInterval, childEvents)
 			return
 		}
 
 		// 订阅就绪后立刻补一次 Peek：覆盖"投递委派任务到订阅生效之间子任务
 		// 已终态"的丢事件窗口（与 reconciler_handoff.go 同一 idiom）。
-		if a.peekAndWake(watchCtx, childTaskID) {
+		if a.peekAndWake(ctx, childTaskID) {
 			return
 		}
 
-		a.loopHandoffEvents(watchCtx, childTaskID, events, childEvents)
+		a.loopHandoffEvents(ctx, childTaskID, events, childEvents)
 	})
 }
 

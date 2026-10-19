@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 )
 
 type mockToolExecutor struct {
+	mu                     sync.Mutex
 	ExecuteWithTaintCalled bool
 }
 
@@ -26,7 +28,9 @@ func (r *mockToolExecutor) Lookup(name string) (types.Tool, error) {
 	return types.Tool{Name: name, Source: types.ToolBuiltin, Capability: types.CapReadOnly, SideEffects: se}, nil
 }
 func (r *mockToolExecutor) ExecuteWithTaint(_ context.Context, name string, _ []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	r.mu.Lock()
 	r.ExecuteWithTaintCalled = true
+	r.mu.Unlock()
 	return &types.ToolResult{Success: true, Output: []byte(`{"ok":true}`)}, nil
 }
 
@@ -63,7 +67,10 @@ func TestAgent_HappyPath(t *testing.T) {
 			t.Errorf("expected state Complete, got %v", agent.StateMachine().Current())
 		}
 		// 验证 ExecuteWithTaint 被正确调用一次
-		if !mockExec.ExecuteWithTaintCalled {
+		mockExec.mu.Lock()
+		called := mockExec.ExecuteWithTaintCalled
+		mockExec.mu.Unlock()
+		if !called {
 			t.Fatalf("expected ExecuteWithTaint to be called")
 		}
 

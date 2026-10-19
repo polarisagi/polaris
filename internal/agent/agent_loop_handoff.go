@@ -140,6 +140,7 @@ func (a *Agent) resumeHandoffInLoop(ctx context.Context) error {
 
 	finalBatchMessages := assembleResumeBatchMessages(origCalls, spawnCallID, spawnMsg, pendingResults)
 
+	a.cancelHandoffWatcher()
 	a.sCtx.Mu.Lock()
 	a.sCtx.LoopMessages = append(a.sCtx.LoopMessages, finalBatchMessages...)
 	a.sCtx.HandoffTaskIDs = nil

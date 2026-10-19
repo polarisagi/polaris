@@ -247,15 +247,17 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 	if a.handoffPoster == nil || len(childIDs) == 0 {
 		return
 	}
-	concurrent.SafeGo(a.ctx, "agent.subagents_watcher", func(parentCtx context.Context) {
-		watchCtx, cancel := context.WithCancel(parentCtx)
-		defer cancel()
+	watchCtx, cancel := context.WithCancel(a.ctx)
+	a.registerHandoffWatcher(cancel)
+
+	concurrent.SafeGo(watchCtx, "agent.subagents_watcher", func(ctx context.Context) {
+		defer a.cancelHandoffWatcher()
 
 		for _, cid := range childIDs {
 			cID := cid
 			cEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(cID)
 			defer cancelSub()
-			concurrent.SafeGo(watchCtx, "agent.subagents_event_forwarder", func(subCtx context.Context) {
+			concurrent.SafeGo(ctx, "agent.subagents_event_forwarder", func(subCtx context.Context) {
 				for {
 					select {
 					case <-subCtx.Done():
@@ -270,13 +272,13 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 			})
 		}
 
-		events, err := a.handoffPoster.Subscribe(watchCtx)
+		events, err := a.handoffPoster.Subscribe(ctx)
 		if err != nil {
-			a.pollSubagentsCompletion(watchCtx, childIDs)
+			a.pollSubagentsCompletion(ctx, childIDs)
 			return
 		}
 
-		if a.peekAllSubagentsDone(watchCtx, childIDs) {
+		if a.peekAllSubagentsDone(ctx, childIDs) {
 			a.asyncIntent(types.TriggerAgentHandoffDone)
 			return
 		}
@@ -286,15 +288,15 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 
 		for {
 			select {
-			case <-watchCtx.Done():
+			case <-ctx.Done():
 				return
 			case <-events:
-				if a.peekAllSubagentsDone(watchCtx, childIDs) {
+				if a.peekAllSubagentsDone(ctx, childIDs) {
 					a.asyncIntent(types.TriggerAgentHandoffDone)
 					return
 				}
 			case <-ticker.C:
-				if a.peekAllSubagentsDone(watchCtx, childIDs) {
+				if a.peekAllSubagentsDone(ctx, childIDs) {
 					a.asyncIntent(types.TriggerAgentHandoffDone)
 					return
 				}
