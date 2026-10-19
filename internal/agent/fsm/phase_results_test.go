@@ -107,7 +107,12 @@ func TestRespondEffect_IsTheOnlyUserAudience(t *testing.T) {
 				if !ok {
 					continue
 				}
+				// R5-02 复核：agentic 循环（S_LOOP）的交互回合同样面向用户流式输出，
+				// 其受众由 LoopStreamsToUser 决定（见 loop_stream_test.go）。
 				isRespond := tr.To == types.AgentStateRespond
+				if tr.To == types.AgentStateLoop {
+					continue
+				}
 				if isRespond != (llm.Audience == protocol.AudienceUser) {
 					t.Errorf("转移 %d --%d--> %d：audience=%d，只有进入 S_RESPOND 的 Effect 可面向用户",
 						from, trig, tr.To, llm.Audience)

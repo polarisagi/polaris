@@ -311,7 +311,11 @@ par:
         Only llm_fill effects with audience=user (currently s_respond only) may publish
         token events to stream subscribers. Internal effects (perceive/plan/reflect) accumulate
         output for structured parsing only. LLMFillEffect.Audience zero value is internal (fail-closed).
-      enforced_by: m4.doStreamInfer + unit_test (ADR-0098)
+        2026-10-20 复核（R5-02，追记）：agentic 循环 s_loop 的 llm_fill 在「交互回合」（loop_completion 非
+        explicit 且非 AcquireHeadless 获取）同样 audience=user——逐轮流式推文本与工具进度；委派/cron/workflow
+        回合仍为 internal，回合末由 publishPreparedReply 一次性发布。已流式推送过的回合（LoopReplyStreamed）
+        终态不得重复发布。原结论（仅 s_respond）对 staged 路径保持有效。
+      enforced_by: m4.doStreamInfer + unit_test (ADR-0098; fsm.TestLoopEffect_AudienceByTurnOrigin)
 
     - id: par_inv_07
       name: complete_only_via_respond

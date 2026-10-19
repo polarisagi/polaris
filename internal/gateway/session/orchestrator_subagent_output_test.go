@@ -213,3 +213,80 @@ func TestR5_01_SubagentOutputNotInParentReply(t *testing.T) {
 		t.Error("缺少含 CHILD-OUT 的 subagent_output 状态事件")
 	}
 }
+
+// echoToolExecutor 对任意工具返回固定输出。
+type echoToolExecutor struct{}
+
+func (echoToolExecutor) Lookup(name string) (types.Tool, error) {
+	return types.Tool{Name: name, Source: types.ToolBuiltin, Capability: types.CapReadOnly}, nil
+}
+func (echoToolExecutor) ExecuteWithTaint(context.Context, string, []byte, types.TaintLevel) (*types.ToolResult, error) {
+	return &types.ToolResult{Success: true, Output: []byte("file content: mock")}, nil
+}
+
+// TestR5_02_GatewayDeltasEqualReply 生产装配：交互回合 3 轮（2 轮工具 + 1 轮文本），
+// 网关收到的 Delta 按序拼接等于 Result.Reply 与持久化的助手消息，回复不重复；
+// 并收到 2 条 tool_call 与 2 条 tool_result 状态事件。
+func TestR5_02_GatewayDeltasEqualReply(t *testing.T) {
+	useAgenticLoopMode(t)
+
+	pool := agent.NewPool(func(sessionID string) *agent.Agent {
+		ag := agent.NewAgent(sessionID, nil, nil)
+		ag.InjectDAGRunner(dag.NewRunner())
+		ag.InjectDAGValidator(dag.NewValidator())
+		ag.InjectPolicyGate(allowAllGate{})
+		ag.InjectToolExecutor(echoToolExecutor{})
+		call := func(id string) []types.InferToolCall {
+			return []types.InferToolCall{{ID: id, Name: "read_file", Input: []byte(`{"path":"a"}`)}}
+		}
+		ag.InjectProvider(&scriptedProvider{responses: []*types.ProviderResponse{
+			{Content: "先读。", ToolCalls: call("c1")},
+			{Content: "再读。", ToolCalls: call("c2")},
+			{Content: "完成。"},
+		}})
+		return ag
+	}, 10)
+
+	persistence := newFakePersistence()
+	orc := New(Deps{
+		Hooks: &fakeHooks{}, SlashRouter: &fakeSlash{}, Compression: &fakeCompression{},
+		Persistence: persistence, Prompt: fakePrompt{}, Registry: fakeRegistry{}, AgentPool: pool,
+		TranscriptDir: t.TempDir(), DataDir: t.TempDir(),
+	})
+	sink := &recordingSink{}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := orc.RunTurn(ctx, Request{SessionID: "s-r5-02", Input: "go", Channel: "web"}, sink)
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+
+	const want = "先读。再读。完成。"
+	if res.Reply != want {
+		t.Errorf("Reply = %q, want %q", res.Reply, want)
+	}
+	if replies := persistence.savedAssistantReplies(); len(replies) != 1 || replies[0] != want {
+		t.Errorf("持久化助手消息 = %q, want [%q]", replies, want)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	var deltas strings.Builder
+	calls, results := 0, 0
+	for _, e := range sink.events {
+		switch {
+		case e.Kind == KindDelta:
+			deltas.WriteString(e.Text)
+		case e.Kind == KindStatus && e.Payload["type"] == "tool_call":
+			calls++
+		case e.Kind == KindStatus && e.Payload["type"] == "tool_result":
+			results++
+		}
+	}
+	if deltas.String() != want {
+		t.Errorf("Delta 拼接 = %q, want %q", deltas.String(), want)
+	}
+	if calls != 2 || results != 2 {
+		t.Errorf("tool_call=%d tool_result=%d, want 2/2", calls, results)
+	}
+}

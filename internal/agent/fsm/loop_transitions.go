@@ -80,7 +80,11 @@ func (sm *StateMachine) registerLoopTransitions() {
 			sCtx.Mu.Lock()
 			defer sCtx.Mu.Unlock()
 			userQ := sCtx.RawIntentTS.UnsafeContent()
-			finalReply := sCtx.PreparedReply
+			// 已流式推送过文本时，助手回复就是用户实际看到的拼接文本（R5-02）。
+			finalReply := sCtx.LoopStreamedText
+			if finalReply == "" {
+				finalReply = sCtx.PreparedReply
+			}
 			if finalReply == "" {
 				finalReply = sCtx.LoopSummary
 			}
@@ -167,8 +171,15 @@ func (sm *StateMachine) loopEffect(sCtx *StateContext) protocol.Effect {
 		modelPool = "default"
 	}
 
+	// 交互回合（用户在读）逐轮流式推送文本与工具进度；委派/后台回合保持回合末一次性发布（R5-02）。
+	audience := protocol.AudienceInternal
+	if sCtx.LoopStreamsToUser() {
+		audience = protocol.AudienceUser
+	}
+
 	return protocol.LLMFillEffect{
 		SchemaRef: "agentic_loop",
+		Audience:  audience,
 		PromptFn: func(pCtx protocol.StateContext) []types.Message {
 			return sm.promptLoop(sCtx, pCtx)
 		},
