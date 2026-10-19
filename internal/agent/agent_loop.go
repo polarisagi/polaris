@@ -157,10 +157,9 @@ func toolCallsToDAGPlan(calls []types.InferToolCall, taintLevel types.TaintLevel
 			var codeArgs struct {
 				Language string `json:"language"`
 			}
-			_ = json.Unmarshal(c.Input, &codeArgs)
-			lang := codeArgs.Language
-			if lang == "" {
-				lang = "python"
+			lang := "python"
+			if err := json.Unmarshal(c.Input, &codeArgs); err == nil && codeArgs.Language != "" {
+				lang = codeArgs.Language
 			}
 			toolName = "code_act:" + lang
 		}
