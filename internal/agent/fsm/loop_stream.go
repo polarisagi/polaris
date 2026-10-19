@@ -9,6 +9,8 @@ type LoopStream struct {
 	// LoopStreamedText 各轮已推文本按序拼接，等于用户实际看到的回复，
 	// 也是写入 ConversationHistory 的助手内容。
 	LoopStreamedText string
+	// LoopEmptyRetries 本回合因「既无正文也无工具调用」而重跑本轮的次数（R5-06）。
+	LoopEmptyRetries int
 }
 
 // TurnOrigin 回合来源标记。不属于 AgenticTurn：它由 Pool 在获取实例时写入，
