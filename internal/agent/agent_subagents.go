@@ -68,6 +68,13 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 		}
 		task.Model = model
 
+		// local_only_mode 校验：子智能体模型不得为云端模型
+		if model != "" {
+			if err := a.validateModelSelection(ctx, model); err != nil {
+				return nil, apperr.Wrap(apperr.CodeForbidden, fmt.Sprintf("spawn_agents: task[%d] model %q rejected by policy", i, model), err)
+			}
+		}
+
 		childID := fmt.Sprintf("subagent-%s-%d-%s", a.ID, i, uuid.NewString()[:8])
 		childIDs = append(childIDs, childID)
 

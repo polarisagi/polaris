@@ -152,3 +152,35 @@ func TestInferenceRouter_ProviderRef_Fallback(t *testing.T) {
 		t.Fatalf("expected stream events")
 	}
 }
+
+// TestProviderRegistry_PickEntryByRef_LocalOnlyMode 验证 local_only_mode 下 PickEntryByRef 拒绝解析与实例化非本地模型（V3）。
+func TestProviderRegistry_PickEntryByRef_LocalOnlyMode(t *testing.T) {
+	cfg := config.CurrentThresholds().M1Router
+	reg := NewProviderRegistry(cfg)
+	fac := &mockFactory{}
+	reg.InjectProviderFactory(fac)
+
+	origCfg := config.Get()
+	defer config.Update(origCfg)
+
+	var newCfg config.Config
+	if origCfg != nil {
+		newCfg = *origCfg
+	}
+	newCfg.Security.LocalOnlyMode = true
+	config.Update(&newCfg)
+
+	ctx := context.Background()
+
+	// 1. 云端模型：直接拒绝返回 nil
+	entry := reg.PickEntryByRef(ctx, "openai/gpt-4o", true)
+	if entry != nil {
+		t.Fatal("V3 缺陷：local_only_mode 下 PickEntryByRef 必须拒绝非本地厂商模型")
+	}
+
+	// 2. 本地模型：正常允许实例化
+	localEntry := reg.PickEntryByRef(ctx, "ollama/llama3", true)
+	if localEntry == nil {
+		t.Fatal("local_only_mode 下应正常放行本地模型 ollama/llama3")
+	}
+}
