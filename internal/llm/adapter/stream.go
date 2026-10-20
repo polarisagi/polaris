@@ -218,7 +218,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			usageDirty = false
 			emittedAny = true
 			select {
-			case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: usageLatest}:
+			case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: usageLatest, FinishReason: lastFinishReason}:
 				return false
 			case <-ctx.Done():
 				return true
@@ -293,7 +293,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			if len(chunk.Choices) == 0 {
 				if chunk.Usage != nil {
 					select {
-					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage}:
+					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage, FinishReason: lastFinishReason}:
 						emittedAny = true
 						usageDirty = false
 					case <-ctx.Done():
@@ -328,7 +328,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 					accumulatedOutputTokens += len([]rune(delta.Content)) / 3
 				}
 				select {
-				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage}:
+				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage, FinishReason: lastFinishReason}:
 					emittedAny = true
 					if chunk.Usage != nil {
 						usageDirty = false

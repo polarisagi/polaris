@@ -22,6 +22,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 	var usage types.Usage
 	var inferErr error
 	var toolCalls []types.InferToolCall
+	var finishReason string
 
 	for ev := range ch {
 		switch ev.Type {
@@ -66,6 +67,9 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 				inferErr = apperr.New(apperr.CodeCancelled, "推理流被中断: "+ev.Content).WithRetryAfter(5)
 			}
 		}
+		if ev.FinishReason != "" {
+			finishReason = ev.FinishReason
+		}
 		if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
 			usage.InputTokens = ev.Usage.InputTokens
 			usage.OutputTokens = ev.Usage.OutputTokens
@@ -81,6 +85,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 		ReasoningContent: reasoning.String(),
 		ToolCalls:        toolCalls,
 		Usage:            usage,
+		FinishReason:     finishReason,
 	}, nil
 }
 

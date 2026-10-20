@@ -114,17 +114,22 @@ func (a *Agent) SetConversationHistory(history []types.Message) {
 // 错误被 nextState 吞掉，FSM 静默转 S_FAILED，用户只看到 session 层兜底的
 // "推理返回空内容"，日志里也无从区分"模型只输出了思考链""输出被截断""格式错误"
 // （2026-09-25 实测 S_RESPOND 空正文即此）。
-func (a *Agent) reportUnusableFill(ctx context.Context, next types.State, err error, resp *types.ProviderResponse) {
+func (a *Agent) reportUnusableFill(ctx context.Context, next types.State, err error, resp *types.ProviderResponse, fillBytes int) {
 	if err == nil {
 		return
 	}
-	var reasoningLen, contentLen, outTokens int
+	var reasoningLen, contentLen, outTokens, toolCalls int
+	var finishReason string
 	if resp != nil {
 		reasoningLen, contentLen, outTokens = len(resp.ReasoningContent), len(resp.Content), resp.Usage.OutputTokens
+		toolCalls, finishReason = len(resp.ToolCalls), resp.FinishReason
 	}
+	// content_bytes 是流累积的原始正文；fill_bytes 是转换（原生 tool_calls→DAG JSON 等）后真正交给
+	// OnSuccess 的字节数。二者不等说明正文在内核内被改写/清空；相等而为 0 则空输出来自模型/传输侧。
 	slog.WarnContext(ctx, "kernel: llm fill unusable",
 		"agent_id", a.ID, "session", a.sCtx.SessionID, "state", a.sm.Current(), "next", next,
-		"content_bytes", contentLen, "reasoning_bytes", reasoningLen, "output_tokens", outTokens, "err", err)
+		"content_bytes", contentLen, "fill_bytes", fillBytes, "reasoning_bytes", reasoningLen,
+		"tool_calls", toolCalls, "finish_reason", finishReason, "output_tokens", outTokens, "err", err)
 	if stateToTriggerMap()[next] != types.TriggerReplanExhausted {
 		return // 非终止性：OnSuccess 已按降级语义继续推进，只需留痕
 	}

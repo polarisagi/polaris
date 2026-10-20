@@ -202,7 +202,7 @@ func TestAgenticTurnContractEval_MisbehavingOutputNeverLeaks(t *testing.T) {
 }
 
 // 场景 E：空输出重试——模型首轮既无正文也无工具调用（DeepSeek 思考模式偶发只出思考链），
-// 不能把空回复交给用户；重试一次后正常完成，LLM 调用次数上界 2。
+// 不能把空回复交给用户；带提示重试一次后正常完成，LLM 调用次数 2。
 func TestAgenticTurnContractEval_EmptyOutputRetried(t *testing.T) {
 	out := runAgenticEval(t, []*types.ProviderResponse{
 		{Content: ""},
@@ -218,21 +218,22 @@ func TestAgenticTurnContractEval_EmptyOutputRetried(t *testing.T) {
 }
 
 // 场景 E-1：重试后仍为空且本回合从未产出正文——判失败并给出错误事件，
-// 而不是以空回复"成功"收尾；LLM 调用次数上界 2（不无限重试）。
+// 而不是以空回复"成功"收尾；额外调用上限 2 次，总调用上界 3（不无限重试，B3）。
 func TestAgenticTurnContractEval_EmptyOutputExhaustedFails(t *testing.T) {
 	out := runAgenticEval(t, []*types.ProviderResponse{
+		{Content: ""},
 		{Content: ""},
 		{Content: ""},
 	}, &allowPolicyGate{}, &mockToolExecutor{}, "你是谁？")
 
 	if out.final != types.AgentStateFailed || out.reply != "" {
-		t.Fatalf("两次空输出应判失败：final=%v reply=%q", out.final, out.reply)
+		t.Fatalf("连续空输出应判失败：final=%v reply=%q", out.final, out.reply)
 	}
 	if len(out.errors) == 0 {
 		t.Error("失败必须有面向客户端的错误事件，否则用户只见空白")
 	}
-	if out.calls != 2 {
-		t.Errorf("LLM 调用次数 = %d，上界 2", out.calls)
+	if out.calls != 3 {
+		t.Errorf("LLM 调用次数 = %d，期望 3（首次 + 2 次额外）", out.calls)
 	}
 }
 
@@ -242,12 +243,13 @@ func TestAgenticTurnContractEval_EmptyAfterTextKeepsEarlierReply(t *testing.T) {
 		{Content: "先读文件。", ToolCalls: []types.InferToolCall{{ID: "call_1", Name: "read_file", Input: json.RawMessage(`{"path":"a"}`)}}},
 		{Content: ""},
 		{Content: ""},
+		{Content: ""},
 	}, &allowPolicyGate{}, &mockToolExecutor{}, "读文件")
 
 	if out.final != types.AgentStateComplete || out.reply != "先读文件。" {
 		t.Fatalf("已有正文时空轮不应判失败：final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
 	}
-	if out.calls > 3 {
-		t.Errorf("LLM 调用次数 = %d，上界 3", out.calls)
+	if out.calls > 4 {
+		t.Errorf("LLM 调用次数 = %d，上界 4", out.calls)
 	}
 }

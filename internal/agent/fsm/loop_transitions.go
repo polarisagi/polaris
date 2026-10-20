@@ -219,6 +219,11 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	sCtx.Mu.Lock()
 	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
 	copy(roundMsgs, sCtx.LoopMessages)
+	round := sCtx.LoopRound
+	sCtx.Mu.Unlock()
+	// 空输出重试：在 L4 末尾追加瞬态的「助手(含 reasoning_content) + user 提示」（B3.1）。
+	roundMsgs = append(roundMsgs, sCtx.loopEmptyRetryMessages(round)...)
+	sCtx.Mu.Lock()
 
 	var usageText string
 	if sCtx.LoopLastUsageTokens > 0 || sCtx.LoopLastWallSeconds > 0 {
@@ -260,6 +265,11 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 		if state, handled, err := sm.onLoopEmptyOutput(sCtx); handled {
 			return state, err
 		}
+	} else {
+		// 拿到非空输出：本次空输出事件结束，恢复档位清零。
+		sCtx.Mu.Lock()
+		sCtx.LoopEmptyRetries = 0
+		sCtx.Mu.Unlock()
 	}
 
 	// 检查是否有 finish 调用
@@ -342,9 +352,16 @@ func (sm *StateMachine) onLoopSuccess(sCtx *StateContext, fill []byte) (types.St
 }
 
 // onLoopEmptyOutput 处理 LLM 本轮空输出；handled=false 表示交回常规收尾流程。
+//
+// 恢复链（B3，合计额外调用 ≤ loopEmptyMaxExtraCalls）：
+//  1. 带 user 提示 + 回传 reasoning_content 重试（不再发送与上次完全相同的请求）；
+//  2. 仍为空：已有工具结果 → 无工具（tool_choice=none）收尾；尚无 → 关闭思考模式重试；
+//  3. 仍为空：本回合已有正文则沿用既有收尾，否则以友好文案失败。
+//
+// 提示消息与档位由 promptLoop / Agent.executeEffect 按 LoopEmptyRetries 实时读取。
 func (sm *StateMachine) onLoopEmptyOutput(sCtx *StateContext) (state types.State, handled bool, err error) {
 	sCtx.Mu.Lock()
-	if sCtx.LoopEmptyRetries < 1 {
+	if sCtx.LoopEmptyRetries < loopEmptyMaxExtraCalls {
 		sCtx.LoopEmptyRetries++
 		sCtx.Mu.Unlock()
 		return types.State("S_LOOP_STEER"), true, nil
@@ -357,7 +374,8 @@ func (sm *StateMachine) onLoopEmptyOutput(sCtx *StateContext) (state types.State
 	if hasText {
 		return "", false, nil
 	}
-	return types.State("S_LOOP_FAILED"), true, apperr.New(apperr.CodeInternal, "loop: LLM returned empty output after retry")
+	return types.State("S_LOOP_FAILED"), true, apperr.New(apperr.CodeInternal,
+		"模型连续多次只完成了思考、没有给出回答或工具调用，已自动重试仍无结果。请换个说法再试一次，或稍后重试")
 }
 
 // onLoopFailure 处理 LLM 推理失败。

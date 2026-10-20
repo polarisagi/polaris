@@ -39,6 +39,8 @@ StreamEvent struct {
 	Type    StreamEventType
 	Content string
 	Usage   Usage
+	// FinishReason 随携带 usage 的终态事件下发（流内最后一次 finish_reason），供空输出诊断；其余事件为空。
+	FinishReason string
 }
 
 type
