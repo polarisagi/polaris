@@ -34,7 +34,8 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 			})
 		case types.StreamTextDelta:
 			content.WriteString(ev.Content)
-			if audience == protocol.AudienceUser {
+			// 适配器会单独补发"空正文 + usage"事件（A：用量随终态事件到达），空增量不是用户可见 token。
+			if audience == protocol.AudienceUser && ev.Content != "" {
 				a.publishStreamEvent(types.AgentStreamEvent{
 					Type:       types.AgentStreamEventToken,
 					Content:    ev.Content,

@@ -196,11 +196,14 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
 	tok := llmparent.NewTiktokenTokenizer("deepseek-v4")
-	rawCh, err := d.client.SendStreamRequest(ctx, cancel, apiKey, apiReq, tok.EstimateRequest(req))
+	rawCh, err := d.client.SendStreamRequest(ctx, nil, apiKey, apiReq, tok.EstimateRequest(req))
 	// 建连/握手阶段的结果先行回报；建连成功后逐块解码期间的错误（rawCh 内部）
 	// 属于流中断，现有设计未对单块错误做凭证级分类，维持原有粒度不扩大改动范围。
 	cred.RecordResult(err)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.StreamInfer", err)
 	}
 
@@ -208,6 +211,12 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 	// [SafeGo] 计费/缓存指标转发：畸形事件触发 panic 此前会直接崩进程。
 	concurrent.SafeGo(ctx, "llm.adapter.deepseek_stream_relay", func(context.Context) {
 		defer close(outCh)
+		// cancel 必须在 relay 排空 rawCh 之后才触发：此前由解码协程在写完最后一帧后立刻
+		// cancel，relay 的 `select { outCh<-ev; <-ctx.Done() }` 两路同时就绪时随机选择，
+		// 约一半概率丢弃 rawCh 里尚未转发的 tool_calls 与末尾 usage（空输出根因，见 REPORT B2）。
+		if cancel != nil {
+			defer cancel()
+		}
 		for ev := range rawCh {
 			if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
 				if d.tbr != nil {
