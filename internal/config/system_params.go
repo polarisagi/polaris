@@ -208,3 +208,7 @@ func ResolveConfigFile(explicitPath, dataDir string) string {
 	}
 	return filepath.Join(".", ConfigFileName)
 }
+
+// UsageDisplayFXCNYPerUSD 用量费用的展示汇率（人民币/美元）。llm_calls 一律存 USD，界面语言为中文时
+// 客户端按此折算成 ¥ 展示，并标注"估算"；设置页可覆盖。它只影响显示，不参与任何计费或预算判定。
+const UsageDisplayFXCNYPerUSD = 7.1

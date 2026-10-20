@@ -22,7 +22,10 @@ type Price struct {
 type Entry struct {
 	Prefix string
 	Price  Price
-	Source string
+	// ContextWindow 上下文窗口（token），0 = 未知。状态栏的"上下文占用"以它为分母；
+	// 优先用探测到的目录（provider_discovered_models），这里是目录缺失时的回退。
+	ContextWindow int
+	Source        string
 }
 
 // deepseekSource 官方定价页。页面注明高峰/低谷两档（低谷为高峰的一半，UTC 工作日
@@ -34,26 +37,37 @@ const deepseekSource = "https://api-docs.deepseek.com/quick_start/pricing"
 //
 //nolint:gochecknoglobals // 只读价目常量表
 var entries = []Entry{
-	{"deepseek-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, deepseekSource},
+	{"deepseek-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, 1_000_000, deepseekSource},
 	// 官方页说明 deepseek-v4-flash 仍可用且按 Flash 计价。
-	{"deepseek-v4-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, deepseekSource},
-	{"deepseek-v4-pro", Price{Input: 1.32, CacheHit: 0.044, Output: 3.96}, deepseekSource},
-	{"gpt-4o-mini", Price{Input: 0.15, CacheHit: 0.075, Output: 0.60}, "https://openai.com/api/pricing/"},
+	{"deepseek-v4-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, 1_000_000, deepseekSource},
+	{"deepseek-v4-pro", Price{Input: 1.32, CacheHit: 0.044, Output: 3.96}, 1_000_000, deepseekSource},
+	{"gpt-4o-mini", Price{Input: 0.15, CacheHit: 0.075, Output: 0.60}, 128_000, "https://openai.com/api/pricing/"},
 }
 
 // Lookup 按模型 ID 查价。modelID 可带 "provider/" 前缀；大小写不敏感。
 func Lookup(modelID string) (Price, bool) {
+	e, ok := lookupEntry(modelID)
+	return e.Price, ok
+}
+
+// ContextWindow 目录登记的上下文窗口；未收录或未登记返回 0。
+func ContextWindow(modelID string) int {
+	e, _ := lookupEntry(modelID)
+	return e.ContextWindow
+}
+
+func lookupEntry(modelID string) (Entry, bool) {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	if i := strings.LastIndex(id, "/"); i >= 0 {
 		id = id[i+1:]
 	}
-	best, bestLen := Price{}, 0
+	var best Entry
 	for _, e := range entries {
-		if strings.HasPrefix(id, e.Prefix) && len(e.Prefix) > bestLen {
-			best, bestLen = e.Price, len(e.Prefix)
+		if strings.HasPrefix(id, e.Prefix) && len(e.Prefix) > len(best.Prefix) {
+			best = e
 		}
 	}
-	return best, bestLen > 0
+	return best, best.Prefix != ""
 }
 
 // Entries 返回目录副本，供测试与文档生成。

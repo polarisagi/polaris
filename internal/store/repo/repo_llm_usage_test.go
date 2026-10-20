@@ -203,3 +203,44 @@ func TestPruneLLMCalls_CancelledContext(t *testing.T) {
 		t.Fatal("已取消的 ctx 应返回错误")
 	}
 }
+
+// 会话用量按 session_id 聚合所有用途；按 turn_id 拆回合；"最近一次请求"优先取内核调用。
+func TestSessionUsage_AggregatesAllPurposesAndTurns(t *testing.T) {
+	db := newLLMCallsDB(t)
+	w := NewSQLiteLLMCallRepository(db)
+	seedUsage(t, w,
+		protocol.LLMUsageRecord{CreatedAtMs: ms(1, 1), SessionID: "s1", TurnID: "t1", Purpose: "kernel", ModelID: "deepseek-flash", InputTokens: 12000, CacheHitTokens: 0, OutputTokens: 300, CostUSD: 0.004},
+		protocol.LLMUsageRecord{CreatedAtMs: ms(1, 2), SessionID: "s1", TurnID: "t1", Purpose: "kernel", ModelID: "deepseek-flash", InputTokens: 13000, CacheHitTokens: 12000, OutputTokens: 100, CostUSD: 0.001},
+		protocol.LLMUsageRecord{CreatedAtMs: ms(1, 3), SessionID: "s1", TurnID: "t2", Purpose: "kernel", ModelID: "deepseek-flash", InputTokens: 14000, CacheHitTokens: 13000, OutputTokens: 50, CostUSD: 0.001},
+		protocol.LLMUsageRecord{CreatedAtMs: ms(1, 4), SessionID: "s1", TurnID: "", Purpose: "consolidate_summary", ModelID: "other", InputTokens: 99999, OutputTokens: 1, CostUSD: 0.5},
+		protocol.LLMUsageRecord{CreatedAtMs: ms(1, 5), SessionID: "s2", TurnID: "t9", Purpose: "kernel", ModelID: "deepseek-flash", InputTokens: 1, CostUSD: 9},
+	)
+	q := NewSQLiteLLMUsageQuery(db)
+	su, err := q.SessionUsage(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if su.Calls != 4 || su.InputTokens != 12000+13000+14000+99999 || su.CacheHitTokens != 25000 || su.OutputTokens != 451 {
+		t.Fatalf("totals: %+v", su.LLMUsageTotals)
+	}
+	if su.LastInputTokens != 14000 || su.LastModelID != "deepseek-flash" {
+		t.Fatalf("最近一次应取内核调用而非后台摘要: %+v", su)
+	}
+	if len(su.ByTurn) != 2 || su.ByTurn[0].TurnID != "t1" || su.ByTurn[0].Calls != 2 || su.ByTurn[1].TurnID != "t2" {
+		t.Fatalf("by_turn: %+v", su.ByTurn)
+	}
+	tu, err := q.TurnUsage(context.Background(), "t1")
+	if err != nil || tu.Calls != 2 || tu.InputTokens != 25000 {
+		t.Fatalf("turn usage: %+v err=%v", tu, err)
+	}
+	if empty, _ := q.TurnUsage(context.Background(), ""); empty.Calls != 0 {
+		t.Fatalf("空 turn_id 不应聚合: %+v", empty)
+	}
+	g, err := q.UsageSince(context.Background(), ms(1, 3))
+	if err != nil || g.Calls != 3 {
+		t.Fatalf("since: %+v err=%v", g, err)
+	}
+	if none, _ := q.SessionUsage(context.Background(), "nope"); none.Calls != 0 || none.LastInputTokens != 0 {
+		t.Fatalf("无记录会话应为零值: %+v", none)
+	}
+}

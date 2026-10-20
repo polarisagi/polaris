@@ -43,3 +43,45 @@ type LLMUsageQueryRepository interface {
 	// 组内无行时不返回该组。
 	AggregateLLMUsage(ctx context.Context, q LLMUsageQuery) ([]LLMUsageGroup, error)
 }
+
+// LLMUsageTotals 一组 llm_calls 行的求和（比率由调用方派生）。
+type LLMUsageTotals struct {
+	Calls           int64
+	InputTokens     int64 // 含前缀缓存命中
+	CacheHitTokens  int64
+	OutputTokens    int64 // 含推理
+	ReasoningTokens int64
+	CostUSD         float64
+	LatencyMs       int64 // 各次调用耗时之和（并行调用会重复计，仅作参考）
+}
+
+// LLMTurnUsage 一个回合（turn_id）的用量。
+type LLMTurnUsage struct {
+	TurnID    string
+	FirstAtMs int64
+	LastAtMs  int64
+	LLMUsageTotals
+}
+
+// LLMSessionUsage 一个会话的全部用途用量（kernel、persona_refine、压缩等，归属以 ctx 的 session_id 为准）。
+type LLMSessionUsage struct {
+	LLMUsageTotals
+	// LastInputTokens/LastModelID：最近一次成功的内核（purpose=kernel）请求的输入 token 与模型，
+	// 无内核调用时退回最近一次任意成功请求。供"上下文占用"。
+	LastInputTokens int64
+	LastModelID     string
+	ByTurn          []LLMTurnUsage
+}
+
+// LLMSessionUsageRepository 会话/回合/全局维度的用量查询（A3/A4）。
+// 与 LLMUsageQueryRepository 由同一个 SQLite 实现满足，消费方按需类型断言。
+//
+// @producer: internal/store/repo/repo_llm_usage.go
+type LLMSessionUsageRepository interface {
+	SessionUsage(ctx context.Context, sessionID string) (LLMSessionUsage, error)
+	TurnUsage(ctx context.Context, turnID string) (LLMUsageTotals, error)
+	// UsageSince 自 sinceMs 起全部会话的累计（含无会话的后台调用）。
+	UsageSince(ctx context.Context, sinceMs int64) (LLMUsageTotals, error)
+	// ContextWindowFor 探测目录里模型的上下文窗口；未知返回 0。
+	ContextWindowFor(ctx context.Context, modelID string) (int, error)
+}
