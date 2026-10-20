@@ -167,16 +167,16 @@ func WriteAgenticUsage(b *prompt.PromptBuilder, tokens int, cost float64, wallSe
 // FinishAgenticLayered 补齐 L0 稳定核，按 L0..L4 组装前缀，并在 L4 回合消息之后追加末尾易变块（R3-01）。
 // 易变块为单条 user 消息，依次包含 core.VolatileContent()、T7 计量行、收尾告警。
 // 该易变块不写入 LoopMessages，每轮按最新计量重新生成，保证 L0..L4 字节前缀严格稳定（T1）。
+//
+// L0 只取可变稳定核（StableMessage），**不带** "# PHASE CONTRACTS" 阶段契约段：契约库是
+// Perceive/Plan/Reflect/Respond 四阶段的输出格式（TaskModel/DAG JSON 等），其导语要求模型
+// 去找末尾的 "# ACTIVE PHASE" 选择器——agentic 循环没有阶段、也不写选择器，模型在思考链里
+// 反复困惑"我在 Perceive 阶段该输出 TaskModel JSON？"（2026-10-20 实测），既误导又白付约 2.5K token。
+// 循环模式的指令只来自 L3 的 kernel/loop.md。
 func FinishAgenticLayered(b *prompt.PromptBuilder, memory protocol.MemoryFacade, usageText, warnPrompt string) []types.Message {
 	if memory != nil {
 		if core := memory.ImmutableCore(); core != nil {
-			if pc := phaseContractCoreOf(memory); pc != nil {
-				for _, m := range pc.StableMessagesWithContracts() {
-					b.WriteStable(m)
-				}
-			} else {
-				b.WriteStable(core.StableMessage())
-			}
+			b.WriteStable(core.StableMessage())
 		}
 	}
 	msgs := b.BuildLayered()
@@ -220,7 +220,7 @@ func BuildAgenticPrompt(ctx context.Context, memory protocol.MemoryFacade, sCtx 
 	WriteConversationHistory(b, sCtx)
 
 	// 3. L3 阶段层：内核指令（每回合保持不变的内容）
-	WritePhaseContract(b, memory, "kernel/loop.md", "You are Polaris in agentic loop mode. Use available tools to fulfill user goals. When done, reply clearly or call finish.")
+	WriteKernelInstruction(b, "kernel/loop.md", "You are Polaris in agentic loop mode. Use available tools to fulfill user goals. When done, reply clearly or call finish.")
 
 	// 4. L4 回合层：如果 roundMsgs 为空，写入初始 RawIntentTS；否则逐条写入 roundMsgs
 	if len(roundMsgs) == 0 {
