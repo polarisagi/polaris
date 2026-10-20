@@ -217,8 +217,8 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 	}
 
 	sCtx.Mu.Lock()
-	roundMsgs := make([]types.Message, len(sCtx.LoopMessages))
-	copy(roundMsgs, sCtx.LoopMessages)
+	roundMsgs := make([]types.Message, 0, len(sCtx.LoopMessages)+2) // +2：空输出重试的瞬态助手/user 提示
+	roundMsgs = append(roundMsgs, sCtx.LoopMessages...)
 	round := sCtx.LoopRound
 	sCtx.Mu.Unlock()
 	// 空输出重试：在 L4 末尾追加瞬态的「助手(含 reasoning_content) + user 提示」（B3.1）。

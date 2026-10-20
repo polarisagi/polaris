@@ -259,7 +259,7 @@ Go GC 对 purego/Rust FFI 堆外内存无可见性，管控逻辑内联于 Memor
 
 ### 8-bis. LLM 原始流转储（`POLARIS_LLM_RAW_DUMP`，调试专用）
 
-默认关闭。设置环境变量 `POLARIS_LLM_RAW_DUMP=<目录>` 后，OpenAI 兼容适配器每次流式请求写一个 `<目录>/<unixnano>-<seq>.sse`（目录 0700、文件 0600）：首行 `# request {...}` 为请求摘要（时间、模型、消息条数、工具名、tool_choice、thinking、reasoning_effort），其后逐行原样记录 SSE 数据行。**绝不写 API Key / Authorization**，但**会包含完整对话内容（用户输入、模型输出、工具参数与结果）**——只用于排查“空输出/usage 丢失/厂商协议差异”，用完立即关闭并删除目录。进程启动时读取一次（`sync.Once`），改值需重启。实现：`internal/llm/adapter/stream_diag.go`。另有常驻的 Debug 日志 `llm stream: summary`（text/reasoning 字节、tool_calls 数、finish_reason、usage）。
+默认关闭。设置环境变量 `POLARIS_LLM_RAW_DUMP=<目录>` 后，OpenAI 兼容适配器每次流式请求写一个 `<目录>/<unixnano>-<随机>.sse`（目录 0700、文件 0600）：首行 `# request {...}` 为请求摘要（时间、模型、消息条数、工具名、tool_choice、thinking、reasoning_effort），其后逐行原样记录 SSE 数据行。**绝不写 API Key / Authorization**，但**会包含完整对话内容（用户输入、模型输出、工具参数与结果）**——只用于排查“空输出/usage 丢失/厂商协议差异”，用完立即关闭并删除目录。每次流式请求读取一次环境变量（无包级状态），改值后对新请求立即生效。实现：`internal/llm/adapter/stream_diag.go`。另有常驻的 Debug 日志 `llm stream: summary`（text/reasoning 字节、tool_calls 数、finish_reason、usage）。
 
 ---
 

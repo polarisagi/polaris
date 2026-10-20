@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -16,17 +14,9 @@ import (
 // 仅用于排查"空输出/工具调用丢失"这类需要看原始帧的问题，用完请关闭并删除目录。
 const EnvLLMRawDump = "POLARIS_LLM_RAW_DUMP"
 
-var (
-	rawDumpSeq atomic.Int64
-	// 进程内只读一次：转储开关属于启动期调试设置，运行中改环境变量本就不会生效。
-	rawDumpDirOnce sync.Once
-	rawDumpDirVal  string
-)
-
-func rawDumpDir() string {
-	rawDumpDirOnce.Do(func() { rawDumpDirVal = os.Getenv(EnvLLMRawDump) })
-	return rawDumpDirVal
-}
+// rawDumpDir 每次流式请求读取一次环境变量（廉价），避免包级可变状态；
+// 取值为空即关闭。
+func rawDumpDir() string { return os.Getenv(EnvLLMRawDump) }
 
 // rawDump 单条流的转储句柄；nil 表示未开启，所有方法对 nil 安全。
 type rawDump struct {
@@ -34,7 +24,7 @@ type rawDump struct {
 	f  *os.File
 }
 
-// newRawDump 开启时创建 <dir>/<unixnano>-<seq>.sse 并写入请求摘要。
+// newRawDump 开启时创建 <dir>/<unixnano>-<随机>.sse 并写入请求摘要。
 // 只写模型名、消息数、工具名与关键开关——绝不写 API Key、鉴权头或消息正文。
 func newRawDump(dir string, req *OpenAIRequest) *rawDump {
 	if dir == "" || req == nil {
@@ -44,8 +34,8 @@ func newRawDump(dir string, req *OpenAIRequest) *rawDump {
 		slog.Warn("llm raw dump: mkdir failed", "dir", dir, "err", err)
 		return nil
 	}
-	name := fmt.Sprintf("%d-%d.sse", time.Now().UnixNano(), rawDumpSeq.Add(1))
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	// CreateTemp 保证文件名唯一（并发流不会撞名），且权限固定 0600。
+	f, err := os.CreateTemp(dir, fmt.Sprintf("%d-*.sse", time.Now().UnixNano()))
 	if err != nil {
 		slog.Warn("llm raw dump: open failed", "dir", dir, "err", err)
 		return nil

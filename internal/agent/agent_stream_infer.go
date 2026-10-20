@@ -67,14 +67,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 				inferErr = apperr.New(apperr.CodeCancelled, "推理流被中断: "+ev.Content).WithRetryAfter(5)
 			}
 		}
-		if ev.FinishReason != "" {
-			finishReason = ev.FinishReason
-		}
-		if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
-			usage.InputTokens = ev.Usage.InputTokens
-			usage.OutputTokens = ev.Usage.OutputTokens
-			usage.CacheHitTokens = ev.Usage.CacheHitTokens
-		}
+		foldStreamMeta(ev, &finishReason, &usage)
 	}
 
 	if inferErr != nil {
@@ -116,4 +109,17 @@ func (a *Agent) acceptStreamToolCall(payload string, audience protocol.LLMAudien
 		})
 	}
 	return types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input}, true
+}
+
+// foldStreamMeta 把单个流事件携带的终态元数据（finish_reason、usage）折叠进累计值：
+// 适配器保证 usage 只在终态事件出现一次，后到者覆盖先到者。
+func foldStreamMeta(ev types.StreamEvent, finishReason *string, usage *types.Usage) {
+	if ev.FinishReason != "" {
+		*finishReason = ev.FinishReason
+	}
+	if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
+		usage.InputTokens = ev.Usage.InputTokens
+		usage.OutputTokens = ev.Usage.OutputTokens
+		usage.CacheHitTokens = ev.Usage.CacheHitTokens
+	}
 }
