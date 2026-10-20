@@ -57,6 +57,8 @@ type WorkflowAdmin struct {
 	// HITL 写入类管线工具步骤的人工审批网关；nil 时需审批的写工具 fail-closed 拒绝。
 	HITL        HITLPrompter
 	dedupStates sync.Map // runID -> *dedupState
+	// stepSessions 记录正在执行的步骤会话归属哪个运行（sessionID -> runID），供整体超时判定审批等待。
+	stepSessions sync.Map
 }
 
 // NewWorkflowAdmin 构造 WorkflowAdmin。

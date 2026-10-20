@@ -88,7 +88,8 @@ func (h *WorkflowAdmin) runWorkflowGraph(wf *workflow, runID string, steps []wor
 		if release != nil {
 			defer release()
 		}
-		bgCtx, cancel := context.WithTimeout(context.Background(), 120*time.Minute)
+		// 整体 120 分钟预算在等待人工审批期间暂停（与 cron 自动化一致）。
+		bgCtx, cancel := pausableTimeout(120*time.Minute, h.runWaiting(runID))
 		defer cancel()
 
 		status := "ok"

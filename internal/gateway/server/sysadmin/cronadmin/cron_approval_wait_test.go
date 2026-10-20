@@ -18,7 +18,7 @@ func TestSuperviseRunBudget_PausesWhileWaiting(t *testing.T) {
 	waiting.Store(true)
 	var mu sync.Mutex
 	var changes []bool
-	go superviseRunBudget(ctx, cancel, 120*time.Millisecond, 10*time.Millisecond,
+	go SuperviseBudget(ctx, cancel, 120*time.Millisecond, 10*time.Millisecond,
 		func(context.Context) bool { return waiting.Load() },
 		func(w bool) { mu.Lock(); changes = append(changes, w); mu.Unlock() })
 

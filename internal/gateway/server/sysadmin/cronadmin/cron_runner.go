@@ -133,7 +133,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 		defer cancel()
 		budgetCtx := bgCtx // bgCtx 之后会被 WithValue 重新赋值，监督协程只持有不再变化的副本
 		concurrent.SafeGo(context.Background(), "cronadmin.executeAutomation.budget", func(context.Context) {
-			superviseRunBudget(budgetCtx, cancel, timeout, approvalPollInterval,
+			SuperviseBudget(budgetCtx, cancel, timeout, ApprovalPollInterval,
 				sessionWaitingForApproval(ca.HITLGateway, sessionID),
 				func(waiting bool) {
 					st := "running"
