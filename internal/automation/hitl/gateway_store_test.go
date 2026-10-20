@@ -76,8 +76,12 @@ func TestGateway_RespondIdempotent(t *testing.T) {
 		t.Fatalf("pending should be empty: %+v", pend)
 	}
 	// 未知 ID 同样报错。
-	if err := gw.Respond(ctx, "nope", types.HITLResponse{Approved: false}); err == nil {
-		t.Fatal("unknown id must fail")
+	// 未知 ID：批准与拒绝两条路径都应是 NOT_FOUND（HTTP 404），而不是 500/403/409。
+	for _, approved := range []bool{false, true} {
+		err := gw.Respond(ctx, "nope", types.HITLResponse{Approved: approved})
+		if !apperr.IsCode(err, apperr.CodeNotFound) {
+			t.Fatalf("unknown id (approved=%v): want NOT_FOUND, got %v", approved, err)
+		}
 	}
 }
 

@@ -398,6 +398,10 @@ func (g *GatewayImpl) respond(
 		return apperr.Wrap(apperr.CodeInternal, "hitl_gateway: decide failed", err)
 	}
 	if !hit {
+		// 未命中 = 已决/已超时/已对账/不存在。拒绝路径不预读行，故在此区分"不存在"（404）与"已不是 pending"（409）。
+		if _, gerr := g.store.Get(ctx, checkpointID); apperr.IsCode(gerr, apperr.CodeNotFound) {
+			return apperr.New(apperr.CodeNotFound, "hitl_gateway: approval "+checkpointID+" not found")
+		}
 		return apperr.New(apperr.CodeConflict,
 			fmt.Sprintf("hitl_gateway: %s is not pending (already decided, timed out or orphaned)", checkpointID))
 	}

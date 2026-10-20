@@ -33,6 +33,11 @@ func (g *GatewayImpl) applyApprovalGuards(
 	ctx context.Context, checkpointID string,
 ) (types.HITLPrompt, error) {
 	row, err := g.store.Get(ctx, checkpointID)
+	if apperr.IsCode(err, apperr.CodeNotFound) {
+		// 不存在的审批 ID 是调用方给错了，不是"无法校验前置条件"：如实报 NOT_FOUND（HTTP 404），
+		// 而不是笼统的 FORBIDDEN/500 让用户误以为服务异常。
+		return types.HITLPrompt{}, apperr.New(apperr.CodeNotFound, "hitl_gateway: approval "+checkpointID+" not found")
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "hitl_gateway: cannot read pending record, refusing approval (fail-closed)",
 			"checkpoint", checkpointID, "err", err)

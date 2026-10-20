@@ -18,6 +18,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -251,7 +252,8 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 
 	err := s.hitlGateway.Respond(r.Context(), approvalID, resp)
 	if err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		// 状态码跟随错误码：不存在 404、已决/已超时 409、前置校验不过 403，其余才是 500。
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 
