@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func (h *SysAdminHandler) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
@@ -24,6 +26,18 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
+	}
+
+	// 权限模式只认单一事实源 permission_mode：旧客户端仍写 computer_use_mode 时别名到新键，
+	// 取值必须是三档之一（非法值直接拒绝，不落库）。
+	if key == types.LegacyPrefComputerUseMode {
+		key = types.PrefPermissionMode
+	}
+	if key == types.PrefPermissionMode {
+		if _, ok := types.ParsePermissionMode(req.Value); !ok {
+			httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "permission_mode must be default|auto_review|full_access"), http.StatusBadRequest)
+			return
+		}
 	}
 
 	err := h.SystemRepo.UpsertPreference(r.Context(), key, req.Value)

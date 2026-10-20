@@ -79,7 +79,7 @@ func (m *Manager) Authorize(ctx context.Context, req protocol.ExtensionInstallRe
 	}
 	mode, err := m.prefsRepo.GetPermissionMode(ctx)
 	if err != nil {
-		mode = types.ModeAutoReview
+		mode = types.ModeDefault // 读不到偏好时取最严档（fail-closed）
 	}
 
 	// 1. TrustTier Override based on whitelist

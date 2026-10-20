@@ -66,6 +66,22 @@ const (
 	ModeFullAccess PermissionMode = "full_access"
 )
 
+// PrefPermissionMode 权限模式的唯一偏好键（ADR-0117 决策一）；
+// LegacyPrefComputerUseMode 是迁移前前端写入的旧键，仅在读取/写入入口处回落。
+const (
+	PrefPermissionMode        = "permission_mode"
+	LegacyPrefComputerUseMode = "computer_use_mode"
+)
+
+// ParsePermissionMode 解析权限模式字面量；非三档之一返回 false（调用方 fail-closed 取最严档）。
+func ParsePermissionMode(s string) (PermissionMode, bool) {
+	switch m := PermissionMode(s); m {
+	case ModeDefault, ModeAutoReview, ModeFullAccess:
+		return m, true
+	}
+	return "", false
+}
+
 // CheckpointDeviceControlReview 电脑/浏览器操控（computer_use/browser_use）的 HITL
 // checkpoint 类型，由 interceptComputerUse 发起。
 //
