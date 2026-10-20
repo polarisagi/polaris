@@ -7,21 +7,11 @@ import (
 func coreMemoryEditTool() types.Tool {
 	return types.Tool{
 		Name: "core_memory_edit",
-		Description: "Edit the agent's core working memory — a set of named text blocks injected into every " +
-			"prompt. Treat it as a small, always-visible filesystem you fully control.\n\n" +
-			"Operations:\n" +
-			"  list     — enumerate all blocks with key, description, size, and byte limit. " +
-			"Call this first if you are unsure which block to edit.\n" +
-			"  get      — read one block's full content.\n" +
-			"  set      — overwrite a block entirely (creates it if absent).\n" +
-			"  append   — add text to the end of a block.\n" +
-			"  replace  — replace an exact substring inside a block. Prefer this over `set` for large blocks: " +
-			"it is cheaper and cannot accidentally drop unrelated text. `old_str` must appear exactly once " +
-			"unless `replace_all` is true.\n" +
-			"  delete   — remove a block.\n" +
-			"  describe — record what a block is for, so future turns pick the right target.\n\n" +
-			"Blocks marked read-only cannot be modified. Writes exceeding a block's byte limit are rejected — " +
-			"summarize or split the content instead of retrying the same write.",
+		Description: "Edit core working memory: named text blocks injected into every prompt. " +
+			"Operations: list (keys, sizes, limits; call first if unsure), get, set (overwrite/create), append, " +
+			"replace (exact old_str→new_str; must match once unless replace_all; prefer over set for large blocks), " +
+			"delete, describe (record a block's purpose). Read-only blocks can't change; writes over a block's byte " +
+			"limit are rejected — summarize or split instead of retrying.",
 		Version:     "2.0.0",
 		Source:      types.ToolBuiltin,
 		TrustTier:   types.TrustSystem,

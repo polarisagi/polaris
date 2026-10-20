@@ -279,3 +279,87 @@ func TestRunTurn_Interactive_EmitsStepsAndCompleteMeta(t *testing.T) {
 		t.Errorf("complete payload lacks turn_id: %v", complete)
 	}
 }
+
+func TestFriendlyTurnError(t *testing.T) {
+	for _, c := range []struct{ code, detail, want string }{
+		{"empty_response", "推理返回空内容，请检查模型配置或重试", "模型没有返回内容"},
+		{"empty_response", "context deadline exceeded", "模型响应超时"},
+		{"empty_response", "HTTP 401 Unauthorized", "模型凭据无效或无权限"},
+		{"empty_response", "429 Too Many Requests: rate limit", "模型触发限流"},
+		{"empty_response", "insufficient balance", "模型额度不足"},
+		{"empty_response", "something odd", "模型调用失败"},
+	} {
+		if got := friendlyTurnError(c.code, c.detail); got != c.want {
+			t.Errorf("friendlyTurnError(%q,%q)=%q want %q", c.code, c.detail, got, c.want)
+		}
+	}
+}
+
+// 失败回合：error 步骤落库，摘要行带 failed/error，便于历史接口生成占位。
+func TestStepRecorder_FailMarksSummaryAndPersistsErrorStep(t *testing.T) {
+	sink := &recordingSink{}
+	st := &fakeTurnStore{}
+	r := newStepRecorder(context.Background(), sink, st, "s", "turn_f")
+	r.fail("empty_response", "模型没有返回内容", "推理返回空内容")
+	r.fail("empty_response", "第二次应被忽略", "x")
+	sum := r.finalize(true)
+	if !sum.Failed || sum.Error != "模型没有返回内容" || sum.ErrorCode != "empty_response" {
+		t.Fatalf("summary = %+v", sum)
+	}
+	var sawErrStep, sawSummary bool
+	for _, rec := range st.snapshot() {
+		if rec.Kind == StepKindError {
+			sawErrStep = true
+		}
+		if rec.Kind == stepKindSummary {
+			var got StepSummary
+			if err := json.Unmarshal(rec.Data, &got); err != nil || !got.Failed || got.ErrorDetail != "推理返回空内容" {
+				t.Errorf("summary row = %s (%v)", rec.Data, err)
+			}
+			sawSummary = true
+		}
+	}
+	if !sawErrStep || !sawSummary {
+		t.Errorf("sawErrStep=%v sawSummary=%v", sawErrStep, sawSummary)
+	}
+}
+
+// 端到端：模型空输出 → 回合失败 → 用户消息被挂上回合 ID（供历史显示占位），且没有任何助手消息落库。
+func TestRunTurn_Interactive_EmptyReplyMarksTurnFailed(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	persistence := newFakePersistence()
+	pool := &fakeAgentPool{ctrl: ctrl}
+	store := &fakeTurnStore{}
+	orc := New(Deps{
+		Hooks: &fakeHooks{}, SlashRouter: &fakeSlash{}, Compression: &fakeCompression{}, Persistence: persistence,
+		Prompt: fakePrompt{}, Registry: fakeRegistry{}, AgentPool: pool,
+		TranscriptDir: t.TempDir(), DataDir: t.TempDir(), Turns: store,
+	})
+	sink := &recordingSink{}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s1", Input: "hi", Channel: "web"}, sink); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if got := persistence.savedAssistantReplies(); len(got) != 0 {
+		t.Fatalf("失败回合不应落库助手消息: %v", got)
+	}
+	store.mu.Lock()
+	meta := store.meta
+	store.mu.Unlock()
+	if usage, ok := meta[1]; !ok || usage != "" {
+		t.Fatalf("用户消息(id=1)应被挂上失败回合 ID（usage 为空）: %v", meta)
+	}
+	var failedSummary bool
+	for _, rec := range store.snapshot() {
+		if rec.Kind == stepKindSummary {
+			var s StepSummary
+			_ = json.Unmarshal(rec.Data, &s)
+			failedSummary = s.Failed && s.Error != ""
+		}
+	}
+	if !failedSummary {
+		t.Error("摘要行应标记 failed")
+	}
+}

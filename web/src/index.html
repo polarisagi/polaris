@@ -108,7 +108,7 @@
       <li>
         <a @click.prevent="cycleTheme()" href="#" class="flex items-center gap-2">
           <span x-text="themeLabels[curTheme]" class="w-5 text-center"></span>
-          <span x-text="$store.i18n.t('theme_' + curTheme) || curTheme"></span>
+          <span x-text="$store.i18n.t('theme_' + curTheme)"></span>
         </a>
       </li>
       <li>

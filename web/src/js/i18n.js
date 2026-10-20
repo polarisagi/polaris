@@ -142,6 +142,8 @@ export const zh = {
   theme_light:   '白天',
   theme_terminal:'终端',
   theme_system:  '跟随系统',
+  theme_nord:    '北欧',
+  theme_corporate:'商务',
 
   computer_control_title: '权限',
   computer_control_desc:  '控制 Agent 在哪些情况下需要先问你，以及它能操作什么',
@@ -943,6 +945,12 @@ export const zh = {
   mesh_mcp_register_failed: "对端已登记，但委派通道注册失败（可再次接受同一邀请串重试）",
   mesh_copied: "已复制",
   mesh_close: "关闭",
+  close: "关闭",
+  chat_recall: "撤回编辑",
+  chat_recall_title: "撤回并重新编辑",
+  chat_turn_failed: "本轮失败",
+  chat_turn_failed_unknown: "未知原因",
+  chat_retry: "重试",
 }
 
 export const en = {
@@ -1087,6 +1095,8 @@ export const en = {
   theme_light:   'Light',
   theme_terminal:'Terminal',
   theme_system:  'System',
+  theme_nord:    'Nord',
+  theme_corporate:'Corporate',
 
   computer_control_title: 'Permissions',
   computer_control_desc:  'Control when the Agent must ask you first, and what it may operate',
@@ -1854,4 +1864,21 @@ export const en = {
   mesh_mcp_register_failed: "Peer registered, but the delegation channel failed to register (accept the same invite again to retry)",
   mesh_copied: "Copied",
   mesh_close: "Close",
+  catalog_api_key_label:   'API Key',
+  catalog_name_label:      'Display name',
+  catalog_name_hint:       '(optional, leave blank for the provider default)',
+  catalog_base_url_label:  'Base URL',
+  catalog_base_url_hint:   '(optional, leave blank for the default endpoint)',
+  catalog_advanced:        'Advanced options',
+  catalog_local_no_key:    'Local deployment, no API key needed',
+  catalog_models_preview:  'Models that will be configured',
+  catalog_save:            'Add now',
+  catalog_saving:          'Adding…',
+  catalog_no_models:       'This provider has no preset models; configure them manually after adding',
+  close: 'Close',
+  chat_recall: 'Recall & edit',
+  chat_recall_title: 'Recall and edit this message',
+  chat_turn_failed: 'This turn failed',
+  chat_turn_failed_unknown: 'unknown reason',
+  chat_retry: 'Retry',
 }

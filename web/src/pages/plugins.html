@@ -299,8 +299,8 @@
           此操作需要进行安全审核（HITL）。批准后，该插件将被允许安装并在系统中执行代码。请确认您信任此插件的来源。
         </p>
         <div class="modal-action">
-          <button class="btn btn-ghost hover:bg-error/10 text-error" @click="$store.plugins.resolveApproval('deny')" x-text="$store.i18n.t('approvals_deny') || '拒绝'"></button>
-          <button class="btn btn-warning" @click="$store.plugins.resolveApproval('approve')" x-text="$store.i18n.t('approvals_approve') || '批准'"></button>
+          <button class="btn btn-ghost hover:bg-error/10 text-error" @click="$store.plugins.resolveApproval('deny')" x-text="$store.i18n.t('approvals_deny')"></button>
+          <button class="btn btn-warning" @click="$store.plugins.resolveApproval('approve')" x-text="$store.i18n.t('approvals_approve')"></button>
         </div>
       </div>
       <div class="modal-backdrop" @click="$store.plugins.resolveApproval('deny')"></div>

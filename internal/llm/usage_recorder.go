@@ -209,13 +209,14 @@ func (p *usageRecordingProvider) fillUsage(row *protocol.LLMUsageRecord, u types
 	}
 	row.InputTokens, row.CacheHitTokens = input, u.CacheHitTokens
 	row.OutputTokens, row.ReasoningTokens = u.OutputTokens, u.ReasoningTokens
-	row.CostUSD = p.priceFor(row.ModelID).Cost(miss, u.CacheHitTokens, u.OutputTokens)
+	row.CostUSD = p.priceFor(row.ModelID, time.UnixMilli(row.CreatedAtMs)).Cost(miss, u.CacheHitTokens, u.OutputTokens)
 }
 
-// priceFor 按实际调用的模型 ID 取价（pricing.Resolve：目录优先，回退适配器声明费率）。
+// priceFor 按实际调用的模型 ID 与调用开始时刻取价（pricing.Resolve：目录优先，回退适配器声明费率；
+// DeepSeek 等分时段计价的模型按 at 的 UTC 时段折算）。
 // 不能只信适配器——用户把 DeepSeek 接在 openai_compat 适配器下时，适配器只知道 OpenAI 价格。
-func (p *usageRecordingProvider) priceFor(modelID string) pricing.Price {
-	return pricing.Resolve(modelID, p.Capabilities())
+func (p *usageRecordingProvider) priceFor(modelID string, at time.Time) pricing.Price {
+	return pricing.Resolve(modelID, p.Capabilities(), at)
 }
 
 func setStatus(ctx context.Context, row *protocol.LLMUsageRecord, err error) {

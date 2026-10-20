@@ -110,7 +110,11 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 	// 可能遍历 map）；稳定层任何集合都必须确定序（ADR-0105 决策一字节稳定规则 1）。
 	// 无工具时必须清空：ic 是长生命周期共享对象，不清空会残留上一请求的工具名。
 	ic.BuiltinTools = ""
-	if s.ToolReg != nil {
+	// 懒加载模式（ADR-0119）：核心工具名 + 未加载工具的一行索引，替代平铺全部工具名；索引字节只随工具集变化。
+	if s.ToolIndex != nil {
+		ic.BuiltinTools = s.ToolIndex.ToolsHint(ctx)
+	}
+	if ic.BuiltinTools == "" && s.ToolReg != nil {
 		var names []string
 		for _, t := range s.ToolReg.List() {
 			names = append(names, t.Name)
@@ -181,32 +185,6 @@ func sortedValueLines(m map[string]any) []string {
 }
 
 func loadOperationalDirectives(pm PromptManager) string {
-	var opDirectives []string
-
-	if op := pm.ReadPrompt("operational/tool_use.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-	if op := pm.ReadPrompt("operational/task_completion.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-	if op := pm.ReadPrompt("operational/execution_discipline.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-	if op := pm.ReadPrompt("operational/memory_hygiene.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-	if op := pm.ReadPrompt("operational/coding_style.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-	if op := pm.ReadPrompt("operational/output_efficiency.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-	if op := pm.ReadPrompt("operational/risky_actions.md", ""); op != "" {
-		opDirectives = append(opDirectives, op)
-	}
-
-	if len(opDirectives) > 0 {
-		return strings.Join(opDirectives, "\n\n")
-	}
-	return ""
+	// 七份运营指令已合并去重为 operational/directives.md（ADR-0119：约 2k → 约 0.9k token/轮）。
+	return pm.ReadPrompt("operational/directives.md", "")
 }

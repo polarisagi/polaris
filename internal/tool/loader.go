@@ -55,6 +55,12 @@ func GetBuiltinToolMeta(name string) (types.Tool, error) {
 			fmt.Sprintf("loader: parse schema.json for %q", name), err)
 	}
 
+	// 顶层 $schema / title / description 对模型无信息量却每轮随 tools 下发（ADR-0119 首轮 token 瘦身）；
+	// 描述以 tool.yaml 的 description 为准，不在 schema 里重复。
+	for _, k := range []string{"$schema", "title", "description", "$id"} {
+		delete(inputSchema, k)
+	}
+
 	capLevel, err := mapCapability(meta.Capability)
 	if err != nil {
 		return types.Tool{}, apperr.Wrap(apperr.CodeOf(err), fmt.Sprintf("%s: tool %q", "loader", name), err)

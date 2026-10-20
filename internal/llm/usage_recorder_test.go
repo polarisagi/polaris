@@ -194,10 +194,32 @@ func TestUsageRecorder_DeepSeekFlashRealRecordsRegression(t *testing.T) {
 		{"含命中", 24612, 14976, 2444, 0.0058, 0.0066, 2.91},
 	}
 	for _, c := range cases {
-		row := protocol.LLMUsageRecord{ModelID: "deepseek-flash"}
+		// 固定在高峰时刻（周二 02:00 UTC），金额不随运行时刻漂移；分时段见下一个测试。
+		row := protocol.LLMUsageRecord{ModelID: "deepseek-flash", CreatedAtMs: time.Date(2026, 10, 20, 2, 0, 0, 0, time.UTC).UnixMilli()}
 		p.fillUsage(&row, types.Usage{InputTokens: c.in, CacheHitTokens: c.hit, OutputTokens: c.out})
 		if row.CostUSD < c.wantLo || row.CostUSD > c.wantHi {
 			t.Errorf("%s: cost %.6f 应在 [%.4f,%.4f]（旧错值 %.4f）", c.name, row.CostUSD, c.wantLo, c.wantHi, c.oldWrongCostRecord)
+		}
+	}
+}
+
+// 记账按调用开始时刻（row.CreatedAtMs）的 UTC 时段计价：高峰 1x，工作日非高峰与周末 0.5x。
+func TestUsageRecorder_PeakWindowPricing(t *testing.T) {
+	p := &usageRecordingProvider{Provider: &mockProvider{caps: types.ProviderCapabilities{}}}
+	full := (9636*0.30 + 14976*0.006 + 2444*1.20) / 1e6
+	for _, c := range []struct {
+		name string
+		at   time.Time
+		want float64
+	}{
+		{"周二 02:00 高峰", time.Date(2026, 10, 20, 2, 0, 0, 0, time.UTC), full},
+		{"周二 05:00 非高峰", time.Date(2026, 10, 20, 5, 0, 0, 0, time.UTC), full / 2},
+		{"周六 02:00 周末", time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC), full / 2},
+	} {
+		row := protocol.LLMUsageRecord{ModelID: "deepseek-flash", CreatedAtMs: c.at.UnixMilli()}
+		p.fillUsage(&row, types.Usage{InputTokens: 24612, CacheHitTokens: 14976, OutputTokens: 2444})
+		if row.CostUSD < c.want-1e-9 || row.CostUSD > c.want+1e-9 {
+			t.Errorf("%s: cost %v want %v", c.name, row.CostUSD, c.want)
 		}
 	}
 }

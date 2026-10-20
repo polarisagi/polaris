@@ -118,7 +118,8 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	finalInput, userMsg := o.buildUserMessage(req)
 
 	history = append(history, userMsg)
-	if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+	userMsgID, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0)
+	if err != nil {
 		slog.Error("session: saveMessage user", "session", sessionID, "err", err)
 	}
 	if tw != nil {
@@ -264,6 +265,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		if tw != nil {
 			tw.WriteError("empty_response", inferErr)
 		}
+		o.failTurn(ctx, stepRec, turnID, userMsgID, "empty_response", inferErr)
 		o.emitError(sink, "empty_response", inferErr, sessionID, apperr.New(apperr.CodeInternal, inferErr))
 		o.hooks.StopFailure(ctx, sessionID, "empty_response")
 		return &Result{SessionID: sessionID, Aborted: true}, nil

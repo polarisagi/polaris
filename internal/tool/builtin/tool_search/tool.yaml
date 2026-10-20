@@ -1,6 +1,4 @@
 name: tool_search
-description: |
-  在已注册工具集中按名称或描述关键词搜索。query 为空时返回全量工具列表。
-  用途：Agent 可在调用前动态发现可用工具，避免幻觉式调用不存在的工具名称。
+description: "按名称或关键词搜索尚未加载的工具并激活；激活后下一轮即可调用（参数以那一轮收到的定义为准）。系统提示里的“未加载”清单就是它的检索范围；已列在 Loaded 里的工具无需搜索。"
 capability: read-only
 risk_level: low

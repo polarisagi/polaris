@@ -17,10 +17,10 @@ import (
 )
 
 // semanticMatchThreshold 语义检索的最低余弦相似度，低于此值的候选不返回，
-// 避免懒加载模式下 search_tools 把不相关工具也激活进会话（污染 tool_use 列表）。
+// 避免懒加载模式下 tool_search 把不相关工具也激活进会话（污染 tool_use 列表）。
 const semanticMatchThreshold = 0.3
 
-// toolSearchMaxResults 单次 search_tools 调用返回的工具数上限。
+// toolSearchMaxResults 单次 tool_search 调用返回的工具数上限。
 // 与 M13-bis-Extension-Registry.md §4 的 `LIMIT 10` 设计一致。
 const toolSearchMaxResults = 10
 
@@ -30,7 +30,7 @@ const toolSearchMaxResults = 10
 // 最旧条目（FIFO，简化版 LRU，与 tool_helpers.go 的 lruCache 风格一致）。
 const toolEmbeddingCacheMaxEntries = 1000
 
-// toolEmbeddingCache 缓存工具描述的向量，避免每次 search_tools 调用都重新
+// toolEmbeddingCache 缓存工具描述的向量，避免每次 tool_search 调用都重新
 // embed 全部候选（懒加载场景下工具总数可能上百个）。以工具名为 key，
 // 描述文本变化极罕见（仅扩展升级时），不做基于内容变化的失效逻辑，最坏情况
 // 下命中过期描述向量，语义相关性略有偏差但不影响正确性；条目数量本身通过
@@ -79,7 +79,7 @@ type scoredTool struct {
 	score float32
 }
 
-// toolSearchMatcher 持有单次 search_tools 调用的匹配状态，把 MakeToolSearchFn
+// toolSearchMatcher 持有单次 tool_search 调用的匹配状态，把 MakeToolSearchFn
 // 内部原本揉在一个闭包里的"语义检索 + 子串兜底 + 排序截断"拆成独立方法，
 // 避免闭包圈复杂度超过 lint 阈值（gocyclo/nestif）。
 type toolSearchMatcher struct {
@@ -119,16 +119,34 @@ func (m *toolSearchMatcher) matchSemantic(ctx context.Context, all []protocol.Ca
 	}
 }
 
-// matchSubstring 子串匹配兜底：query 为空（列出全部/供懒加载探测）或语义检索
-// 不可用/未命中时生效。子串命中给一个低于典型语义命中的固定分，语义分更高时不覆盖。
-func (m *toolSearchMatcher) matchSubstring(all []protocol.CatalogEntry, query string) {
-	lowerQuery := strings.ToLower(query)
-	for _, t := range all {
-		if query == "" ||
-			strings.Contains(strings.ToLower(t.Name), lowerQuery) ||
-			strings.Contains(strings.ToLower(t.Description), lowerQuery) {
+// matchKeywords 关键词 / BM25 匹配（ADR-0119）：对工具名称（加权）、描述分词后打分，不需要 Embedder。
+// query 为空（列出全部）时给所有候选固定低分；工具名被 query 整词包含时直接置顶。
+// 分数归一到 (0,1]，与语义检索的余弦分在 upsert 里取大者。
+func (m *toolSearchMatcher) matchKeywords(all []protocol.CatalogEntry, query string) {
+	if query == "" {
+		for _, t := range all {
 			m.upsert(t, 0.5)
 		}
+		return
+	}
+	scores := bm25Scores(all, query)
+	var maxScore float64
+	for _, sc := range scores {
+		maxScore = max(maxScore, sc)
+	}
+	if maxScore <= 0 {
+		return
+	}
+	lowerQuery := strings.ToLower(query)
+	for i, t := range all {
+		if scores[i] <= 0 {
+			continue
+		}
+		norm := float32(scores[i] / maxScore * 0.9)
+		if len(t.Name) >= 3 && strings.Contains(lowerQuery, strings.ToLower(t.Name)) {
+			norm = 1 // 点名匹配
+		}
+		m.upsert(t, norm)
 	}
 }
 
@@ -185,13 +203,12 @@ func activateAndSummarize(compCatalog *catalog.CompositeCatalog, sessionID strin
 	return results
 }
 
-// MakeToolSearchFn 让 Agent 在已注册工具集中按名称/描述关键词或语义搜索。
-// 命中结果会被激活到当前会话（基于 ctx 的 TaskID）。
+// MakeToolSearchFn 让 Agent 在已注册工具集中按名称/描述关键词搜索，并把命中的工具激活到当前会话
+// （基于 ctx 的 TaskID）；激活后的工具在**下一轮**请求的 tools 数组里出现。
 //
-// 匹配策略（P1-2）：Embedder 可用时优先语义检索（复用 M1 Embedder + internal/ffi
-// VecCosineF32 余弦相似度，Rust SIMD 加速/纯 Go 降级二选一，不新写向量检索栈），
-// 子串匹配作为 Embedder 不可用或未命中语义阈值时的兜底，两路结果合并去重后
-// 按分数降序返回，最多 toolSearchMaxResults 条。
+// 匹配策略（ADR-0119）：关键词/BM25 是基线，任何机器可用；Embedder 可用时叠加语义检索
+// （复用 M1 Embedder + internal/ffi VecCosineF32），两路结果合并去重后按分数降序，最多 toolSearchMaxResults 条。
+// 懒加载模式下已常驻的核心工具不返回（它们已经可调用，返回只会占用结果名额）。
 func MakeToolSearchFn(compCatalog *catalog.CompositeCatalog, embedder search.Embedder) sandbox.InProcessFn {
 	embCache := newToolEmbeddingCache()
 
@@ -204,18 +221,35 @@ func MakeToolSearchFn(compCatalog *catalog.CompositeCatalog, embedder search.Emb
 		}
 
 		all := compCatalog.List(ctx, types.TrustUntrusted) // search across all
+		if compCatalog.LazyActive(ctx, types.TrustUntrusted) {
+			all = excludeCore(compCatalog, all)
+		}
 		query := strings.TrimSpace(args.Query)
 
 		matcher := newToolSearchMatcher(embedder, embCache, len(all))
 		matcher.matchSemantic(ctx, all, query)
-		matcher.matchSubstring(all, query)
+		matcher.matchKeywords(all, query)
 
 		matches := matcher.sortedTop(toolSearchMaxResults)
 		results := activateAndSummarize(compCatalog, sessionIDFromCtx(ctx), matches)
 
-		return json.Marshal(map[string]any{
-			"tools": results,
-			"total": len(results),
-		})
+		out := map[string]any{"tools": results, "total": len(results)}
+		if len(results) > 0 {
+			out["note"] = "已激活，下一轮可直接调用；参数以下一轮收到的工具定义为准。"
+		} else {
+			out["note"] = "没有匹配的工具。换用工具名或更具体的关键词再试一次。"
+		}
+		return json.Marshal(out)
 	}
+}
+
+// excludeCore 去掉常驻核心工具（已在 tools 数组里，无需激活）。
+func excludeCore(c *catalog.CompositeCatalog, all []protocol.CatalogEntry) []protocol.CatalogEntry {
+	out := make([]protocol.CatalogEntry, 0, len(all))
+	for _, e := range all {
+		if !c.IsCore(e.Name) {
+			out = append(out, e)
+		}
+	}
+	return out
 }

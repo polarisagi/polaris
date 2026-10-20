@@ -14,7 +14,7 @@
 - `extension_instances`（020）是安装状态 SSoT；写入前必经 `Manager.InstallExtension`
 - 禁直接 INSERT `mcp_servers`/`skills`/`plugins`，必由安装层绑定写入
 - `trust_tier` 由 `security/policy` 决定，本包原样传递不做策略判定
-- 工具懒加载阈值 40（`lazy_load_tool_threshold`）：超限仅暴露 builtin（trust_tier=4）+ `search_tools`
+- 工具懒加载阈值 40（`lazy_load_tool_threshold`）：超限仅暴露静态核心集（含 `tool_search`），其余由系统提示索引 + `tool_search` 激活（ADR-0119，不依赖 Embedder）
 - ambient skill 注入上限 4000 字符（`ambient_skill_max_chars`）；超限按 trust_tier 降序截断
 
 **文件索引**

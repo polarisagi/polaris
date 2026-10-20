@@ -550,7 +550,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 					a.sCtx.LoopLastUsageTokens += callTokens
 					if a.provider != nil {
 						caps := a.provider.Capabilities()
-						callCost := pricing.CostFor(resp.Model, caps, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
+						callCost := pricing.CostFor(resp.Model, caps, time.Now(), resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
 						a.sCtx.LoopLastUsageCost += callCost
 					}
 					if !a.sCtx.LoopTurnStartTime.IsZero() {

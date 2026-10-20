@@ -93,7 +93,7 @@ SKILL.md frontmatter 的 `exec_mode`（DB 同名列，DDL 仅 `'tool'|'ambient'`
 已安装工具总数超过 `spec/state.yaml §thresholds.m13_interface.lazy_load_tool_threshold` 时切换懒加载，避免 context 爆炸。激活状态按 `session_id` 跟踪（`internal/tool/catalog/composite.go`）。
 
 - **正常模式**：`buildToolSchemas()` 全量返回 builtin + mcp + skill（exec_mode=tool，runtime=script）。
-- **懒加载模式**：仅返回核心 builtin（trust_tier=4）+ `search_tools` 元工具；LLM 经 `search_tools(query, type?: mcp|skill|builtin|any)` 按需发现并激活，命中结果（LIMIT 10）的完整 schema 注入后续 tool_use 可用列表。
+- **懒加载模式**（ADR-0119，不依赖 Embedder）：仅返回静态核心集（14 个，含 `tool_search`）；其余工具在系统提示里以"名称 用途"一行索引列出，LLM 经 `tool_search(query)`（关键词/BM25，Embedder 可用时叠加语义）按需激活，命中结果（LIMIT 10）的完整 schema 在下一轮追加到 tools 数组尾部并在会话内保留。
 - **5 级搜索降级**（`internal/extension/native/extension_manager.go`）：① SurrealDB FTSSearch（BM25）→ ② VecKNN（语义向量，需 embedFn）→ ③ GraphSpreadingActivation（沿 "provides" 边扩散）→ ④ SQLite `extension_catalog` LIKE → ⑤ 线上 MCP 注册表。`cognitive` 或 `db` 为 nil 时自动降级。
 
 ---
@@ -260,14 +260,14 @@ Bundle 子组件写入全局表但**只过一次门**：
 
 ### 8.1 工具列表构建（每次推理请求）
 
-`totalTools() ≤ lazy_load_tool_threshold`（`spec/state.yaml §thresholds.m13_interface`）时全量返回 builtin + mcp + script runtime skill（exec_mode=tool）；超限仅返回核心 builtin + `search_tools`。`skillToolSchemas()` 仅暴露 `runtime='script' AND exec_mode='tool'` 的技能，工具名 `skill__{slug}`（DB 键 `skill:{slug}` 去前缀加双下划线）；Logic Collapse 脚本技能经 `execute_skill`，不进此列表。
+`totalTools() ≤ lazy_load_tool_threshold`（`spec/state.yaml §thresholds.m13_interface`）时全量返回 builtin + mcp + script runtime skill（exec_mode=tool）；超限仅返回核心集（含 `tool_search`），其余见系统提示索引（ADR-0119）。`skillToolSchemas()` 仅暴露 `runtime='script' AND exec_mode='tool'` 的技能，工具名 `skill__{slug}`（DB 键 `skill:{slug}` 去前缀加双下划线）；Logic Collapse 脚本技能经 `execute_skill`，不进此列表。
 
 ### 8.2 工具执行路由（toolExec closure）
 
 - `skill__{slug}` → DB 读 `skills.instructions`（script runtime，LLM 执行 instructions）
 - `execute_skill` → MCPManager → ContainerSandbox.Execute（Rust 沙箱）
 - `agent:{id}` → 设计路径（Cedar Gate → A2A Client → 外部 Agent，结果赋 TaintHigh）；当前跨代理走 `mcp__<server>__a2a_delegate`（§10）
-- `search_tools` → 查询工具库，命中 schema 激活到当前会话
+- `tool_search` → 查询未加载的工具，命中后激活到当前会话（下一轮可调用）
 - 其他 → `sandboxRouter.Execute` → InProcessSandbox（builtin 直接执行，mcp 走 `CallToolTainted()`）
 
 ### 8.3 Ambient Skill 注入（每次推理请求）

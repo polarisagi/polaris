@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/pricing"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -143,8 +144,11 @@ func stripLeadingComments(s string) string {
 // ── llm_calls 历史费用重算（一次性数据迁移）─────────────────────────────────
 
 const (
-	repriceMarkerKey = "data_migration.llm_cost_reprice.v1"
-	repriceBackupDDL = `CREATE TABLE IF NOT EXISTS llm_calls_cost_backup (
+	// v2：按调用时刻分时段计价（DeepSeek 非高峰为高峰价一半）。v1 是不分时段的版本，
+	// 它从未随发布版本在用户库上执行过；万一执行过，备份表用 INSERT OR IGNORE 保留最早原值，v2 重算安全。
+	repriceMarkerKey   = "data_migration.llm_cost_reprice.v2"
+	repriceMarkerKeyV1 = "data_migration.llm_cost_reprice.v1"
+	repriceBackupDDL   = `CREATE TABLE IF NOT EXISTS llm_calls_cost_backup (
 		id           TEXT PRIMARY KEY,
 		cost_usd_old REAL NOT NULL,
 		repriced_at  INTEGER NOT NULL
@@ -156,6 +160,7 @@ const (
 // 背景：旧版费率字段名为 Per1K 而填的是每百万价，且 openai_compat 适配器对 DeepSeek 流量套用
 // gpt-4o-mini 价，历史行金额整体错 1000 倍量级（一次 1.2 万 token 记约 2 美元）。
 //   - 只重算 model_id 命中目录的行；目录外模型的历史价无从核实，保持原值。
+//   - 分时段模型按每行 created_at（调用发起时刻，UTC）套用高峰/非高峰价，与实时记账同口径。
 //   - 可逆：旧值写入 llm_calls_cost_backup（INSERT OR IGNORE，保留最早的原值），RevertLLMCostReprice 还原。
 //   - 幂等：完成后在 sys_config 写标记，之后每次启动直接跳过。
 func RepriceLLMCalls(db *sql.DB, nowMs int64) (updated int64, err error) {
@@ -179,25 +184,13 @@ func RepriceLLMCalls(db *sql.DB, nowMs int64) (updated int64, err error) {
 		return 0, err
 	}
 	for _, m := range models {
-		p, ok := pricing.Lookup(m)
-		if !ok {
+		if _, ok := pricing.Lookup(m); !ok {
 			continue
 		}
-		hit := p.CacheHit
-		if hit <= 0 {
-			hit = p.Input
+		n, rerr := repriceModelRows(tx, m, nowMs)
+		if rerr != nil {
+			return 0, rerr
 		}
-		if _, err = tx.Exec(`INSERT OR IGNORE INTO llm_calls_cost_backup(id, cost_usd_old, repriced_at)
-			SELECT id, cost_usd, ? FROM llm_calls WHERE model_id = ?`, nowMs, m); err != nil {
-			return 0, apperr.Wrap(apperr.CodeInternal, "reprice: backup rows", err)
-		}
-		res, uerr := tx.Exec(`UPDATE llm_calls SET cost_usd =
-			((input_tokens - MIN(cache_hit_tokens, input_tokens)) * ? + MIN(cache_hit_tokens, input_tokens) * ? + output_tokens * ?) / 1000000.0
-			WHERE model_id = ?`, p.Input, hit, p.Output, m)
-		if uerr != nil {
-			return 0, apperr.Wrap(apperr.CodeInternal, "reprice: update", uerr)
-		}
-		n, _ := res.RowsAffected()
 		updated += n
 	}
 	if _, err = tx.Exec(`INSERT INTO sys_config(key, value) VALUES(?, ?)
@@ -208,6 +201,58 @@ func RepriceLLMCalls(db *sql.DB, nowMs int64) (updated int64, err error) {
 		return 0, apperr.Wrap(apperr.CodeInternal, "reprice: commit", err)
 	}
 	return updated, nil
+}
+
+type repriceRow struct {
+	id              string
+	createdAtMs     int64
+	in, hit, outTok int64
+}
+
+// repriceModelRows 备份并按每行调用时刻重算某模型的全部历史行，返回更新行数。
+func repriceModelRows(tx *sql.Tx, model string, nowMs int64) (int64, error) {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO llm_calls_cost_backup(id, cost_usd_old, repriced_at)
+		SELECT id, cost_usd, ? FROM llm_calls WHERE model_id = ?`, nowMs, model); err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "reprice: backup rows", err)
+	}
+	rows, err := loadRepriceRows(tx, model)
+	if err != nil {
+		return 0, err
+	}
+	var updated int64
+	for _, r := range rows {
+		p, _ := pricing.LookupAt(model, time.UnixMilli(r.createdAtMs))
+		hit := min(r.hit, r.in)
+		cost := p.Cost(int(r.in-hit), int(hit), int(r.outTok))
+		res, uerr := tx.Exec(`UPDATE llm_calls SET cost_usd = ? WHERE id = ?`, cost, r.id)
+		if uerr != nil {
+			return 0, apperr.Wrap(apperr.CodeInternal, "reprice: update", uerr)
+		}
+		n, _ := res.RowsAffected()
+		updated += n
+	}
+	return updated, nil
+}
+
+func loadRepriceRows(tx *sql.Tx, model string) ([]repriceRow, error) {
+	rs, err := tx.Query(`SELECT id, created_at, input_tokens, cache_hit_tokens, output_tokens
+		FROM llm_calls WHERE model_id = ?`, model)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "reprice: select rows", err)
+	}
+	defer rs.Close()
+	var out []repriceRow
+	for rs.Next() {
+		var r repriceRow
+		if err := rs.Scan(&r.id, &r.createdAtMs, &r.in, &r.hit, &r.outTok); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "reprice: scan rows", err)
+		}
+		out = append(out, r)
+	}
+	if err := rs.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "reprice: iterate rows", err)
+	}
+	return out, nil
 }
 
 // RevertLLMCostReprice 把 RepriceLLMCalls 改过的行还原为备份里的旧值，并清除完成标记。
@@ -224,7 +269,7 @@ func RevertLLMCostReprice(db *sql.DB) (restored int64, err error) {
 		return 0, apperr.Wrap(apperr.CodeInternal, "reprice revert: restore", err)
 	}
 	restored, _ = res.RowsAffected()
-	if _, err = tx.Exec(`DELETE FROM sys_config WHERE key = ?`, repriceMarkerKey); err != nil {
+	if _, err = tx.Exec(`DELETE FROM sys_config WHERE key IN (?, ?)`, repriceMarkerKey, repriceMarkerKeyV1); err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "reprice revert: marker", err)
 	}
 	if _, err = tx.Exec(`DELETE FROM llm_calls_cost_backup`); err != nil {

@@ -121,6 +121,9 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		TurnID string          `json:"turn_id,omitempty"`
 		Usage  json.RawMessage `json:"usage,omitempty"`
 		Steps  json.RawMessage `json:"steps,omitempty"`
+		// TurnError 仅用户消息携带：该消息触发的回合失败（没有助手回复）。前端据此在其后显示"本轮失败"占位。
+		// 来自回合步骤摘要，只用于展示；不属于 chat_messages 内容，永远不进入模型历史。
+		TurnError json.RawMessage `json:"turn_error,omitempty"`
 	}
 	viewsByMessage := h.appViewsByMessageID(r.Context(), messages)
 	stepSummaries := h.turnSummaries(r.Context(), sessionID)
@@ -137,10 +140,7 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		if row.ToolCalls != "" {
 			m.ToolCalls = json.RawMessage(row.ToolCalls)
 		}
-		if row.TurnID != "" {
-			m.TurnID = row.TurnID
-			m.Steps = stepSummaries[row.TurnID]
-		}
+		m.TurnID, m.Steps, m.TurnError = turnMeta(row.Role, row.TurnID, stepSummaries)
 		if row.Usage != "" && json.Valid([]byte(row.Usage)) {
 			m.Usage = json.RawMessage(row.Usage)
 		}

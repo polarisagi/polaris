@@ -22,12 +22,12 @@ func schemaNames(ss []types.ToolSchema) string {
 
 func lazyCatalog() *CompositeCatalog {
 	src := &fakeSource{entries: []protocol.CatalogEntry{
-		coreEntry("core_b"), coreEntry("core_a"),
+		coreEntry("core_b"), coreEntry("core_a"), coreEntry("tool_search"),
 		communityEntry("tool_a"), communityEntry("tool_b"), communityEntry("tool_c"),
 	}}
 	cc := NewCompositeCatalog(src)
 	cc.LazyLoadThreshold = 1
-	cc.Embedder = fakeEmbedder{}
+	cc.CoreTools = []string{"core_a", "core_b", "tool_search"}
 	return cc
 }
 
@@ -35,14 +35,14 @@ func sessionCtx(id string) context.Context {
 	return context.WithValue(context.Background(), protocol.CtxTaskIDKey{}, id)
 }
 
-// ADR-0105 决策三：先激活 B 再激活 A，输出为 [核心..., search_tools, B, A]，核心部分字节不变。
+// ADR-0105 决策三：先激活 B 再激活 A，输出为 [核心..., tool_search, B, A]，核心部分字节不变。
 func TestSchemas_LazyLoad_AppendOnlyInActivationOrder(t *testing.T) {
 	cc := lazyCatalog()
 	ctx := sessionCtx("s1")
 
 	base := cc.Schemas(ctx, types.TrustUntrusted)
-	if got := schemaNames(base); got != "core_a,core_b,search_tools" {
-		t.Fatalf("初始应为核心(按名称)+search_tools：%s", got)
+	if got := schemaNames(base); got != "core_a,core_b,tool_search" {
+		t.Fatalf("初始应为核心(按名称)+tool_search：%s", got)
 	}
 	baseJSON, _ := json.Marshal(base)
 
@@ -51,7 +51,7 @@ func TestSchemas_LazyLoad_AppendOnlyInActivationOrder(t *testing.T) {
 	cc.ActivateTool("s1", "tool_a")
 	afterA := cc.Schemas(ctx, types.TrustUntrusted)
 
-	if got := schemaNames(afterA); got != "core_a,core_b,search_tools,tool_b,tool_a" {
+	if got := schemaNames(afterA); got != "core_a,core_b,tool_search,tool_b,tool_a" {
 		t.Fatalf("激活部分应按激活顺序 B,A 追加：%s", got)
 	}
 	// 每次激活只在尾部追加：前一次的完整输出是后一次的字节前缀。
@@ -79,11 +79,11 @@ func TestSchemas_LazyLoad_ReactivationAndEdgeCases(t *testing.T) {
 	cc.ActivateTool("s2", "tool_c") // 重复
 	cc.ActivateTool("s2", "core_a") // 核心，已在前段
 	cc.ActivateTool("s2", "ghost")  // 不存在
-	if got := schemaNames(cc.Schemas(ctx, types.TrustUntrusted)); got != "core_a,core_b,search_tools,tool_c,tool_a" {
+	if got := schemaNames(cc.Schemas(ctx, types.TrustUntrusted)); got != "core_a,core_b,tool_search,tool_c,tool_a" {
 		t.Fatalf("got %s", got)
 	}
 	// 会话隔离。
-	if got := schemaNames(cc.Schemas(sessionCtx("other"), types.TrustUntrusted)); got != "core_a,core_b,search_tools" {
+	if got := schemaNames(cc.Schemas(sessionCtx("other"), types.TrustUntrusted)); got != "core_a,core_b,tool_search" {
 		t.Fatalf("其他会话不应看到激活项：%s", got)
 	}
 }
@@ -94,7 +94,7 @@ func TestSchemas_NonLazy_KeepsSortedOrder(t *testing.T) {
 	cc.LazyLoadThreshold = 100
 	cc.ActivateTool("s3", "tool_c")
 	got := schemaNames(cc.Schemas(sessionCtx("s3"), types.TrustUntrusted))
-	if got != "core_a,core_b,tool_a,tool_b,tool_c" {
+	if got != "core_a,core_b,tool_search,tool_a,tool_b,tool_c" {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -102,18 +102,18 @@ func TestSchemas_NonLazy_KeepsSortedOrder(t *testing.T) {
 // 单会话激活数有界：超限淘汰最早激活项。
 func TestActivateTool_BoundedPerSession(t *testing.T) {
 	var entries []protocol.CatalogEntry
-	entries = append(entries, coreEntry("core"))
+	entries = append(entries, coreEntry("core"), coreEntry("tool_search"))
 	for i := 0; i < maxActivatedToolsPerSession+5; i++ {
 		entries = append(entries, communityEntry(fmt.Sprintf("t%03d", i)))
 	}
 	cc := NewCompositeCatalog(&fakeSource{entries: entries})
 	cc.LazyLoadThreshold = 1
-	cc.Embedder = fakeEmbedder{}
+	cc.CoreTools = []string{"core", "tool_search"}
 	for i := 0; i < maxActivatedToolsPerSession+5; i++ {
 		cc.ActivateTool("s", fmt.Sprintf("t%03d", i))
 	}
 	got := cc.Schemas(sessionCtx("s"), types.TrustUntrusted)
-	if len(got) != 2+maxActivatedToolsPerSession { // core + search_tools + 上限
+	if len(got) != 2+maxActivatedToolsPerSession { // core + tool_search + 上限
 		t.Fatalf("激活数应被限制在 %d，got %d", maxActivatedToolsPerSession, len(got)-2)
 	}
 	if got[2].Name != "t005" {

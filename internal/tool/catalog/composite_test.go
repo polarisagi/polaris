@@ -94,7 +94,7 @@ func TestCompositeCatalog_Lookup(t *testing.T) {
 }
 
 // TestCompositeCatalog_Schemas_NoLazyLoadBelowThreshold 验证工具总数未超过
-// LazyLoadThreshold 时，Schemas() 直接返回全部工具，不注入 search_tools。
+// LazyLoadThreshold 时，Schemas() 直接返回全部工具，不注入 tool_search。
 func TestCompositeCatalog_Schemas_NoLazyLoadBelowThreshold(t *testing.T) {
 	src := &fakeSource{entries: []protocol.CatalogEntry{coreEntry("a"), communityEntry("b")}}
 	cc := NewCompositeCatalog(src)
@@ -105,20 +105,20 @@ func TestCompositeCatalog_Schemas_NoLazyLoadBelowThreshold(t *testing.T) {
 		t.Fatalf("expected 2 schemas (no lazy load), got %d", len(schemas))
 	}
 	for _, s := range schemas {
-		if s.Name == "search_tools" {
-			t.Errorf("did not expect search_tools meta-tool below threshold")
+		if s.Name == "tool_search" {
+			t.Errorf("did not expect tool_search meta-tool below threshold")
 		}
 	}
 }
 
 // TestCompositeCatalog_Schemas_LazyLoadCollapsesNonCoreTools 验证超过阈值且
-// Embedder 非 nil 时，非 TrustSystem(4) 且未被会话激活的工具被折叠，
-// 仅保留 core 工具 + search_tools 元工具（P1-2 懒加载核心行为）。
+// 且目录含 tool_search 时，非 TrustSystem(4) 且未被会话激活的工具被折叠，
+// 仅保留 core 工具 + tool_search 元工具（P1-2 懒加载核心行为）。
 func TestCompositeCatalog_Schemas_LazyLoadCollapsesNonCoreTools(t *testing.T) {
-	src := &fakeSource{entries: []protocol.CatalogEntry{coreEntry("core_tool"), communityEntry("community_tool")}}
+	src := &fakeSource{entries: []protocol.CatalogEntry{coreEntry("core_tool"), coreEntry("tool_search"), communityEntry("community_tool")}}
 	cc := NewCompositeCatalog(src)
 	cc.LazyLoadThreshold = 1 // 2 个条目 > 阈值 1，触发懒加载
-	cc.Embedder = fakeEmbedder{}
+	cc.CoreTools = []string{"core_tool", "tool_search"}
 
 	schemas := cc.Schemas(context.Background(), types.TrustUntrusted)
 
@@ -132,8 +132,8 @@ func TestCompositeCatalog_Schemas_LazyLoadCollapsesNonCoreTools(t *testing.T) {
 	if names["community_tool"] {
 		t.Errorf("expected community_tool to be collapsed under lazy load, got %v", names)
 	}
-	if !names["search_tools"] {
-		t.Errorf("expected search_tools meta-tool to be injected under lazy load, got %v", names)
+	if !names["tool_search"] {
+		t.Errorf("expected tool_search meta-tool to be injected under lazy load, got %v", names)
 	}
 }
 
@@ -141,10 +141,10 @@ func TestCompositeCatalog_Schemas_LazyLoadCollapsesNonCoreTools(t *testing.T) {
 // 激活后，同一 TaskID 的 Schemas() 调用能看到该工具；不同/空 session 看不到，
 // CleanupSession 后再次不可见——覆盖 tool_search.go 依赖的会话级激活协议。
 func TestCompositeCatalog_ActivateTool_ExposesToolForSession(t *testing.T) {
-	src := &fakeSource{entries: []protocol.CatalogEntry{coreEntry("core_tool"), communityEntry("community_tool")}}
+	src := &fakeSource{entries: []protocol.CatalogEntry{coreEntry("core_tool"), coreEntry("tool_search"), communityEntry("community_tool")}}
 	cc := NewCompositeCatalog(src)
 	cc.LazyLoadThreshold = 1
-	cc.Embedder = fakeEmbedder{}
+	cc.CoreTools = []string{"core_tool", "tool_search"}
 
 	sessionID := "task-123"
 	cc.ActivateTool(sessionID, "community_tool")
@@ -200,9 +200,3 @@ func TestCompositeCatalog_Invalidate(t *testing.T) {
 		t.Errorf("expected 2 entries after Invalidate triggers rebuild")
 	}
 }
-
-// fakeEmbedder 满足 search.Embedder 接口，仅用于让 CompositeCatalog 判定
-// "懒加载可用"（Schemas() 只检查 Embedder != nil，不实际调用 Embed）。
-type fakeEmbedder struct{}
-
-func (fakeEmbedder) Embed(_ context.Context, _ string) []float32 { return []float32{0.1, 0.2, 0.3} }

@@ -104,7 +104,7 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 
 	// TaskID 激活作用域同源于 pCtx.SessionID（与 agent_execute.go 的
 	// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID) 保持一致），
-	// 否则 search_tools 上一轮激活的工具在本轮（无 Memory 系统时的降级路径）
+	// 否则 tool_search 上一轮激活的工具在本轮（无 Memory 系统时的降级路径）
 	// 重建 ToolsSection 时读不到，见 internal/tool/catalog/composite.go Schemas()。
 	toolListCtx, cancel := sm.bgCtx()
 	defer cancel()
@@ -118,7 +118,10 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	sm.writePlanExternalCatalogs(b, toolListCtx)
 
 	mode, anyAppEnabled, chromeEnabled := computerUsePolicyFromPrefs(preferences)
-	b.WriteComputerUsePolicy(mode, anyAppEnabled, chromeEnabled)
+	// 未开启任何电脑操控能力时不注入策略（ADR-0119：约 250 token/轮，且对模型无可执行内容）。
+	if anyAppEnabled || chromeEnabled {
+		b.WriteComputerUsePolicy(mode, anyAppEnabled, chromeEnabled)
+	}
 	WritePlanHints(b, sCtx)
 
 	// 预算压力约束：75% 阈值已触发时，要求 LLM 生成最小必要 DAG。
