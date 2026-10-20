@@ -105,7 +105,7 @@ Alpine.store('mesh', {
   },
 
   async removePeer(name) {
-    if (!confirm(this.t('mesh_remove_confirm').replace('{0}', name))) return
+    if (!(await Alpine.store('dialog').confirm({ message: this.t('mesh_remove_confirm').replace('{0}', name), danger: true }))) return
     const r = await fetch(`/v1/mesh/peers/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok) { this.toast('error', await errText(r)); return }
     const d = await r.json()
@@ -170,7 +170,7 @@ Alpine.store('mesh', {
   },
 
   async revokeToken(id) {
-    if (!confirm(this.t('mesh_revoke_confirm'))) return
+    if (!(await Alpine.store('dialog').confirm({ message: this.t('mesh_revoke_confirm'), danger: true }))) return
     const r = await fetch(`/v1/mesh/tokens/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok) { this.toast('error', await errText(r)); return }
     this.loadTokens()

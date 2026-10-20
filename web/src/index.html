@@ -48,9 +48,13 @@
         </a>
       </li>
       <li>
-        <a :class="{'active': $store.nav.page === 'sessions'}" @click.prevent="$store.nav.navigate('sessions'); $store.sessions.load()" href="/sessions">
+        <a :class="{'active': $store.nav.page === 'sessions'}" @click.prevent="$store.sessions.projectFilter = null; $store.nav.navigate('sessions'); $store.sessions.load()" href="/sessions">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155"/></svg>
           <span x-text="$store.i18n.t('nav_sessions')"></span>
+          <span x-show="$store.chat.backgroundRunning" x-cloak class="relative flex h-2 w-2 ml-auto" :title="$store.i18n.t('session_running')">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+          </span>
         </a>
       </li>
       <li class="my-2"><div class="divider m-0 h-1"></div></li>
@@ -353,12 +357,27 @@
 <!-- Toast Container -->
 <div class="toast toast-bottom toast-end z-[1000]" x-data>
   <template x-for="t in $store.toast.items" :key="t.id">
-    <div class="alert shadow-lg" :class="t.type === 'ok' ? 'alert-success text-success-content' : t.type === 'warn' ? 'alert-warning text-warning-content' : 'alert-error text-error-content'">
+    <div class="alert shadow-lg" :class="[t.onClick ? 'cursor-pointer' : '', t.type === 'ok' ? 'alert-success text-success-content' : t.type === 'warn' ? 'alert-warning text-warning-content' : 'alert-error text-error-content']" @click="$store.toast.activate(t)">
       <span x-text="t.type === 'ok' ? '✓' : t.type === 'warn' ? '⚠' : '✕'" class="font-bold"></span>
       <span x-text="t.message"></span>
     </div>
   </template>
 </div>
+
+<!-- 应用内确认/提示对话框（store/dialog.js；取代原生 confirm/alert，桌面 WKWebView 下原生对话框不弹）。
+     文本一律 x-text 纯文本渲染；Esc / 点遮罩 = 取消。 -->
+<dialog class="modal z-[1100]" :class="$store.dialog.open ? 'modal-open' : ''" x-data
+        @keydown.escape.window="$store.dialog.open && $store.dialog.close(false)">
+  <div class="modal-box max-w-sm" role="alertdialog" aria-modal="true">
+    <h3 class="font-bold text-base text-base-content" x-text="$store.dialog.title"></h3>
+    <p class="py-3 text-sm text-base-content/80 whitespace-pre-line break-words" x-text="$store.dialog.message"></p>
+    <div class="modal-action">
+      <button class="btn btn-sm btn-ghost" x-show="$store.dialog.kind === 'confirm'" @click="$store.dialog.close(false)" x-text="$store.dialog.cancelText"></button>
+      <button class="btn btn-sm" :class="$store.dialog.danger ? 'btn-error' : 'btn-primary'" @click="$store.dialog.close(true)" x-text="$store.dialog.confirmText"></button>
+    </div>
+  </div>
+  <div class="modal-backdrop" @click="$store.dialog.close(false)"></div>
+</dialog>
 
 <!-- 语音模型下载确认页内 Modal（auto_install=false 时使用，ADR-0108） -->
 <dialog class="modal" :class="$store.audio.modal.open ? 'modal-open' : ''" x-data>

@@ -25,15 +25,20 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// ?limit= 1~200 限制返回条数（缺省 200，保持既有行为）；非法值按缺省处理。
+	limit := 200
+	if n, perr := strconv.Atoi(r.URL.Query().Get("limit")); perr == nil && n >= 1 && n <= 200 {
+		limit = n
+	}
 	// ?project_id= 按项目过滤（ADR-0097）；缺省 = 全部项目，保持既有客户端行为。
 	var (
 		sessions []apptypes.ChatSessionRow
 		err      error
 	)
 	if pid := strings.TrimSpace(r.URL.Query().Get("project_id")); pid != "" {
-		sessions, err = h.PersistenceService.ChatRepo.ListProjectSessions(r.Context(), pid, 200)
+		sessions, err = h.PersistenceService.ChatRepo.ListProjectSessions(r.Context(), pid, limit)
 	} else {
-		sessions, err = h.PersistenceService.ChatRepo.ListSessions(r.Context(), 200)
+		sessions, err = h.PersistenceService.ChatRepo.ListSessions(r.Context(), limit)
 	}
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
@@ -48,8 +53,10 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 		CreatedAt      string  `json:"created_at"`
 		UpdatedAt      string  `json:"updated_at"`
 		MessageCount   int     `json:"message_count"`
-		Source         string  `json:"source"` // "web" | "telegram" | "discord" | ...
+		Source         string  `json:"source"`  // "web" | "telegram" | "discord" | ...
+		Running        bool    `json:"running"` // 有后台运行中的回合（ADR-0116）
 	}
+	running := h.turns().RunningSet()
 	list := make([]sessionRow, 0, len(sessions))
 	for _, row := range sessions {
 		sr := sessionRow{
@@ -61,6 +68,7 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 			UpdatedAt:      row.UpdatedAt,
 			MessageCount:   row.MessageCount,
 			Source:         "web",
+			Running:        running[row.ID],
 		}
 		if strings.HasPrefix(sr.ID, "ch_") {
 			// session key 格式: ch_<channelID>_<chatID>，channelID 本身以 ch_ 开头
@@ -134,7 +142,7 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		msgs = []msgRow{}
 	}
 	// project_id 供前端恢复会话时同步"当前项目"（ADR-0097）；会话行不存在时省略。
-	resp := map[string]any{"session_id": sessionID, "messages": msgs}
+	resp := map[string]any{"session_id": sessionID, "messages": msgs, "running": h.turns().Running(sessionID)}
 	if row, gerr := h.PersistenceService.ChatRepo.GetSession(r.Context(), sessionID); gerr == nil && row != nil {
 		resp["project_id"] = row.ProjectID
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/session"
@@ -30,6 +29,7 @@ import (
 //	status    → {"type":"...","message":"..."} 状态提示
 //	context_warning → {"usage_percent":...,...} 上下文使用率告警
 //	system_notice   → {"message":"...","retry":bool} Agent 池资源降级提示
+//	session   → {"session_id":"...","turn_id":"..."} 会话 ID 确定后立即推送（新会话据此重连）
 //	complete  → {"session_id":"...",...}
 //	error     → {"code":"...","message":"..."}
 func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) {
@@ -61,28 +61,12 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // 关闭 nginx 缓冲
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	// SSE 长连接：禁用写超时
-	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
-
-	sink := newSSESink(w, flusher)
-
 	if s.Orchestrator == nil {
-		sink.Emit(session.Event{ //nolint:errcheck // sseSink.Emit 恒定返回 nil，见 sse_sink.go
-			Kind:    session.KindError,
-			Payload: map[string]any{"code": "no_orchestrator", "message": "系统错误：会话编排器未初始化"},
-		})
+		flusher, ok := prepareSSE(w)
+		if !ok {
+			return
+		}
+		writeSSEWithID(w, flusher, 1, "error", map[string]any{"code": "no_orchestrator", "message": "系统错误：会话编排器未初始化"})
 		return
 	}
 
@@ -99,16 +83,17 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		ReasoningEffort: req.ReasoningEffort,
 	}
 
-	if _, err := s.Orchestrator.RunTurn(r.Context(), domainReq, sink); err != nil {
-		// RunTurn 只在会话确保之前的边界校验失败（如非法 session_id 绕过前置
-		// 检查）时返回非 nil error；正常业务失败（no_provider/empty_response/
-		// hook_blocked 等）均已经 sink 推送 KindError 事件并返回 nil error，
-		// 不落入此分支。
-		sink.Emit(session.Event{ //nolint:errcheck // sseSink.Emit 恒定返回 nil
-			Kind:    session.KindError,
-			Payload: map[string]any{"code": "turn_error", "message": err.Error()},
-		})
+	// 回合在 TurnHub 持有的 ctx 下后台运行（ADR-0116）；本连接只是第一个订阅者，
+	// 断开只退订、不取消回合。
+	turn := s.startTurn(w, r, sessionID, domainReq)
+	if turn == nil {
+		return
 	}
+	flusher, ok := prepareSSE(w)
+	if !ok {
+		return
+	}
+	streamSubscription(r.Context(), w, flusher, turn.Subscribe(0))
 }
 
 // toDomainAttachments 把 wire 协议的 sseAttachment 翻译为 session.Attachment

@@ -21,11 +21,19 @@ Alpine.store('toast', {
       }
     }
     const id = this._nextId++
-    const item = { id, type, message, key: opts?.key, _timer: null }
+    const item = { id, type, message, key: opts?.key, onClick: opts?.onClick || null, _timer: null }
     item._timer = setTimeout(() => {
       this.items = this.items.filter((t) => t.id !== id)
     }, durationMs)
     this.items.push(item)
+  },
+
+  // 点击带 onClick 的 toast：执行回调并关闭（后台会话完成提示据此跳转）。
+  activate(item) {
+    if (!item.onClick) return
+    clearTimeout(item._timer)
+    this.items = this.items.filter((t) => t.id !== item.id)
+    item.onClick()
   },
 })
 

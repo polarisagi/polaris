@@ -2,6 +2,17 @@
 // 使用: $store.i18n.t('key')
 
 export const zh = {
+  projects_default_badge: '默认',
+  projects_view_all: '查看全部 {0} 个会话',
+  sessions_clear_filter: '清除过滤',
+  session_running: '后台运行中',
+  session_done_toast: '「{0}」已完成',
+  session_error_toast: '「{0}」出错',
+  session_busy: '该会话上一轮仍在收尾，请稍后再试',
+  dialog_confirm_title: '请确认',
+  dialog_alert_title: '提示',
+  dialog_confirm_btn: '确认',
+  dialog_ok_btn: '知道了',
   // 侧边栏
   nav_chat:          '新对话',
   nav_sessions:      '会话',
@@ -875,6 +886,17 @@ export const zh = {
 }
 
 export const en = {
+  projects_default_badge: 'Default',
+  projects_view_all: 'View all {0} sessions',
+  sessions_clear_filter: 'Clear filter',
+  session_running: 'Running in background',
+  session_done_toast: '"{0}" finished',
+  session_error_toast: '"{0}" failed',
+  session_busy: 'The previous turn of this session is still wrapping up, try again shortly',
+  dialog_confirm_title: 'Please confirm',
+  dialog_alert_title: 'Notice',
+  dialog_confirm_btn: 'Confirm',
+  dialog_ok_btn: 'OK',
   // Sidebar
   nav_chat:          'New Chat',
   nav_sessions:      'Sessions',

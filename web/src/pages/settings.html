@@ -203,7 +203,7 @@ dim = 2560</code></pre>
                   <span x-show="$store.providers.testingID !== p.id" x-text="$store.i18n.t('providers_test')"></span>
                 </button>
                 <button class="btn btn-sm btn-ghost" @click="$store.providers.openEdit(p)" x-text="$store.i18n.t('providers_edit')"></button>
-                <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="confirm($store.i18n.t('providers_confirm_del')) && $store.providers.remove(p.id)" x-text="$store.i18n.t('providers_delete')"></button>
+                <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="$store.dialog.confirm({ message: $store.i18n.t('providers_confirm_del'), danger: true }).then(ok => ok && $store.providers.remove(p.id))" x-text="$store.i18n.t('providers_delete')"></button>
               </div>
             </div>
           </div>
@@ -257,7 +257,7 @@ dim = 2560</code></pre>
 
               <div class="card-actions justify-end mt-4 pt-4 border-t border-base-300">
                 <button class="btn btn-sm btn-ghost" @click="$store.channels.openEdit(c)" x-text="$store.i18n.t('channels_edit')"></button>
-                <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="confirm($store.i18n.t('confirm_delete')) && $store.channels.remove(c.id)" x-text="$store.i18n.t('channels_delete')"></button>
+                <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="$store.dialog.confirm({ message: $store.i18n.t('confirm_delete'), danger: true }).then(ok => ok && $store.channels.remove(c.id))" x-text="$store.i18n.t('channels_delete')"></button>
               </div>
             </div>
           </div>

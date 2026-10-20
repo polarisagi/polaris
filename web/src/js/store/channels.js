@@ -49,7 +49,8 @@ Alpine.store('channels', {
 
   async remove(id) {
     const r = await fetch(`/v1/channels/${id}`, { method: 'DELETE', headers: authHeaders() })
-    if (r.ok) { await this.load(); Alpine.store('toast').show('success', '已删除') }
+    if (r.ok) { await this.load(); Alpine.store('toast').show('ok', '已删除') }
+    else Alpine.store('toast').show('error', `删除失败: HTTP ${r.status}`)
   },
 
   async toggle(c) {

@@ -3,7 +3,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI + 桌面外壳; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:368 对内调度 / 3:457 MCP / 6:465 (SOFT)降级 / 6-bis:478 已知Bug修复记录 / 7:490 跨模块契约 / 8:507 Web UI 规约 / 8.6:621 834 插件聚合市场DB+流 / 8.7:652 870 自动化中心DB+流+工作流 / 8.8:757 987 电脑操控权限+Preferences / 8.9:774 1027 前端组件规范 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:371 对内调度 / 3:460 MCP / 6:468 (SOFT)降级 / 6-bis:481 已知Bug修复记录 / 7:493 跨模块契约 / 8:510 Web UI 规约 / 8.6:626 834 插件聚合市场DB+流 / 8.7:657 870 自动化中心DB+流+工作流 / 8.8:762 987 电脑操控权限+Preferences / 8.9:779 1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -62,7 +62,7 @@ CLI 是**薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调�
 |---|---|---|
 | 系统 | `GET /healthz` `/readyz` `/metrics` `/v1/status` `/v1/doctor` `/v1/config/server` `/v1/system/{version,capabilities,update}` | 健康/就绪/指标/状态（Agent 状态 + Token 统计 + 内存）/诊断；`/_admin/{kill,unseal}` 为 KillSwitch 管理面 |
 | Agent 对话 | `POST /v1/agent/query`（同步）`/v1/agent/stream`（SSE）`/v1/agent/codeact`；`GET /v1/agent/tasks/{taskID}`；`POST /v1/agent/{taskID}/interrupt`（§1.2.5）；`GET /v1/logs/stream`（日志 SSE） | |
-| 会话/项目 | `/v1/sessions`（列表/详情/删除）`GET /v1/sessions/{id}/context`（§1.2.6）`POST …/recap` `PUT …/project`；`/v1/projects`（CRUD，ADR-0097）；`GET /v1/search` `/v1/insights` | |
+| 会话/项目 | `/v1/sessions`（列表/详情/删除）`GET /v1/sessions/{id}/stream`（重订阅后台回合，ADR-0116）`POST /v1/sessions/{id}/abort`（显式中止）`GET /v1/sessions/{id}/context`（§1.2.6）`POST …/recap` `PUT …/project`；`/v1/projects`（CRUD，ADR-0097）；`GET /v1/search` `/v1/insights` | |
 | 用量/预算 | `GET /v1/usage`（`?since=24h&until=&group_by=purpose\|model\|provider\|day`；请求数/输入·缓存命中·输出·推理 token/命中率/估算费用；ADR-0105 决策八，CLI `polaris usage`）`/v1/config/budget`（GET/PUT） | |
 | Provider/模型 | `/v1/providers`（CRUD + `/from-catalog` + `/{id}/test`）`/v1/providers/{id}/models`（CRUD + deprecate/upgrade）`/v1/catalog/providers`；`/v1/config` `/v1/config/model-roles`（GET/PUT） | |
 | 工具/技能 | `GET /v1/tools`、`POST /v1/tools/{name}/execute`；`/v1/skills`（list/install/create/commands/injections）；`/v1/hooks`（含 `hooks/trust`） | |
@@ -79,7 +79,8 @@ CLI 是**薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调�
 | OpenAI 兼容 | `POST /v1/chat/completions` | 第三方客户端接入 |
 
 **SSE 请求**（`POST /v1/agent/stream`）：query(string,req) / session_id / model / temperature(float32) / max_tokens(int)，后四项 opt。
-**SSE 事件**（text/event-stream，`data: <JSON>\n\n`）：`token` | `tool_call` | `tool_result` | `thinking` | `error` | `complete` | `context_warning` | `status/compacting` | `status/compacted`。
+**SSE 事件**（text/event-stream，`[id: <seq>\n]event: <type>\ndata: <JSON>\n\n`）：`session`（`{session_id,turn_id}`，会话确定后立即推送）| `token` | `tool_call` | `tool_result` | `thinking` | `error` | `complete` | `context_warning` | `status/compacting` | `status/compacted`。
+**回合与连接解耦（ADR-0116）**：回合 ctx 由 `session.TurnHub` 持有，连接只是订阅者——断开仅退订，**不再中止回合**（推翻原「断连即中止」）。`GET /v1/sessions/{id}/stream?after=<seq>` 回放缓冲事件后接实时（无回合 → 204；回合结束后保留 5 分钟）；`POST /v1/sessions/{id}/abort` 显式中止；同会话已有运行中回合时 `POST /v1/agent/stream` 返回 `409 {"code":"session_busy"}`；`GET /v1/sessions`、`GET /v1/sessions/{id}` 带 `running`；`GET /v1/sessions` 支持 `?limit=`（1~200）。缓冲有界（4096 条 / 4MB，越界先合并相邻 token）；回合未产出终止事件时补 `complete{aborted:true}`；空闲每 15s 推 `: ping` 心跳。
 - `context_warning`：上下文使用率 ≥ warnPct 触发；payload `{usage_pct, thrashing}`（thrashing=true → 前端红色 Banner 并隐藏"立即压缩"，见 §1.2.6）。
 - `status/compacting` / `status/compacted`：压缩进行中（蓝色 Indicator）/ 完成（末尾消息标分隔线）。
 
@@ -309,9 +310,11 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | GET | `/v1/sessions` | `chatHandler.HandleListSessions` |
 | DELETE | `/v1/sessions/{sessionID}` | `chatHandler.HandleDeleteSession` |
 | GET | `/v1/sessions/{sessionID}` | `chatHandler.HandleGetSession` |
+| POST | `/v1/sessions/{sessionID}/abort` | `chatHandler.HandleAbortSession` |
 | GET | `/v1/sessions/{sessionID}/context` | `chatHandler.HandleGetSessionContext` |
 | PUT | `/v1/sessions/{sessionID}/project` | `chatHandler.HandleMoveSession` |
 | POST | `/v1/sessions/{sessionID}/recap` | `chatHandler.HandleSessionRecap` |
+| GET | `/v1/sessions/{sessionID}/stream` | `chatHandler.HandleSessionStream` |
 | GET | `/v1/skills` | `sysadminHandler.HandleListSkills` |
 | GET | `/v1/skills/commands` | `chatHandler.HandleListSkillCommands` |
 | POST | `/v1/skills/create` | `handleSkillCreate` |
@@ -339,7 +342,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 170 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 172 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
@@ -519,7 +522,7 @@ web/
 │   ├── pages/                # chat sessions projects search eval monitor settings plugins skills automation + onboard
 │   ├── js/
 │   │   ├── app.js            # Alpine stores 入口 + marked 配置 + URL 路由初始化（legacyPageMap）
-│   │   ├── sse.js            # SSEClient（fetch+ReadableStream + 指数退避重连）
+│   │   ├── sse.js            # SSEClient（fetch+ReadableStream + 按 seq 续传重连；绝不重 POST）
 │   │   ├── utils.js / i18n.js
 │   │   └── store/            # 按域拆分的 Alpine 状态（chat/logs/nav/statusBar/projects/mesh/audio/computer/…）
 │   └── css/style.css         # Tailwind v4 入口 + 主题色 token
@@ -535,8 +538,8 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | 导航入口 | 路由 | 子 Tab / 说明 | 主要 API |
 |----------|------|--------------|---------|
 | 新对话 | `/` | 权限模式下拉内联于输入区 | `POST /v1/agent/stream` (SSE) |
-| 项目 | `/projects` | 项目管理（ADR-0097） | `/v1/projects` |
-| 会话 | `/sessions` | — | `GET /v1/sessions` |
+| 项目 | `/projects` | 项目管理（ADR-0097）：单列项目列表（默认项目置顶），点击行原地展开（手风琴，同时仅一个），展开区只列最近 2 个会话（`GET /v1/sessions?project_id=&limit=2`），「查看全部」跳会话页并按项目过滤 | `/v1/projects` |
+| 会话 | `/sessions` | 可按项目过滤（顶部「项目：xxx ✕」） | `GET /v1/sessions` |
 | 搜索 | `/search` | — | `GET /v1/search` |
 | 插件 | `/plugins` | 插件 · 应用 · MCP · 技能 · 市场（五合一） | `/v1/plugins/*` |
 | 技能 | `/skills` | 已安装技能（独立） | `GET /v1/skills` |
@@ -558,7 +561,9 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 - **流端点**: `POST /v1/agent/stream`；因需 POST body 用 `fetch+ReadableStream`（`sse.js:SSEClient`），非原生 `EventSource`。
 - **状态机** `(inv_webui_08)`: `IDLE → SUBMITTING → THINKING → STREAMING → TOOL_RUNNING → STREAMING → COMPLETE → IDLE`。
 - **工具生命周期**：`TOOL_RUNNING` 期间 SSE 额外推 `tool_start` / `tool_progress` / `tool_success` / `tool_error`，支持中间态渲染。
-- **异常退避**: 1s→2s→4s→8s→16s→30s，超 10 次转 ERROR。
+- **异常退避**: 1s→2s→4s→8s→16s→30s，超 10 次转 ERROR。断线重连**只走** `GET /v1/sessions/{id}/stream?after=<lastSeq>`，**绝不重新 POST**（会重复提交一轮，ADR-0116）。
+- **多会话运行时**: `chat` store 的 `runs[sessionID]` 各持一套状态机与 SSE；视图字段是对当前视图所属 run 的访问器。切换会话只摘视图、不停 SSE；`loadSession` 对服务端 `running:true` 的会话自动重订阅；后台会话完成/出错以可点击 toast 提示，运行中的会话在会话页/项目页/侧栏显示脉动圆点；「中断」调用 `POST /v1/sessions/{id}/abort`。
+- **应用内对话框**: 原生 `confirm/alert/prompt` 在桌面 WKWebView 不弹框，一律走 `Alpine.store('dialog')`（`store/dialog.js`，文本 `x-text` 纯文本渲染），`make native-dialog-check`（L-22）门控。
 - **中断恢复**: 收到 `error(interrupted)`，保留 `currentTokens` 并打橙色"⚠ 已中断"徽章，消息持久化入列。
 - **幂等去重** `(inv_webui_10)`: `dedupeRunID(sessionID, input)` 5s 窗口内同元组返回同一 runID。
 
