@@ -6,6 +6,7 @@ import (
 
 	"context"
 	"database/sql"
+	"log/slog"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -104,14 +105,49 @@ func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[strin
 	return prefs, nil
 }
 
+// GetPermissionMode 读取当前权限模式（每次工具调用都应现读，用户中途切换即刻生效）。
+//
+// 迁移：permission_mode 为空而旧键 computer_use_mode 有值时回落旧值并回写新键，此后
+// 全部代码只读新键。未设置 → auto_review（产品默认）；值非法 → default（fail-closed
+// 取最严档，而不是放宽到默认档）；读库失败同样返回 default 与错误。
 func (r *SQLiteSystemRepository) GetPermissionMode(ctx context.Context) (types.PermissionMode, error) {
-	val, err := r.GetPreference(ctx, "permission_mode")
+	val, err := r.GetPreference(ctx, types.PrefPermissionMode)
 	if err != nil {
-		return types.ModeAutoReview, apperr.Wrap(apperr.CodeInternal, "error", err) // default
+		return types.ModeDefault, apperr.Wrap(apperr.CodeInternal, "get permission_mode", err)
 	}
-	return types.PermissionMode(val), nil
+	if val == "" {
+		if val, err = r.migrateLegacyPermissionMode(ctx); err != nil {
+			return types.ModeDefault, err
+		}
+	}
+	if val == "" {
+		return types.ModeAutoReview, nil
+	}
+	m, ok := types.ParsePermissionMode(val)
+	if !ok {
+		slog.WarnContext(ctx, "permission_mode: invalid stored value, falling back to strictest mode", "value", val)
+		return types.ModeDefault, nil
+	}
+	return m, nil
+}
+
+// migrateLegacyPermissionMode 读取旧键 computer_use_mode；值合法时回写到新键，返回旧值（可能为空）。
+func (r *SQLiteSystemRepository) migrateLegacyPermissionMode(ctx context.Context) (string, error) {
+	legacy, err := r.GetPreference(ctx, types.LegacyPrefComputerUseMode)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "get legacy computer_use_mode", err)
+	}
+	if _, ok := types.ParsePermissionMode(legacy); legacy != "" && ok {
+		if uerr := r.UpsertPreference(ctx, types.PrefPermissionMode, legacy); uerr != nil {
+			slog.WarnContext(ctx, "permission_mode: migrate legacy computer_use_mode failed", "err", uerr)
+		}
+	}
+	return legacy, nil
 }
 
 func (r *SQLiteSystemRepository) SetPermissionMode(ctx context.Context, mode types.PermissionMode) error {
-	return r.UpsertPreference(ctx, "permission_mode", string(mode))
+	if _, ok := types.ParsePermissionMode(string(mode)); !ok {
+		return apperr.New(apperr.CodeInvalidInput, "invalid permission mode: "+string(mode))
+	}
+	return r.UpsertPreference(ctx, types.PrefPermissionMode, string(mode))
 }

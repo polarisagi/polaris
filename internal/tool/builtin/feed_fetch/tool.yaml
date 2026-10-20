@@ -1,6 +1,6 @@
 name: feed_fetch
 version: "1.0.0"
-capability: write-network
+capability: read-network
 risk_level: medium
 sandbox: in-process
 side_effects:

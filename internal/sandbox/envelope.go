@@ -136,12 +136,12 @@ func (e *ExecEnvelope) PersistentSandboxAvailable() bool {
 }
 
 // RequiresCapabilityToken 返回该工具是否必须持有效能力令牌（inv_M7_01）。
-// CapReadOnly 之上（CapWriteLocal / CapWriteNetwork / CapPrivileged）一律要求；
-// 只读豁免理由：read_file/glob/grep 等大量内置只读工具不带 token，直接改会全线红。
+// CapReadNetwork 之上（CapWriteLocal / CapWriteNetwork / CapPrivileged）一律要求；
+// 只读与读取型联网（web_search/web_fetch 等）豁免：这类工具大量不带 token，且不改变外部状态。
 //
 //nolint:gocyclo
 func RequiresCapabilityToken(c types.CapabilityLevel) bool {
-	return c > types.CapReadOnly
+	return c > types.CapReadNetwork
 }
 
 // applyPreToolUse 执行 PreToolUse hook：阻断时返回失败结果；改写入参时替换 req.Input 并

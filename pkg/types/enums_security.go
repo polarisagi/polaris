@@ -66,6 +66,22 @@ const (
 	ModeFullAccess PermissionMode = "full_access"
 )
 
+// PrefPermissionMode 权限模式的唯一偏好键（ADR-0117 决策一）；
+// LegacyPrefComputerUseMode 是迁移前前端写入的旧键，仅在读取/写入入口处回落。
+const (
+	PrefPermissionMode        = "permission_mode"
+	LegacyPrefComputerUseMode = "computer_use_mode"
+)
+
+// ParsePermissionMode 解析权限模式字面量；非三档之一返回 false（调用方 fail-closed 取最严档）。
+func ParsePermissionMode(s string) (PermissionMode, bool) {
+	switch m := PermissionMode(s); m {
+	case ModeDefault, ModeAutoReview, ModeFullAccess:
+		return m, true
+	}
+	return "", false
+}
+
 // CheckpointDeviceControlReview 电脑/浏览器操控（computer_use/browser_use）的 HITL
 // checkpoint 类型，由 interceptComputerUse 发起。
 //
@@ -80,6 +96,10 @@ const CheckpointDeviceControlReview = "device_control_review"
 // （M11 §2.5 SanitizeByUserReview）。TaintLevel>=TaintMedium，超时一律拒绝，
 // 批准即按节点参数内容哈希铸造 TaintExemptionToken。
 const CheckpointTaintReview = "taint_review"
+
+// CheckpointToolApproval 统一权限矩阵（policy.Decide）判为“需询问”的工具调用审批
+// （ADR-0117）。超时一律拒绝：没人应答绝不等于同意。
+const CheckpointToolApproval = "tool_approval"
 
 // TrustTier 五级信任体系（ADR-0016 §2.1）。
 // 替代 SignatureValid bool，使系统能区分技能/工具来源的信任级别。

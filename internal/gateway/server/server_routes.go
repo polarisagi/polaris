@@ -143,6 +143,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/projects/{id}", s.chatHandler.HandleGetProject)
 	mux.HandleFunc("PUT /v1/projects/{id}", s.chatHandler.HandleUpdateProject)
 	mux.HandleFunc("DELETE /v1/projects/{id}", s.chatHandler.HandleDeleteProject)
+	mux.HandleFunc("GET /v1/approval-rules", s.chatHandler.HandleListApprovalRules)
+	mux.HandleFunc("DELETE /v1/approval-rules/{id}", s.chatHandler.HandleDeleteApprovalRule)
 
 	// 语音识别与合成 API（ADR-0108）
 	mux.HandleFunc("GET /v1/audio/status", s.handleGetAudioStatus)

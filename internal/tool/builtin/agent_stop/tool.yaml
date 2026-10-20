@@ -1,5 +1,6 @@
 name: agent_stop
 description: 中止正在执行的子智能体。
-capability: CapWrite
+capability: write-local
 read_only: false
 idempotent: true
+risk_level: medium

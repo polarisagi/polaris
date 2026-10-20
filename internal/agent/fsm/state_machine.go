@@ -382,8 +382,12 @@ func (s *StateContext) DrainSteerQueueToMessages() bool {
 	copy(steers, s.LoopSteerQueue)
 	s.LoopSteerQueue = nil
 	round := s.LoopRound
-	if s.GlobalTaintLevel < types.TaintHigh {
-		s.GlobalTaintLevel = types.TaintHigh
+	// 全局污点只升不降，且按插话自身的等级并入：owner 本人的插话是 TaintLow，
+	// 不应把整轮拉到 High（ADR-0007 修订）；来自外部的插话仍是 High。
+	for _, st := range steers {
+		if st.Level() > s.GlobalTaintLevel {
+			s.GlobalTaintLevel = st.Level()
+		}
 	}
 	s.Mu.Unlock()
 
@@ -770,32 +774,6 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 	}
 
 	return effects, nil
-}
-
-func (sm *StateMachine) activateExtWithRetry(ctx context.Context, goal string) ([]ExtActivatedHint, bool) {
-	const maxRetries = 2
-	var hints []ExtActivatedHint
-	var err error
-
-	for attempt := 1; attempt <= maxRetries+1; attempt++ {
-		hints, err = sm.activator.FindAndActivate(ctx, goal)
-		if err == nil {
-			return hints, false
-		}
-		slog.Warn("extension_activator: failed to activate extensions for replan", "attempt", attempt, "err", err)
-		if attempt <= maxRetries {
-			select {
-			case <-ctx.Done():
-				return nil, true
-			case <-time.After(time.Duration(attempt) * time.Second):
-				// Exponential backoff or simple backoff
-			}
-		}
-	}
-
-	// Exhausted retries
-	metrics.GlobalReplanExtActivationDegradedTotal.Add(1)
-	return nil, true
 }
 
 // History 返回状态遍历历史。

@@ -29,9 +29,17 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 		}
 	}
 
+	// 统一权限判定（ADR-0117）已接线时，GUI 动作的授权在 S_VALIDATE 的 policy.Decide 中完成
+	// （与其它工具同一张矩阵、同一张批量审批卡）；这里只保留上面的 Cedar 策略预检。
+	if a.perm.modes != nil {
+		return nil
+	}
+
 	mode := "auto_review"
 	if a.sCtx.Preferences != nil {
-		if v, ok := a.sCtx.Preferences["computer_use_mode"]; ok && v != "" {
+		if v, ok := a.sCtx.Preferences[types.PrefPermissionMode]; ok && v != "" {
+			mode = v
+		} else if v, ok := a.sCtx.Preferences[types.LegacyPrefComputerUseMode]; ok && v != "" {
 			mode = v
 		}
 	}

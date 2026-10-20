@@ -2,7 +2,7 @@
 
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
-<!-- §跳读: 0:9 职责 / 0-ter:42 不变量速查 / 1:55 三层宪法 / 2:76 Taint / 3:204 Cedar / 4:268 KillSwitch / 5:336 隐私 / 6:396 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:421 Factuality / 7:447 审计 / 8:471 多Agent宪法 / 9:503 威胁监控 / 13:517 579 降级 / 14:549 611 跨模块契约 / 15:565 630 任意文件读 / 16:573 639 流式安全防护 -->
+<!-- §跳读: 0:9 职责 / 0-ter:42 不变量速查 / 1:55 三层宪法 / 2:76 Taint / 3:208 Cedar / 4:272 KillSwitch / 5:340 隐私 / 6:400 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:425 Factuality / 7:451 审计 / 8:475 多Agent宪法 / 9:507 威胁监控 / 13:521 降级 / 14:553 611 跨模块契约 / 15:569 630 任意文件读 / 16:577 639 流式安全防护 -->
 
 ---
 
@@ -120,10 +120,14 @@ TaintLevel/TaintedString/SafeString/TaintSource/PropagateTaint 类型定义见 `
 | 级别 | 语义 | 来源 | Slot |
 |------|------|------|------|
 | TaintNone (0) | 系统编译期内容 | system slot / compiled prompts | instruction |
-| TaintLow (1) | 用户原始输入 | instruction slot / workspace 内文件 | instruction |
+| TaintLow (1) | 用户原始输入（仅限 owner 经已认证本地可信客户端 web/desktop/cli 输入，ADR-0007 决策四；外部渠道输入仍为 High） | instruction slot / workspace 内文件 | instruction |
 | TaintMedium (2) | 受信第三方输出 | 白名单 MCP（Model Context Protocol，模型上下文协议） / allowlist connector | data (不可进 instruction) |
 | TaintHigh (3) | 不受信外部内容 | 抓取网页 / 未知 MCP / shell stdout | data (不可进 instruction) |
 | TaintUserReviewed (4) | 用户显式 review 后降级 | 用户确认操作 | data (不可进 instruction) |
+
+### 2.3.1 权限模式与硬限制 [Permission-Decide]
+
+ADR-0117：S_VALIDATE 对每个计划节点调用确定性的 `policy.Decide`（`internal/security/policy/approval*.go`，不调用 LLM），顺序为 硬限制 → 读取类 → full_access → 已记住授权 → auto_review 自动放行 → 询问。**硬限制在三档模式（含 full_access）下都询问，且不可被已记住的授权覆盖**：① 灾难性命令（`sudo`/`su`/`doas`/`pkexec`、`mkfs*`、删根/家目录、`dd` 写块设备）；② 凭据外流（本回合读取过凭据后的任何联网操作）；③ 参数污点 ≥ High 且操作敏感（写网络、特权、危险 shell、工作区外写入、高风险写入、键鼠 UI 输入）。shell 命令由 `cmdclass` 基于语法树逐段分类。
 
 ### 2.4 传播规则 [Taint-Prop]
 

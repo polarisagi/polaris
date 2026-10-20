@@ -90,3 +90,13 @@ func (v *ExemptionVault) pruneLocked(agentID string) []*TaintExemptionToken {
 func (v *ExemptionVault) IsReviewed(agentID string, content []byte) bool {
 	return v.Lookup(agentID, content) != nil
 }
+
+// grantTTL 统一权限判定放行/用户确认后铸造的豁免令牌有效期，与对话内审批窗口同量级。
+const grantTTL = 10 * time.Minute
+
+// Grant 为 agentID 对 content 铸造一枚豁免令牌（实现 protocol.TaintExemptionGranter）。
+// 调用方只能在 policy.Decide 放行或用户明确批准之后调用：令牌按内容哈希匹配，
+// 参数变一个字节即失效，重新走判定。
+func (v *ExemptionVault) Grant(agentID string, content []byte, grantedBy string) {
+	v.Store(agentID, NewTaintExemptionToken(content, grantTTL, grantedBy))
+}

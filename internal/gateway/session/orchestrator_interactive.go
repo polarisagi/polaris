@@ -56,22 +56,20 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	isFirstTurn := len(history) == 0
 
 	// 插话（Steer）：若会话内已有正在运行的循环（AgentStateLoop / AgentStateLoopExec），直接入队并退出本轮编排
-	if steerable, ok := o.agentPool.(interface{ TrySteer(string, string) bool }); ok {
-		if steerable.TrySteer(sessionID, req.Input) {
-			finalInput, _ := o.buildUserMessage(req)
-			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
-				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
-			}
-			_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
-				"session_id": sessionID,
-				"message":    "插话已入队，将于下一轮次生效",
-			}})
-			_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
-				"session_id": sessionID,
-				"steered":    true,
-			}})
-			return &Result{SessionID: sessionID, Reply: ""}, nil
+	if o.trySteerPool(sessionID, req) {
+		finalInput, _ := o.buildUserMessage(req)
+		if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+			slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
 		}
+		_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
+			"session_id": sessionID,
+			"message":    "插话已入队，将于下一轮次生效",
+		}})
+		_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
+			"session_id": sessionID,
+			"steered":    true,
+		}})
+		return &Result{SessionID: sessionID, Reply: ""}, nil
 	}
 
 	var agentCtrl protocol.AgentController
@@ -85,7 +83,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		defer release()
 
 		st := agentCtrl.CurrentState()
-		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec || st == types.AgentStateLoopAwait || st == types.AgentStateLoopRecall) && agentCtrl.Steer(req.Input) {
+		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec || st == types.AgentStateLoopAwait || st == types.AgentStateLoopRecall) && steerAgent(agentCtrl, req) {
 			finalInput, _ := o.buildUserMessage(req)
 			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
 				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
@@ -223,7 +221,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
 	agentCtrl.SetConversationHistory(history[:len(history)-1])
 	agentCtrl.SetModelLock(req.ModelID)
-	reply, inferErr, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput)
+	reply, inferErr, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput, inputTaintLevel(req))
 	if !aborted && inferErr == "" && reply != "" {
 		var stopViewIDs []string
 		reply, inferErr, aborted, stopViewIDs = o.continueOnStopHooks(ctx, sink, sessionID, agentCtrl, history, reply)

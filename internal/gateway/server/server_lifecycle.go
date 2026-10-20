@@ -146,6 +146,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		ChatRepo:              s.chatRepo,
 		ChannelRepo:           s.channelRepo,
 		ProjectRepo:           s.projectRepo,
+		ApprovalRules:         repo.NewSQLiteApprovalRuleRepository(rwDB),
 		ProviderRepo:          s.providerRepo,
 		SystemRepo:            s.systemRepo,
 		AgentPool:             agentPool,

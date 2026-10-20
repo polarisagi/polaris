@@ -66,6 +66,13 @@ type DAGValidationContext struct {
 	TaintAuditor AuditLogger
 }
 
+// TaintExemptionGranter 由统一权限判定在放行/用户批准一次工具调用后为其铸造
+// 按内容哈希匹配的豁免令牌（让 L1 污点闸门与出口污点检查认可这次已授权的调用）。
+// ExemptionVault 同时实现 TaintReviewChecker 与本接口。
+type TaintExemptionGranter interface {
+	Grant(agentID string, content []byte, grantedBy string)
+}
+
 // TaintReviewChecker 判断某 AgentID 是否持有对指定内容有效的人工复核豁免
 // （接口在调用方 internal/execute/dag 定义所在的共享契约包，HE-3）。
 type TaintReviewChecker interface {

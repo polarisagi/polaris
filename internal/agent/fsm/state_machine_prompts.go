@@ -195,8 +195,10 @@ func computerUsePolicyFromPrefs(preferences map[string]string) (mode string, any
 	if preferences == nil {
 		return mode, false, false
 	}
-	if v, ok := preferences["computer_use_mode"]; ok && v != "" {
+	if v, ok := preferences[types.PrefPermissionMode]; ok && v != "" {
 		mode = v
+	} else if v, ok := preferences[types.LegacyPrefComputerUseMode]; ok && v != "" {
+		mode = v // 迁移前遗留的快照键；启动迁移后不会再出现
 	}
 	if v, ok := preferences["computer_any_app_enabled"]; ok {
 		anyAppEnabled = v == "true"

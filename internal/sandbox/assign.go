@@ -26,7 +26,7 @@ func AssignSandboxTier(tool types.Tool, trustTier types.TrustTier, hwTier int, g
 	if sourceTier > tier {
 		tier = sourceTier
 	}
-	if tool.Capability >= types.CapWriteNetwork && tier < types.SandboxWasm {
+	if tool.Capability.AllowsNetwork() && tier < types.SandboxWasm {
 		tier = types.SandboxWasm
 	}
 	if tool.Capability >= types.CapPrivileged {

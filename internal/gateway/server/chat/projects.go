@@ -44,8 +44,10 @@ type projectDTO struct {
 	Archived     bool   `json:"archived"`
 	IsDefault    bool   `json:"is_default"`
 	SessionCount int    `json:"session_count"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	// RememberedRules 本项目已记住的“以后不再询问”授权条数（ADR-0117）。
+	RememberedRules int    `json:"remembered_rules"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 func toProjectDTO(p types.ProjectRow) projectDTO {
@@ -166,9 +168,12 @@ func (h *ChatHandler) HandleListProjects(w http.ResponseWriter, r *http.Request)
 		respondProjectErr(w, err)
 		return
 	}
+	counts := h.approvalRuleCounts(r)
 	list := make([]projectDTO, 0, len(rows))
 	for _, p := range rows {
-		list = append(list, toProjectDTO(p))
+		dto := toProjectDTO(p)
+		dto.RememberedRules = counts[p.ID]
+		list = append(list, dto)
 	}
 	httputil.WriteJSON(w, map[string]any{"projects": list})
 }
@@ -183,7 +188,9 @@ func (h *ChatHandler) HandleGetProject(w http.ResponseWriter, r *http.Request) {
 		respondProjectErr(w, err)
 		return
 	}
-	httputil.WriteJSON(w, toProjectDTO(*p))
+	dto := toProjectDTO(*p)
+	dto.RememberedRules = h.approvalRuleCounts(r)[p.ID]
+	httputil.WriteJSON(w, dto)
 }
 
 // POST /v1/projects  {name, root_path?, instructions?, trusted?}

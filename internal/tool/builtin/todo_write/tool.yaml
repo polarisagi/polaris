@@ -3,3 +3,4 @@ description: Replace the current session's todo list (full-list replacement, per
 capability: write-local
 side_effects:
   - state-mutate
+risk_level: low

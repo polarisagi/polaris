@@ -26,6 +26,7 @@ func (o *orchestrator) runFSMTurn(
 	sessionID string,
 	agentCtrl protocol.AgentController,
 	input string,
+	inputTaint types.TaintLevel,
 ) (reply string, inferErr string, aborted bool, viewIDs []string) {
 	// [W-2-A] 接入 SystemPromptGuard——同时注册 FSM 内核阶段模板（静态指令主体）
 	// 与 ActivatedSystemPrompt（M9 GEPA 动态激活提示词，可能为空），覆盖两类
@@ -38,7 +39,7 @@ func (o *orchestrator) runFSMTurn(
 	userTS := taint.NewTaintedString(input, taint.TaintSource{
 		Module:           "gateway/chat",
 		EventID:          sessionID,
-		OriginTaintLevel: types.TaintHigh,
+		OriginTaintLevel: inputTaint,
 	}, "http_gateway")
 	agentCtrl.SetTaskIntent(userTS)
 	if err := agentCtrl.SendIntent(types.TriggerIntentReceived); err != nil {
@@ -179,6 +180,18 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 			"tool":        ev.ToolName,
 			"input":       string(ev.ToolInput),
 			"deadline_ns": ev.DeadlineNs,
+		}
+		if ev.Reason != "" {
+			payload["reason"] = ev.Reason
+		}
+		if ev.HardLimit {
+			payload["hard_limit"] = true
+		}
+		if ev.RememberLabel != "" {
+			payload["remember_label"] = ev.RememberLabel
+		}
+		if len(ev.Items) > 0 {
+			payload["items"] = ev.Items
 		}
 		if ev.AgentID != "" {
 			payload["agent_id"] = ev.AgentID

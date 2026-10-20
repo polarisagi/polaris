@@ -125,7 +125,7 @@ func validateTaintGate(ctx context.Context, vCtx *DAGValidationContext) error {
 func isWriteNetworkTool(toolName string, registry protocol.AgentToolExecutor) bool {
 	if registry != nil {
 		if t, err := registry.Lookup(toolName); err == nil {
-			return t.Capability >= types.CapWriteNetwork
+			return t.EffectiveCapability().WritesNetwork()
 		}
 	}
 	// 内置黑名单兜底（未知工具默认视为有网络副作用，fail-closed）
@@ -145,7 +145,7 @@ func isWriteNetworkTool(toolName string, registry protocol.AgentToolExecutor) bo
 func isReadOnlyTool(toolName string, registry protocol.AgentToolExecutor) bool {
 	if registry != nil {
 		if t, err := registry.Lookup(toolName); err == nil {
-			return t.Capability <= types.CapReadOnly
+			return t.EffectiveCapability().IsReadOnlyForTaint()
 		}
 	}
 	// 内置白名单兜底（仅对已知工具适用，未知工具默认 fail-closed）

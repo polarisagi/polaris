@@ -24,7 +24,8 @@ type ChatHandler struct {
 	AgentPool      protocol.AgentPool
 	Blackboard     protocol.Blackboard
 	ChannelRepo    repo.ChannelRepository
-	ProjectRepo    repo.ProjectRepository // ADR-0097
+	ProjectRepo    repo.ProjectRepository      // ADR-0097
+	ApprovalRules  repo.ApprovalRuleRepository // ADR-0117：项目级“以后不再询问”规则
 	ProviderRepo   protocol.ProviderRepository
 	SystemRepo     repo.SystemRepository
 	Registry       protocol.LLMRegistry
@@ -61,7 +62,8 @@ type Dependencies struct {
 	DB                    protocol.SQLQuerier
 	ChatRepo              protocol.ChatRepository
 	ChannelRepo           repo.ChannelRepository
-	ProjectRepo           repo.ProjectRepository // ADR-0097
+	ProjectRepo           repo.ProjectRepository      // ADR-0097
+	ApprovalRules         repo.ApprovalRuleRepository // ADR-0117
 	ProviderRepo          protocol.ProviderRepository
 	SystemRepo            repo.SystemRepository
 	AgentPool             protocol.AgentPool
@@ -138,6 +140,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		Blackboard:         deps.Blackboard,
 		ChannelRepo:        deps.ChannelRepo,
 		ProjectRepo:        deps.ProjectRepo,
+		ApprovalRules:      deps.ApprovalRules,
 		ProviderRepo:       deps.ProviderRepo,
 		SystemRepo:         deps.SystemRepo,
 		Registry:           deps.Registry,

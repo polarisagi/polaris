@@ -200,6 +200,8 @@ func buildAgent(
 	// S_VALIDATE TaintGate 人工复核豁免（M11 §2.5 SanitizeByUserReview，2026-07-14）：
 	// 与 tb.ToolReg 的出口污点检查共享同一个 ExemptionVault 实例。
 	a.InjectTaintReviewChecker(tb.ExemptionVault)
+	// 统一权限判定（ADR-0117）：权限模式每次工具调用实时读偏好表，项目级“以后不再询问”规则读 approval_rules。
+	a.InjectPermission(tb.SysRepo, repo.NewSQLiteApprovalRuleRepository(sb.Store.DB()))
 	// Taint 受控降级审计（M11 §2.5「每次降级写 audit_log」，2026-08-10）：
 	// 复用 auditTrailLogAdapter 把 sb.AuditTrail 的 RecordAudit 桥接为
 	// protocol.AuditLogger 形状，与 BackgroundTaskScheduler 共用同一后端。
@@ -573,6 +575,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		streamBus,
 	)
 
+	// 旧键 computer_use_mode 在此一次性迁移到 permission_mode（读取即回写），
+	// 之后的 ListPreferences 快照只含新键。
+	if _, mErr := tb.SysRepo.GetPermissionMode(ctx); mErr != nil {
+		slog.Warn("polaris: permission_mode migration/read failed, strictest mode applies", "err", mErr)
+	}
 	prefs, err := tb.SysRepo.ListPreferences(ctx)
 	if err != nil {
 		slog.Warn("polaris: failed to load preferences on startup", "err", err)

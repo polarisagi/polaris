@@ -72,8 +72,12 @@ func MakeRunCommandFn(
 			return nil, apperr.New(apperr.CodeForbidden,
 				fmt.Sprintf("run_command: command denied: %s", verdict.Reason))
 		case classifier.RiskHITL:
-			// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
-			if pol.HITLAutoApprove {
+			// 统一权限判定（ADR-0117）已放行或经用户确认这次调用：不再重复询问；RiskDeny 不受影响。
+			if protocol.IsPreApproved(ctx) {
+				slog.Info("run_command: risky command pre-approved by permission decision",
+					"cmd", args.Command, "reason", verdict.Reason)
+			} else if pol.HITLAutoApprove {
+				// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 				slog.Warn("run_command: HITL auto-approved (full profile)",
 					"cmd", args.Command, "reason", verdict.Reason,
 					"profile", pol.Profile)

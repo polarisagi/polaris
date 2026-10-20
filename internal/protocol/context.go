@@ -70,6 +70,21 @@ type CtxAnomalyFilterKey struct{}
 // CtxCapabilityTokenKey 用于在 context 中传递能力令牌 *token.Token (A-7/inv_M7_01)
 type CtxCapabilityTokenKey struct{}
 
+// CtxPreApprovedKey 标记当前工具调用已由统一权限判定（policy.Decide）放行或经用户确认，
+// 工具内部的命令风险 HITL（bash/run_command）据此不再重复询问；灾难性命令的硬拒绝不受影响。
+type CtxPreApprovedKey struct{}
+
+// WithPreApproved 标记本次调用已获授权。
+func WithPreApproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CtxPreApprovedKey{}, true)
+}
+
+// IsPreApproved 报告本次调用是否已获统一权限判定授权。
+func IsPreApproved(ctx context.Context) bool {
+	v, _ := ctx.Value(CtxPreApprovedKey{}).(bool)
+	return v
+}
+
 // CtxBackgroundWorkKey 标记当前调用链属于可降级的后台工作。InferenceRouter 据此以
 // priority=1 申请 LLM 额度（受水位线约束），且不刷新"用户活跃"时间（否则后台自己的
 // 推理会把空闲窗口顶掉）。值为 backgroundMode，决定被水位线拒绝时的处置。
