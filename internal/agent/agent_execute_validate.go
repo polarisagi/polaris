@@ -187,7 +187,7 @@ func (a *Agent) runBlindZoneHITL(ctx context.Context, plan *protocol.DAGPlan) (b
 	var sideEffects []string
 	for _, node := range plan.Nodes {
 		t, err := a.toolRegistry.Lookup(node.ToolName)
-		if err != nil || t.Capability > types.CapReadOnly {
+		if err != nil || !t.EffectiveCapability().IsReadOnlyForTaint() {
 			sideEffects = append(sideEffects, node.ToolName)
 		}
 	}

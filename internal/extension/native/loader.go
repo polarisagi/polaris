@@ -54,13 +54,22 @@ func GetExtensionToolMeta(name string) (types.Tool, error) {
 			fmt.Sprintf("native/loader: parse schema.json for %q", name), err)
 	}
 
+	capLevel, err := mapCapability(meta.Capability)
+	if err != nil {
+		return types.Tool{}, apperr.Wrap(apperr.CodeOf(err), fmt.Sprintf("%s: tool %q", "native/loader", name), err)
+	}
+	riskLevel, err := mapRiskLevel(meta.RiskLevel)
+	if err != nil {
+		return types.Tool{}, apperr.Wrap(apperr.CodeOf(err), fmt.Sprintf("%s: tool %q", "native/loader", name), err)
+	}
+
 	return types.Tool{
 		Name:        meta.Name,
 		Description: meta.Description,
 		Version:     meta.Version,
 		InputSchema: inputSchema,
-		Capability:  mapCapability(meta.Capability),
-		RiskLevel:   mapRiskLevel(meta.RiskLevel),
+		Capability:  capLevel,
+		RiskLevel:   riskLevel,
 		SandboxTier: mapSandbox(meta.Sandbox),
 		SideEffects: mapSideEffects(meta.SideEffects),
 		Source:      types.ToolBuiltin,
@@ -68,29 +77,41 @@ func GetExtensionToolMeta(name string) (types.Tool, error) {
 	}, nil
 }
 
-func mapCapability(s string) types.CapabilityLevel {
+// mapCapability 把 tool.yaml 的 capability 字面量映射为能力等级。
+// fail-closed：未知/空值一律报错，不再默认只读（曾因 "CapWrite"/"write_local" 等无效值
+// 静默降为只读，使写类工具绕过污点与审批，ADR-0117）。
+func mapCapability(s string) (types.CapabilityLevel, error) {
 	switch s {
+	case "read-only":
+		return types.CapReadOnly, nil
+	case "read-network":
+		return types.CapReadNetwork, nil
 	case "write-local":
-		return types.CapWriteLocal
+		return types.CapWriteLocal, nil
 	case "write-network":
-		return types.CapWriteNetwork
+		return types.CapWriteNetwork, nil
 	case "privileged":
-		return types.CapPrivileged
+		return types.CapPrivileged, nil
 	default:
-		return types.CapReadOnly
+		return 0, apperr.New(apperr.CodeInvalidInput,
+			fmt.Sprintf("%s: invalid capability %q (want read-only|read-network|write-local|write-network|privileged)", "native/loader", s))
 	}
 }
 
-func mapRiskLevel(s string) types.RiskLevel {
+// mapRiskLevel 同样 fail-closed：缺失或非法的 risk_level 报错而非默认 low。
+func mapRiskLevel(s string) (types.RiskLevel, error) {
 	switch s {
+	case "low":
+		return types.RiskLow, nil
 	case "medium":
-		return types.RiskMedium
+		return types.RiskMedium, nil
 	case "high":
-		return types.RiskHigh
+		return types.RiskHigh, nil
 	case "privileged":
-		return types.RiskPrivileged
+		return types.RiskPrivileged, nil
 	default:
-		return types.RiskLow
+		return 0, apperr.New(apperr.CodeInvalidInput,
+			fmt.Sprintf("%s: invalid risk_level %q (want low|medium|high|privileged)", "native/loader", s))
 	}
 }
 

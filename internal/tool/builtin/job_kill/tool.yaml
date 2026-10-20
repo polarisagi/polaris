@@ -1,2 +1,4 @@
 name: job_kill
 description: Terminate a running background job.
+capability: write-local
+risk_level: medium

@@ -53,7 +53,7 @@ func hasNetworkEgressSideEffect(t types.Tool) bool {
 
 // isReversible 判断工具副作用是否可逆。
 func isReversible(t types.Tool) bool {
-	if t.Capability >= types.CapWriteNetwork {
+	if t.Capability.WritesNetwork() {
 		return false
 	}
 	for _, se := range t.SideEffects {

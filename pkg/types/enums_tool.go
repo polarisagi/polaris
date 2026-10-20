@@ -14,10 +14,21 @@ type CapabilityLevel int
 
 const (
 	CapReadOnly     CapabilityLevel = iota // 只读操作
+	CapReadNetwork                         // 读取型网络请求（搜索/抓取），不改变外部状态
 	CapWriteLocal                          // 本地写操作
 	CapWriteNetwork                        // 网络写操作
 	CapPrivileged                          // 特权操作
 )
+
+// IsReadOnlyForTaint 污点判定口径的"只读"：纯本地只读与读取型联网都不改变外部状态
+// （"会联网"与"会向外写"必须分开，ADR-0117）。
+func (c CapabilityLevel) IsReadOnlyForTaint() bool { return c <= CapReadNetwork }
+
+// AllowsNetwork 沙箱是否放行网络出站：读取型联网与网络写及以上放行，本地写不放行。
+func (c CapabilityLevel) AllowsNetwork() bool { return c == CapReadNetwork || c >= CapWriteNetwork }
+
+// WritesNetwork 是否会向外部写（对外发送/提交）。
+func (c CapabilityLevel) WritesNetwork() bool { return c >= CapWriteNetwork }
 
 // SideEffect 描述工具执行的副作用类型（用于 Saga 补偿策略选择）。
 type SideEffect string

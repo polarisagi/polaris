@@ -89,6 +89,26 @@ type Tool struct {
 	Timeout     time.Duration
 	RetryPolicy *RetryPolicy
 }
+
+// EffectiveCapability 返回用于污点/审批判定的有效能力等级（fail-closed）。
+// MCP 与技能工具注册时没有 manifest 能力声明，Capability 零值恰为 CapReadOnly，
+// 直接使用会让写类外部工具被当作只读放行：
+//   - MCP：默认按网络写；仅"服务器声明只读且来自受信服务器（注册时风险等级 <= Medium）"
+//     才降为读取型联网（annotations 只是提示，未受信服务器不采信）；
+//   - 技能：至少本地写。
+func (t Tool) EffectiveCapability() CapabilityLevel {
+	switch t.Source {
+	case ToolMCP:
+		if t.ReadOnlyHint && t.RiskLevel <= RiskMedium {
+			return max(t.Capability, CapReadNetwork)
+		}
+		return max(t.Capability, CapWriteNetwork)
+	case ToolSkill:
+		return max(t.Capability, CapWriteLocal)
+	}
+	return t.Capability
+}
+
 type ToolCallRequest struct {
 	ID             string
 	ToolName       string

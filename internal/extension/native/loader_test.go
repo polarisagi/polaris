@@ -11,16 +11,25 @@ func TestMapCapability_AllValues(t *testing.T) {
 		input    string
 		expected types.CapabilityLevel
 	}{
+		{"read-only", types.CapReadOnly},
+		{"read-network", types.CapReadNetwork},
 		{"write-local", types.CapWriteLocal},
 		{"write-network", types.CapWriteNetwork},
 		{"privileged", types.CapPrivileged},
-		{"unknown", types.CapReadOnly},
-		{"", types.CapReadOnly},
 	}
-
 	for _, c := range cases {
-		if out := mapCapability(c.input); out != c.expected {
-			t.Errorf("expected %v for %q, got %v", c.expected, c.input, out)
+		out, err := mapCapability(c.input)
+		if err != nil || out != c.expected {
+			t.Errorf("expected %v for %q, got %v (err=%v)", c.expected, c.input, out, err)
+		}
+	}
+}
+
+// 未知/空/历史无效值必须报错（fail-closed），不得静默降为只读。
+func TestMapCapability_InvalidFailsClosed(t *testing.T) {
+	for _, in := range []string{"", "unknown", "CapWrite", "write_local", "write", "READ-ONLY"} {
+		if _, err := mapCapability(in); err == nil {
+			t.Errorf("mapCapability(%q) should fail closed", in)
 		}
 	}
 }
@@ -34,12 +43,16 @@ func TestMapRiskLevel_AllValues(t *testing.T) {
 		{"high", types.RiskHigh},
 		{"privileged", types.RiskPrivileged},
 		{"low", types.RiskLow},
-		{"", types.RiskLow},
 	}
-
 	for _, c := range cases {
-		if out := mapRiskLevel(c.input); out != c.expected {
-			t.Errorf("expected %v for %q, got %v", c.expected, c.input, out)
+		out, err := mapRiskLevel(c.input)
+		if err != nil || out != c.expected {
+			t.Errorf("expected %v for %q, got %v (err=%v)", c.expected, c.input, out, err)
+		}
+	}
+	for _, in := range []string{"", "2", "bogus"} {
+		if _, err := mapRiskLevel(in); err == nil {
+			t.Errorf("mapRiskLevel(%q) should fail closed", in)
 		}
 	}
 }
@@ -91,5 +104,14 @@ func TestGetExtensionToolMeta_NotFound(t *testing.T) {
 	_, err := GetExtensionToolMeta("this_does_not_exist")
 	if err == nil {
 		t.Errorf("expected error for non-existent tool")
+	}
+}
+
+// 全部内嵌扩展工具 manifest 必须可加载（含合法 capability/risk_level）。
+func TestAllEmbeddedExtensionManifestsValid(t *testing.T) {
+	for _, n := range []string{"knowledge_search", "knowledge_ingest", "install_extension", "search_extension"} {
+		if _, err := GetExtensionToolMeta(n); err != nil {
+			t.Errorf("%s: %v", n, err)
+		}
 	}
 }

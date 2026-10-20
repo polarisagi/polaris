@@ -1,2 +1,4 @@
 name: todo_read
 description: Read the current session's todo list as {"todos":[{"content","status"}]}. Persisted per session in the database.
+capability: read-only
+risk_level: low

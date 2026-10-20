@@ -248,12 +248,12 @@ func (a toolMetaAdapter) ToolMeta(name string) pipeline.ToolMeta {
 	// ReadOnly 判定：
 	// MCP 工具在 Capability 上默认为零值 CapReadOnly，因此必须且仅看服务器声明的 ReadOnlyHint，
 	// 忽略 Capability 零值（规范明确 annotations 仅为提示，不可用作安全边界，但管线允许集以只读为准）。
-	// 非 MCP 内置工具依 Capability 及白名单（web_fetch / feed_fetch）判定。
+	// 非 MCP 内置工具依 Capability 判定（读取型联网 CapReadNetwork 同属只读）。
 	var isReadOnly bool
 	if tool.Source == types.ToolMCP {
 		isReadOnly = tool.ReadOnlyHint
 	} else {
-		isReadOnly = tool.Capability == types.CapReadOnly || name == "web_fetch" || name == "feed_fetch"
+		isReadOnly = tool.Capability.IsReadOnlyForTaint()
 	}
 	isWriteAllowed := slices.Contains(a.writeAllowlist, name)
 	isPrivileged := tool.Capability >= types.CapPrivileged
