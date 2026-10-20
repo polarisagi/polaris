@@ -85,21 +85,27 @@ func TestPublishAndRelease(t *testing.T) {
 	}
 
 	h.release()
-	for _, p := range []string{layout.RunPID, layout.RunPort, layout.RunToken} {
+	for _, p := range []string{layout.RunPID, layout.RunPort} {
 		if _, err = os.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("%s 应在 release 后清理", filepath.Base(p))
 		}
 	}
+	if _, err = os.Stat(layout.RunToken); err != nil {
+		t.Fatalf("令牌文件应保留以便重启复用: %v", err)
+	}
 	h.release() // 幂等
 }
 
-// 每次启动的令牌必须轮换，不得复用上一次的值。
-func TestTokenRotatesPerStart(t *testing.T) {
+// 重启后令牌复用（浏览器 Cookie 不因重启失效）；显式轮换后才变化。
+func TestTokenReusedAcrossStarts(t *testing.T) {
 	layout := newTestLayout(t)
 
 	first, err := acquireRuntime(layout)
 	if err != nil {
 		t.Fatalf("acquireRuntime: %v", err)
+	}
+	if err = first.publish(18888); err != nil {
+		t.Fatalf("publish: %v", err)
 	}
 	tokenA := first.Token
 	first.release()
@@ -108,10 +114,24 @@ func TestTokenRotatesPerStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquireRuntime: %v", err)
 	}
-	defer second.release()
+	if second.Token != tokenA {
+		t.Fatal("令牌文件有效时重启应复用令牌")
+	}
+	if err = second.publish(18888); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	second.release()
 
-	if second.Token == tokenA {
-		t.Fatal("两次启动的本地令牌相同——令牌未轮换")
+	if err = runtimeinfo.RotateToken(layout.RunToken); err != nil {
+		t.Fatalf("RotateToken: %v", err)
+	}
+	third, err := acquireRuntime(layout)
+	if err != nil {
+		t.Fatalf("acquireRuntime: %v", err)
+	}
+	defer third.release()
+	if third.Token == tokenA {
+		t.Fatal("显式轮换后应生成新令牌")
 	}
 }
 

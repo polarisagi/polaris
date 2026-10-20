@@ -51,14 +51,48 @@ type State struct {
 	Token string
 }
 
-// NewToken 生成一枚本地令牌。每次启动轮换，不落盘复用——令牌的生命周期与进程一致，
-// 持久化它只会让一次泄露长期有效。
+// NewToken 生成一枚新的本地令牌（256 位随机，hex 64 字符）。
 func NewToken() (string, error) {
 	b := make([]byte, tokenBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "runtimeinfo: 生成本地令牌失败", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// GetOrCreateToken 复用令牌文件中仍然有效的令牌，否则生成新令牌（reused=false）。
+//
+// # 为什么重启后复用
+//
+// 令牌曾「每次启动轮换」，代价是：浏览器里 polaris_local Cookie 与已打开的页面在守护进程
+// 重启后全部带着旧令牌，下一次请求即 401，用户只能手动刷新页面。令牌文件是 0600 的本机
+// 私有文件、令牌仅回环可用且为 256 位随机，复用不扩大暴露面——能读该文件的本机账号本来就
+// 能读进程内存与数据库。需要主动失效时调用 RotateToken。
+//
+// 「有效」= 文件存在、权限未宽于 0600、内容恰为 64 位 hex。任一不满足都重新生成，
+// 不做宽容读取（权限被放宽意味着令牌可能已被他人读取）。
+func GetOrCreateToken(path string) (token string, reused bool, err error) {
+	if tok, rerr := readSecret(path); rerr == nil && validToken(tok) {
+		return tok, true, nil
+	}
+	tok, err := NewToken()
+	return tok, false, err
+}
+
+// RotateToken 删除令牌文件，使下次启动重新生成。文件本就不存在不算失败。
+func RotateToken(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return apperr.Wrap(apperr.CodeInternal, "runtimeinfo: 轮换令牌失败 "+path, err)
+	}
+	return nil
+}
+
+func validToken(s string) bool {
+	if len(s) != tokenBytes*2 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // Write 原子写入三个运行时文件。调用方须先建好父目录（config.DataLayout.MkdirAll）。
@@ -146,10 +180,11 @@ func Read(p Paths) (State, error) {
 	return State{PID: pid, Port: port, Token: token}, nil
 }
 
-// Remove 清理三个文件，用于优雅关停。逐个尽力删除，不因其一失败而跳过其余——
+// Remove 清理 PID 与端口文件，用于优雅关停；令牌文件有意保留（见 GetOrCreateToken），
+// 要失效它用 RotateToken。逐个尽力删除，不因其一失败而跳过其余——
 // 残留的端口文件会让下一个客户端连向一个已经不存在的端口。
 func Remove(p Paths) {
-	for _, path := range []string{p.PID, p.Port, p.Token} {
+	for _, path := range []string{p.PID, p.Port} {
 		if path == "" {
 			continue
 		}

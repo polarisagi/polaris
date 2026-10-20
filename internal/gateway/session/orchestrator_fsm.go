@@ -69,6 +69,9 @@ func (o *orchestrator) runFSMTurn(
 				return string(replyBuilder), errBuilder, false, viewIDs
 			}
 			evCount++
+			if rec := recorderFrom(ctx); rec != nil {
+				rec.onEvent(ev)
+			}
 			stop := o.handleFSMEvent(ctx, sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
 			if stop {
 				slog.InfoContext(ctx, "session: fsm turn done",

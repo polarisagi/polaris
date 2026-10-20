@@ -1,4 +1,5 @@
 import Alpine from 'alpinejs'
+import './net.js' // 必须最先：它替换 window.fetch，之后所有 store 的请求才经过 401 自愈
 import { marked } from 'marked'
 import { sanitizeContent, authHeaders } from './utils.js'
 

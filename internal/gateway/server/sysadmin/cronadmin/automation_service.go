@@ -2,6 +2,8 @@ package cronadmin
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -31,6 +33,8 @@ type AutomationInput struct {
 	RequiresHITL    bool   `json:"requires_hitl"`
 	RiskLevel       int    `json:"risk_level"`
 	Source          string `json:"source"` // 仅创建时生效
+	// ProjectID 自动化所属项目。创建时空 = 创建者所在项目（Agent 工具）或默认项目；更新时空 = 保持原项目。
+	ProjectID string `json:"project_id"`
 }
 
 // MinIntervalMinutes 连续计算 50 次触发时间，取相邻差最小值（以分钟为单位）。
@@ -116,7 +120,49 @@ func validateAndNormalizeAutomationInput(in *AutomationInput) (string, error) {
 	return nextRun, nil
 }
 
+// resolveProject 校验并确定自动化所属项目；返回空串表示“沿用默认/原值”由调用方决定。
+// 项目必须存在且未归档：归档项目不接收新会话（ADR-0097），自动化每次运行都会新建会话。
+func (ca *CronAdmin) resolveProject(ctx context.Context, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" || ca.DB == nil {
+		return requested, nil
+	}
+	var archived int
+	err := ca.DB.QueryRowContext(ctx, `SELECT archived FROM projects WHERE id=?`, requested).Scan(&archived)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("project %s not found", requested))
+	}
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "cronadmin: check project failed", err)
+	}
+	if archived == 1 {
+		return "", apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("project %s is archived", requested))
+	}
+	return requested, nil
+}
+
+// creatorProject Agent 工具创建自动化时，默认归入创建者当前会话所在的项目（“创建时所在项目”）。
+func (ca *CronAdmin) creatorProject(ctx context.Context) string {
+	sid, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	if sid == "" || ca.DB == nil {
+		return ""
+	}
+	var pid string
+	if err := ca.DB.QueryRowContext(ctx, `SELECT project_id FROM chat_sessions WHERE id=?`, sid).Scan(&pid); err != nil {
+		return ""
+	}
+	return pid
+}
+
 func (ca *CronAdmin) createAutomation(ctx context.Context, in AutomationInput, nextRun string) (string, string, error) {
+	projectID := in.ProjectID
+	if projectID == "" {
+		projectID = ca.creatorProject(ctx)
+	}
+	projectID, err := ca.resolveProject(ctx, projectID)
+	if err != nil {
+		return "", "", err
+	}
 	id := newAutoID()
 	source := in.Source
 	if source == "" {
@@ -148,6 +194,7 @@ func (ca *CronAdmin) createAutomation(ctx context.Context, in AutomationInput, n
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		EventFilter:     in.EventFilter,
+		ProjectID:       projectID,
 	}
 	if err := ca.AutomationRepo.CreateAutomation(ctx, row); err != nil {
 		return "", "", apperr.Wrap(apperr.CodeInternal, "cronadmin: create automation failed", err)
@@ -162,6 +209,13 @@ func (ca *CronAdmin) updateAutomation(ctx context.Context, in AutomationInput, n
 	}
 	if existing == nil {
 		return "", "", apperr.New(apperr.CodeNotFound, fmt.Sprintf("automation %s not found", in.ID))
+	}
+	// 项目：未指定保持原值；改项目要校验目标存在且未归档（原项目已归档但没改它时不阻断编辑）。
+	projectID := existing.ProjectID
+	if in.ProjectID != "" && in.ProjectID != existing.ProjectID {
+		if projectID, err = ca.resolveProject(ctx, in.ProjectID); err != nil {
+			return "", "", err
+		}
 	}
 
 	enabled := true
@@ -189,6 +243,7 @@ func (ca *CronAdmin) updateAutomation(ctx context.Context, in AutomationInput, n
 		NextRunAt:       nextRun,
 		UpdatedAt:       now,
 		EventFilter:     in.EventFilter,
+		ProjectID:       projectID,
 	}
 	if err := ca.AutomationRepo.UpdateAutomation(ctx, row); err != nil {
 		return "", "", apperr.Wrap(apperr.CodeInternal, "cronadmin: update automation failed", err)

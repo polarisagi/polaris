@@ -57,7 +57,7 @@ func drainStream(ch <-chan types.StreamEvent) {
 func TestStreamInfer_EmptyPoolFallback_BalancesGovernor(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	reg.RegisterWithRole("default-p1", "DefaultP1", "default",
-		&mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}})
+		&mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}})
 	gov := &countingGovernor{}
 	router := NewInferenceRouter(reg, nil, WithGovernor(gov))
 

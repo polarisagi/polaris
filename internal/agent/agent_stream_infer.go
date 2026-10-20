@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -17,6 +18,7 @@ import (
 // Perceive/Plan/Reflect 的输出是给解析器的结构化填空，逐 token 推给用户即
 // 2026-09-24「回复里夹带 DAG JSON」缺陷本身。思考链照常发布，前端独立渲染。
 func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, audience protocol.LLMAudience) (*types.ProviderResponse, error) {
+	started := time.Now()
 	var content strings.Builder
 	var reasoning strings.Builder
 	var usage types.Usage
@@ -73,6 +75,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 	if inferErr != nil {
 		return nil, inferErr
 	}
+	a.publishLLMStep(audience, started, usage)
 	return &types.ProviderResponse{
 		Content:          content.String(),
 		ReasoningContent: reasoning.String(),
@@ -106,6 +109,7 @@ func (a *Agent) acceptStreamToolCall(payload string, audience protocol.LLMAudien
 			TaintLevel: a.sCtx.GlobalTaintLevel,
 			ToolName:   tc.Name,
 			ToolInput:  tc.Input,
+			CallID:     tc.ID,
 		})
 	}
 	return types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input}, true
@@ -122,4 +126,29 @@ func foldStreamMeta(ev types.StreamEvent, finishReason *string, usage *types.Usa
 		usage.OutputTokens = ev.Usage.OutputTokens
 		usage.CacheHitTokens = ev.Usage.CacheHitTokens
 	}
+}
+
+// publishLLMStep 发布一次 LLM 调用的步骤信息（ADR-0118）。只在受众为用户的交互回合发布：
+// 感知/规划/反思等内部填空调用对用户是噪音，用量仍完整记在 llm_calls。
+func (a *Agent) publishLLMStep(audience protocol.LLMAudience, started time.Time, usage types.Usage) {
+	if audience != protocol.AudienceUser {
+		return
+	}
+	retry := false
+	if a.sCtx != nil {
+		retry = a.sCtx.LoopEmptyRetries > 0
+	}
+	purpose := types.PurposeKernel
+	if a.sm != nil {
+		purpose = llmPurposeOf(a.sm.Current())
+	}
+	a.publishStreamEvent(types.AgentStreamEvent{
+		Type:           types.AgentStreamEventLLM,
+		ToolName:       purpose,
+		DurationMs:     time.Since(started).Milliseconds(),
+		InTokens:       usage.InputTokens,
+		OutTokens:      usage.OutputTokens,
+		CacheHitTokens: usage.CacheHitTokens,
+		Retry:          retry,
+	})
 }

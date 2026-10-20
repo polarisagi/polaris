@@ -11,10 +11,14 @@ import (
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -248,7 +252,8 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 
 	err := s.hitlGateway.Respond(r.Context(), approvalID, resp)
 	if err != nil {
-		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		// 状态码跟随错误码：不存在 404、已决/已超时 409、前置校验不过 403，其余才是 500。
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 
@@ -276,12 +281,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// KillFullStop = 3；PolarisKillswitchStage 由 main.go KillSwitch 回调写入
 	sealed := metrics.GlobalKillswitchStage.Load() >= 3
 
+	// 用量：?session_id= 给该会话（含上下文占用），缺省给今日全局累计。此前 token_used/token_limit/
+	// cost_cny 写死为 0，状态栏恒显示 0。币种为 USD，折算由客户端按 fx_cny_per_usd 展示。
+	usage := s.statusUsage(r)
+
 	httputil.WriteJSON(w, map[string]any{
 		"sealed":          sealed,
 		"model_id":        modelID,
-		"token_used":      0,
-		"token_limit":     0,
-		"cost_cny":        0.0,
+		"usage":           usage,
+		"fx_cny_per_usd":  config.UsageDisplayFXCNYPerUSD,
 		"memory_mb":       memMB,
 		"memory_limit_mb": 8192,
 		"agent_id":        agentID,
@@ -290,4 +298,28 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"embedding":       s.GetEmbeddingStatus(),
 		"accelerator":     s.GetAcceleratorInfo(),
 	})
+}
+
+// statusUsage 组装 /v1/status 的 usage 字段。查询失败不让状态快照整体失败（状态栏其余指标仍有用），
+// 以 error 字段如实标出，客户端据此显示"用量不可用"而不是 0。
+func (s *Server) statusUsage(r *http.Request) map[string]any {
+	sid := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sid != "" && !session.SessionIDPattern.MatchString(sid) {
+		return map[string]any{"error": "invalid session_id"}
+	}
+	if s.sysadminHandler == nil || s.sysadminHandler.UsageRepo == nil {
+		return map[string]any{"error": "usage ledger unavailable"}
+	}
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	view, err := sysadmin.BuildSessionUsage(r.Context(), s.sysadminHandler.UsageRepo, sid, dayStart)
+	if err != nil {
+		slog.Warn("handleStatus: usage query failed", "session", sid, "err", err)
+		return map[string]any{"error": "usage query failed"}
+	}
+	scope := "today"
+	if sid != "" {
+		scope = "session"
+	}
+	return map[string]any{"scope": scope, "data": view}
 }

@@ -1,4 +1,5 @@
 import Alpine from 'alpinejs'
+import { newTurn, applyStep } from './steps.js'
 import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
 import { SSEClient, dedupeRunID } from '../sse.js'
 import { mcpAppsHost } from '../mcp_apps.js'
@@ -17,6 +18,7 @@ const sseClients = new Map() // run.rid -> SSEClient
 const idleDefaults = () => ({
   state: 'IDLE', taskID: null, currentTokens: '', thinkingText: '', errorMsg: '',
   contextWarning: null, compacting: false, phase: '', approvals: [], subagents: [],
+  turn: null, // 步骤时间线（ADR-0118）：首个 step 事件到达时创建
 })
 const RUN_FIELDS = Object.keys(idleDefaults())
 
@@ -756,6 +758,12 @@ const chatStore = {
           run.pendingToolCall = null
         }
         break
+      case 'step':
+        // 结构化步骤（ADR-0118）：与旧的 thinking/tool_call/tool_result 事件并行发送，旧事件继续驱动
+        // 流式状态机，step 只负责时间线。
+        if (!run.turn) run.turn = newTurn()
+        applyStep(run.turn, data)
+        break
       case 'complete':
         if (data && data.session_id) this._bindSession(run, data.session_id)
         if (data && data.duration_ms) {
@@ -892,11 +900,31 @@ const chatStore = {
       if (inView) this.thinkingOpen = false
       run.thinkingText = ''
     }
+    this._attachTurn(run, data)
     this._closeRun(run)
     if (inView) {
       if (!wasAborting) Alpine.store('statusBar').poll()
     } else if (!wasAborting) {
       this._notifyBackground(run, true)
+    }
+  },
+
+  // 回合收尾：把时间线与用量挂到最后一条助手消息上（折叠摘要行与消息脚注读这两个字段）。
+  _attachTurn(run, data) {
+    const t = run.turn
+    if (t) {
+      t.running = false
+      if (data?.turn_id) t.id = data.turn_id
+      if (data?.steps) t.summary = data.steps
+    }
+    if (!data?.turn_id && !t) return
+    const msgs = run.messages
+    const last = msgs[msgs.length - 1]
+    if (!last || last.role !== 'assistant') return
+    if (data?.usage) last.usage = data.usage
+    if (t && (t.steps.length > 0 || t.summary)) last.turn = t
+    else if (data?.turn_id && data?.steps?.steps > 0) {
+      last.turn = { id: data.turn_id, steps: [], summary: data.steps, loaded: false, loading: false, running: false, error: '' }
     }
   },
 
@@ -937,6 +965,7 @@ const chatStore = {
     }
     run.phase = ''
     run.approvals = []
+    if (run.turn) run.turn.running = false
     run.state = 'ERROR'
     run.errorMsg = err.message || '连接中断'
     this._closeRun(run)
@@ -1033,6 +1062,11 @@ const chatStore = {
           cancelled: false,
         })),
         taskDuration: m.task_duration || 0,
+        // 回合步骤摘要与用量（ADR-0118）：步骤本体展开时才懒加载。
+        usage: m.usage || null,
+        turn: m.turn_id && m.steps && m.steps.steps > 0
+          ? { id: m.turn_id, steps: [], summary: m.steps, loaded: false, loading: false, running: false, error: '' }
+          : null,
         aborted: m.aborted || false,
         compactionAfter: d.compaction_events?.some(e => e.at_message_id === m.id) || false,
       }))

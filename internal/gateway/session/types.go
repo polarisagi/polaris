@@ -48,6 +48,8 @@ const (
 	// KindSession 对应 wire 事件 "session"：会话 ID 一经确定（含新会话）立即推送，
 	// Payload {session_id}；TurnHub 据此登记新会话并补 turn_id（ADR-0116）。
 	KindSession
+	// KindStep 对应 wire 事件 "step"（ADR-0118 步骤时间线），Payload 即 Step 的 JSON。
+	KindStep
 )
 
 // Event 领域事件。Text 用于 KindDelta 增量文本；Payload 用于 KindStatus /
@@ -89,7 +91,7 @@ type Attachment struct {
 // RunTurn 内部处理，Request 只携带未解析的引用。
 type Request struct {
 	SessionID string
-	// ProjectID 新会话归属的项目（ADR-0097）。仅交互式路径设置；空 = 默认项目。
+	// ProjectID 新会话归属的项目（ADR-0097）。交互式路径与自动化（cron/webhook/event）的无头路径设置；空 = 默认项目。
 	// 已存在的会话以库内归属为准，本字段被忽略（INSERT OR IGNORE 语义）。
 	ProjectID   string
 	Input       string

@@ -281,6 +281,25 @@ dim = 2560</code></pre>
         </div>
       </div>
 
+      <!-- 费用显示币种（A2）：仅影响展示，账本恒为 USD -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card-body p-4 gap-2">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="font-bold text-sm" x-text="$store.i18n.t('settings_currency')"></div>
+              <p class="text-xs text-base-content/60" x-text="$store.i18n.t('settings_currency_hint')"></p>
+            </div>
+            <select class="select select-bordered select-sm" aria-label="currency"
+                    :value="$store.fmt.pref" @change="$store.fmt.setPref($event.target.value)">
+              <option value="auto" :selected="$store.fmt.pref === 'auto'" x-text="$store.i18n.t('settings_currency_auto')"></option>
+              <option value="cny" :selected="$store.fmt.pref === 'cny'" x-text="$store.i18n.t('settings_currency_cny')"></option>
+              <option value="usd" :selected="$store.fmt.pref === 'usd'" x-text="$store.i18n.t('settings_currency_usd')"></option>
+            </select>
+          </div>
+          <div class="text-xs text-base-content/50" x-text="$store.fmt.hint"></div>
+        </div>
+      </div>
+
       <div x-show="$store.config.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
         <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
         <p x-text="$store.i18n.t('loading')"></p>

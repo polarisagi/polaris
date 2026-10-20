@@ -133,8 +133,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.chatHandler.HandleGetSession)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.chatHandler.HandleGetSessionContext)
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
-	mux.HandleFunc("GET /v1/sessions/{sessionID}/stream", s.chatHandler.HandleSessionStream) // ADR-0116 重订阅后台回合
-	mux.HandleFunc("POST /v1/sessions/{sessionID}/abort", s.chatHandler.HandleAbortSession)  // ADR-0116 显式中止
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/turns/{turnID}/steps", s.chatHandler.HandleGetTurnSteps) // ADR-0118 懒加载步骤
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/stream", s.chatHandler.HandleSessionStream)              // ADR-0116 重订阅后台回合
+	mux.HandleFunc("POST /v1/sessions/{sessionID}/abort", s.chatHandler.HandleAbortSession)               // ADR-0116 显式中止
 	mux.HandleFunc("PUT /v1/sessions/{sessionID}/project", s.chatHandler.HandleMoveSession)
 
 	// 项目 API（ADR-0097）。读写均限本地可信客户端 / admin，见 chat/projects.go requireProjectAccess。
@@ -172,6 +173,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/insights", s.sysadminHandler.HandleInsights)
 	// LLM 用量聚合（ADR-0105 决策八）：按 purpose/model/provider/day 汇总请求数、token、缓存命中率与估算费用。
 	mux.HandleFunc("GET /v1/usage", s.sysadminHandler.HandleGetUsage)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/usage", s.sysadminHandler.HandleGetSessionUsage)
 	mux.HandleFunc("POST /v1/sessions/{sessionID}/recap", s.chatHandler.HandleSessionRecap)
 
 	// Trajectory 导出（自演化训练数据）

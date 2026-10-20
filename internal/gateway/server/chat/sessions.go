@@ -116,8 +116,14 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		// Views 本条助手消息关联的 MCP Apps UI 视图（M8f-1），刷新页面后前端
 		// 据此重新渲染。只有 role="assistant" 且本轮产生过 tool_ui 事件的消息非空。
 		Views []mcpAppViewDTO `json:"views,omitempty"`
+		// TurnID/Usage/Steps（ADR-0118）：产生本条助手消息的回合、用量摘要、步骤摘要（步数/工具数/用时/token）。
+		// 步骤本体不随历史返回，展开时按 TurnID 走 GET /v1/sessions/{id}/turns/{turn_id}/steps 懒加载。
+		TurnID string          `json:"turn_id,omitempty"`
+		Usage  json.RawMessage `json:"usage,omitempty"`
+		Steps  json.RawMessage `json:"steps,omitempty"`
 	}
 	viewsByMessage := h.appViewsByMessageID(r.Context(), messages)
+	stepSummaries := h.turnSummaries(r.Context(), sessionID)
 	msgs := make([]msgRow, 0, len(messages))
 	total := 0
 	for _, row := range messages {
@@ -130,6 +136,13 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if row.ToolCalls != "" {
 			m.ToolCalls = json.RawMessage(row.ToolCalls)
+		}
+		if row.TurnID != "" {
+			m.TurnID = row.TurnID
+			m.Steps = stepSummaries[row.TurnID]
+		}
+		if row.Usage != "" && json.Valid([]byte(row.Usage)) {
+			m.Usage = json.RawMessage(row.Usage)
 		}
 
 		total += len(m.Content)

@@ -40,11 +40,11 @@ func (m *nonRetryableProvider) ModelID() string                          { retur
 
 func TestInferenceRouter_NonRetryableErrorSkipsFailover(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	// 显式拉开 CostPer1KInput 差距，保证 best() 在 map 遍历顺序随机的情况下
+	// 显式拉开 CostPerMTokInput 差距，保证 best() 在 map 遍历顺序随机的情况下
 	// 仍确定性地优先选中 primary（否则 healthScore 打平时命中哪个纯看 map 迭代顺序，
 	// 会导致本测试间歇性失败——两者曾经都用零值 caps 导致 flaky）。
-	primary := &nonRetryableProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}
-	secondary := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0}}
+	primary := &nonRetryableProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1}}
+	secondary := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 9.0}}
 	reg.Register("primary", "Primary", primary)
 	reg.Register("secondary", "Secondary", secondary)
 
@@ -63,8 +63,8 @@ func TestInferenceRouter_NonRetryableErrorSkipsFailover(t *testing.T) {
 
 func TestInferenceRouter_NonRetryableStreamErrorSkipsFailover(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	primary := &nonRetryableProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}
-	secondary := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0}}
+	primary := &nonRetryableProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1}}
+	secondary := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 9.0}}
 	reg.Register("primary", "Primary", primary)
 	reg.Register("secondary", "Secondary", secondary)
 

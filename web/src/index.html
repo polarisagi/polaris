@@ -191,11 +191,24 @@
         </template>
         
         <div class="divider divider-horizontal mx-0"></div>
-        <div class="flex items-center gap-2">
-          <span x-text="`tokens: ${$store.statusBar.tokenUsed.toLocaleString()} / ${$store.statusBar.tokenLimit.toLocaleString()}`"></span>
+        <div class="flex items-center gap-2" :title="$store.i18n.t('status_ctx_title')">
+          <!-- 有会话：上下文占用（最近一次请求的输入 / 模型窗口）；无会话：今日全局累计 -->
+          <template x-if="$store.statusBar.usageScope === 'session' && $store.statusBar.tokenLimit > 0">
+            <span x-text="`${$store.i18n.t('status_ctx')}: ${$store.fmt.tok($store.statusBar.tokenUsed)} / ${$store.fmt.tok($store.statusBar.tokenLimit)} (${$store.fmt.pct($store.statusBar.tokenPct)})`"></span>
+          </template>
+          <template x-if="$store.statusBar.usageScope === 'session' && $store.statusBar.tokenLimit === 0">
+            <span x-text="`${$store.i18n.t('status_ctx')}: ${$store.fmt.tok($store.statusBar.tokenUsed)}`"></span>
+          </template>
+          <template x-if="$store.statusBar.usageScope !== 'session'">
+            <span x-text="`${$store.i18n.t('status_today')}: ${$store.fmt.tok($store.statusBar.usage?.input)} ${$store.i18n.t('usage_in')} · ${$store.fmt.tok($store.statusBar.usage?.output)} ${$store.i18n.t('usage_out')}`"></span>
+          </template>
           <span x-show="$store.statusBar.tokenBadge" class="badge badge-xs" :class="$store.statusBar.tokenBadge?.cls" x-text="$store.statusBar.tokenBadge?.label"></span>
         </div>
-        
+        <template x-if="$store.statusBar.usageScope === 'session' && $store.statusBar.usage">
+          <span class="hidden md:inline text-base-content/60"
+                x-text="`${$store.fmt.tok($store.statusBar.usage.input)} ${$store.i18n.t('usage_in')} · ${$store.fmt.pct($store.statusBar.usage.cache_hit_ratio)} ${$store.i18n.t('usage_hit')} · ${$store.fmt.tok($store.statusBar.usage.output)} ${$store.i18n.t('usage_out')}`"></span>
+        </template>
+
         <div class="divider divider-horizontal mx-0"></div>
         <span x-text="`mem: ${$store.statusBar.memoryMB}MB`"></span>
 
@@ -284,7 +297,8 @@
           </div>
         </div>
 
-        <span class="ml-auto font-bold" x-text="`¥${$store.statusBar.costCNY.toFixed(4)}`"></span>
+        <span class="ml-auto font-bold" :title="$store.fmt.hint"
+              x-text="`≈${$store.fmt.money($store.statusBar.costUSD)}${$store.statusBar.usageScope === 'session' ? '' : ' / ' + $store.i18n.t('status_today')}`"></span>
       </div>
     </header>
 
@@ -353,6 +367,15 @@
   </svg>
   <span x-show="$store.logs.entries.length > 0 && !$store.logs.drawerOpen" class="badge badge-success badge-xs absolute top-0 right-0"></span>
 </button>
+
+<!-- 本地令牌失效横幅（js/net.js：401 自愈重试仍失败时出现） -->
+<div x-data x-show="$store.net.broken" x-cloak
+     class="fixed top-0 inset-x-0 z-[1100] flex justify-center px-4 pt-2">
+  <button type="button" class="alert alert-warning shadow-lg max-w-full cursor-pointer text-sm py-2"
+          @click="$store.net.reconnect()" :disabled="$store.net.refreshing">
+    <span x-text="$store.i18n.t('net_broken_banner')"></span>
+  </button>
+</div>
 
 <!-- Toast Container -->
 <div class="toast toast-bottom toast-end z-[1000]" x-data>

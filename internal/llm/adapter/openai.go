@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	llmparent "github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/internal/llm/pricing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -108,12 +109,15 @@ func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool,
 			// 此处声明后路由层才能在多模态请求时将 OpenAI 纳入候选
 			SupportsVision:   true,
 			MaxContextTokens: 128000,
-			CostPer1KInput:   0.15,
-			CostPer1KOutput:  0.60,
 			// 仅官方端点认识 prompt_cache_key；Ollama/自建/其他兼容端点默认不发（见 WithOpenAIPromptCacheKey）。
 			SupportsPromptCacheKey: strings.HasPrefix(baseURL, openAIOfficialBase),
 		},
 		tbr: tbr,
+	}
+	// 费率按模型 ID 查价目目录（USD / 百万 token）。查不到记 0 而不是套用 gpt-4o-mini：
+	// 通用兼容端点后面常是 DeepSeek 等其他模型，套错价比不记价更误导（llm_calls 另按实际模型 ID 取价）。
+	if pr, ok := pricing.Lookup(model); ok {
+		a.caps.CostPerMTokInput, a.caps.CostPerMTokOutput, a.caps.CostPerMTokCacheHit = pr.Input, pr.Output, pr.CacheHit
 	}
 	for _, o := range opts {
 		o(a)

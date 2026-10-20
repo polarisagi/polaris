@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -102,4 +104,90 @@ func (r *SQLiteLLMCallRepository) PruneLLMCalls(ctx context.Context, beforeMs in
 			return total, nil
 		}
 	}
+}
+
+const usageTotalsCols = `COUNT(*),
+	COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cache_hit_tokens), 0),
+	COALESCE(SUM(output_tokens), 0), COALESCE(SUM(reasoning_tokens), 0),
+	COALESCE(SUM(cost_usd), 0), COALESCE(SUM(latency_ms), 0)`
+
+func scanTotals(sc interface{ Scan(...any) error }, t *protorepo.LLMUsageTotals, extra ...any) error {
+	dst := append([]any{&t.Calls, &t.InputTokens, &t.CacheHitTokens, &t.OutputTokens, &t.ReasoningTokens, &t.CostUSD, &t.LatencyMs}, extra...)
+	return sc.Scan(dst...) //nolint:wrapcheck // 调用方统一包装
+}
+
+// SessionUsage 见 protorepo.LLMSessionUsageRepository。走 idx_llm_calls_session。
+func (r *SQLiteLLMUsageQuery) SessionUsage(ctx context.Context, sessionID string) (protorepo.LLMSessionUsage, error) {
+	var out protorepo.LLMSessionUsage
+	if err := scanTotals(r.db.QueryRowContext(ctx, `SELECT `+usageTotalsCols+` FROM llm_calls WHERE session_id = ?`, sessionID), &out.LLMUsageTotals); err != nil {
+		return out, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.SessionUsage", err)
+	}
+	// 最近一次内核请求；没有则退回任意成功请求。
+	for _, purposeFilter := range []string{` AND purpose = 'kernel'`, ``} {
+		err := r.db.QueryRowContext(ctx, `SELECT input_tokens, model_id FROM llm_calls
+			WHERE session_id = ? AND status = 'ok' AND input_tokens > 0`+purposeFilter+`
+			ORDER BY created_at DESC LIMIT 1`, sessionID).Scan(&out.LastInputTokens, &out.LastModelID)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return out, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.SessionUsage: last", err)
+		}
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT turn_id, `+usageTotalsCols+`, MIN(created_at), MAX(created_at)
+		FROM llm_calls WHERE session_id = ? AND turn_id != '' GROUP BY turn_id ORDER BY MIN(created_at)`, sessionID)
+	if err != nil {
+		return out, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.SessionUsage: by_turn", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tu protorepo.LLMTurnUsage
+		if err := rows.Scan(&tu.TurnID, &tu.Calls, &tu.InputTokens, &tu.CacheHitTokens, &tu.OutputTokens,
+			&tu.ReasoningTokens, &tu.CostUSD, &tu.LatencyMs, &tu.FirstAtMs, &tu.LastAtMs); err != nil {
+			return out, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.SessionUsage: scan turn", err)
+		}
+		out.ByTurn = append(out.ByTurn, tu)
+	}
+	if err := rows.Err(); err != nil {
+		return out, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.SessionUsage: rows", err)
+	}
+	return out, nil
+}
+
+// TurnUsage 见 protorepo.LLMSessionUsageRepository。走 idx_llm_calls_turn。
+func (r *SQLiteLLMUsageQuery) TurnUsage(ctx context.Context, turnID string) (protorepo.LLMUsageTotals, error) {
+	var t protorepo.LLMUsageTotals
+	if turnID == "" {
+		return t, nil
+	}
+	if err := scanTotals(r.db.QueryRowContext(ctx, `SELECT `+usageTotalsCols+` FROM llm_calls WHERE turn_id = ?`, turnID), &t); err != nil {
+		return t, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.TurnUsage", err)
+	}
+	return t, nil
+}
+
+// UsageSince 见 protorepo.LLMSessionUsageRepository。
+func (r *SQLiteLLMUsageQuery) UsageSince(ctx context.Context, sinceMs int64) (protorepo.LLMUsageTotals, error) {
+	var t protorepo.LLMUsageTotals
+	if err := scanTotals(r.db.QueryRowContext(ctx, `SELECT `+usageTotalsCols+` FROM llm_calls WHERE created_at >= ?`, sinceMs), &t); err != nil {
+		return t, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.UsageSince", err)
+	}
+	return t, nil
+}
+
+// ContextWindowFor 见 protorepo.LLMSessionUsageRepository。目录表不存在（精简库）按未知处理。
+func (r *SQLiteLLMUsageQuery) ContextWindowFor(ctx context.Context, modelID string) (int, error) {
+	if modelID == "" {
+		return 0, nil
+	}
+	var cw sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `SELECT context_window FROM provider_discovered_models
+		WHERE model_id = ? AND context_window > 0 ORDER BY last_seen_at DESC LIMIT 1`, modelID).Scan(&cw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteLLMUsageQuery.ContextWindowFor", err)
+	}
+	return int(cw.Int64), nil
 }

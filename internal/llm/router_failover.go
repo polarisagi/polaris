@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/polarisagi/polaris/internal/llm/pricing"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/pb"
@@ -212,9 +213,7 @@ func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferReque
 
 func (ir *InferenceRouter) recordFailoverMetrics(ctx context.Context, chosen *providerEntry, resp *types.ProviderResponse, start time.Time) {
 	caps := chosen.provider.Capabilities()
-	costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
-		float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
-		float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+	costUSD := pricing.CostFor(resp.Model, caps, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
 	ms := float64(time.Since(start).Milliseconds())
 	trace.RecordLLMCall(ctx,
 		chosen.name, resp.Model, "failover", ms,

@@ -44,8 +44,8 @@ func NewOllamaAdapter(model string, httpClient *http.Client, tbr *metrics.TokenB
 			SupportsTools:     true,
 			SupportsThinking:  false,
 			MaxContextTokens:  32768,
-			CostPer1KInput:    0.0,
-			CostPer1KOutput:   0.0,
+			CostPerMTokInput:  0.0,
+			CostPerMTokOutput: 0.0,
 		},
 		tbr: tbr,
 	}

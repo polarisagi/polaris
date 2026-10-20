@@ -424,15 +424,19 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		// 造成 HE-2 污点静默丢失。
 		ctx = context.WithValue(ctx, protocol.CtxTaintLevelKey{}, taintLevel)
 
+		callID := "dag_" + uuid.NewString()
+		execStart := time.Now()
 		a.publishStreamEvent(types.AgentStreamEvent{
 			Type:       types.AgentStreamEventToolCall,
 			ToolName:   toolName,
 			ToolInput:  args,
 			TaintLevel: taintLevel,
+			CallID:     callID,
 		})
 
 		res, err := toolExecFnInner(ctx, toolName, args, taintLevel)
-		if err != nil || res == nil || !res.Success {
+		failed := err != nil || res == nil || !res.Success
+		if failed {
 			nodeFailures.Add(1)
 		}
 
@@ -454,6 +458,10 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			Content:    outputContent,
 			TaintLevel: taintLevel,
 			UI:         a.buildToolUIRef(toolName, args, res),
+			CallID:     callID,
+			ResultRaw:  capStreamResultRaw(outputContent),
+			IsError:    failed,
+			DurationMs: time.Since(execStart).Milliseconds(),
 		})
 
 		return res, err

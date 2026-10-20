@@ -46,6 +46,7 @@ type automation struct {
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
 	EventFilter     string `json:"event_filter"`
+	ProjectID       string `json:"project_id"`
 }
 
 type automationRun struct {

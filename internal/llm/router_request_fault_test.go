@@ -33,8 +33,8 @@ func (p *overflowProvider) StreamInfer(context.Context, []types.Message, ...type
 func newOverflowRouter(t *testing.T) (*InferenceRouter, *overflowProvider, *mockProvider, *ProviderRegistry) {
 	t.Helper()
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	over := &overflowProvider{mockProvider: mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}}
-	backup := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0}}
+	over := &overflowProvider{mockProvider: mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1}}}
+	backup := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 9.0}}
 	reg.Register("over", "Overflow", over)
 	reg.Register("backup", "Backup", backup)
 	return NewInferenceRouter(reg, nil), over, backup, reg
@@ -88,9 +88,9 @@ func TestRouter_ContextOverflow_DoesNotTripBreaker(t *testing.T) {
 func TestRouter_ContextOverflow_FailsOverOnlyToLargerWindow(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		reg := NewProviderRegistry(config.M1RouterThresholds{})
-		small := &overflowProvider{mockProvider: mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1, MaxContextTokens: 8192}}}
-		same := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.2, MaxContextTokens: 8192}}
-		large := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0, MaxContextTokens: 128000}}
+		small := &overflowProvider{mockProvider: mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1, MaxContextTokens: 8192}}}
+		same := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.2, MaxContextTokens: 8192}}
+		large := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 9.0, MaxContextTokens: 128000}}
 		reg.Register("small", "Small", small)
 		reg.Register("same", "Same", same)
 		reg.Register("large", "Large", large)

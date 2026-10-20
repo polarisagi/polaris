@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -23,6 +26,7 @@ func truncateStreamToolResult(s string) string {
 // 工具调用事件已由 acceptStreamToolCall 在流式阶段发布，这里补齐成对的结果事件；
 // 污点等级随结果走，客户端据此决定展示方式。
 func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCall) types.Message {
+	start := time.Now()
 	msg := a.executeLoopToolCallRaw(ctx, call)
 	if a.sCtx.LoopStreamsToUser() {
 		a.publishStreamEvent(types.AgentStreamEvent{
@@ -30,7 +34,27 @@ func (a *Agent) executeLoopToolCall(ctx context.Context, call types.InferToolCal
 			ToolName:   call.Name,
 			Content:    truncateStreamToolResult(msg.Content),
 			TaintLevel: msg.TaintLevel,
+			CallID:     call.ID,
+			ResultRaw:  capStreamResultRaw(msg.Content),
+			IsError:    strings.HasPrefix(msg.Content, "Error: "),
+			DurationMs: time.Since(start).Milliseconds(),
 		})
 	}
 	return msg
+}
+
+// streamResultRawMaxBytes 随事件带给 session 层生成摘要的原始结果上限。摘要只读前部结构
+// （搜索结果标题、网页标题、命令退出码与末尾输出），完整结果已在模型上下文中，不必整份搬运。
+const streamResultRawMaxBytes = 64 << 10
+
+func capStreamResultRaw(s string) string {
+	if len(s) <= streamResultRawMaxBytes {
+		return s
+	}
+	// 按字节截断后修正到 UTF-8 边界，避免把多字节字符切成乱码。
+	cut := streamResultRawMaxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }

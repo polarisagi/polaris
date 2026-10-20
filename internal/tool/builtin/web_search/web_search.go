@@ -38,7 +38,12 @@ type ddg struct {
 	endpoint string // 为空时使用默认 https://html.duckduckgo.com/html/?q=
 	// retryDelay 遇到限流（HTTP 202/429）后的退避时长；零值用 defaultRateLimitBackoff。
 	retryDelay time.Duration
+	// breaker 同会话连续限流后的熔断器；nil 表示不熔断（测试直接构造 &ddg{} 即如此）。
+	breaker *rateBreaker
 }
+
+// newDDG 构造带进程级熔断器的 DuckDuckGo 引擎。
+func newDDG(endpoint string) *ddg { return &ddg{endpoint: endpoint, breaker: ddgBreaker()} }
 
 // defaultRateLimitBackoff DDG 限流后的短退避：202 是其反爬响应，立即重试几乎必然再次命中。
 const defaultRateLimitBackoff = 2 * time.Second
@@ -63,7 +68,7 @@ type brave struct {
 // pickEngine 依据配置选择搜索引擎实现；若未指定或缺少必要凭据，降级回退至 duckduckgo。
 func pickEngine(cfg *config.Config) (engine, string) {
 	if cfg == nil {
-		return &ddg{}, "duckduckgo"
+		return newDDG(""), "duckduckgo"
 	}
 
 	engName := strings.ToLower(strings.TrimSpace(cfg.Agent.Skill.WebSearchEngine))
@@ -73,24 +78,26 @@ func pickEngine(cfg *config.Config) (engine, string) {
 
 	switch engName {
 	case "duckduckgo", "ddg":
-		return &ddg{endpoint: cfg.Agent.Skill.WebSearchBaseURL}, "duckduckgo"
+		return newDDG(cfg.Agent.Skill.WebSearchBaseURL), "duckduckgo"
+	case "bing":
+		return &bing{}, "bing"
 	case "searxng":
 		base := strings.TrimSpace(cfg.Agent.Skill.WebSearchBaseURL)
 		if base == "" {
 			slog.Warn("web_search: searxng requires web_search_base_url, falling back to duckduckgo")
-			return &ddg{}, "duckduckgo"
+			return newDDG(""), "duckduckgo"
 		}
 		return &searxng{base: base}, "searxng"
 	case "brave":
 		key := strings.TrimSpace(cfg.Agent.Skill.WebSearchAPIKey)
 		if key == "" {
 			slog.Warn("web_search: brave requires web_search_api_key, falling back to duckduckgo")
-			return &ddg{endpoint: cfg.Agent.Skill.WebSearchBaseURL}, "duckduckgo"
+			return newDDG(cfg.Agent.Skill.WebSearchBaseURL), "duckduckgo"
 		}
 		return &brave{key: key, endpoint: cfg.Agent.Skill.WebSearchBaseURL}, "brave"
 	default:
 		slog.Warn("web_search: unknown search engine, falling back to duckduckgo", "engine", engName)
-		return &ddg{endpoint: cfg.Agent.Skill.WebSearchBaseURL}, "duckduckgo"
+		return newDDG(cfg.Agent.Skill.WebSearchBaseURL), "duckduckgo"
 	}
 }
 
@@ -99,8 +106,8 @@ type namedEngine struct {
 	eng  engine
 }
 
-// fallbackEngines 返回主引擎失败后可降级的其他引擎：仅包含「配置里已具备凭据」的引擎，
-// 绝不凭空启用用户没配置的服务。DDG 为兜底免费引擎，故任何主引擎失败后都可退到 DDG。
+// fallbackEngines 返回主引擎失败后可降级的其他引擎：付费引擎仅在「配置里已具备凭据」时才加入，
+// 绝不凭空启用用户没配置的服务。DDG 与 Bing 是无需密钥的免费兜底引擎，故任何主引擎失败后依次退到它们。
 func fallbackEngines(cfg *config.Config, primary string) []namedEngine {
 	var out []namedEngine
 	if cfg != nil {
@@ -109,7 +116,11 @@ func fallbackEngines(cfg *config.Config, primary string) []namedEngine {
 		}
 	}
 	if primary != "duckduckgo" {
-		out = append(out, namedEngine{name: "duckduckgo", eng: &ddg{}})
+		out = append(out, namedEngine{name: "duckduckgo", eng: newDDG("")})
+	}
+	// Bing 是无需密钥的第二免费引擎：DDG 常以 202 反爬应答，默认链（仅 DDG）会因此整体失败。
+	if primary != "bing" {
+		out = append(out, namedEngine{name: "bing", eng: &bing{}})
 	}
 	return out
 }
@@ -136,7 +147,7 @@ func searchWithFallback(ctx context.Context, c *http.Client, primary namedEngine
 	if errors.Is(err, ErrRateLimited) {
 		code = apperr.CodeResourceExhausted
 	}
-	return nil, "", apperr.New(code, "web_search 失败（可稍后重试，或换用其他信息来源）："+strings.Join(reasons, "；"))
+	return nil, "", apperr.New(code, "web_search 失败（可稍后重试，或换用其他信息来源；也可在设置中配置 Brave/SearXNG 作为第二搜索引擎）："+strings.Join(reasons, "；"))
 }
 
 // limitingTransport 在实际发起 HTTP 请求前对目标 Host 施加速率保护，防频繁击穿。
@@ -238,6 +249,17 @@ func MakeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer, limiters ..
 
 // search 执行 DuckDuckGo HTML 抓取与抽取。
 func (d *ddg) search(ctx context.Context, c *http.Client, q string, n int) ([]result, error) {
+	key := breakerKey(ctx)
+	if ok, left := d.breaker.allow(key); !ok {
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted,
+			fmt.Sprintf("web_search: ddg 暂停使用（连续被限流，%d 秒后再试）", int(left.Seconds())+1), ErrRateLimited)
+	}
+	res, err := d.doSearch(ctx, c, q, n)
+	d.breaker.record(key, errors.Is(err, ErrRateLimited), err == nil)
+	return res, err
+}
+
+func (d *ddg) doSearch(ctx context.Context, c *http.Client, q string, n int) ([]result, error) {
 	target := d.endpoint
 	if target == "" {
 		target = "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(q)

@@ -282,6 +282,10 @@ const (
 	AgentStreamEventApproval AgentStreamEventType = "approval"
 	// AgentStreamEventSteerAccepted 用户在回合中途发送的插话已被状态机接纳，将于下一轮次边界生效。
 	AgentStreamEventSteerAccepted AgentStreamEventType = "steer_accepted"
+	// AgentStreamEventLLM 一次 LLM 调用结束（ADR-0118 步骤时间线）：ToolName 携带用途，
+	// Tokens/DurationMs 为该次调用的用量与耗时，Retry 标记这是空输出恢复链追加的额外调用。
+	// 纯进度信息，session 层转成 llm 步骤；不进回复正文。
+	AgentStreamEventLLM AgentStreamEventType = "llm"
 )
 
 // TurnPhase AgentStreamEventPhase 的 Content 取值（ADR-0098）。内核 → session → 客户端
@@ -318,6 +322,21 @@ type AgentStreamEvent struct {
 	// （M8f-1）。session 编排层据此额外发一条 KindStatus "tool_ui" 事件并落库
 	// chat_app_views，不影响本事件本身承载的模型可见文本（Content 字段不变）。
 	UI *ToolUIRef `json:"ui,omitempty"`
+
+	// 以下为步骤时间线（ADR-0118）所需的结构化信息，仅进程内消费（session 层），不随事件外发。
+	// CallID 工具调用 ID：ToolCall 与 ToolResult 据此配对（并行工具调用下按工具名配对会错位）。
+	CallID string `json:"-"`
+	// ResultRaw 工具原始结果（已按 streamResultRawMaxBytes 截断），供按工具类型生成可读摘要；
+	// Content 仍是给用户看的 500 字截断文本。
+	ResultRaw string `json:"-"`
+	// IsError 工具以失败告终（Go 错误或 Success=false）。
+	IsError bool `json:"-"`
+	// DurationMs 工具执行耗时 / LLM 调用耗时。
+	DurationMs int64 `json:"-"`
+	// Tokens 仅 AgentStreamEventLLM：该次调用的 token 用量。
+	InTokens, OutTokens, CacheHitTokens int `json:"-"`
+	// Retry 仅 AgentStreamEventLLM：空输出恢复链追加的额外调用。
+	Retry bool `json:"-"`
 }
 
 // ApprovalItem 是批量审批卡中的一项待审工具调用。

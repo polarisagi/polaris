@@ -101,7 +101,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 // prepareHeadlessTurn 落地会话确保 + SessionStart/UserPromptSubmit 分发 + 用户消息持久化
 // （从 runHeadless 拆出，gocyclo 治理）。blockedResult 非 nil 时调用方应直接 return（hook 拦截）。
 func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req Request, sessionID string, isNewSession bool) (isFirstTurn bool, hookContext string, blockedResult *Result, err error) {
-	if err := o.persistence.EnsureSession(ctx, sessionID); err != nil {
+	if err := o.ensureHeadlessSession(ctx, sessionID, req.ProjectID); err != nil {
 		return false, "", nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): ensure session", err)
 	}
 	hookContext, reason := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
@@ -163,4 +163,19 @@ func (o *orchestrator) finishHeadlessTurn(ctx context.Context, req Request, sess
 	}
 
 	return reply
+}
+
+// ensureHeadlessSession 落地无头会话。req.ProjectID 非空（自动化所属项目，ADR-0097/0117 追记）时归入该项目——
+// 项目决定工作区上下文与“以后不再询问”规则的作用域；项目已被删除/归档等导致归属失败时降级为默认项目，
+// 让定时任务继续跑而不是每次都失败，并留痕。
+func (o *orchestrator) ensureHeadlessSession(ctx context.Context, sessionID, projectID string) error {
+	if projectID != "" {
+		err := o.persistence.EnsureSessionInProject(ctx, sessionID, projectID)
+		if err == nil {
+			return nil
+		}
+		slog.Warn("session: headless project binding failed, falling back to default project",
+			"session", sessionID, "project", projectID, "err", err)
+	}
+	return o.persistence.EnsureSession(ctx, sessionID) //nolint:wrapcheck // 调用方统一包装
 }

@@ -47,6 +47,9 @@ ChatMessageRow struct {
 	// AppendMessageIdempotent 据此做 INSERT OR IGNORE，供 outbox 重试兜底路径
 	// 使用；直接同步写入路径可留空（历史行为不变）。
 	DedupeKey string
+	// TurnID/Usage 产生本条 assistant 消息的回合 ID 与该回合用量摘要 JSON（ADR-0118），其余消息为空。
+	TurnID string
+	Usage  string
 }
 
 type

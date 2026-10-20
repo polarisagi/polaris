@@ -31,6 +31,7 @@ func TestCronHandlers(t *testing.T) {
 			cron_schedule TEXT,
 			schedule TEXT,
 			event_filter TEXT,
+			project_id TEXT NOT NULL DEFAULT 'default',
 			events TEXT,
 			prompt TEXT,
 			script TEXT,

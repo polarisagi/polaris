@@ -144,3 +144,74 @@ func TestToUsageView_RatioClamped(t *testing.T) {
 func repoGroup(input, hit int64) protorepo.LLMUsageGroup {
 	return protorepo.LLMUsageGroup{InputTokens: input, CacheHitTokens: hit}
 }
+
+func newSessionUsageHandler(t *testing.T) *SysAdminHandler {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	ddl, err := schema.FS.ReadFile("039_llm_calls.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(ddl)); err != nil {
+		t.Fatal(err)
+	}
+	w := repo.NewSQLiteLLMCallRepository(db)
+	for i, r := range []protocol.LLMUsageRecord{
+		{ID: "a", CreatedAtMs: 1000, SessionID: "sess_abc", TurnID: "turn_1", Purpose: "kernel", ModelID: "deepseek-flash", Status: "ok", InputTokens: 20000, CacheHitTokens: 15000, OutputTokens: 500, CostUSD: 0.005},
+		{ID: "b", CreatedAtMs: 2000, SessionID: "sess_abc", TurnID: "turn_1", Purpose: "kernel", ModelID: "deepseek-flash", Status: "ok", InputTokens: 100000, CacheHitTokens: 20000, OutputTokens: 100, CostUSD: 0.03},
+		{ID: "c", CreatedAtMs: 3000, SessionID: "sess_other", Purpose: "kernel", ModelID: "deepseek-flash", Status: "ok", InputTokens: 1, CostUSD: 7},
+	} {
+		_ = i
+		if err := w.RecordLLMUsage(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &SysAdminHandler{UsageRepo: repo.NewSQLiteLLMUsageQuery(db)}
+}
+
+func getSessionUsage(h *SysAdminHandler, id string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/v1/sessions/x/usage", nil)
+	req.SetPathValue("sessionID", id)
+	rec := httptest.NewRecorder()
+	h.HandleGetSessionUsage(rec, req)
+	return rec
+}
+
+func TestHandleGetSessionUsage(t *testing.T) {
+	h := newSessionUsageHandler(t)
+	rec := getSessionUsage(h, "sess_abc")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var v SessionUsageView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Calls != 2 || v.Input != 120000 || v.CacheHit != 35000 || v.Output != 600 || v.CostUSD < 0.0349 || v.CostUSD > 0.0351 {
+		t.Fatalf("累计不对（不得混入其他会话）: %+v", v)
+	}
+	// 最近一次内核请求 10 万 token，deepseek-flash 窗口 100 万（目录表缺失时回退价目目录）。
+	if v.LastInput != 100000 || v.ContextWindow != 1_000_000 || v.ContextPct < 0.0999 || v.ContextPct > 0.1001 {
+		t.Fatalf("上下文占用: %+v", v)
+	}
+	if len(v.ByTurn) != 1 || v.ByTurn[0].TurnID != "turn_1" || v.ByTurn[0].Calls != 2 {
+		t.Fatalf("by_turn: %+v", v.ByTurn)
+	}
+	if rec := getSessionUsage(h, "bad id!"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法 session_id 应 400，得到 %d", rec.Code)
+	}
+	if rec := getSessionUsage(&SysAdminHandler{}, "sess_abc"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("无账本应 503，得到 %d", rec.Code)
+	}
+	// 无记录的会话返回零值而非 404。
+	var z SessionUsageView
+	rec = getSessionUsage(h, "sess_none")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &z) != nil || z.Calls != 0 || z.ByTurn == nil {
+		t.Fatalf("空会话: %d %s", rec.Code, rec.Body.String())
+	}
+}

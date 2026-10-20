@@ -43,6 +43,8 @@ type Deps struct {
 	TranscriptDir string
 	DataDir       string
 	WorkspaceDir  string
+	// Turns 回合步骤与元数据持久化（ADR-0118）；nil 时步骤只实时推送、不落库，消息也不带用量摘要。
+	Turns TurnStore
 }
 
 type orchestrator struct {
@@ -56,6 +58,7 @@ type orchestrator struct {
 	transcriptDir string
 	dataDir       string
 	workspaceDir  string
+	turns         TurnStore
 }
 
 // New 构造 Orchestrator。
@@ -71,6 +74,7 @@ func New(d Deps) Orchestrator {
 		transcriptDir: d.TranscriptDir,
 		dataDir:       d.DataDir,
 		workspaceDir:  d.WorkspaceDir,
+		turns:         d.Turns,
 	}
 }
 

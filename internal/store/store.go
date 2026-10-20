@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -104,6 +105,20 @@ func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 		}
 		db.Close()
 		return nil, apperr.Wrap(apperr.CodeInternal, "schema migration", err)
+	}
+
+	// 存量库补齐新增的列/表，并一次性重算历史 llm_calls 费用（见 legacy_upgrade.go）。
+	if err := s.upgradeLegacySchema(); err != nil {
+		if readDB != db {
+			readDB.Close()
+		}
+		db.Close()
+		return nil, apperr.Wrap(apperr.CodeInternal, "legacy schema upgrade", err)
+	}
+	if n, err := RepriceLLMCalls(db, time.Now().UnixMilli()); err != nil {
+		slog.Warn("store: llm_calls 历史费用重算失败，保持原值", "err", err)
+	} else if n > 0 {
+		slog.Info("store: llm_calls 历史费用已按价目重算", "rows", n)
 	}
 
 	// 先 Recover 再 Apply（GR-1.1-005）：Recover 的职责是拦截"上次迁移中途崩溃"

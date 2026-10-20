@@ -40,6 +40,8 @@ Alpine.store('logs', {
     }
     this._evtSrc.onerror = () => {
       this.connected = false
+      // EventSource 不经 fetch 包装：令牌失效时先换 Cookie 再按原节奏重连。
+      Alpine.store('net')?.refresh?.()
       this._scheduleReconnect()
     }
   },

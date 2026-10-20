@@ -47,6 +47,8 @@ func TestSessionsHandlersExtra(t *testing.T) {
 			tool_calls TEXT NOT NULL DEFAULT '',
 			file_offset INTEGER NOT NULL DEFAULT 0,
 			file_length INTEGER NOT NULL DEFAULT 0,
+			turn_id TEXT NOT NULL DEFAULT '',
+			usage TEXT NOT NULL DEFAULT '',
 			created_at DATETIME,
 			updated_at DATETIME,
 			metadata TEXT

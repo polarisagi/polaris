@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/llm/pricing"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -182,6 +183,7 @@ func (p *usageRecordingProvider) baseRecord(ctx context.Context, start time.Time
 		ID:           uuid.NewString(),
 		CreatedAtMs:  start.UnixMilli(),
 		SessionID:    sessionID,
+		TurnID:       protocol.TurnIDFrom(ctx),
 		Purpose:      purpose,
 		Provider:     p.name,
 		ModelID:      model,
@@ -192,7 +194,7 @@ func (p *usageRecordingProvider) baseRecord(ctx context.Context, start time.Time
 	}
 }
 
-// fillUsage 写入用量与按 ProviderCapabilities 费率（每 1K token）估算的费用。
+// fillUsage 写入用量与按价目（USD / 百万 token，见 internal/llm/pricing）估算的费用。
 //
 // 口径归一（llm_calls.input_tokens 一律 = 全部输入，含缓存命中，见 039_llm_calls.sql）：
 //   - OpenAI/DeepSeek/Google 的 toUsage 直接给出含命中的 prompt_tokens，原样写入；
@@ -207,10 +209,13 @@ func (p *usageRecordingProvider) fillUsage(row *protocol.LLMUsageRecord, u types
 	}
 	row.InputTokens, row.CacheHitTokens = input, u.CacheHitTokens
 	row.OutputTokens, row.ReasoningTokens = u.OutputTokens, u.ReasoningTokens
-	caps := p.Capabilities()
-	row.CostUSD = (float64(miss)*caps.CostPer1KInput +
-		float64(u.CacheHitTokens)*caps.CostPer1KCacheHit +
-		float64(u.OutputTokens)*caps.CostPer1KOutput) / 1000
+	row.CostUSD = p.priceFor(row.ModelID).Cost(miss, u.CacheHitTokens, u.OutputTokens)
+}
+
+// priceFor 按实际调用的模型 ID 取价（pricing.Resolve：目录优先，回退适配器声明费率）。
+// 不能只信适配器——用户把 DeepSeek 接在 openai_compat 适配器下时，适配器只知道 OpenAI 价格。
+func (p *usageRecordingProvider) priceFor(modelID string) pricing.Price {
+	return pricing.Resolve(modelID, p.Capabilities())
 }
 
 func setStatus(ctx context.Context, row *protocol.LLMUsageRecord, err error) {

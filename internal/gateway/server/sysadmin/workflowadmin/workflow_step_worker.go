@@ -144,13 +144,19 @@ func (h *WorkflowAdmin) failStepTaskInfra(ctx context.Context, taskID, msg strin
 // 复用既有 runWorkflowStep，成功/业务失败均以 CompleteTask 写回（见
 // stepCompletionPayload 文档注释）。
 func (h *WorkflowAdmin) executeStepTask(ctx context.Context, taskID string, envelope stepIntentEnvelope, step workflowStep, upstreamOutput string) {
-	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
 	stepKey := step.StepKey
 	if stepKey == "" {
 		stepKey = fmt.Sprintf("step_%d", step.Seq)
 	}
+
+	// 单步 30 分钟预算在等待人工审批期间暂停；会话 ID 先于预算确定，才能识别本步骤的无人值守审批。
+	sessionID := ""
+	if step.Kind == "" || step.Kind == "agent" {
+		sessionID = cronadmin.NewSessionID()
+		defer h.trackSession(sessionID, envelope.RunID)()
+	}
+	bgCtx, cancel := pausableTimeout(30*time.Minute, h.stepWaiting(envelope.RunID, stepKey, sessionID))
+	defer cancel()
 
 	// 针对非 agent 步骤（tool/transform/llm），统一交由 pipelineRunner 执行
 	if step.Kind != "" && step.Kind != "agent" {
@@ -174,7 +180,6 @@ func (h *WorkflowAdmin) executeStepTask(ctx context.Context, taskID string, enve
 		}
 	}
 
-	sessionID := cronadmin.NewSessionID()
 	stepName := stepLabel(step)
 
 	reply, stepErr := h.runWorkflowStep(bgCtx, sessionID, effectivePrompt, effectiveWorkingDir, effectiveEffort, stepName)

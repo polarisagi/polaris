@@ -7,6 +7,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"time"
 
@@ -26,22 +27,24 @@ const (
 type runtimeHandle struct {
 	lock  *os.File
 	paths runtimeinfo.Paths
-	// Token 是本次启动的本地令牌，随 publish 落盘，同时供网关鉴权比对。
+	// Token 是本次启动使用的本地令牌，随 publish 落盘，同时供网关鉴权比对。
 	Token string
 }
 
-// acquireRuntime 取得单实例锁并生成本次启动的本地令牌。
+// acquireRuntime 取得单实例锁并取得本次启动的本地令牌（文件有效则复用，否则新建）。
 // 端口此时尚未确定（可能配置为 0 由内核分配），故 run/ 文件在 publish 时才写。
 func acquireRuntime(layout config.DataLayout) (*runtimeHandle, error) {
 	lock, err := lockInstance(layout.RunLock)
 	if err != nil {
 		return nil, err
 	}
-	token, err := runtimeinfo.NewToken()
+	// 令牌文件有效则复用：重启后浏览器里已有的 Cookie / 打开的页面不至于全部 401。
+	token, reused, err := runtimeinfo.GetOrCreateToken(layout.RunToken)
 	if err != nil {
 		unlockInstance(lock)
 		return nil, apperr.Wrap(apperr.CodeInternal, "runtime: 生成本地令牌失败", err)
 	}
+	slog.Info("runtime: 本地令牌就绪", "reused", reused)
 	return &runtimeHandle{
 		lock: lock,
 		paths: runtimeinfo.Paths{

@@ -42,13 +42,13 @@ func newProviderEntry(name, displayName string, p protocol.Provider, cfg config.
 }
 
 // healthScore 综合健康评分 = 可用性×0.4 + 延迟×0.3 + 成本×0.2 + 质量×0.1
-// 延迟得分 = max(0, 1 - p95ms/5000)；成本得分 = max(0, 1 - costPer1KInput/10)
+// 延迟得分 = max(0, 1 - p95ms/5000)；成本得分 = max(0, 1 - CostPerMTokInput/10)
 func (e *providerEntry) healthScore() float64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	caps := e.provider.Capabilities()
 	latencyScore := max64(0, 1.0-e.p95ms/5000.0)
-	costScore := max64(0, 1.0-caps.CostPer1KInput/10.0)
+	costScore := max64(0, 1.0-caps.CostPerMTokInput/10.0)
 	return e.successRate*0.4 + latencyScore*0.3 + costScore*0.2 + 0.1
 }
 

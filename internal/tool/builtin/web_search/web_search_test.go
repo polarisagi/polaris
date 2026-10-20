@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/builtin/web_fetch"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -397,15 +398,147 @@ func TestSearchWithFallback_AllFailStructuredError(t *testing.T) {
 
 // fallbackEngines 只启用配置里已有凭据的引擎，不凭空启用。
 func TestFallbackEngines_OnlyConfigured(t *testing.T) {
-	if got := fallbackEngines(&config.Config{}, "duckduckgo"); len(got) != 0 {
-		t.Fatalf("无 brave key 时 ddg 无降级目标: %v", got)
+	names := func(es []namedEngine) []string {
+		out := make([]string, 0, len(es))
+		for _, e := range es {
+			out = append(out, e.name)
+		}
+		return out
 	}
+	eq := func(got []namedEngine, want ...string) {
+		t.Helper()
+		g := names(got)
+		if strings.Join(g, ",") != strings.Join(want, ",") {
+			t.Fatalf("降级链 = %v，期望 %v", g, want)
+		}
+	}
+	eq(fallbackEngines(&config.Config{}, "duckduckgo"), "bing")
 	cfg := &config.Config{}
 	cfg.Agent.Skill.WebSearchAPIKey = "k"
-	if got := fallbackEngines(cfg, "duckduckgo"); len(got) != 1 || got[0].name != "brave" {
-		t.Fatalf("有 brave key 时 ddg 应降级 brave: %v", got)
+	eq(fallbackEngines(cfg, "duckduckgo"), "brave", "bing")
+	eq(fallbackEngines(cfg, "brave"), "duckduckgo", "bing")
+	eq(fallbackEngines(&config.Config{}, "bing"), "duckduckgo")
+}
+
+func readBingFixture(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "testdata", "websearch", "bing.html"))
+	if err != nil {
+		t.Fatalf("读取 bing 夹具失败: %v", err)
 	}
-	if got := fallbackEngines(cfg, "brave"); len(got) != 1 || got[0].name != "duckduckgo" {
-		t.Fatalf("brave 应降级 ddg: %v", got)
+	return data
+}
+
+func TestParseBingHTML_Fixture(t *testing.T) {
+	res, err := parseBingHTML(readBingFixture(t), 10)
+	if err != nil || len(res) == 0 {
+		t.Fatalf("应解析出结果: n=%d err=%v", len(res), err)
+	}
+	for _, r := range res {
+		if r.Title == "" || !strings.HasPrefix(r.URL, "http") {
+			t.Fatalf("结果不完整: %+v", r)
+		}
+		if strings.Contains(r.URL, "bing.com/ck/a") {
+			t.Fatalf("跟踪链接未还原: %s", r.URL)
+		}
+	}
+	if limited, _ := parseBingHTML(readBingFixture(t), 1); len(limited) != 1 {
+		t.Fatalf("n=1 应只返回 1 条，实际 %d", len(limited))
+	}
+}
+
+func TestUnwrapBingLink(t *testing.T) {
+	// "a1" + base64url("https://go.dev/doc/")
+	wrapped := "https://www.bing.com/ck/a?!&&p=x&u=a1aHR0cHM6Ly9nby5kZXYvZG9jLw&ntb=1"
+	if got := unwrapBingLink(wrapped); got != "https://go.dev/doc/" {
+		t.Fatalf("还原失败: %q", got)
+	}
+	if got := unwrapBingLink("https://example.com/a"); got != "https://example.com/a" {
+		t.Fatalf("直链应原样返回: %q", got)
+	}
+	for _, bad := range []string{"", "javascript:void(0)", "https://www.bing.com/ck/a?u=zz", "https://www.bing.com/ck/a?u=a1!!!"} {
+		if got := unwrapBingLink(bad); got != "" {
+			t.Fatalf("%q 应丢弃，得到 %q", bad, got)
+		}
+	}
+}
+
+func TestBing_RateLimitedStatus(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer ts.Close()
+	_, err := (&bing{endpoint: ts.URL}).search(context.Background(), ts.Client(), "x", 3)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("429 应为 ErrRateLimited: %v", err)
+	}
+}
+
+func TestRateBreaker_OpenResetExpiry(t *testing.T) {
+	b := newRateBreaker()
+	now := time.Unix(1000, 0)
+	b.now = func() time.Time { return now }
+
+	b.record("s1", true, false)
+	if ok, _ := b.allow("s1"); !ok {
+		t.Fatal("1 次限流不应熔断")
+	}
+	b.record("s1", true, false)
+	if ok, left := b.allow("s1"); ok || left <= 0 || left > breakerOpenFor {
+		t.Fatalf("连续 2 次限流应熔断: ok=%v left=%v", ok, left)
+	}
+	if ok, _ := b.allow("s2"); !ok {
+		t.Fatal("熔断按会话隔离")
+	}
+	now = now.Add(breakerOpenFor + time.Second)
+	if ok, _ := b.allow("s1"); !ok {
+		t.Fatal("到期后应放行探测")
+	}
+	// 非限流类错误不累加；成功复位计数
+	b.record("s3", true, false)
+	b.record("s3", false, false)
+	b.record("s3", false, true)
+	b.record("s3", true, false)
+	if ok, _ := b.allow("s3"); !ok {
+		t.Fatal("成功应清零连续计数")
+	}
+	var nilB *rateBreaker
+	if ok, _ := nilB.allow("x"); !ok {
+		t.Fatal("nil 熔断器恒放行")
+	}
+	nilB.record("x", true, false)
+}
+
+// DDG 连续两次 202 → 熔断，第三次搜索不再请求 DDG，且整条链退到 Bing 成功。
+func TestSearchChain_DDG202ThenBing(t *testing.T) {
+	var ddgHits atomic.Int32
+	ddgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ddgHits.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ddgSrv.Close()
+	fixture := readBingFixture(t)
+	bingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(fixture)
+	}))
+	defer bingSrv.Close()
+
+	br := newRateBreaker()
+	primary := namedEngine{name: "duckduckgo", eng: &ddg{endpoint: ddgSrv.URL, retryDelay: time.Millisecond, breaker: br}}
+	fbs := []namedEngine{{name: "bing", eng: &bing{endpoint: bingSrv.URL}}}
+	ctx := context.WithValue(context.Background(), protocol.CtxSessionIDKey{}, "sess-1")
+
+	for i := 0; i < 2; i++ {
+		res, name, err := searchWithFallback(ctx, ddgSrv.Client(), primary, fbs, "golang", 5)
+		if err != nil || name != "bing" || len(res) == 0 {
+			t.Fatalf("第 %d 次应退到 bing: name=%s n=%d err=%v", i+1, name, len(res), err)
+		}
+	}
+	before := ddgHits.Load()
+	if _, name, err := searchWithFallback(ctx, ddgSrv.Client(), primary, fbs, "golang", 5); err != nil || name != "bing" {
+		t.Fatalf("熔断期内仍应由 bing 兜底: %s %v", name, err)
+	}
+	if ddgHits.Load() != before {
+		t.Fatalf("熔断期内不应再请求 DDG（%d -> %d）", before, ddgHits.Load())
 	}
 }

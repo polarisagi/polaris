@@ -9,6 +9,7 @@ import (
 
 	llmparent "github.com/polarisagi/polaris/internal/llm"
 
+	"github.com/polarisagi/polaris/internal/llm/pricing"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -35,14 +36,15 @@ func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Cli
 		modelID = "deepseek-flash"
 	}
 
-	// 费率为官方高峰价（USD / 1K token，api-docs.deepseek.com quick_start/pricing，2026-09），
-	// 供 llm_calls 费用估算与路由成本评分；此前 flash/pro 同为占位值 0.14/0.28（按 1K 计等于
-	// $140/百万，且两档无差别）。V4.1 Flash 与 V4 Pro 上下文均为 1M。
+	// 费率取自价目目录（USD / 百万 token，官方高峰价，出处见 internal/llm/pricing），
+	// 供路由成本评分；llm_calls 记账按实际模型 ID 再查一次目录。V4.1 Flash 与 V4 Pro 上下文均为 1M。
 	const maxCtx = 1_000_000
-	costIn, costOut, costHit := 0.0003, 0.0012, 0.000006 // deepseek-flash: $0.30 / $1.20 / $0.006 per 1M
-	if modelID == "deepseek-v4-pro" || modelID == "deepseek-reasoner" {
-		costIn, costOut, costHit = 0.00132, 0.00396, 0.000044 // $1.32 / $3.96 / $0.044 per 1M
+	lookupID := modelID
+	if modelID == "deepseek-reasoner" {
+		lookupID = "deepseek-v4-pro" // 沿用既有映射：官方页未列 reasoner，按 Pro 档估算
 	}
+	pr, _ := pricing.Lookup(lookupID)
+	costIn, costOut, costHit := pr.Input, pr.Output, pr.CacheHit
 
 	c := &OpenAICompatibleClient{
 		BaseURL:    "https://api.deepseek.com/v1", // DeepSeek 兼容入口
@@ -54,13 +56,13 @@ func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Cli
 		client:   c,
 		modelID:  modelID,
 		capabilities: types.ProviderCapabilities{
-			SupportsStreaming: true,
-			SupportsTools:     true,
-			SupportsThinking:  true,
-			MaxContextTokens:  maxCtx,
-			CostPer1KInput:    costIn,
-			CostPer1KOutput:   costOut,
-			CostPer1KCacheHit: costHit,
+			SupportsStreaming:   true,
+			SupportsTools:       true,
+			SupportsThinking:    true,
+			MaxContextTokens:    maxCtx,
+			CostPerMTokInput:    costIn,
+			CostPerMTokOutput:   costOut,
+			CostPerMTokCacheHit: costHit,
 		},
 		tbr: tbr,
 	}
