@@ -43,7 +43,7 @@ type ddg struct {
 }
 
 // newDDG 构造带进程级熔断器的 DuckDuckGo 引擎。
-func newDDG(endpoint string) *ddg { return &ddg{endpoint: endpoint, breaker: ddgBreaker} }
+func newDDG(endpoint string) *ddg { return &ddg{endpoint: endpoint, breaker: ddgBreaker()} }
 
 // defaultRateLimitBackoff DDG 限流后的短退避：202 是其反爬响应，立即重试几乎必然再次命中。
 const defaultRateLimitBackoff = 2 * time.Second

@@ -60,7 +60,7 @@ func NewToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// LoadOrCreateToken 复用令牌文件中仍然有效的令牌，否则生成新令牌（reused=false）。
+// GetOrCreateToken 复用令牌文件中仍然有效的令牌，否则生成新令牌（reused=false）。
 //
 // # 为什么重启后复用
 //
@@ -71,7 +71,7 @@ func NewToken() (string, error) {
 //
 // 「有效」= 文件存在、权限未宽于 0600、内容恰为 64 位 hex。任一不满足都重新生成，
 // 不做宽容读取（权限被放宽意味着令牌可能已被他人读取）。
-func LoadOrCreateToken(path string) (token string, reused bool, err error) {
+func GetOrCreateToken(path string) (token string, reused bool, err error) {
 	if tok, rerr := readSecret(path); rerr == nil && validToken(tok) {
 		return tok, true, nil
 	}
@@ -180,7 +180,7 @@ func Read(p Paths) (State, error) {
 	return State{PID: pid, Port: port, Token: token}, nil
 }
 
-// Remove 清理 PID 与端口文件，用于优雅关停；令牌文件有意保留（见 LoadOrCreateToken），
+// Remove 清理 PID 与端口文件，用于优雅关停；令牌文件有意保留（见 GetOrCreateToken），
 // 要失效它用 RotateToken。逐个尽力删除，不因其一失败而跳过其余——
 // 残留的端口文件会让下一个客户端连向一个已经不存在的端口。
 func Remove(p Paths) {

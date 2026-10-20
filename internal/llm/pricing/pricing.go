@@ -34,14 +34,14 @@ type Entry struct {
 const deepseekSource = "https://api-docs.deepseek.com/quick_start/pricing"
 
 // entries 顺序无关，Lookup 取最长前缀。
-//
-//nolint:gochecknoglobals // 只读价目常量表
-var entries = []Entry{
-	{"deepseek-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, 1_000_000, deepseekSource},
-	// 官方页说明 deepseek-v4-flash 仍可用且按 Flash 计价。
-	{"deepseek-v4-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, 1_000_000, deepseekSource},
-	{"deepseek-v4-pro", Price{Input: 1.32, CacheHit: 0.044, Output: 3.96}, 1_000_000, deepseekSource},
-	{"gpt-4o-mini", Price{Input: 0.15, CacheHit: 0.075, Output: 0.60}, 128_000, "https://openai.com/api/pricing/"},
+func entries() []Entry {
+	return []Entry{
+		{"deepseek-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, 1_000_000, deepseekSource},
+		// 官方页说明 deepseek-v4-flash 仍可用且按 Flash 计价。
+		{"deepseek-v4-flash", Price{Input: 0.30, CacheHit: 0.006, Output: 1.20}, 1_000_000, deepseekSource},
+		{"deepseek-v4-pro", Price{Input: 1.32, CacheHit: 0.044, Output: 3.96}, 1_000_000, deepseekSource},
+		{"gpt-4o-mini", Price{Input: 0.15, CacheHit: 0.075, Output: 0.60}, 128_000, "https://openai.com/api/pricing/"},
+	}
 }
 
 // Lookup 按模型 ID 查价。modelID 可带 "provider/" 前缀；大小写不敏感。
@@ -62,7 +62,7 @@ func lookupEntry(modelID string) (Entry, bool) {
 		id = id[i+1:]
 	}
 	var best Entry
-	for _, e := range entries {
+	for _, e := range entries() {
 		if strings.HasPrefix(id, e.Prefix) && len(e.Prefix) > len(best.Prefix) {
 			best = e
 		}
@@ -71,7 +71,7 @@ func lookupEntry(modelID string) (Entry, bool) {
 }
 
 // Entries 返回目录副本，供测试与文档生成。
-func Entries() []Entry { return append([]Entry(nil), entries...) }
+func Entries() []Entry { return entries() }
 
 // CostUSD 按本价目估算费用，口径同 types.CostUSD。
 func (p Price) CostUSD(input, cacheHit, output int) float64 {

@@ -11,7 +11,9 @@ import (
 // 只认已知工具的已知字段；认不出结构时退回通用截断，绝不 panic、绝不丢掉"出错了"这个事实。
 
 // argsKeyPriority 通用入参摘要优先取的字段（命中第一个非空字符串）。
-var argsKeyPriority = []string{"query", "url", "command", "path", "file_path", "pattern", "prompt", "name", "task"} //nolint:gochecknoglobals // 只读
+func argsKeyPriority() []string {
+	return []string{"query", "url", "command", "path", "file_path", "pattern", "prompt", "name", "task"}
+}
 
 func argsPreview(tool string, raw []byte) string {
 	if len(raw) == 0 {
@@ -21,7 +23,7 @@ func argsPreview(tool string, raw []byte) string {
 	if json.Unmarshal(raw, &obj) != nil {
 		return clipRunes(string(raw), argsPreviewMax)
 	}
-	for _, k := range argsKeyPriority {
+	for _, k := range argsKeyPriority() {
 		if v, ok := obj[k].(string); ok && strings.TrimSpace(v) != "" {
 			return clipRunes(v, argsPreviewMax)
 		}

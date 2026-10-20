@@ -39,7 +39,7 @@ func acquireRuntime(layout config.DataLayout) (*runtimeHandle, error) {
 		return nil, err
 	}
 	// 令牌文件有效则复用：重启后浏览器里已有的 Cookie / 打开的页面不至于全部 401。
-	token, reused, err := runtimeinfo.LoadOrCreateToken(layout.RunToken)
+	token, reused, err := runtimeinfo.GetOrCreateToken(layout.RunToken)
 	if err != nil {
 		unlockInstance(lock)
 		return nil, apperr.Wrap(apperr.CodeInternal, "runtime: 生成本地令牌失败", err)

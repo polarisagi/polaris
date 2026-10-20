@@ -167,10 +167,10 @@ func TestRemove(t *testing.T) {
 	Remove(p) // 幂等
 }
 
-func TestLoadOrCreateToken(t *testing.T) {
+func TestGetOrCreateToken(t *testing.T) {
 	p := newPaths(t)
 
-	first, reused, err := LoadOrCreateToken(p.Token)
+	first, reused, err := GetOrCreateToken(p.Token)
 	if err != nil || reused || !validToken(first) {
 		t.Fatalf("首次应新建: tok=%q reused=%v err=%v", first, reused, err)
 	}
@@ -179,7 +179,7 @@ func TestLoadOrCreateToken(t *testing.T) {
 	}
 	Remove(p)
 
-	second, reused, err := LoadOrCreateToken(p.Token)
+	second, reused, err := GetOrCreateToken(p.Token)
 	if err != nil || !reused || second != first {
 		t.Fatalf("重启应复用: tok=%q reused=%v err=%v", second, reused, err)
 	}
@@ -188,7 +188,7 @@ func TestLoadOrCreateToken(t *testing.T) {
 	if err = os.WriteFile(p.Token, []byte("not-a-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if tok, reused, _ := LoadOrCreateToken(p.Token); reused || tok == "not-a-token" || !validToken(tok) {
+	if tok, reused, _ := GetOrCreateToken(p.Token); reused || tok == "not-a-token" || !validToken(tok) {
 		t.Fatalf("损坏令牌不应复用: tok=%q reused=%v", tok, reused)
 	}
 
@@ -200,7 +200,7 @@ func TestLoadOrCreateToken(t *testing.T) {
 		if err = os.Chmod(p.Token, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if tok, reused, _ := LoadOrCreateToken(p.Token); reused || tok == first {
+		if tok, reused, _ := GetOrCreateToken(p.Token); reused || tok == first {
 			t.Fatalf("权限过宽的令牌不应复用: reused=%v", reused)
 		}
 	}
@@ -208,7 +208,7 @@ func TestLoadOrCreateToken(t *testing.T) {
 
 func TestRotateToken(t *testing.T) {
 	p := newPaths(t)
-	tok, _, _ := LoadOrCreateToken(p.Token)
+	tok, _, _ := GetOrCreateToken(p.Token)
 	if err := Write(p, State{PID: 1, Port: 1234, Token: tok}); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestRotateToken(t *testing.T) {
 	if err := RotateToken(p.Token); err != nil { // 幂等
 		t.Fatal(err)
 	}
-	next, reused, _ := LoadOrCreateToken(p.Token)
+	next, reused, _ := GetOrCreateToken(p.Token)
 	if reused || next == tok {
 		t.Fatalf("轮换后应得到新令牌")
 	}

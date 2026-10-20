@@ -34,7 +34,7 @@ func newRateBreaker() *rateBreaker {
 }
 
 // ddgBreaker 进程内共享；键为会话 ID（取自 ctx 的 CtxSessionIDKey，无会话时用空串，即全局一档）。
-var ddgBreaker = newRateBreaker() //nolint:gochecknoglobals // 进程级限流状态
+var ddgBreaker = sync.OnceValue(newRateBreaker) //nolint:gochecknoglobals // 进程级限流状态
 
 func breakerKey(ctx context.Context) string {
 	k, _ := ctx.Value(protocol.CtxSessionIDKey{}).(string)

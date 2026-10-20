@@ -521,6 +521,9 @@ func newStepWriter(ctx context.Context, store TurnStore, sessionID, turnID strin
 				}
 			case <-tick.C:
 				flush()
+			case <-ctx.Done():
+				flush()
+				return
 			}
 		}
 	})

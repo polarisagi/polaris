@@ -19,22 +19,22 @@ import (
 // 一次 ALTER，对象（表/索引）一律从内嵌的建表文件里按名摘取，不另写第二份 DDL。
 
 // legacyColumns 为存量库补齐的列。定义须与建表文件一致。
-//
-//nolint:gochecknoglobals // 只读清单
-var legacyColumns = []struct{ table, column, def string }{
-	{"llm_calls", "turn_id", "TEXT NOT NULL DEFAULT ''"},
-	{"chat_messages", "turn_id", "TEXT NOT NULL DEFAULT ''"},
-	{"chat_messages", "usage", "TEXT NOT NULL DEFAULT ''"},
-	{"automations", "project_id", "TEXT NOT NULL DEFAULT 'default'"},
+func legacyColumns() []struct{ table, column, def string } {
+	return []struct{ table, column, def string }{
+		{"llm_calls", "turn_id", "TEXT NOT NULL DEFAULT ''"},
+		{"chat_messages", "turn_id", "TEXT NOT NULL DEFAULT ''"},
+		{"chat_messages", "usage", "TEXT NOT NULL DEFAULT ''"},
+		{"automations", "project_id", "TEXT NOT NULL DEFAULT 'default'"},
+	}
 }
 
 // legacyObjects 为存量库补齐的表/索引：file 前缀 + 对象名，从建表文件摘取 CREATE 语句执行。
-//
-//nolint:gochecknoglobals // 只读清单
-var legacyObjects = []struct{ filePrefix, object string }{
-	{"013_", "chat_turn_steps"},
-	{"013_", "idx_chat_turn_steps_session"},
-	{"039_", "idx_llm_calls_turn"},
+func legacyObjects() []struct{ filePrefix, object string } {
+	return []struct{ filePrefix, object string }{
+		{"013_", "chat_turn_steps"},
+		{"013_", "idx_chat_turn_steps_session"},
+		{"039_", "idx_llm_calls_turn"},
+	}
 }
 
 // upgradeLegacySchema 幂等补齐存量库的列与对象。必须在 runMigrations 之后调用。
@@ -45,7 +45,7 @@ func (s *SQLiteStore) upgradeLegacySchema() error {
 	if s.schemaFS == nil {
 		return nil
 	}
-	for _, o := range legacyObjects {
+	for _, o := range legacyObjects() {
 		stmt, err := findCreateStatement(s.schemaFS, o.filePrefix, o.object)
 		if err != nil {
 			return err
@@ -58,7 +58,7 @@ func (s *SQLiteStore) upgradeLegacySchema() error {
 }
 
 func ensureColumns(db *sql.DB) error {
-	for _, c := range legacyColumns {
+	for _, c := range legacyColumns() {
 		has, tableExists, err := columnExists(db, c.table, c.column)
 		if err != nil {
 			return err

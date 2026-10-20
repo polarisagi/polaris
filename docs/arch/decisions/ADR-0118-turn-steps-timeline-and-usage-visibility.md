@@ -71,6 +71,6 @@
 - `internal/llm/pricing/pricing.go`、`pkg/types/models_llm.go`（`CostUSD`）、`internal/store/legacy_upgrade.go`（`RepriceLLMCalls`）
 - `internal/gateway/session/steps.go`、`steps_turn.go`、`internal/store/repo/repo_chat_turns.go`、`internal/gateway/server/chat/turn_steps.go`
 - `internal/gateway/server/sysadmin/session_usage.go`、`internal/gateway/server/server_handlers_hitl.go`（`handleStatus`）
-- `internal/runtimeinfo/runtimeinfo.go`（`LoadOrCreateToken`/`RotateToken`）
+- `internal/runtimeinfo/runtimeinfo.go`（`GetOrCreateToken`/`RotateToken`）
 - `web/src/js/net.js`、`web/src/js/store/{statusBar,steps,chat}.js`
 - `internal/tool/builtin/web_search/{bing,breaker}.go`

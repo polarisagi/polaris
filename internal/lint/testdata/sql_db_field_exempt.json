@@ -8,6 +8,7 @@
   "internal/store/repo/repo_audit.go": true,
   "internal/store/repo/repo_budget.go": true,
   "internal/store/repo/repo_chat.go": true,
+  "internal/store/repo/repo_chat_turns.go": true,
   "internal/store/repo/repo_cron.go": true,
   "internal/store/repo/repo_event.go": true,
   "internal/store/repo/repo_project.go": true,
