@@ -553,6 +553,17 @@ const chatStore = {
     this.lastAbortedInput = null;
   },
 
+  // retryFailedTurn 重试失败的回合：撤掉失败的提问与错误占位，再把同一条输入重新发出。
+  // idx 是错误占位在 messages 中的下标，其前一条就是失败回合的用户消息。
+  retryFailedTurn(idx) {
+    if (this.isActive) return
+    const m = this.messages[idx]
+    if (!m || m.role !== 'error') return
+    const input = m.retryInput
+    this.messages.splice(idx - 1, 2)
+    this.submit(input)
+  },
+
   playingMsgIdx: null,
   _audioPlayer: null,
 
@@ -1069,7 +1080,14 @@ const chatStore = {
           : null,
         aborted: m.aborted || false,
         compactionAfter: d.compaction_events?.some(e => e.at_message_id === m.id) || false,
+        // 该用户消息触发的回合失败了（服务端从回合步骤摘要给出，不属于消息内容）。
+        turnError: m.role === 'user' ? (m.turn_error || null) : null,
       }))
+      // 失败回合在用户消息之后补一条错误占位：纯展示用，不存在于服务端消息表，也不会发给模型。
+      this.messages = this.messages.flatMap(m => m.turnError
+        ? [m, { role: 'error', content: '', toolCalls: [], reasoningContent: '', aborted: false,
+                errorMessage: m.turnError.message || '', errorDetail: m.turnError.detail || '', retryInput: m.content }]
+        : [m])
       // 服务端回合仍在后台运行（刷新页面 / 桌面窗口重开）：重新订阅，回放后接实时。
       if (d.running) this._attachRun(sessionID)
     } catch { /* 静默失败，空历史 */ }

@@ -29,6 +29,7 @@ const (
 	StepKindRetry    = "retry"
 	StepKindNotice   = "notice"
 	StepKindLLM      = "llm"
+	StepKindError    = "error" // 回合失败占位：只在失败回合出现，历史里据此显示"本轮失败"
 
 	stepPhaseStart  = "start"
 	stepPhaseUpdate = "update"
@@ -48,6 +49,7 @@ const (
 const (
 	argsPreviewMax      = 300
 	resultPreviewMax    = 600
+	errorDetailMax      = 300
 	thinkingPersistMax  = 8 << 10 // 单个思考步骤落库截断
 	thinkingEmitEvery   = 150 * time.Millisecond
 	maxPersistHeadSteps = 200
@@ -121,6 +123,12 @@ type StepSummary struct {
 	Fetches    int        `json:"fetches"`
 	DurationMs int64      `json:"duration_ms"`
 	Tokens     StepTokens `json:"tokens"`
+	// Failed 本回合以失败收场（没有产出助手回复）。历史接口据此在对应用户消息之后补一条错误占位；
+	// 这些字段只给人看，不进入发给模型的历史。
+	Failed      bool   `json:"failed,omitempty"`
+	ErrorCode   string `json:"error_code,omitempty"`
+	Error       string `json:"error,omitempty"`        // 友好原因
+	ErrorDetail string `json:"error_detail,omitempty"` // 原始错误（截断）
 }
 
 type stepState struct {
@@ -331,6 +339,19 @@ func (r *stepRecorder) onEvent(ev types.AgentStreamEvent) {
 			st.Tokens = &StepTokens{In: ev.InTokens, Out: ev.OutTokens, CacheHit: ev.CacheHitTokens}
 		})
 	}
+}
+
+// fail 把本回合标记为失败：追加一个 error 步骤（实时推送并落库）并把原因写进摘要行，
+// 历史接口据此生成错误占位。幂等（只记第一次）。
+func (r *stepRecorder) fail(code, friendly, detail string) {
+	if r.sum.Failed {
+		return
+	}
+	r.sum.Failed, r.sum.ErrorCode, r.sum.Error = true, code, friendly
+	r.sum.ErrorDetail = clipRunes(detail, errorDetailMax)
+	r.instant(StepKindError, friendly, "", StepStatusError, func(st *stepState) {
+		st.ResultPreview = r.sum.ErrorDetail
+	})
 }
 
 func (r *stepRecorder) onThinking(ev types.AgentStreamEvent, parent, scope string) {

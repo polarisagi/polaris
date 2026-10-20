@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -95,4 +96,52 @@ func (o *orchestrator) finishTurnMeta(ctx context.Context, rec *stepRecorder, tu
 		}
 	}
 	return extra
+}
+
+// friendlyReasons 失败原因归类表：按顺序匹配，第一个命中关键词（小写子串）的条目胜出。
+func friendlyReasons() []struct {
+	reason   string
+	keywords []string
+} {
+	return []struct {
+		reason   string
+		keywords []string
+	}{
+		{"模型响应超时", []string{"deadline", "timeout", "超时"}},
+		{"模型凭据无效或无权限", []string{"401", "403", "unauthorized", "api key", "api_key", "invalid_api"}},
+		{"模型触发限流", []string{"429", "rate limit", "rate_limit", "限流"}},
+		{"模型额度不足", []string{"quota", "insufficient", "余额", "额度"}},
+		{"模型没有返回内容", []string{"空内容", "empty"}},
+	}
+}
+
+// friendlyTurnError 把回合失败的原始错误归类成给人看的一句话原因。原始错误另存 error_detail。
+// 只做关键词归类，不解析 Provider 私有错误格式；归不了类就给通用说法。code 暂不参与归类，
+// 留作与其他失败来源（no_provider 等）扩展时区分。
+func friendlyTurnError(_, detail string) string {
+	d := strings.ToLower(detail)
+	for _, r := range friendlyReasons() {
+		for _, k := range r.keywords {
+			if strings.Contains(d, k) {
+				return r.reason
+			}
+		}
+	}
+	return "模型调用失败"
+}
+
+// failTurn 回合以失败收场：在步骤时间线里记下错误、把回合 ID 挂到触发它的用户消息上，
+// 使会话历史能在该用户消息之后显示"本轮失败"占位（否则失败回合只剩一条孤零零的用户消息，
+// 重发后看起来像同一问题被提交了两次）。userMsgID<=0（用户消息未落库）时只记步骤。
+// 这里写的全是展示数据：不触碰 chat_messages 的内容列，不进入模型历史。
+func (o *orchestrator) failTurn(ctx context.Context, rec *stepRecorder, turnID string, userMsgID int64, code, detail string) {
+	if rec == nil {
+		return
+	}
+	rec.fail(code, friendlyTurnError(code, detail), detail)
+	if o.turns != nil && userMsgID > 0 {
+		if err := o.turns.AttachTurnMeta(context.WithoutCancel(ctx), userMsgID, turnID, ""); err != nil {
+			slog.Warn("session: attach failed turn to user message", "message_id", userMsgID, "turn", turnID, "err", err)
+		}
+	}
 }

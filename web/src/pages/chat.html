@@ -164,10 +164,21 @@
                 <div class="flex justify-end mt-1 pr-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
                   <button class="btn btn-xs btn-ghost text-base-content/60 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 border border-base-300 hover:border-primary/30 transition-all"
                           @click="$store.chat.recallMessage(idx, msg.content)"
-                          title="撤回并重新编辑">
+                          :title="$store.i18n.t('chat_recall_title')">
                     <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
-                    <span x-text="$store.i18n.t('chat_recall') || '撤回编辑'"></span>
+                    <span x-text="$store.i18n.t('chat_recall')"></span>
                   </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- 失败回合占位：历史里只剩用户消息时，说明这一轮没有产出回答，而不是消息被重复发送 -->
+            <template x-if="msg.role === 'error'">
+              <div class="chat chat-start">
+                <div class="chat-bubble bg-error/10 text-error border border-error/30 text-sm" :title="msg.errorDetail">
+                  <span x-text="$store.i18n.t('chat_turn_failed') + '：' + (msg.errorMessage || $store.i18n.t('chat_turn_failed_unknown'))"></span>
+                  <span class="opacity-60"> · </span>
+                  <button class="link link-hover font-medium" @click="$store.chat.retryFailedTurn(idx)" x-text="$store.i18n.t('chat_retry')"></button>
                 </div>
               </div>
             </template>
@@ -178,14 +189,13 @@
                 
                 <div class="chat-bubble bg-base-200 text-base-content relative group text-left w-fit" 
                      :class="{ 'border-warning border': msg.aborted }"
-                     x-data="{ expanded: false, isLong: false, thinkingOpen: false }"
-                     x-init="$nextTick(() => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 }); window.addEventListener('resize', () => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 })">
-                  
-                  <div x-ref="content" class="transition-all duration-300 relative" :class="{ 'max-h-32 overflow-hidden': !expanded }">
+                     x-data="{ thinkingOpen: false }">
+                  <!-- 助手回答默认完整展示，不做折叠（只有用户自己发的超长消息折叠） -->
+                  <div x-ref="content" class="relative">
                     <template x-if="msg.reasoningContent && !msg.turn">
                       <div class="mb-4 border border-base-300 rounded-xl overflow-hidden bg-base-300/30 text-sm shadow-sm">
                         <div class="flex items-center gap-2 p-2 px-3 cursor-pointer text-base-content/60 font-medium hover:bg-base-300/50 transition-colors" @click="thinkingOpen = !thinkingOpen">
-                          <span x-text="$store.i18n.t('chat_thought') || 'Thought Process'"></span>
+                          <span x-text="$store.i18n.t('chat_thought')"></span>
                           <svg class="w-4 h-4 ml-auto transition-transform" :class="{ '-rotate-90': !thinkingOpen }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
                         </div>
                         <div class="p-3 px-4 text-base-content/70 italic whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-base-300" x-show="thinkingOpen" x-text="msg.reasoningContent"></div>
@@ -209,7 +219,7 @@
                               <div class="mb-3 last:mb-0 rounded-lg border border-base-200 bg-base-200/50 overflow-hidden">
                                 <div class="flex items-center gap-2 p-2 bg-base-300/30 text-base-content font-mono font-bold border-b border-base-200">
                                   <span class="text-primary">⚡</span><span x-text="tc.name"></span>
-                                  <span x-show="tc.output !== null" class="ml-auto opacity-70 badge badge-ghost badge-xs font-normal" x-text="$store.i18n.t('chat_complete') || 'Complete'"></span>
+                                  <span x-show="tc.output !== null" class="ml-auto opacity-70 badge badge-ghost badge-xs font-normal" x-text="$store.i18n.t('chat_complete')"></span>
                                   <span x-show="tc.output === null" class="loading loading-spinner loading-xs ml-auto text-primary"></span>
                                 </div>
                                 <div class="p-2 bg-base-100/50 border-b border-base-200 font-mono text-base-content/70 whitespace-pre-wrap" x-text="typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input, null, 2)"></div>
@@ -292,17 +302,6 @@
                         </template>
                       </div>
                     </template>
-                  </div>
-                  
-                  <!-- Gradient Overlay & Hover Badge -->
-                  <div x-show="isLong && !expanded" @click="expanded = true"
-                       class="absolute bottom-0 left-0 w-full h-24 bg-gradient-to-t from-base-200 via-base-200/80 to-transparent flex items-end justify-center pb-2 cursor-pointer transition-opacity">
-                    <div class="badge badge-outline bg-base-100 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm mb-1" x-text="$store.i18n.t('chat_click_expand_all')"></div>
-                  </div>
-                  
-                  <!-- Collapse Button -->
-                  <div x-show="expanded" class="text-center mt-3 -mb-1">
-                    <button class="btn btn-xs btn-ghost" @click="expanded = false; $nextTick(() => { $el.closest('.chat-bubble').scrollIntoView({behavior:'smooth', block:'center'}) })" x-text="$store.i18n.t('chat_collapse_all')"></button>
                   </div>
                 </div>
 

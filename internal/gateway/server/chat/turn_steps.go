@@ -111,3 +111,39 @@ func validTurnID(id string) bool {
 	}
 	return true
 }
+
+// failedTurnError 从回合摘要行取出失败信息：摘要未标记失败（或不可解析）返回 nil。
+func failedTurnError(summary json.RawMessage) json.RawMessage {
+	if len(summary) == 0 {
+		return nil
+	}
+	var s struct {
+		Failed      bool   `json:"failed"`
+		ErrorCode   string `json:"error_code"`
+		Error       string `json:"error"`
+		ErrorDetail string `json:"error_detail"`
+	}
+	if json.Unmarshal(summary, &s) != nil || !s.Failed {
+		return nil
+	}
+	out, err := json.Marshal(map[string]string{"code": s.ErrorCode, "message": s.Error, "detail": s.ErrorDetail})
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// turnMeta 决定一条历史消息携带的回合信息。用户消息上的 turn_id 只表示"这一轮失败了"
+// （失败占位），成功回合的 turn_id 与步骤摘要只挂在助手消息上。
+func turnMeta(role, turnID string, summaries map[string]json.RawMessage) (id string, steps, turnErr json.RawMessage) {
+	if turnID == "" {
+		return "", nil, nil
+	}
+	if role != "user" {
+		return turnID, summaries[turnID], nil
+	}
+	if te := failedTurnError(summaries[turnID]); te != nil {
+		return turnID, nil, te
+	}
+	return "", nil, nil
+}
