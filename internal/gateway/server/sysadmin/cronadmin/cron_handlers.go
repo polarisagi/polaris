@@ -64,6 +64,7 @@ type updateAutomationReq struct {
 	RequiresHITL    *bool   `json:"requires_hitl"`
 	RiskLevel       *int    `json:"risk_level"`
 	EventFilter     *string `json:"event_filter"`
+	ProjectID       *string `json:"project_id"`
 }
 
 func applyAutomationPatch(in *AutomationInput, req updateAutomationReq) {
@@ -109,6 +110,9 @@ func applyAutomationPatch(in *AutomationInput, req updateAutomationReq) {
 	if req.EventFilter != nil {
 		in.EventFilter = *req.EventFilter
 	}
+	if req.ProjectID != nil {
+		in.ProjectID = *req.ProjectID
+	}
 }
 
 // HandleUpdateAutomation 更新指定自动化任务。
@@ -148,6 +152,7 @@ func (ca *CronAdmin) HandleUpdateAutomation(w http.ResponseWriter, r *http.Reque
 		RequiresHITL:    row.RequiresHITL,
 		RiskLevel:       row.RiskLevel,
 		Source:          row.Source,
+		ProjectID:       row.ProjectID,
 	}
 	applyAutomationPatch(&in, req)
 

@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	repoimpl "github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -53,7 +54,8 @@ func newTestCronAdmin(t *testing.T) (*CronAdmin, *sql.DB) {
 			circuit_opened_at TEXT,
 			created_at TEXT,
 			updated_at TEXT,
-			event_filter TEXT
+			event_filter TEXT,
+			project_id TEXT NOT NULL DEFAULT 'default'
 		);
 		CREATE TABLE IF NOT EXISTS automation_runs (
 			id TEXT PRIMARY KEY,
@@ -302,5 +304,66 @@ func TestAutomationService_ListSummaries(t *testing.T) {
 	}
 	if summaries[0].Name != "Task 1" || summaries[0].Kind != "prompt" || summaries[0].Source != "agent" {
 		t.Errorf("unexpected summary: %+v", summaries[0])
+	}
+}
+
+// 自动化项目归属（C2）：创建默认归默认项目 / 创建者所在项目；指定项目必须存在且未归档；
+// 更新时不带 project_id 保持原项目；运行请求带上所属项目。
+func TestAutomationService_ProjectBinding(t *testing.T) {
+	ca, db := newTestCronAdmin(t)
+	ctx := context.Background()
+	if _, err := db.Exec(`
+		CREATE TABLE projects (id TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT 'default');
+		INSERT INTO projects(id, archived) VALUES ('default', 0), ('prj_a', 0), ('prj_old', 1);
+		INSERT INTO chat_sessions(id, project_id) VALUES ('sess-a', 'prj_a');`); err != nil {
+		t.Fatal(err)
+	}
+	projectOf := func(id string) string {
+		t.Helper()
+		row, err := ca.AutomationRepo.GetAutomation(ctx, id)
+		if err != nil || row == nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		return row.ProjectID
+	}
+	base := AutomationInput{Prompt: "p", TriggerType: "manual"}
+
+	id, _, err := ca.SaveAutomation(ctx, base)
+	if err != nil || projectOf(id) != "default" {
+		t.Fatalf("未指定项目应归默认项目: id=%s project=%q err=%v", id, projectOf(id), err)
+	}
+
+	in := base
+	in.ProjectID = "prj_a"
+	idA, _, err := ca.SaveAutomation(ctx, in)
+	if err != nil || projectOf(idA) != "prj_a" {
+		t.Fatalf("指定项目应生效: %q err=%v", projectOf(idA), err)
+	}
+
+	// Agent 工具创建：默认归创建者当前会话所在项目。
+	agentCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, "sess-a")
+	idAgent, _, err := ca.SaveAutomation(agentCtx, base)
+	if err != nil || projectOf(idAgent) != "prj_a" {
+		t.Fatalf("应归创建会话所在项目: %q err=%v", projectOf(idAgent), err)
+	}
+
+	for _, bad := range []string{"prj_missing", "prj_old"} {
+		in := base
+		in.ProjectID = bad
+		if _, _, err := ca.SaveAutomation(ctx, in); !apperr.IsCode(err, apperr.CodeInvalidInput) {
+			t.Errorf("项目 %s 应被拒绝, got %v", bad, err)
+		}
+	}
+
+	// 更新不带 project_id：保持原项目；带则迁移。
+	upd := base
+	upd.ID = idA
+	if _, _, err := ca.SaveAutomation(ctx, upd); err != nil || projectOf(idA) != "prj_a" {
+		t.Fatalf("更新未带项目应保持原值: %q err=%v", projectOf(idA), err)
+	}
+	upd.ProjectID = "default"
+	if _, _, err := ca.SaveAutomation(ctx, upd); err != nil || projectOf(idA) != "default" {
+		t.Fatalf("更新应能改项目: %q err=%v", projectOf(idA), err)
 	}
 }

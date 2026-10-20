@@ -28,6 +28,9 @@ type AutomationRow struct {
 	CreatedAt       string
 	UpdatedAt       string
 	EventFilter     string
+	// ProjectID 自动化所属项目：运行产生的会话归入该项目，“以后不再询问”规则按它记忆（ADR-0117 追记）。
+	// 空 = 默认项目。
+	ProjectID string
 }
 
 type AutomationRunRow struct {

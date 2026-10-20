@@ -253,6 +253,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 		// 注释。WorkingDir 前缀拼接由 RunTurn 内部处理，此处传原始 a.Prompt。
 		result, runErr := ca.SessionOrch.RunTurn(bgCtx, session.Request{
 			SessionID:      sessionID,
+			ProjectID:      a.ProjectID,
 			Input:          a.Prompt,
 			Channel:        "cron",
 			Headless:       true,

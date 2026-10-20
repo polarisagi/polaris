@@ -37,6 +37,7 @@ func automationFromRow(row repo.AutomationRow) automation {
 		CreatedAt:       row.CreatedAt,
 		UpdatedAt:       row.UpdatedAt,
 		EventFilter:     row.EventFilter,
+		ProjectID:       row.ProjectID,
 	}
 }
 

@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS automations (
     risk_level        INTEGER NOT NULL DEFAULT 1,        -- 风险等级
     -- 来源（ADR-0114）：'user'=界面/API 创建 | 'agent'=Agent 经 automation_save 创建 | 'plugin:<plugin_id>'=插件模板实例化
     source            TEXT    NOT NULL DEFAULT 'user',
+    -- 所属项目（ADR-0118 追记）：运行会话归入该项目，无人值守审批的“以后不再询问”按它记忆。无 FK：项目删除/归档后
+    -- 运行时回落默认项目，不阻断自动化。存量行取默认值 'default'。
+    project_id        TEXT    NOT NULL DEFAULT 'default',
     -- 执行状态（cronTick 更新）
     last_run_at       TEXT    NOT NULL DEFAULT '',
     next_run_at       TEXT    NOT NULL DEFAULT '',       -- cronTick 预计算下次触发时间

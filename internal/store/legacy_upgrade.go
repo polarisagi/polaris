@@ -25,6 +25,7 @@ var legacyColumns = []struct{ table, column, def string }{
 	{"llm_calls", "turn_id", "TEXT NOT NULL DEFAULT ''"},
 	{"chat_messages", "turn_id", "TEXT NOT NULL DEFAULT ''"},
 	{"chat_messages", "usage", "TEXT NOT NULL DEFAULT ''"},
+	{"automations", "project_id", "TEXT NOT NULL DEFAULT 'default'"},
 }
 
 // legacyObjects 为存量库补齐的表/索引：file 前缀 + 对象名，从建表文件摘取 CREATE 语句执行。

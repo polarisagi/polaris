@@ -29,6 +29,7 @@ func TestCronRunnerExtra(t *testing.T) {
 			trigger_type TEXT,
 			cron_schedule TEXT,
 			event_filter TEXT,
+			project_id TEXT NOT NULL DEFAULT 'default',
 			working_dir TEXT,
 			env_type TEXT,
 			reasoning_effort TEXT,

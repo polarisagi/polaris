@@ -51,6 +51,7 @@ func setupFacadeTest(t *testing.T) (*AutomationFacade, *sql.DB) {
 		trigger_type TEXT,
 		cron_schedule TEXT,
 		event_filter TEXT NOT NULL DEFAULT '{}',
+		project_id TEXT NOT NULL DEFAULT 'default',
 		channel_id TEXT,
 		working_dir TEXT,
 		env_type TEXT,

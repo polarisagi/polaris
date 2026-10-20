@@ -91,7 +91,7 @@ type Attachment struct {
 // RunTurn 内部处理，Request 只携带未解析的引用。
 type Request struct {
 	SessionID string
-	// ProjectID 新会话归属的项目（ADR-0097）。仅交互式路径设置；空 = 默认项目。
+	// ProjectID 新会话归属的项目（ADR-0097）。交互式路径与自动化（cron/webhook/event）的无头路径设置；空 = 默认项目。
 	// 已存在的会话以库内归属为准，本字段被忽略（INSERT OR IGNORE 语义）。
 	ProjectID   string
 	Input       string

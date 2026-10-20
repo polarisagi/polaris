@@ -96,7 +96,7 @@ func TestTriggerWebhookAutomations(t *testing.T) {
 	// 否则 ListWebhookAutomations 的 SELECT 会因缺列报错）。
 	_, _ = db.Exec(`CREATE TABLE automations (
 		id TEXT PRIMARY KEY, name TEXT, prompt TEXT, trigger_type TEXT, cron_schedule TEXT,
-		event_filter TEXT, channel_id TEXT, working_dir TEXT, env_type TEXT,
+		event_filter TEXT, project_id TEXT NOT NULL DEFAULT 'default', channel_id TEXT, working_dir TEXT, env_type TEXT,
 		reasoning_effort TEXT, result_action TEXT, sandbox_level INTEGER, cedar_rules_json TEXT,
 		enabled INTEGER, requires_hitl INTEGER, risk_level INTEGER, source TEXT DEFAULT 'user',
 		last_run_at TEXT, next_run_at TEXT, run_count INTEGER, last_run_status TEXT, last_run_error TEXT,
