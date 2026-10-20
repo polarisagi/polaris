@@ -1,5 +1,5 @@
 name: web_fetch
-description: "读取网页并返回正文。默认 mode=markdown：自动去掉导航/广告，只留正文 Markdown（最省 token）。\n找链接用 mode=links；需要原样文本用 text。内容长时看 next_offset，用 offset 续读。\nunchanged=true 表示与上次抓取相同。需要登录或 JS 渲染的页面请改用浏览器插件。\nRSS/Atom 订阅请用 feed_fetch。"
+description: "读取网页正文。mode：markdown（默认，去导航广告，最省 token）、text、links（找链接）、raw。内容长时用 next_offset 经 offset 续读；unchanged=true 表示同上次。需登录/JS 渲染用浏览器插件，RSS 用 feed_fetch。"
 version: "2.0.0"
 capability: read-network
 risk_level: medium

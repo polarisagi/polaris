@@ -12,6 +12,11 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 )
 
+// ToolIndexer 渲染系统提示里的工具段（catalog.CompositeCatalog 实现）。
+type ToolIndexer interface {
+	ToolsHint(ctx context.Context) string
+}
+
 type PromptAssemblyService struct {
 	PromptMgr               protocol.PromptFacade
 	SoulMDContent           *string
@@ -23,13 +28,15 @@ type PromptAssemblyService struct {
 	Registry                protocol.LLMRegistry
 	ServerPlatform          string
 	ToolReg                 protocol.ToolRegistry
-	DB                      protocol.SQLQuerier
-	Embedder                search.Embedder
-	EmbedThreshold          float64
-	AmbientMaxChars         int
-	MCPMgr                  MCPManager
-	skillEmbedCacheMu       sync.RWMutex
-	skillEmbedCache         map[string]*skillEmbedEntry
+	// ToolIndex 懒加载模式下提供"已加载核心 + 未加载工具索引"（ADR-0119）；nil 或返回空串时回退平铺工具名。
+	ToolIndex         ToolIndexer
+	DB                protocol.SQLQuerier
+	Embedder          search.Embedder
+	EmbedThreshold    float64
+	AmbientMaxChars   int
+	MCPMgr            MCPManager
+	skillEmbedCacheMu sync.RWMutex
+	skillEmbedCache   map[string]*skillEmbedEntry
 }
 
 // skillEmbedEntry 是技能文本→向量缓存的条目。

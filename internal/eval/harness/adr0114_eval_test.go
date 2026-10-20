@@ -213,3 +213,38 @@ func Test_ADR0114_TrajectoryCases(t *testing.T) {
 		assert.Contains(t, reason, "missing expected tool sequence or out of order")
 	})
 }
+
+// Test_ADR0119_ToolSearchCases 验证"非核心任务先 tool_search 再调用"评测用例的解析与判定：
+// 先 tool_search 再调用目标工具的轨迹通过；跳过 tool_search 直接调用（懒加载下该工具不在 tools 里，
+// 必然是幻觉调用）或只搜索不调用的轨迹不通过。
+func Test_ADR0119_ToolSearchCases(t *testing.T) {
+	ctx := context.Background()
+	data, err := os.ReadFile(filepath.Join("testdata", "adr0119_tool_search_cases.json"))
+	require.NoError(t, err)
+	var cases []protocol.EvalCase
+	require.NoError(t, json.Unmarshal(data, &cases))
+	require.GreaterOrEqual(t, len(cases), 10, "非核心工具用例不得少于 10 条")
+
+	judge := NewTrajectoryJudge()
+	for _, c := range cases {
+		t.Run(c.ID, func(t *testing.T) {
+			rules, err := ParseRules(c.Expected)
+			require.NoError(t, err)
+			require.Len(t, rules.ExpectedToolSequence, 2)
+			require.Equal(t, "tool_search", rules.ExpectedToolSequence[0])
+			target := rules.ExpectedToolSequence[1]
+
+			ok, reason := judge.Evaluate(ctx, &TrajectoryTrace{ToolCalls: []ToolCallRecord{
+				{Name: "tool_search", Input: map[string]any{"query": c.Input["search_query"]}},
+				{Name: target, Input: map[string]any{}},
+			}}, rules)
+			assert.True(t, ok, reason)
+
+			ok, _ = judge.Evaluate(ctx, &TrajectoryTrace{ToolCalls: []ToolCallRecord{{Name: target, Input: map[string]any{}}}}, rules)
+			assert.False(t, ok, "跳过 tool_search 直接调用应判不通过")
+
+			ok, _ = judge.Evaluate(ctx, &TrajectoryTrace{ToolCalls: []ToolCallRecord{{Name: "tool_search", Input: map[string]any{}}}}, rules)
+			assert.False(t, ok, "只搜索不调用应判不通过")
+		})
+	}
+}

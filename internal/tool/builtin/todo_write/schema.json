@@ -1,1 +1,39 @@
-{"title": "todo_write", "type": "object", "properties": {"todos": {"type": "array", "items": {"oneOf": [{"type": "string", "description": "Legacy form: item content, status defaults to pending."}, {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content"]}]}, "description": "The full todo list for the current session; replaces the previous list. Items are strings (pending) or {content, status} objects."}}, "required": ["todos"]}
+{
+  "title": "todo_write",
+  "type": "object",
+  "properties": {
+    "todos": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ]
+          }
+        ]
+      },
+      "description": "完整清单（替换旧清单）"
+    }
+  },
+  "required": [
+    "todos"
+  ]
+}

@@ -267,10 +267,6 @@ func (gateKnowledge) SearchRAG(context.Context, string, int) ([]fsm.KnowledgeRes
 	return []fsm.KnowledgeResult{{Content: "RECALL_RAG_MARKER 迁移手册第三章", Source: "kb", Score: 0.9}}, nil
 }
 
-type gateEmbedder struct{}
-
-func (gateEmbedder) Embed(context.Context, string) []float32 { return nil }
-
 var gateRecallMarkers = []string{"RECALL_EPISODIC_MARKER", "RECALL_REFLECTION_MARKER", "RECALL_SEMANTIC_MARKER", "RECALL_RAG_MARKER"}
 
 // gateEnv 是一个会话的全部共享状态：同一 session ID、同一 PII vault、同一 ImmutableCore——
@@ -299,15 +295,15 @@ func newGateEnv(t *testing.T) *gateEnv {
 	core.UserPreferences["language"] = "zh-CN"
 	core.VolatileBlock = "日期 2026-09-30"
 	mc := catalog.NewMemoryCatalog()
-	for _, n := range []string{"read_file", "sys_probe"} {
+	for _, n := range []string{"read_file", "sys_probe", "tool_search"} {
 		mc.Register(protocol.CatalogEntry{Name: n, Description: n + " tool", Parameters: map[string]any{"type": "object"}, Source: types.ToolBuiltin, TrustTier: types.TrustSystem})
 	}
 	for _, n := range []string{"extra_a", "extra_b"} {
 		mc.Register(protocol.CatalogEntry{Name: n, Description: n + " tool", Parameters: map[string]any{"type": "object"}, Source: types.ToolMCP, TrustTier: types.TrustCommunity})
 	}
 	cc := catalog.NewCompositeCatalog(mc)
-	cc.LazyLoadThreshold = 1 // 4 个工具 > 1：走懒加载路径（核心 + search_tools + 激活追加）
-	cc.Embedder = gateEmbedder{}
+	cc.LazyLoadThreshold = 1 // 5 个工具 > 1：走懒加载路径（核心 + tool_search + 激活追加）
+	cc.CoreTools = []string{"read_file", "sys_probe", "tool_search"}
 	return &gateEnv{
 		t:        t,
 		session:  "gate-session-" + t.Name(),

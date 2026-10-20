@@ -40,7 +40,7 @@ func toolOptionsFor(schemas []types.ToolSchema, forbidCall bool) []types.InferOp
 // toolInferOptions 返回本次 LLM 调用应附加的 tools 相关选项。
 //
 // TaskID 注入方式与 promptPlan 里 BuildToolListSection 保持一致：懒加载工具激活作用域需要
-// 同一个 TaskID，否则上一轮 search_tools 激活的工具在本轮 Schemas() 重建时对不上
+// 同一个 TaskID，否则上一轮 tool_search 激活的工具在本轮 Schemas() 重建时对不上
 // （见 catalog/composite.go）。非 Plan 阶段读到的激活集合与 Plan 相同，故 tools 数组一致。
 //
 // 非 Plan 阶段即便模型仍返回 tool_calls：调用点只在 S_PLAN 才把 ToolCalls 转 DAG，

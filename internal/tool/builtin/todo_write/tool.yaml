@@ -1,5 +1,5 @@
 name: todo_write
-description: Replace the current session's todo list (full-list replacement, persisted per session in the database). Items are strings (status pending) or {content, status} objects with status pending|in_progress|completed.
+description: "整体替换当前会话待办清单。条目为字符串（pending）或 {content, status}，status 取 pending|in_progress|completed。"
 capability: write-local
 side_effects:
   - state-mutate

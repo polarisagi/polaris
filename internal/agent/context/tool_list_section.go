@@ -12,7 +12,7 @@ import (
 // （完整定义走原生 function-calling，见函数体注释）。
 //
 // ctx 必须携带 protocol.CtxTaskIDKey（由调用方从 sCtx.SessionID 注入），否则
-// 懒加载模式下 search_tools 在上一轮激活的工具（CompositeCatalog.ActivateTool）
+// 懒加载模式下 tool_search 在上一轮激活的工具（CompositeCatalog.ActivateTool）
 // 无法在本轮 Schemas() 重建时命中同一激活作用域——见 internal/tool/catalog/composite.go
 // 的 Schemas() 与 internal/tool/tool_search.go 的 sessionIDFromCtx，两处必须使用
 // 同一个 TaskID 才能让"搜索到的工具在后续轮次真正可调用"这个懒加载协议闭环。

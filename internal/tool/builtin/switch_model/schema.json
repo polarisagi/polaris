@@ -6,15 +6,15 @@
   "properties": {
     "ref": {
       "type": "string",
-      "description": "目标模型引用，格式为 <provider_id>/<model_id> 或已有池名（如 general/reasoning/default/budget）。"
+      "description": "<provider_id>/<model_id> 或池名（general/reasoning/default/budget）"
     },
     "pool": {
       "type": "string",
-      "description": "目标角色池，取值 reasoning, general, default, budget（可选，当未指定 ref 时使用）。"
+      "description": "角色池（未给 ref 时用）"
     },
     "thinking": {
       "type": "string",
-      "description": "目标思考档位，取值 none, low, medium, high（可选）。"
+      "description": "none/low/medium/high"
     }
   }
 }

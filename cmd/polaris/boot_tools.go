@@ -643,7 +643,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		slog.Warn("polaris: failed to load tool_search meta", "err", err)
 	}
 
-	compCatalog.Embedder = sb.Embedder
 	compCatalog.LazyLoadThreshold = sb.Cfg.Thresholds.M13Interface.LazyLoadToolThreshold
 
 	for _, t := range toolReg.List() {

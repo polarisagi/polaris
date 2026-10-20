@@ -1,18 +1,5 @@
 name: search_extension
-description: |
-  Search for plugins, skills, or MCP servers that can extend your capabilities.
-  Supports natural language / semantic queries — describe what you want to do, not just exact names.
-  Examples: "send a tweet", "read emails", "analyze spreadsheets", "control browser".
-
-  Use this tool proactively whenever you lack a capability to complete the user's request.
-  Workflow: search_extension → get catalog ID → install_extension.
-
-  Search cascade (automatic, no configuration needed):
-    1. Semantic vector search (natural language understanding)
-    2. BM25 full-text search (keyword matching)
-    3. Graph spreading activation (discover related extensions)
-    4. Local catalog fallback (substring match)
-    5. Online MCP registry (last resort, requires network)
+description: "Search plugins, skills and MCP servers that add capabilities (natural-language query: \"send a tweet\", \"read emails\"). Use proactively when you lack a capability. Workflow: search_extension → catalog ID → install_extension."
 version: "1.0.0"
 capability: write-network
 risk_level: low

@@ -9,41 +9,41 @@
         "properties": {
           "prompt": {
             "type": "string",
-            "description": "子智能体要执行的具体任务说明"
+            "description": "任务说明"
           },
           "role": {
             "type": "string",
-            "description": "目标子智能体角色（如 general-purpose, researcher 等）"
+            "description": "子智能体角色（如 researcher）"
           },
           "model": {
             "type": "string",
-            "description": "运行模型，缺省继承父智能体模型"
+            "description": "模型，缺省继承"
           },
           "thinking": {
             "type": "string",
-            "description": "思考档位（none/low/medium/high）"
+            "description": "none/low/medium/high"
           },
           "tools": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "允许使用的工具名列表"
+            "description": "允许的工具名"
           },
           "read_only": {
             "type": "boolean",
-            "description": "是否以只读模式运行"
+            "description": "只读模式"
           },
           "max_result_chars": {
             "type": "integer",
-            "description": "结果最大字符数，默认 4000"
+            "description": "结果字符上限，默认 4000"
           }
         },
         "required": [
           "prompt"
         ]
       },
-      "description": "并发任务列表"
+      "description": "并发任务"
     },
     "wait": {
       "type": "string",
@@ -52,7 +52,7 @@
         "none"
       ],
       "default": "all",
-      "description": "等待模式：all=挂起当前智能体等待全部完成；none=派生后立即返回ID边做边等"
+      "description": "all=等全部完成；none=立即返回 ID"
     }
   },
   "required": [

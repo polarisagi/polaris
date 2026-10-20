@@ -1,5 +1,5 @@
 name: git_diff
-description: "Show the unified diff for a git repository (working tree, staged changes, or between two refs). Returns structured per-file stats plus the raw diff text (capped at 1MB)."
+description: "Show a git diff (working tree, staged, or between two refs): per-file stats plus raw diff (capped 1MB)."
 version: "1.0.0"
 capability: read-only
 risk_level: low

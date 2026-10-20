@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -18,11 +17,12 @@ type CompositeCatalog struct {
 	cache   []protocol.CatalogEntry // nil 表示需要重建
 
 	LazyLoadThreshold int
-	Embedder          search.Embedder
-	activeSessions    map[string]*sessionActivation // sessionID -> 本会话激活的工具（保持激活顺序）
+	// CoreTools 懒加载时常驻 tools 数组的工具名；为空用默认核心集（见 lazy.go coreToolNames，ADR-0119）。
+	CoreTools      []string
+	activeSessions map[string]*sessionActivation // sessionID -> 本会话激活的工具（保持激活顺序）
 }
 
-// maxActivatedToolsPerSession 单会话激活工具数上限（有界，防 search_tools 反复激活撑爆 tools 数组）。
+// maxActivatedToolsPerSession 单会话激活工具数上限（有界，防 tool_search 反复激活撑爆 tools 数组）。
 // 超限时淘汰最早激活的一个：极端情形下宁可付一次 tools 前缀失配，也不让数组无界增长。
 const maxActivatedToolsPerSession = 64
 
@@ -162,17 +162,17 @@ func (c *CompositeCatalog) Invalidate() {
 // Schemas 构建懒加载后的工具 schema 列表。
 //
 // TaskID 激活作用域必须与写入端一致：internal/tool/tool_search.go 的
-// search_tools 执行路径（经 ExecuteTool → DAG 节点执行，protocol.CtxTaskIDKey
+// tool_search 执行路径（经 ExecuteTool → DAG 节点执行，protocol.CtxTaskIDKey
 // 由 internal/execute/dag/executor.go 注入）和本方法的读取路径统一使用
 // sCtx.SessionID 作为 TaskID 来源（agent_execute.go 的
 // executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)）。
 // 提示词构建阶段的调用方（internal/agent/context/memory_context.go
 // BuildPlanContext → BuildToolListSection、internal/agent/fsm/state_machine.go
-// 无 Memory 降级路径）均已改为显式传入携带同一 TaskID 的 ctx，search_tools
+// 无 Memory 降级路径）均已改为显式传入携带同一 TaskID 的 ctx，tool_search
 // 上一轮激活的工具能在下一轮提示词重建时正确出现在 Schemas() 列表里。
 // sysadmin 包（internal/gateway/server/sysadmin/tools.go 等）的管理态调用
 // 用 context.Background() 是有意为之——这些是无会话概念的一次性管理操作
-// （列全部工具供 Admin UI / 工作流校验），不涉及 search_tools 的会话级激活。
+// （列全部工具供 Admin UI / 工作流校验），不涉及 tool_search 的会话级激活。
 func (c *CompositeCatalog) Schemas(ctx context.Context, minTrust types.TrustTier) []types.ToolSchema {
 	entries := c.List(ctx, minTrust)
 	threshold := c.LazyLoadThreshold
@@ -180,10 +180,12 @@ func (c *CompositeCatalog) Schemas(ctx context.Context, minTrust types.TrustTier
 		threshold = 40
 	}
 
-	shouldLazyLoad := len(entries) > threshold && c.Embedder != nil
+	// 懒加载与 Embedder 无关（ADR-0119）：工具总数超阈值，且目录里确有 tool_search 可供激活时启用。
+	// 没有 tool_search 就无从激活，此时宁可全量下发也不能让工具不可达。
+	shouldLazyLoad := lazyActive(entries, threshold)
 
 	// 激活作用域 key 必须与 tool_search.go 的 MakeToolSearchFn 一致，
-	// 否则 search_tools 激活的工具在这里读不到（见该文件内注释）。
+	// 否则 tool_search 激活的工具在这里读不到（见该文件内注释）。
 	sessionID := ""
 	if tid, ok := ctx.Value(protocol.CtxTaskIDKey{}).(string); ok {
 		sessionID = tid
@@ -210,35 +212,21 @@ func (c *CompositeCatalog) Schemas(ctx context.Context, minTrust types.TrustTier
 		return schemas
 	}
 
-	// 懒加载（ADR-0105 决策三，tools 数组只追加）：
-	//   [核心工具（TrustTier>=4，List 确定序）] [search_tools] [本会话激活工具，按激活顺序]
+	// 懒加载（ADR-0105 决策三 tools 数组只追加；ADR-0119 核心集不依赖 Embedder）：
+	//   [常驻核心工具（IsCoreTool，List 确定序，含 tool_search）] [本会话激活工具，按激活顺序]
 	// 激活只会在数组尾部追加，核心部分与已有激活部分的字节不随新激活而变——此前激活工具按名称
 	// 插进核心工具中间，插入点之后的 tools 定义全部失配（Anthropic 上 tools 变化使整个缓存失效）。
 	byName := make(map[string]protocol.CatalogEntry, len(entries))
-	schemas := make([]types.ToolSchema, 0, len(entries))
+	schemas := make([]types.ToolSchema, 0, len(c.coreSet())+len(activated))
 	for _, e := range entries {
 		byName[e.Name] = e
-		if e.TrustTier >= 4 {
+		if c.IsCore(e.Name) {
 			schemas = append(schemas, toSchema(e))
 		}
 	}
-	schemas = append(schemas, types.ToolSchema{
-		Name:        "search_tools",
-		Description: "Search for available tools dynamically based on a query.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{
-					"type":        "string",
-					"description": "Semantic query to find relevant tools",
-				},
-			},
-			"required": []string{"query"},
-		},
-	})
 	for _, name := range activated {
 		// 核心工具已在前段；已被卸载或被 minTrust 过滤的激活项静默跳过（不占位）。
-		if e, ok := byName[name]; ok && e.TrustTier < 4 {
+		if e, ok := byName[name]; ok && !c.IsCore(name) {
 			schemas = append(schemas, toSchema(e))
 		}
 	}

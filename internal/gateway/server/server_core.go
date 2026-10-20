@@ -418,6 +418,10 @@ func (s *Server) SetReloadProviders(f func()) {
 // SetCatalog 注入工具目录
 func (s *Server) SetCatalog(c catalog.Catalog) {
 	s.catalog = c
+	// 懒加载的工具索引进系统提示（ADR-0119）。
+	if ti, ok := c.(chat.ToolIndexer); ok && s.chatHandler != nil && s.chatHandler.PromptService != nil {
+		s.chatHandler.PromptService.ToolIndex = ti
+	}
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Catalog = c
 	}

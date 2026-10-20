@@ -4,71 +4,83 @@
   "properties": {
     "kind": {
       "type": "string",
-      "enum": ["prompt", "pipeline"],
-      "description": "自动化类型：prompt 或 pipeline"
+      "enum": [
+        "prompt",
+        "pipeline"
+      ],
+      "description": "prompt 或 pipeline"
     },
     "id": {
       "type": "string",
-      "description": "可选。已有任务 ID，传入时表示更新，不传表示新建"
+      "description": "已有任务 ID（更新时传）"
     },
     "name": {
       "type": "string",
-      "description": "自动化任务名称"
+      "description": "任务名称"
     },
     "prompt": {
       "type": "string",
-      "description": "自动化执行时发送给 Agent 的提示词（kind=prompt 时必填）"
+      "description": "kind=prompt 必填：到点发给 Agent 的提示词"
     },
     "cron": {
       "type": "string",
-      "description": "标准 5 字段 Cron 表达式（如 '0 * * * *'）"
+      "description": "5 字段 Cron，如 \"0 * * * *\""
     },
     "trigger": {
       "type": "object",
-      "description": "触发器配置（kind=pipeline 时可选，如 {\"type\":\"cron\",\"cron\":\"0 8 * * *\"}）"
+      "description": "pipeline 触发器，如 {\"type\":\"cron\",\"cron\":\"0 8 * * *\"}"
     },
     "steps": {
       "type": "array",
-      "description": "管线执行步骤（kind=pipeline 时必填）",
+      "description": "pipeline 必填：步骤",
       "items": {
         "type": "object",
         "properties": {
           "key": {
             "type": "string",
-            "description": "步骤唯一标识"
+            "description": "步骤标识"
           },
           "kind": {
             "type": "string",
-            "description": "步骤类型：tool, transform, llm, agent, sink"
+            "description": "tool/transform/llm/agent/sink"
           }
         },
-        "required": ["key", "kind"]
+        "required": [
+          "key",
+          "kind"
+        ]
       }
     },
     "sink": {
       "type": "object",
-      "description": "管线输出目标配置（可选）"
+      "description": "输出目标（可选）"
     },
     "reasoning_effort": {
       "type": "string",
-      "enum": ["low", "medium", "high"],
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
       "default": "low",
-      "description": "推理强度：low、medium 或 high，默认 low"
+      "description": "low/medium/high"
     },
     "result_action": {
       "type": "string",
       "default": "session",
-      "description": "执行结果处理方式：session（默认）、silent 或 channel:<id>"
+      "description": "session（默认）/silent/channel:<id>"
     },
     "enabled": {
       "type": "boolean",
       "default": true,
-      "description": "是否启用，默认 true"
+      "description": "是否启用"
     },
     "dry_run": {
       "type": "boolean",
-      "description": "是否进行同步试运行预览（不落库、不执行外部写操作，返回步骤预览和预计 token 消耗）"
+      "description": "试运行预览，不落库、不执行外部写，返回步骤与预计 token"
     }
   },
-  "required": ["kind"]
+  "required": [
+    "kind"
+  ]
 }
