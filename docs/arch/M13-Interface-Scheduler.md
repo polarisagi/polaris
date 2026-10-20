@@ -3,7 +3,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI + 桌面外壳; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:374 对内调度 / 3:463 MCP / 6:471 (SOFT)降级 / 6-bis:484 已知Bug修复记录 / 7:496 跨模块契约 / 8:513 Web UI 规约 / 8.6:629 834 插件聚合市场DB+流 / 8.7:660 870 自动化中心DB+流+工作流 / 8.8:765 987 电脑操控权限+Preferences / 8.9:781 1027 前端组件规范 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:374 对内调度 / 3:463 MCP / 6:471 (SOFT)降级 / 6-bis:484 已知Bug修复记录 / 7:496 跨模块契约 / 8:513 Web UI 规约 / 8.6:629 834 插件聚合市场DB+流 / 8.7:660 870 自动化中心DB+流+工作流 / 8.8:769 987 电脑操控权限+Preferences / 8.9:785 1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -709,6 +709,10 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 ### 业务流：HITL 审批
 
 Agent 触发危险操作（`write_network` / Privileged / 超预算）→ M11 Cedar-Gate 拦截，`tasks.status` 置 `Suspended`，SSE 推 `approval_pending`（前端 approvals badge +1）→ 用户在「待办审批」Tab 经 `GET /v1/approvals/pending` 查看后 `POST /v1/approvals/{id}/resolve { decision, note? }` → M8 Blackboard 将 `TaskEntry.status` 更新为 `Running` 或 `Cancelled`。
+
+### 业务流：无人值守审批（cron / workflow / webhook，ADR-0117 追记）
+
+无人在对话界面前的回合（`AcquireHeadless`，`StateContext.BackgroundTurn`）里需询问的工具调用**不再直接拒绝**：`buildApprovalPrompt` 给 `HITLPrompt` 打 `Unattended=true`、`SessionID`，期限取 `hitl.default_deadline_min_long`（默认 1440 分钟=24 小时），审批进入同一 HITL 待审批队列（`hitl_requests`）。cron 运行预算（5–60 分钟）改为**可暂停**（`cronadmin.superviseRunBudget`）：运行会话存在待批的无人值守审批期间不计时，并把 run/automation 状态置 `suspended`（UI 显示“等待批准”），批准后恢复 `running`；超时无人应答按拒绝处理（`CheckpointToolApproval` 一律 auto_deny）。前端：审批轮询全局化（自动化页 5s，其它页 15s），侧边栏角标、页面可见时 toast、页面在后台且已授权时 Web Notification；自动化页审批卡与对话内同形（逐项展示、硬限制说明、“以后不再询问”勾选，规则记到该无人值守会话当前项目）。workflow/webhook 沿用同一审批路径，但目前仅 cron 运行预算可暂停。
 
 ### 外部触发器（Webhook）
 

@@ -2,7 +2,7 @@
 
 > Go 状态机持有控制流，LLM 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 > 代码位置：`internal/agent/`（FSM 在 `internal/agent/fsm/`；DAG 执行器与 S_VALIDATE 四层校验物理实现在 `internal/execute/dag/`，ADR-0046；FSM 经 `internal/agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口驱动，唯一决定何时进入 S_EXECUTE/S_VALIDATE）。
-<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:171 Suspend-on-Idle / 3:187 S_VALIDATE / 4:226 DAG（Directed Acyclic Graph，有向无环图） / 5:296 System1/2 / 6:320 WorldModel / 7:328 推理预算 / 8:375 CrashRecovery / 8-bis:412 Handoff唤醒事件化+无损续跑 / 12:422 已知Bug修复记录 / 13:428 (SOFT)降级 / 14:445 481 跨模块契约 / 15:469 505 默认参数 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:19 不变量速查 / 1:37 状态机 / 1.1:100 输出通道+S_RESPOND / 2:172 Suspend-on-Idle / 3:190 S_VALIDATE / 4:229 DAG（Directed Acyclic Graph，有向无环图） / 5:299 System1/2 / 6:323 WorldModel / 7:331 推理预算 / 8:378 CrashRecovery / 8-bis:416 Handoff唤醒事件化+无损续跑 / 12:426 已知Bug修复记录 / 13:432 (SOFT)降级 / 14:449 481 跨模块契约 / 15:473 505 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -149,7 +149,8 @@ S_IDLE ──(TriggerIntentReceived)──→ S_LOOP_RECALL ──(TriggerLoopRe
 13. **回合自动记忆召回（S_LOOP_RECALL，R4-02）**：自主循环回合起点引入确定性 Effect 步骤 `S_IDLE → S_LOOP_RECALL（状态 17）→ S_LOOP`。在 FSM 锁外调用统一记忆召回管线（`TurnRecallText`），召回情景记忆、反思、L2 语义与 RAG 知识库（`RecallWant.Goal` 传入本回合意图；缺 Goal 则只查情景，R5-03），结果以 `## Recalled Context` 注入本回合首条 user 消息，并合并污点定级（`TaintLevel`）。若召回失败，自动降级为无召回并记录指标 `polaris.agent.loop_recall_failure_total`，不阻断回合。寒暄快路（`tryPhaticBypass`）跳过召回。 召回非空时与 staged 的 `writePlanRecall` 同口径：`GlobalTaintLevel` 至少提升到 `TaintMedium`，首条消息污点取 `PropagateTaint(用户意图, Medium, Global, 召回项)`（R5-03）。
 14. **交互回合流式输出与工具进度（R5-02）**：`loopEffect` 在「交互回合」（`LoopCompletion != explicit` 且非 `AcquireHeadless` 获取，`StateContext.LoopStreamsToUser`）设 `Audience=User`——每轮文本增量以 Token 事件流式推送，工具调用事件由 `acceptStreamToolCall` 推送，`executeLoopToolCall` 完成后补发 `ToolResult` 事件（内容截断 500 字符，污点随结果）。已流式推送的回合以 `LoopReplyStreamed` 标记，终态 `publishPreparedReply` 不再重发；`ConversationHistory` 中的助手内容取各轮流式文本按序拼接（`LoopStreamedText`），无流式文本时才回落 `PreparedReply`/`LoopSummary`/最后一段助手文本。委派子智能体（explicit）、cron、workflow 等无人阅读的回合保持回合末一次性发布（`AcquireHeadless` 靠它拼 Output）。par_inv_06 已据此追记复核（`spec/state.yaml`）。
 15. **子智能体嵌套输出不入父回复正文（R5-01）**：`IsNested` 的 Token 事件在网关 `handleFSMEvent` 转为 `KindStatus{type:"subagent_output", agent_id, parent_id, role, message}` 进度事件，不进 `*reply`、不推 `KindDelta`、不持久化（子智能体结果本就经 tool_result 回到父上下文）；系统提示词泄露扫描仍作用于该内容。前端在子智能体树节点下展示。
-16. **空输出重试（R5-06）**：某轮既无正文也无工具调用时，`onLoopSuccess` 经 `S_LOOP_STEER` 重跑本轮一次（`LoopEmptyRetries`）；仍为空且本回合从未产出正文则 `S_LOOP_FAILED` 并发出错误事件，已有正文则沿用既有收尾，不再静默以空回复完成。
+16. **空输出恢复（R5-06 / 2026-10 修订）**：某轮既无正文也无工具调用（典型：只产出 reasoning）时，`onLoopEmptyOutput` 经 `S_LOOP_STEER` 最多再调用 **2 次**（`LoopEmptyRetries`，连续计数，出现正文/工具调用即清零），**绝不原样重发同一请求**：① 第 1 次重试：请求末尾追加瞬态 assistant 占位 + user 提示“上一轮只完成了思考，没有发出工具调用或回答……”，并把上一轮 `reasoning_content` 回传（DeepSeek 思考模式要求）；② 第 2 次：本回合已有工具结果 → `tool_choice=none` 的无工具收尾调用（`loopEmptyRecoveryOpts`）；尚无工具结果 → 关闭思考（`ThinkingDisabled`）再试一次。仍为空且从未产出正文 → `S_LOOP_FAILED`，错误文案对用户友好（不再是 "LLM returned empty output after retry"）。瞬态消息不进 `LoopMessages`，不污染历史与前缀缓存。诊断：`llm fill unusable` 日志带 `content_bytes/fill_bytes/reasoning_bytes/tool_calls/finish_reason/output_tokens`，适配器 Debug 日志 `llm stream: summary`，以及 `POLARIS_LLM_RAW_DUMP`（见 M03 §8-bis）。
+18. **agentic L0 不含阶段契约（2026-10）**：自主循环的稳定核只写 `ImmutableCore.StableMessage()`，不再注入 `# PHASE CONTRACTS` / `# ACTIVE PHASE`（Perceive/TaskModel JSON 等分阶段契约对“模型直接驱动”的循环是噪声，且诱导模型输出结构化 JSON 或只思考不行动）；循环指令走 `kernel/loop.md`（`BuildAgenticPrompt`）。系统提示词 token（4 字节/token 估算）2335 → 537；前缀仍字节恒定（`agentic_prompt_test.go` 断言）。四阶段降级路径的契约并入 L0（决策九）不受影响。
 17. **主循环模型池（R5-07）**：`m4_kernel.model_pool.loop`（默认 `default`）决定主循环每轮的模型池，不再复用参与升级阶梯的 `model_pool.plan_initial`；模型自选（`resolveModelRoute`）与用户手选锁定的优先级不变。
 
 **回合上下文（ADR-0105）**
@@ -179,6 +180,8 @@ Agent 以 goroutine 运行，空闲时挂起释放资源。
 **咨询式挂起（提案，未实现）**：`AskHuman` 特权工具拟复用同一 Suspend/Resume 路径，新增 `SuspendReason=awaiting_user_input`，不新增状态。→ [ADR-0066](./decisions/ADR-0066-gateway-sql-sink-and-egress-hardening.md)（HITL AskUser，原 ADR-0042）。
 
 **内存持久化失败熔断（GD-13-003）**：写入路径同步落盘，失败以同步 error 返回。`internal/agent/agent_execute_memory.go` 的 `writeEpisodicWithExtract` 捕获错误，`isMemoryPersistenceFailure` 以 `apperr.IsCode(err, apperr.CodeStorageUnavailable)` 判定存储层故障（业务校验错误不熔断）；命中后 `handleMemoryPersistenceFailure` 设 `StateContext.SuspendReason="memory_persistence_failure"`、写一条 `m9_storage_degraded` outbox 记录，并 `asyncIntent(types.TriggerInterruptReceived)`——复用 `Dispatch()` 中早于 transitions 表的全局中断处理器，路由至 `AgentStateInterrupt`（不是 `AgentStateSuspended`，未新增转换规则）。
+
+**空闲挂起只在真正空闲时发生**（2026-10 修复）：`Run()` 的 `idleTimer` 触发时，仅当 FSM 处于 `S_IDLE` 且无 effect 在运行才 `Dispatch(TriggerSuspend)`；回合内（长耗时工具、等待人工审批——无人值守审批可长达 24 小时）一律重置计时器，effect 完成也重置。此前非 Idle 态下 `Dispatch` 失败后 `ForceState(Suspended)`，工具返回的 `TriggerLoopExecDone` 即报 `no transition from 11 with trigger 24`（11=S_SUSPENDED，24=TriggerLoopExecDone）。回归：`agent_idle_suspend_test.go`。
 
 内存效率: 活跃 Agent 约 1MB，休眠 Agent 仅留约 100 字节 checkpoint 元数据。Tier 0 硬上限 2 个活跃 Agent。
 
@@ -380,6 +383,7 @@ M4 仅持有热路径窗口管理与触发判断；压缩算法、锚定策略�
 
 **会话崩溃恢复（ADR-0104，原 ADR-0076 决策一/二/四）**:
 - `Agent.Run()` 写 `inflight:session:{id}` KV 标记，干净退出 `defer` 清除；进程崩溃则残留。`recoverCrashedSessions`（`cmd/polaris/boot_crash_recovery.go`，`bootAgent` 后 `bootServer` 前）扫描候选会话，用 `TrajectoryRecorderImpl` 从 `session_trajectory` 表（045）重建 `TrajectoryTrace`，**仅当最后状态落在纯 LLM 状态（S_PERCEIVE/S_PLAN/S_REFLECT）时自动恢复**；S_VALIDATE/S_EXECUTE/S_REPLAN/S_ROLLBACK 保守跳过（2PC 预写日志未经专门审计）。经 `AgentPool.Acquire` + `InjectReplayData` 注入历史 LLM 录像 + `SetReplayMode(true)` 驱动续跑，消费最后一条录像的同一瞬间翻转为 false；工具执行在 ReplayMode 窗口内短路为 stub。
+- agentic 回合续跑（`recoverAgenticLoopTurns`）重放前经 `RepairDanglingToolCalls` 整段修复历史：任一 assistant.tool_use 缺 tool_result → 在其结果段内补“执行中断，结果未知”（先于其后的 steer/user 消息）；孤儿 tool_result 降级为 user 文本。否则 DeepSeek/OpenAI 兼容协议返回 400（assistant.tool_calls 后缺 tool 消息）。`ResumeAgenticLoop` 再做一次纵深防御。
 - 工作流级：`task_checkpoints`（`(task_id,node_id,attempt)`）命中 `done` 节点直接复用；`POST /v1/workflows/runs/{id}/resume` 以同 runID 手动续跑，启动期不自动续跑（ADR-0104 决策二）。
 - 启动期孤儿对账：`cmd/polaris/boot_orphan_reconciler.go`（ADR-0104 决策一）。
 - S_AWAIT_AGENT 被动恢复：见 §8-bis。
