@@ -74,6 +74,8 @@
               <div class="flex flex-wrap gap-2 mt-4">
                 <div class="badge badge-ghost badge-sm font-mono" x-text="$store.cron.cronLabel(job.cron_schedule) || job.trigger_type"></div>
                 <div class="badge badge-ghost badge-sm" x-text="$store.i18n.t('automation_label_reasoning')+($store.cron.reasoningLevels.find(r=>r.value===job.reasoning_effort)||{label:'中'}).label"></div>
+                <div class="badge badge-ghost badge-sm" x-show="job.project_id" :title="$store.i18n.t('auto_field_project')"
+                     x-text="'📁 ' + (($store.projects.byID(job.project_id) || {}).name || job.project_id)"></div>
               </div>
 
               <div class="mt-4 pt-4 border-t border-base-300 text-xs text-base-content/70 flex items-center gap-2">
@@ -293,6 +295,86 @@
     </div>
   </div>
   </div>
+
+  <!-- ═══════════════════════════════════════════════ 例行任务 创建/编辑 Modal -->
+  <dialog id="cron_modal" class="modal" x-effect="$store.cron.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.cron.showModal = false" x-cloak>
+    <div class="modal-box w-11/12 max-w-2xl max-h-[90vh] overflow-y-auto">
+      <h3 class="font-bold text-lg mb-4" x-text="$store.cron.editMode === 'create' ? $store.i18n.t('auto_modal_create') : $store.i18n.t('auto_modal_edit')"></h3>
+      <div class="space-y-4">
+        <div class="form-control">
+          <label for="cron-f-name" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_name')"></span></label>
+          <input id="cron-f-name" name="cron-f-name" type="text" class="input input-bordered" x-model="$store.cron.form.name">
+        </div>
+        <div class="form-control">
+          <label for="cron-f-prompt" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_prompt')"></span></label>
+          <textarea id="cron-f-prompt" name="cron-f-prompt" rows="4" class="textarea textarea-bordered" x-model="$store.cron.form.prompt"></textarea>
+        </div>
+        <div class="form-control">
+          <label for="cron-f-trigger" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
+          <select id="cron-f-trigger" name="cron-f-trigger" class="select select-bordered" x-model="$store.cron.form.trigger_type">
+            <option value="cron" x-text="$store.i18n.t('wf_trigger_cron')"></option>
+            <option value="webhook" x-text="$store.i18n.t('auto_trigger_webhook')"></option>
+            <option value="both" x-text="$store.i18n.t('auto_trigger_both')"></option>
+            <option value="manual" x-text="$store.i18n.t('wf_trigger_manual')"></option>
+          </select>
+        </div>
+        <div class="form-control" x-show="['cron','both'].includes($store.cron.form.trigger_type)">
+          <label for="cron-f-presets" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
+          <select id="cron-f-presets" name="cron-f-presets" class="select select-bordered mb-2" @change="$store.cron.form.cron_schedule = $event.target.value">
+            <template x-for="p in $store.cron.schedulePresets" :key="p.value">
+              <option :value="p.value" :selected="$store.cron.form.cron_schedule === p.value" x-text="p.label"></option>
+            </template>
+          </select>
+          <input name="cron-f-schedule" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.cron_schedule" placeholder="0 9 * * 1-5">
+        </div>
+        <div class="form-control" x-show="['webhook','both'].includes($store.cron.form.trigger_type)">
+          <label for="cron-f-channel" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_channel')"></span></label>
+          <input id="cron-f-channel" name="cron-f-channel" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.channel_id">
+        </div>
+        <div class="form-control">
+          <label for="cron-f-workdir" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_workdir')"></span></label>
+          <input id="cron-f-workdir" name="cron-f-workdir" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.working_dir">
+        </div>
+        <!-- 所属项目：运行产生的会话归入该项目；无人值守审批的「以后不再询问」按它记忆 -->
+        <div class="form-control">
+          <label for="cron-f-project" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_project')"></span></label>
+          <select id="cron-f-project" name="cron-f-project" class="select select-bordered" x-model="$store.cron.form.project_id">
+            <template x-for="p in $store.projects.active" :key="p.id">
+              <option :value="p.id" :selected="p.id === $store.cron.form.project_id" x-text="p.name"></option>
+            </template>
+          </select>
+          <p class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('auto_project_hint')"></p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="form-control">
+            <label for="cron-f-effort" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_effort')"></span></label>
+            <select id="cron-f-effort" name="cron-f-effort" class="select select-bordered" x-model="$store.cron.form.reasoning_effort">
+              <template x-for="r in $store.cron.reasoningLevels" :key="r.value">
+                <option :value="r.value" :selected="r.value === $store.cron.form.reasoning_effort" x-text="r.label + ' · ' + r.desc"></option>
+              </template>
+            </select>
+          </div>
+          <div class="form-control">
+            <label for="cron-f-result" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_result')"></span></label>
+            <select id="cron-f-result" name="cron-f-result" class="select select-bordered" x-model="$store.cron.form.result_action">
+              <template x-for="r in $store.cron.resultActions" :key="r.value">
+                <option :value="r.value" :selected="r.value === $store.cron.form.result_action" x-text="r.label"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+        <div class="form-control flex-row items-center gap-3">
+          <input type="checkbox" name="cron-f-enabled" class="toggle toggle-primary" x-model="$store.cron.form.enabled">
+          <span class="label-text" x-text="$store.i18n.t('wf_field_enabled')"></span>
+        </div>
+      </div>
+      <div class="modal-action mt-6">
+        <button type="button" class="btn btn-ghost" @click="$store.cron.showModal = false" x-text="$store.i18n.t('cancel')"></button>
+        <button type="button" class="btn btn-primary" @click="$store.cron.save()" x-text="$store.i18n.t('save')"></button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
 
   <!-- ═══════════════════════════════════════════════ Workflow 创建/编辑 Modal -->
   <dialog id="workflow_modal" class="modal" x-effect="$store.workflow.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.workflow.showModal = false" x-cloak>

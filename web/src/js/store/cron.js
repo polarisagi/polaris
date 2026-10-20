@@ -84,6 +84,7 @@ Alpine.store('cron', {
     result_action: 'session',
     cedar_rules_json: '[]',
     enabled: true,
+    project_id: '',
   },
 
   schedulePresets: SCHEDULE_PRESETS,
@@ -119,8 +120,11 @@ Alpine.store('cron', {
       working_dir: '',
       reasoning_effort: 'medium', result_action: 'session',
       cedar_rules_json: '[]', enabled: true,
+      // 默认归入创建时所在的项目（ADR-0118 追记）：运行会话与「以后不再询问」规则都按它作用域
+      project_id: Alpine.store('projects').current || '',
     }
     this.editMode = 'create'
+    Alpine.store('projects').load()
     this.showTemplates = false
     this.showModal = true
     this.loadTemplates()
@@ -129,6 +133,7 @@ Alpine.store('cron', {
   openEdit(job) {
     this.form = { ...job }
     this.editMode = 'edit'
+    Alpine.store('projects').load()
     this.showTemplates = false
     this.showModal = true
     this.loadTemplates()

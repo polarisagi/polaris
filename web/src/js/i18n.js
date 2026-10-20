@@ -2,6 +2,18 @@
 // 使用: $store.i18n.t('key')
 
 export const zh = {
+  auto_modal_create: '新建例行任务',
+  auto_modal_edit: '编辑例行任务',
+  auto_field_name: '任务名称',
+  auto_field_prompt: '任务指令',
+  auto_field_channel: '渠道 ID（Webhook 触发）',
+  auto_field_workdir: '工作目录（可选）',
+  auto_field_project: '所属项目',
+  auto_project_hint: '每次运行产生的会话归入该项目；无人值守审批里勾选的「以后不再询问」也只对该项目生效。',
+  auto_field_effort: '推理强度',
+  auto_field_result: '结果处理',
+  auto_trigger_webhook: 'Webhook',
+  auto_trigger_both: '定时 + Webhook',
   step_kind_thinking: '思考',
   step_kind_tool: '工具',
   step_kind_subagent: '子智能体',
@@ -934,6 +946,18 @@ export const zh = {
 }
 
 export const en = {
+  auto_modal_create: 'New routine',
+  auto_modal_edit: 'Edit routine',
+  auto_field_name: 'Name',
+  auto_field_prompt: 'Instruction',
+  auto_field_channel: 'Channel ID (webhook trigger)',
+  auto_field_workdir: 'Working directory (optional)',
+  auto_field_project: 'Project',
+  auto_project_hint: 'Sessions created by each run belong to this project; "don\'t ask again" ticked in unattended approvals only applies to it.',
+  auto_field_effort: 'Reasoning effort',
+  auto_field_result: 'Result handling',
+  auto_trigger_webhook: 'Webhook',
+  auto_trigger_both: 'Schedule + Webhook',
   step_kind_thinking: 'Thinking',
   step_kind_tool: 'Tool',
   step_kind_subagent: 'Subagent',
