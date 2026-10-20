@@ -156,10 +156,70 @@ func TestRemove(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 	Remove(p)
-	for _, path := range []string{p.PID, p.Port, p.Token} {
+	for _, path := range []string{p.PID, p.Port} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s 应已删除", path)
 		}
 	}
+	if _, err := os.Stat(p.Token); err != nil {
+		t.Fatalf("令牌文件应在关停后保留以便重启复用: %v", err)
+	}
 	Remove(p) // 幂等
+}
+
+func TestLoadOrCreateToken(t *testing.T) {
+	p := newPaths(t)
+
+	first, reused, err := LoadOrCreateToken(p.Token)
+	if err != nil || reused || !validToken(first) {
+		t.Fatalf("首次应新建: tok=%q reused=%v err=%v", first, reused, err)
+	}
+	if err = Write(p, State{PID: 1, Port: 1234, Token: first}); err != nil {
+		t.Fatal(err)
+	}
+	Remove(p)
+
+	second, reused, err := LoadOrCreateToken(p.Token)
+	if err != nil || !reused || second != first {
+		t.Fatalf("重启应复用: tok=%q reused=%v err=%v", second, reused, err)
+	}
+
+	// 损坏内容 → 重新生成。
+	if err = os.WriteFile(p.Token, []byte("not-a-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if tok, reused, _ := LoadOrCreateToken(p.Token); reused || tok == "not-a-token" || !validToken(tok) {
+		t.Fatalf("损坏令牌不应复用: tok=%q reused=%v", tok, reused)
+	}
+
+	// 权限放宽 → 重新生成（POSIX）。
+	if runtime.GOOS != "windows" {
+		if err = os.WriteFile(p.Token, []byte(first), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Chmod(p.Token, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if tok, reused, _ := LoadOrCreateToken(p.Token); reused || tok == first {
+			t.Fatalf("权限过宽的令牌不应复用: reused=%v", reused)
+		}
+	}
+}
+
+func TestRotateToken(t *testing.T) {
+	p := newPaths(t)
+	tok, _, _ := LoadOrCreateToken(p.Token)
+	if err := Write(p, State{PID: 1, Port: 1234, Token: tok}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateToken(p.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateToken(p.Token); err != nil { // 幂等
+		t.Fatal(err)
+	}
+	next, reused, _ := LoadOrCreateToken(p.Token)
+	if reused || next == tok {
+		t.Fatalf("轮换后应得到新令牌")
+	}
 }
