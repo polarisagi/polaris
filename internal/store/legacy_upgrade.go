@@ -187,6 +187,10 @@ func RepriceLLMCalls(db *sql.DB, nowMs int64) (updated int64, err error) {
 		}
 		models = append(models, m)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return 0, apperr.Wrap(apperr.CodeInternal, "reprice: iterate models", err)
+	}
 	rows.Close()
 	for _, m := range models {
 		p, ok := pricing.Lookup(m)
