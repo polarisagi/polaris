@@ -193,6 +193,8 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | GET | `/v1/agent/tasks/{taskID}` | `handleGetAgentTask` |
 | POST | `/v1/agent/{taskID}/interrupt` | `handleAgentInterrupt` |
 | GET | `/v1/agents` | `pluginHandler.HandleListAgents` |
+| GET | `/v1/approval-rules` | `chatHandler.HandleListApprovalRules` |
+| DELETE | `/v1/approval-rules/{id}` | `chatHandler.HandleDeleteApprovalRule` |
 | POST | `/v1/approvals/` | `handleResolveApproval` |
 | GET | `/v1/approvals/pending` | `handleGetPendingApprovals` |
 | POST | `/v1/audio/speech` | `chatHandler.AudioService.HandleAudioSpeech` |
@@ -343,7 +345,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 172 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 174 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
