@@ -5,7 +5,7 @@
 > **语言**：Go　|　**代码**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:25 不变量速查 / 1:40 默认模型 / 2:46 Provider接口 / 3:52 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:121 Token预算 / 6:187 SemanticCache / 7:209 Fallback / 8:239 363 本地推理local_only / 9:282 416 ModelVersion / 12:297 453 (SOFT)降级 / 10:314 470 凭证池+速率追踪 / 13:330 490 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:25 不变量速查 / 1:40 默认模型 / 2:46 Provider接口 / 3:52 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:121 Token预算 / 6:194 SemanticCache / 7:216 Fallback / 8:246 363 本地推理local_only / 9:289 416 ModelVersion / 12:304 453 (SOFT)降级 / 10:321 470 凭证池+速率追踪 / 13:337 490 依赖 -->
 
 ---
 
@@ -173,6 +173,13 @@ TokenBurnDetector 仅做单流检测；系统级燃烧速率从 M3 `polaris_toke
 
 - **usage 位置因厂商而异**：OpenAI 在 `choices` 为空的尾块；DeepSeek 在 `finish_reason` 块（`choices` 非空、`content:""`）。`adapter/stream.go` 解析器对两种位置统一处理——记录最新 usage，流结束（`[DONE]`/EOF）时若尚未随其它事件发出，则补发**恰好一条**带 `Usage` + `FinishReason` 的事件（此前 finish 块 usage 被丢，`llm_calls` 流式调用 token 恒为 0）。表驱动用例：`stream_usage_test.go`（OpenAI/DeepSeek/tool_calls finish/stop finish/无 usage）。
 - **流尾事件不得被取消竞争吞掉**：OpenAI 兼容适配器（`deepseek.go`/`openai.go`/`ollama.go`）的 relay goroutine 在 `outCh<-ev` 与 `<-ctx.Done()` 两个 case 同时就绪时 Go 随机选择；原实现在 SSE 读完后立即 `cancel()`，尾部事件（含最终 content/tool_calls/usage）有概率被丢，表现为“只有 reasoning 的空输出”。现 `SendStreamRequest` 不再持有 cancel，relay 排空 rawCh 后才 `defer cancel()`。回归：`TestDeepSeekStreamInfer_TailEventsSurviveCancel`（400 帧思考 × 40 次，慢消费者）。
+
+### 5.3-ter 价目单位与按模型取价（2026-10-20，ADR-0118 配套修正）
+
+- **单位统一为 USD / 百万 token**：`ProviderCapabilities.CostPerMTokInput/Output/CacheHit`（原 `CostPer1K*` 字段名误导，且 openai_compat 适配器把 gpt-4o-mini 的每百万价格填进了"每千"字段，造成 1000 倍级误差）。换算收口在 `types.CostUSD`：缓存命中的输入按命中价、其余输入按输入价，`(in-hit)*Input + hit*CacheHit + out*Output` 再除 1e6。
+- **按实际模型取价**：`internal/llm/pricing` 目录按小写最长前缀匹配模型 ID，记账（`usage_recorder`）先查目录、查不到才回退适配器声明的费率。用户常把 DeepSeek 接在通用 `openai_compat` 下，按适配器类型取价会把 DeepSeek 流量按 gpt-4o-mini 计费。
+- **DeepSeek 价目**（取自官方定价页 https://api-docs.deepseek.com/quick_start/pricing，核实于 2026-10-20，取高峰价，宁高勿低以保预算护栏安全）：`deepseek-flash`/`deepseek-v4-flash` 输入 $0.30 / 命中 $0.006 / 输出 $1.20；`deepseek-v4-pro` 输入 $1.32 / 命中 $0.044 / 输出 $3.96（每百万 token）。页面只写 "$"，按 USD 存储。
+- **历史修正**：`llm_calls` 存量记录由 `RepriceLLMCalls` 一次性按目录重算，重算前备份原费用、写完成标记，可逆；启动时幂等执行（`internal/store/legacy_upgrade.go`）。两条真实事故记录（旧值 1.9575 与 2.91 USD）修正后为约 0.0039 与 0.0059 USD。
 
 ### 5.4 trackStreamCost
 

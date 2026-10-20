@@ -173,7 +173,7 @@
 <!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `M13-Interface-Scheduler.md` | L3 接口 | 35K | 见下方 [M13 补充](#m13-补充) |
+| `M13-Interface-Scheduler.md` | L3 接口 | 36K | 见下方 [M13 补充](#m13-补充) |
 | `M04-Agent-Kernel.md` | L1 内核 | 30K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 29K | 状态机 + 全模块阈值（唯一权威） |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
@@ -181,8 +181,8 @@
 | `M11-Policy-Safety.md` | L0 策略 | 23K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
 | `M05-Memory-System.md` | L1 记忆 | 22K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
 | `M13-bis-Extension-Registry.md` | L3 扩展 | 17K | 见下方 [M13-bis 补充](#m13-bis-补充) |
+| `M01-Inference-Runtime.md` | L0 推理 | 15K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 14K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
-| `M01-Inference-Runtime.md` | L0 推理 | 14K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
 | `M10-Knowledge-RAG.md` | L2 知识 | 14K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
 | `M09-Self-Improvement-Engine.md` | L2 自演化 | 13K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
 | `M02-Storage-Fabric.md` | L0 存储 | 13K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |

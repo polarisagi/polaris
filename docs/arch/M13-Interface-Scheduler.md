@@ -3,7 +3,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI + 桌面外壳; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:374 对内调度 / 3:463 MCP / 6:471 (SOFT)降级 / 6-bis:484 已知Bug修复记录 / 7:496 跨模块契约 / 8:513 Web UI 规约 / 8.6:629 834 插件聚合市场DB+流 / 8.7:660 870 自动化中心DB+流+工作流 / 8.8:769 987 电脑操控权限+Preferences / 8.9:785 1027 前端组件规范 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:22 不变量速查 / 1:36 对外接口 / 2:378 对内调度 / 3:467 MCP / 6:475 (SOFT)降级 / 6-bis:488 已知Bug修复记录 / 7:500 跨模块契约 / 8:517 Web UI 规约 / 8.6:633 834 插件聚合市场DB+流 / 8.7:664 870 自动化中心DB+流+工作流 / 8.8:773 987 电脑操控权限+Preferences / 8.9:789 1027 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -80,7 +80,11 @@ CLI 是**薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调�
 | OpenAI 兼容 | `POST /v1/chat/completions` | 第三方客户端接入 |
 
 **SSE 请求**（`POST /v1/agent/stream`）：query(string,req) / session_id / model / temperature(float32) / max_tokens(int)，后四项 opt。
-**SSE 事件**（text/event-stream，`[id: <seq>\n]event: <type>\ndata: <JSON>\n\n`）：`session`（`{session_id,turn_id}`，会话确定后立即推送）| `token` | `tool_call` | `tool_result` | `thinking` | `error` | `complete` | `context_warning` | `status/compacting` | `status/compacted`。
+**SSE 事件**（text/event-stream，`[id: <seq>\n]event: <type>\ndata: <JSON>\n\n`）：`session`（`{session_id,turn_id}`，会话确定后立即推送）| `token` | `tool_call` | `tool_result` | `thinking` | `error` | `complete` | `context_warning` | `status/compacting` | `status/compacted` | `step`（结构化步骤，ADR-0118）。
+**步骤事件 `step`（ADR-0118）**：内核流事件（思考、工具调用/结果、审批、降级提示、LLM 调用、子智能体）由 `internal/gateway/session/steps.go` 的 `stepRecorder` 转为统一的 `step` 事件，与原 `token/tool_call/...` 事件并行推送（旧事件保留，兼容旧客户端）。载荷：`{id, parent_id?, seq, kind, phase, title, tool?, args_preview?, result_preview?, status, started_at, duration_ms, tokens?{in,out,cache_hit}, content?, delta?}（`content` 仅 thinking 的 end 事件携带，`delta` 仅 thinking 的 update 事件携带）`。`kind` ∈ `thinking|tool|subagent|approval|retry|notice|llm`；`phase` ∈ `start|update|end`，同一 `id` 的后到事件覆盖先到者；`status` ∈ `running|ok|error|denied|cancelled`。预览有界（参数 300 字、结果 600 字，按 rune 截断）；思考增量每 150ms 合并推送一次。步骤只给人看，**从不写入模型上下文，不增加 token**。事件进入 TurnHub 缓冲，断线续传可回放。
+**`complete` 事件新增字段**：`turn_id`（`turn_<hex>`，与 `session` 事件一致）；`usage = {input, cache_hit, output, cost_usd, llm_calls, duration_ms}`（本回合全部 LLM 调用的聚合，`cost_usd` 为 USD）；`steps = {steps, omitted?, tools, searches, fetches, duration_ms, tokens}` 摘要。同一份 `usage` 与 `turn_id` 写入 assistant 消息（`chat_messages.turn_id/usage`），`GET /v1/sessions/{id}` 的消息体带 `turn_id`、`usage`。
+**用量与步骤接口**：`GET /v1/sessions/{id}/usage`（`SessionUsageView`：累计 input/cache_hit/output/reasoning/cost_usd/calls、`cache_hit_ratio`、`last_input`/`context_window`/`context_pct`、`by_turn[]`）；`GET /v1/sessions/{id}/turns/{turnID}/steps`（懒加载落库步骤，含 seq=0 摘要行，`omitted` 为被丢弃的中间步骤数）；`GET /v1/status` 增 `usage`（当前会话，`?session_id=`；无会话为"今日"累计）、`usage_scope` 与 `fx_cny_per_usd`（展示用折算常量，估算值，非实时汇率）。后端所有金额一律 USD，币种换算只在前端 `fmt` store 做（设置页可选 自动/人民币/美元，仅存浏览器）。
+**步骤落库**：表 `chat_turn_steps(session_id, turn_id, seq, ...)`，随会话删除级联。有界保留：每回合头部 ≤200 步/160KB + 尾部环 ≤80 步/64KB，中间丢弃只计数（摘要 `omitted`），seq=0 摘要行恒存在；单个思考步骤落库截断 8KB；即每回合最多落库约 280 步 / 224KB。保留期 `m13_interface.turn_steps.retention_days`（默认 0 = 永久），由 6 小时清理任务裁剪。
 **回合与连接解耦（ADR-0116）**：回合 ctx 由 `session.TurnHub` 持有，连接只是订阅者——断开仅退订，**不再中止回合**（推翻原「断连即中止」）。`GET /v1/sessions/{id}/stream?after=<seq>` 回放缓冲事件后接实时（无回合 → 204；回合结束后保留 5 分钟）；`POST /v1/sessions/{id}/abort` 显式中止；同会话已有运行中回合时 `POST /v1/agent/stream` 返回 `409 {"code":"session_busy"}`；`GET /v1/sessions`、`GET /v1/sessions/{id}` 带 `running`；`GET /v1/sessions` 支持 `?limit=`（1~200）。缓冲有界（4096 条 / 4MB，越界先合并相邻 token）；回合未产出终止事件时补 `complete{aborted:true}`；空闲每 15s 推 `: ping` 心跳。
 - `context_warning`：上下文使用率 ≥ warnPct 触发；payload `{usage_pct, thrashing}`（thrashing=true → 前端红色 Banner 并隐藏"立即压缩"，见 §1.2.6）。
 - `status/compacting` / `status/compacted`：压缩进行中（蓝色 Indicator）/ 完成（末尾消息标分隔线）。
@@ -318,6 +322,8 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | PUT | `/v1/sessions/{sessionID}/project` | `chatHandler.HandleMoveSession` |
 | POST | `/v1/sessions/{sessionID}/recap` | `chatHandler.HandleSessionRecap` |
 | GET | `/v1/sessions/{sessionID}/stream` | `chatHandler.HandleSessionStream` |
+| GET | `/v1/sessions/{sessionID}/turns/{turnID}/steps` | `chatHandler.HandleGetTurnSteps` |
+| GET | `/v1/sessions/{sessionID}/usage` | `sysadminHandler.HandleGetSessionUsage` |
 | GET | `/v1/skills` | `sysadminHandler.HandleListSkills` |
 | GET | `/v1/skills/commands` | `chatHandler.HandleListSkillCommands` |
 | POST | `/v1/skills/create` | `handleSkillCreate` |
@@ -345,7 +351,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 174 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 176 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
