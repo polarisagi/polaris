@@ -318,7 +318,9 @@ func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *provid
 		return
 	}
 	caps := entry.provider.Capabilities()
-	costUSD := pricing.CostFor(resp.Model, caps, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
+	// 按调用开始时刻计价（分时段）：此处只有耗时，由结束时刻回推。
+	callStart := time.Now().Add(-time.Duration(ms * float64(time.Millisecond)))
+	costUSD := pricing.CostFor(resp.Model, caps, callStart, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
 	trace.RecordLLMCall(ctx,
 		entry.name, resp.Model, "success", ms,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,

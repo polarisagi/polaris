@@ -213,7 +213,7 @@ func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferReque
 
 func (ir *InferenceRouter) recordFailoverMetrics(ctx context.Context, chosen *providerEntry, resp *types.ProviderResponse, start time.Time) {
 	caps := chosen.provider.Capabilities()
-	costUSD := pricing.CostFor(resp.Model, caps, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
+	costUSD := pricing.CostFor(resp.Model, caps, start, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
 	ms := float64(time.Since(start).Milliseconds())
 	trace.RecordLLMCall(ctx,
 		chosen.name, resp.Model, "failover", ms,

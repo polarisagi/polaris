@@ -2,10 +2,12 @@ package store
 
 import (
 	"database/sql"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 )
@@ -83,6 +85,9 @@ func TestUpgradeLegacySchema_MatchesFreshSchema(t *testing.T) {
 	}
 }
 
+// peakMs 2026-10-20（周二）02:00 UTC，DeepSeek 高峰时段内。
+var peakMs = time.Date(2026, 10, 20, 2, 0, 0, 0, time.UTC).UnixMilli()
+
 func seedCalls(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// 两条真实事故记录 + 一条目录外模型。
@@ -96,7 +101,7 @@ func seedCalls(t *testing.T, db *sql.DB) {
 		{"c", "some-unknown-model", 1000, 0, 100, 0.5},
 	} {
 		if _, err := db.Exec(`INSERT INTO llm_calls(id, created_at, provider, model_id, status, input_tokens, cache_hit_tokens, output_tokens, cost_usd)
-			VALUES(?, 1, 'p', ?, 'ok', ?, ?, ?, ?)`, r.id, r.model, r.in, r.hit, r.out, r.cost); err != nil {
+			VALUES(?, ?, 'p', ?, 'ok', ?, ?, ?, ?)`, r.id, peakMs, r.model, r.in, r.hit, r.out, r.cost); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -154,5 +159,58 @@ func TestRepriceLLMCalls_RepricesIdempotentlyAndReverts(t *testing.T) {
 	// 还原后可再次重算（标记已清）。
 	if n, _ := RepriceLLMCalls(s.db, 789); n != 2 {
 		t.Fatalf("还原后再重算 n=%d", n)
+	}
+}
+
+// 历史重算按每行 created_at 套用时段价：同样的 token，高峰 / 工作日非高峰 / 周末分别是 1x / 0.5x / 0.5x。
+func TestRepriceLLMCalls_UsesPerRowPeakWindow(t *testing.T) {
+	s, err := OpenSQLite(filepath.Join(t.TempDir(), "p.db"), schema.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := func(day, hour int) int64 { return time.Date(2026, 10, day, hour, 0, 0, 0, time.UTC).UnixMilli() }
+	for _, r := range []struct {
+		id string
+		ms int64
+	}{
+		{"peak", at(20, 2)},          // 周二 02:00 高峰
+		{"weekday-off", at(20, 5)},   // 周二 05:00 非高峰
+		{"weekend", at(24, 2)},       // 周六 02:00 周末
+		{"boundary-end", at(20, 10)}, // 周二 10:00 窗口结束，非高峰
+	} {
+		if _, err := s.db.Exec(`INSERT INTO llm_calls(id, created_at, provider, model_id, status, input_tokens, cache_hit_tokens, output_tokens, cost_usd)
+			VALUES(?, ?, 'p', 'deepseek-flash', 'ok', 24612, 14976, 2444, 9)`, r.id, r.ms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec("DELETE FROM sys_config WHERE key = ?", repriceMarkerKey); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := RepriceLLMCalls(s.db, 1); err != nil || n != 4 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	full := (9636*0.30 + 14976*0.006 + 2444*1.20) / 1e6
+	for id, want := range map[string]float64{"peak": full, "weekday-off": full / 2, "weekend": full / 2, "boundary-end": full / 2} {
+		if got := costOf(t, s.db, id); math.Abs(got-want) > 1e-9 {
+			t.Errorf("%s: got %v want %v", id, got, want)
+		}
+	}
+	// v1 标记存在不应阻止 v2 重算（v1 不分时段）。
+	if _, err := s.db.Exec("DELETE FROM sys_config WHERE key = ?", repriceMarkerKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("INSERT INTO sys_config(key, value) VALUES(?, 'done')", repriceMarkerKeyV1); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := RepriceLLMCalls(s.db, 2); err != nil || n != 4 {
+		t.Fatalf("v1 标记不应跳过 v2: n=%d err=%v", n, err)
+	}
+	// 还原后回到最早的原值 9，且两个标记都被清。
+	if r, err := RevertLLMCostReprice(s.db); err != nil || r != 4 {
+		t.Fatalf("revert r=%d err=%v", r, err)
+	}
+	if got := costOf(t, s.db, "weekend"); got != 9 {
+		t.Errorf("还原后 weekend=%v", got)
 	}
 }
