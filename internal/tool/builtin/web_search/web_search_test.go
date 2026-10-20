@@ -3,6 +3,7 @@ package web_search
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -315,5 +316,96 @@ func TestWebSearch_HostLimiter(t *testing.T) {
 
 	if atomic.LoadInt32(&limiterCalls) == 0 {
 		t.Errorf("expected limiter interval provider to be called, got 0")
+	}
+}
+
+// C：DDG 返回 202（反爬/限流）→ 短退避后重试 1 次；第二次 200 则成功。
+func TestDDG_Status202RetriesOnce(t *testing.T) {
+	fixtureData := readDDGFixture(t)
+	var hits atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Write(fixtureData)
+	}))
+	defer ts.Close()
+
+	d := &ddg{endpoint: ts.URL, retryDelay: time.Millisecond}
+	res, err := d.search(context.Background(), ts.Client(), "golang", 5)
+	if err != nil || len(res) == 0 {
+		t.Fatalf("202 后重试应成功: res=%d err=%v", len(res), err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("应恰好请求 2 次，实际 %d", hits.Load())
+	}
+}
+
+// 持续 202：只重试 1 次（共 2 次请求），返回可识别的限流错误，而非空结果或无关错误。
+func TestDDG_Status202PersistentIsRateLimited(t *testing.T) {
+	var hits atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ts.Close()
+
+	d := &ddg{endpoint: ts.URL, retryDelay: time.Millisecond}
+	_, err := d.search(context.Background(), ts.Client(), "golang", 5)
+	if !errors.Is(err, errRateLimited) {
+		t.Fatalf("应返回限流错误，got %v", err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("应恰好请求 2 次，实际 %d", hits.Load())
+	}
+}
+
+type stubEngine struct {
+	res []result
+	err error
+	n   int
+}
+
+func (s *stubEngine) search(context.Context, *http.Client, string, int) ([]result, error) {
+	s.n++
+	return s.res, s.err
+}
+
+// 主引擎限流且配置了其他引擎 → 降级成功并报告实际引擎名。
+func TestSearchWithFallback_DegradesToOtherEngine(t *testing.T) {
+	primary := &stubEngine{err: errRateLimited}
+	backup := &stubEngine{res: []result{{Title: "t", URL: "https://x"}}}
+	res, name, err := searchWithFallback(context.Background(), nil,
+		namedEngine{"duckduckgo", primary}, []namedEngine{{"brave", backup}}, "q", 5)
+	if err != nil || name != "brave" || len(res) != 1 {
+		t.Fatalf("应降级到 brave: res=%v name=%q err=%v", res, name, err)
+	}
+}
+
+// 全部失败 → 结构化错误，列出各引擎原因；无降级配置时只含主引擎。
+func TestSearchWithFallback_AllFailStructuredError(t *testing.T) {
+	primary := &stubEngine{err: errRateLimited}
+	_, _, err := searchWithFallback(context.Background(), nil, namedEngine{"duckduckgo", primary}, nil, "q", 5)
+	if err == nil || !strings.Contains(err.Error(), "duckduckgo") || !strings.Contains(err.Error(), "web_search 失败") {
+		t.Fatalf("应返回含引擎原因的结构化错误: %v", err)
+	}
+	if !apperr.IsCode(err, apperr.CodeResourceExhausted) {
+		t.Fatalf("限流应映射 ResourceExhausted: %v", err)
+	}
+}
+
+// fallbackEngines 只启用配置里已有凭据的引擎，不凭空启用。
+func TestFallbackEngines_OnlyConfigured(t *testing.T) {
+	if got := fallbackEngines(&config.Config{}, "duckduckgo"); len(got) != 0 {
+		t.Fatalf("无 brave key 时 ddg 无降级目标: %v", got)
+	}
+	cfg := &config.Config{}
+	cfg.Agent.Skill.WebSearchAPIKey = "k"
+	if got := fallbackEngines(cfg, "duckduckgo"); len(got) != 1 || got[0].name != "brave" {
+		t.Fatalf("有 brave key 时 ddg 应降级 brave: %v", got)
+	}
+	if got := fallbackEngines(cfg, "brave"); len(got) != 1 || got[0].name != "duckduckgo" {
+		t.Fatalf("brave 应降级 ddg: %v", got)
 	}
 }

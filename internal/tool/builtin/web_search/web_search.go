@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -35,6 +36,19 @@ type engine interface {
 
 type ddg struct {
 	endpoint string // 为空时使用默认 https://html.duckduckgo.com/html/?q=
+	// retryDelay 遇到限流（HTTP 202/429）后的退避时长；零值用 defaultRateLimitBackoff。
+	retryDelay time.Duration
+}
+
+// defaultRateLimitBackoff DDG 限流后的短退避：202 是其反爬响应，立即重试几乎必然再次命中。
+const defaultRateLimitBackoff = 2 * time.Second
+
+// errRateLimited 标记「被搜索引擎限流」，供上层决定是否降级到其他引擎。
+var errRateLimited = apperr.NewSentinel(apperr.CodeResourceExhausted, "web_search: rate limited")
+
+// isRateLimitStatus DDG 以 202（反爬挑战页）、429 表示限流；二者都不含搜索结果。
+func isRateLimitStatus(code int) bool {
+	return code == http.StatusAccepted || code == http.StatusTooManyRequests
 }
 
 type searxng struct {
@@ -78,6 +92,51 @@ func pickEngine(cfg *config.Config) (engine, string) {
 		slog.Warn("web_search: unknown search engine, falling back to duckduckgo", "engine", engName)
 		return &ddg{endpoint: cfg.Agent.Skill.WebSearchBaseURL}, "duckduckgo"
 	}
+}
+
+type namedEngine struct {
+	name string
+	eng  engine
+}
+
+// fallbackEngines 返回主引擎失败后可降级的其他引擎：仅包含「配置里已具备凭据」的引擎，
+// 绝不凭空启用用户没配置的服务。DDG 为兜底免费引擎，故任何主引擎失败后都可退到 DDG。
+func fallbackEngines(cfg *config.Config, primary string) []namedEngine {
+	var out []namedEngine
+	if cfg != nil {
+		if key := strings.TrimSpace(cfg.Agent.Skill.WebSearchAPIKey); key != "" && primary != "brave" {
+			out = append(out, namedEngine{name: "brave", eng: &brave{key: key}})
+		}
+	}
+	if primary != "duckduckgo" {
+		out = append(out, namedEngine{name: "duckduckgo", eng: &ddg{}})
+	}
+	return out
+}
+
+// searchWithFallback 先用主引擎，失败（含限流）后依次尝试 fallbacks；全部失败返回带各引擎原因的结构化错误。
+func searchWithFallback(ctx context.Context, c *http.Client, primary namedEngine, fallbacks []namedEngine, q string, n int) ([]result, string, error) {
+	results, err := primary.eng.search(ctx, c, q, n)
+	if err == nil {
+		return results, primary.name, nil
+	}
+	reasons := []string{primary.name + ": " + err.Error()}
+	for _, fb := range fallbacks {
+		if ctx.Err() != nil {
+			break
+		}
+		slog.Warn("web_search: engine failed, falling back", "from", primary.name, "to", fb.name, "err", err)
+		r, ferr := fb.eng.search(ctx, c, q, n)
+		if ferr == nil {
+			return r, fb.name, nil
+		}
+		reasons = append(reasons, fb.name+": "+ferr.Error())
+	}
+	code := apperr.CodeInternal
+	if errors.Is(err, errRateLimited) {
+		code = apperr.CodeResourceExhausted
+	}
+	return nil, "", apperr.New(code, "web_search 失败（可稍后重试，或换用其他信息来源）："+strings.Join(reasons, "；"))
 }
 
 // limitingTransport 在实际发起 HTTP 请求前对目标 Host 施加速率保护，防频繁击穿。
@@ -156,7 +215,8 @@ func MakeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer, limiters ..
 		}
 
 		eng, engineName := pickEngine(cfg)
-		results, err := eng.search(ctx, client, args.Query, args.MaxResults)
+		results, engineName, err := searchWithFallback(ctx, client, namedEngine{name: engineName, eng: eng},
+			fallbackEngines(cfg, engineName), args.Query, args.MaxResults)
 		if err != nil {
 			return nil, err
 		}
@@ -187,6 +247,29 @@ func (d *ddg) search(ctx context.Context, c *http.Client, q string, n int) ([]re
 		target = target + "?q=" + url.QueryEscape(q)
 	}
 
+	body, err := d.fetch(ctx, c, target)
+	if errors.Is(err, errRateLimited) {
+		// 202/429 是限流而非结果页：短退避后重试 1 次。
+		delay := d.retryDelay
+		if delay <= 0 {
+			delay = defaultRateLimitBackoff
+		}
+		slog.Warn("web_search: ddg rate limited, retrying once", "delay", delay)
+		select {
+		case <-ctx.Done():
+			return nil, apperr.Wrap(apperr.CodeCancelled, "web_search: ddg retry canceled", ctx.Err())
+		case <-time.After(delay):
+		}
+		body, err = d.fetch(ctx, c, target)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseDDGHTML(body, n)
+}
+
+// fetch 单次抓取 DDG 页面；限流状态码映射为 errRateLimited。
+func (d *ddg) fetch(ctx context.Context, c *http.Client, target string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInvalidInput, "web_search: ddg bad request", err)
@@ -199,6 +282,9 @@ func (d *ddg) search(ctx context.Context, c *http.Client, q string, n int) ([]re
 	}
 	defer resp.Body.Close()
 
+	if isRateLimitStatus(resp.StatusCode) {
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted, fmt.Sprintf("web_search: ddg returned status %d (rate limited)", resp.StatusCode), errRateLimited)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("web_search: ddg returned status %d", resp.StatusCode))
 	}
@@ -207,8 +293,7 @@ func (d *ddg) search(ctx context.Context, c *http.Client, q string, n int) ([]re
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "web_search: ddg read body failed", err)
 	}
-
-	return parseDDGHTML(body, n)
+	return body, nil
 }
 
 func parseDDGHTML(body []byte, n int) ([]result, error) {
