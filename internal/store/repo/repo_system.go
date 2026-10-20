@@ -116,17 +116,8 @@ func (r *SQLiteSystemRepository) GetPermissionMode(ctx context.Context) (types.P
 		return types.ModeDefault, apperr.Wrap(apperr.CodeInternal, "get permission_mode", err)
 	}
 	if val == "" {
-		legacy, lerr := r.GetPreference(ctx, types.LegacyPrefComputerUseMode)
-		if lerr != nil {
-			return types.ModeDefault, apperr.Wrap(apperr.CodeInternal, "get legacy computer_use_mode", lerr)
-		}
-		if legacy != "" {
-			val = legacy
-			if _, ok := types.ParsePermissionMode(legacy); ok {
-				if uerr := r.UpsertPreference(ctx, types.PrefPermissionMode, legacy); uerr != nil {
-					slog.WarnContext(ctx, "permission_mode: migrate legacy computer_use_mode failed", "err", uerr)
-				}
-			}
+		if val, err = r.migrateLegacyPermissionMode(ctx); err != nil {
+			return types.ModeDefault, err
 		}
 	}
 	if val == "" {
@@ -138,6 +129,20 @@ func (r *SQLiteSystemRepository) GetPermissionMode(ctx context.Context) (types.P
 		return types.ModeDefault, nil
 	}
 	return m, nil
+}
+
+// migrateLegacyPermissionMode 读取旧键 computer_use_mode；值合法时回写到新键，返回旧值（可能为空）。
+func (r *SQLiteSystemRepository) migrateLegacyPermissionMode(ctx context.Context) (string, error) {
+	legacy, err := r.GetPreference(ctx, types.LegacyPrefComputerUseMode)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "get legacy computer_use_mode", err)
+	}
+	if _, ok := types.ParsePermissionMode(legacy); legacy != "" && ok {
+		if uerr := r.UpsertPreference(ctx, types.PrefPermissionMode, legacy); uerr != nil {
+			slog.WarnContext(ctx, "permission_mode: migrate legacy computer_use_mode failed", "err", uerr)
+		}
+	}
+	return legacy, nil
 }
 
 func (r *SQLiteSystemRepository) SetPermissionMode(ctx context.Context, mode types.PermissionMode) error {

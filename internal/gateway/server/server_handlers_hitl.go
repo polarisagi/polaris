@@ -114,14 +114,18 @@ func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action st
 // interruptDebounceWindow 单 task 中断防抖窗口（M13 §1.2.5）。
 const interruptDebounceWindow = 30 * time.Second
 
+// authContextOrLocalWebUI D-1: 本地 WebUI 访问在零认证配置下 authCtx 可能为 nil，
+// 直接访问字段会 panic（GR-9.1-005），此时按未认证的本地 WebUI 处理。
+func authContextOrLocalWebUI(r *http.Request) *authcontext.AuthContext {
+	if authCtx := authcontext.FromContext(r.Context()); authCtx != nil {
+		return authCtx
+	}
+	return &authcontext.AuthContext{ClientType: authcontext.ClientTypeLocalWebUI}
+}
+
 func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	clientIP := extractIP(r)
-	authCtx := authcontext.FromContext(r.Context())
-	if authCtx == nil {
-		// D-1: 本地 WebUI 访问在零认证配置下 authCtx 可能为 nil，
-		// 直接访问下列字段会 panic（GR-9.1-005）
-		authCtx = &authcontext.AuthContext{ClientType: authcontext.ClientTypeLocalWebUI}
-	}
+	authCtx := authContextOrLocalWebUI(r)
 	clientType := authCtx.ClientType
 
 	// GR-9.1-001：限流键与全局中间件同一命名空间（clientIP:clientType，M13 §1.5）；
@@ -164,6 +168,8 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		Reason:   req.Reason,
 		Action:   action,
 		Redirect: req.Redirect,
+		// 信任来自已认证的本地可信客户端，而非请求体自报。
+		OwnerTrusted: authCtx.Authenticated && authCtx.ClientType.IsLocalTrusted(),
 	}
 	s.dispatchInterruptRequest(r.Context(), taskID, req.Action, interruptReq)
 	if s.hooks != nil {
@@ -222,6 +228,8 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action  string `json:"action"` // "approve" or "deny"
 		Comment string `json:"comment"`
+		// Remember 对应审批卡的“以后不再询问”勾选框；仅在批准时有意义。
+		Remember bool `json:"remember"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
@@ -235,6 +243,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 		Approved:  req.Action == "approve",
 		Reason:    req.Comment,
 		UserID:    authCtx.UserID, // M13: 接入鉴权上下文
+		Remember:  req.Remember && req.Action == "approve",
 	}
 
 	err := s.hitlGateway.Respond(r.Context(), approvalID, resp)

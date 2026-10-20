@@ -253,6 +253,9 @@ InterruptRequest struct {
 	Reason   string // 中断原因（供 Audit 记录）
 	Action   InterruptAction
 	Redirect string // Action=InterruptRedirect 时的新意图文本
+	// OwnerTrusted 由 HTTP 边界依据已认证的本地可信客户端设置（不是请求体自报）；
+	// 为真时 Redirect 文本按 owner 本人输入（TaintLow）处理，否则 TaintHigh（ADR-0007 修订）。
+	OwnerTrusted bool
 }
 
 type AgentStreamEventType string
@@ -306,10 +309,24 @@ type AgentStreamEvent struct {
 	ParentID       string               `json:"parent_id,omitempty"`        // 父 Agent ID（ADR-0115 WP4 树状展示）
 	IsNested       bool                 `json:"is_nested,omitempty"`        // 是否为子 Agent 嵌套事件
 	DeadlineNs     int64                `json:"deadline_ns,omitempty"`      // 仅 AgentStreamEventApproval：审批截止（绝对 Unix 纳秒）
+	// 以下仅 AgentStreamEventApproval：询问理由、是否硬限制、勾选框单行说明、本轮全部待审项。
+	Reason        string         `json:"reason,omitempty"`
+	HardLimit     bool           `json:"hard_limit,omitempty"`
+	RememberLabel string         `json:"remember_label,omitempty"`
+	Items         []ApprovalItem `json:"items,omitempty"`
 	// UI 仅 Type==AgentStreamEventToolResult 且该工具关联 MCP Apps UI 视图时非空
 	// （M8f-1）。session 编排层据此额外发一条 KindStatus "tool_ui" 事件并落库
 	// chat_app_views，不影响本事件本身承载的模型可见文本（Content 字段不变）。
 	UI *ToolUIRef `json:"ui,omitempty"`
+}
+
+// ApprovalItem 是批量审批卡中的一项待审工具调用。
+type ApprovalItem struct {
+	Tool          string `json:"tool"`
+	Input         string `json:"input"`
+	Reason        string `json:"reason"`
+	HardLimit     bool   `json:"hard_limit,omitempty"`
+	RememberLabel string `json:"remember_label,omitempty"`
 }
 
 // ToolUIRef 描述一次 MCP 工具调用关联的 MCP Apps UI 视图（io.modelcontextprotocol/ui，

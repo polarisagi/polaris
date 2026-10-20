@@ -119,6 +119,10 @@ type Request struct {
 	// medium/high），后端未消费。两字段随 wire 协议保留。
 	RunID           string
 	ReasoningEffort string
+	// OwnerTrusted 由 HTTP 边界依据已认证的本地可信客户端（web、desktop、cli）设置，
+	// 表示输入出自机器主人本人而非外部来源。仅在 Channel 属于本地客户端时生效
+	// （见 inputTaintLevel），外部渠道即使被错误置位也按 TaintHigh 处理（ADR-0007 修订）。
+	OwnerTrusted bool
 	// LoopCompletion 循环完成判定模式（"auto" | "explicit"）；为空时由调用方/Channel决定（R4-04）。
 	LoopCompletion string
 }

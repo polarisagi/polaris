@@ -24,7 +24,7 @@ func (c *cc) argsStayInWorkspace(args []string) bool {
 		if i := strings.Index(a, "="); strings.HasPrefix(a, "-") && i > 0 {
 			p = a[i+1:] // --out=/x
 		}
-		if !(strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.Contains(p, "..")) {
+		if !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "~") && !strings.Contains(p, "..") {
 			continue
 		}
 		if c.w.pathState(p, false) != pathInside {

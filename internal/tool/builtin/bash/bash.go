@@ -221,6 +221,11 @@ func evaluateBashRisk(ctx context.Context, cmd string, pol policy.Policy, riskCl
 		return verdict, apperr.New(apperr.CodeForbidden,
 			fmt.Sprintf("bash: command denied: %s", verdict.Reason))
 	case classifier.RiskHITL:
+		// 统一权限判定（ADR-0117）已放行或经用户确认这次调用：不再重复询问；上面的 RiskDeny 不受影响。
+		if protocol.IsPreApproved(ctx) {
+			slog.Info("bash: risky command pre-approved by permission decision", "cmd", cmd, "reason", verdict.Reason)
+			return verdict, nil
+		}
 		// full 档：自动放行 + 记录审计日志（ADR-0115 WP1 行为矩阵 / V9 HE-1）
 		if pol.HITLAutoApprove {
 			slog.Warn("bash: HITL auto-approved (full profile)",

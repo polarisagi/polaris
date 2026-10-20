@@ -261,6 +261,16 @@ func isConcurrencySafe(tool types.Tool) bool {
 // Steer 将用户在回合运行中发送的插话压入插话队列，并在下一轮边界注入。
 // 若回合已结束或正在收尾，返回 false（R2-12）。
 func (a *Agent) Steer(text string) bool {
+	return a.steer(text, types.TaintHigh)
+}
+
+// SteerOwner 与 Steer 相同，但插话出自已认证的本地 owner 本人，按 TaintLow 入队
+// （ADR-0007 修订）。调用方（网关）负责在 HTTP 边界判定 owner 身份。
+func (a *Agent) SteerOwner(text string) bool {
+	return a.steer(text, types.TaintLow)
+}
+
+func (a *Agent) steer(text string, level types.TaintLevel) bool {
 	if text == "" {
 		return false
 	}
@@ -280,7 +290,7 @@ func (a *Agent) Steer(text string) bool {
 		a.sCtx.Mu.Unlock()
 		return false
 	}
-	ts := taint.NewTaintedString(text, taint.TaintSource{Module: "session", OriginTaintLevel: types.TaintHigh}, "steer")
+	ts := taint.NewTaintedString(text, taint.TaintSource{Module: "session", OriginTaintLevel: level}, "steer")
 	a.sCtx.LoopSteerQueue = append(a.sCtx.LoopSteerQueue, ts)
 	a.sCtx.Mu.Unlock()
 

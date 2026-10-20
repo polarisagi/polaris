@@ -293,6 +293,10 @@ func (g *GatewayImpl) SetTrustScorer(s *TrustScorer) {
 }
 
 func (g *GatewayImpl) resolveTimeoutAction(p types.HITLPrompt) string {
+	// 统一权限矩阵的审批：无人应答绝不等于同意，任何权限模式下超时都拒绝（ADR-0117）。
+	if p.CheckpointType == types.CheckpointToolApproval {
+		return "auto_deny"
+	}
 	// TaintLevel >= TaintMedium(2) 时超时一律拒绝，禁止 auto_approve（M13 §2.4）。
 	// 此地板不受下方权限模式判断影响——防止被污染/被提示注入的 Agent 拿用户的
 	// 设备操控权限设置当挡箭牌，绕过对外部不可信内容的强制人工复核。

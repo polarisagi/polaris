@@ -31,18 +31,22 @@ func (c *cc) sendsData() bool {
 		"--form-string", "--upload-file", "--json", "--post-data", "--post-file", "--body-data", "--body-file") {
 		return true
 	}
-	for i, a := range c.args {
-		if (a == "-X" || a == "--request" || a == "--method") && i+1 < len(c.args) && !strings.EqualFold(c.args[i+1], "GET") {
+	return nonGetMethod(c.args)
+}
+
+// nonGetMethod 判断参数里是否显式指定了非 GET 的请求方法（-X/--request/--method 各种写法）。
+func nonGetMethod(args []string) bool {
+	for i, a := range args {
+		if (a == "-X" || a == "--request" || a == "--method") && i+1 < len(args) && !strings.EqualFold(args[i+1], "GET") {
 			return true
 		}
 		if strings.HasPrefix(a, "-X") && len(a) > 2 && !strings.EqualFold(a[2:], "GET") {
 			return true
 		}
-		if m, ok := strings.CutPrefix(a, "--request="); ok && !strings.EqualFold(m, "GET") {
-			return true
-		}
-		if m, ok := strings.CutPrefix(a, "--method="); ok && !strings.EqualFold(m, "GET") {
-			return true
+		for _, pre := range []string{"--request=", "--method="} {
+			if m, ok := strings.CutPrefix(a, pre); ok && !strings.EqualFold(m, "GET") {
+				return true
+			}
 		}
 	}
 	return false

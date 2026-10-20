@@ -81,7 +81,7 @@ func (o *orchestrator) continueOnStopHooks(
 		agentCtrl.SetConversationHistory(history)
 		slog.Info("session: Stop hook requested continuation", "session", sessionID, "round", i+1)
 		next, inferErr, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
-			"<stop-hook>\n"+v.Reason+"\n</stop-hook>")
+			"<stop-hook>\n"+v.Reason+"\n</stop-hook>", types.TaintHigh) // hook 文本不是 owner 的输入
 		allViewIDs = append(allViewIDs, viewIDs...)
 		if aborted || inferErr != "" || next == "" {
 			return next, inferErr, aborted, allViewIDs

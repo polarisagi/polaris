@@ -99,18 +99,23 @@ func gitReadOnly(sub string, rest []string) bool {
 	switch sub {
 	case "branch":
 		return gitBranchReadOnly(rest)
-	case "remote":
-		s, _ := firstNonFlag(rest)
-		return s == "" || s == "show" || s == "get-url"
 	case "tag":
 		return len(positionals(rest)) == 0 && !hasShort(rest, 'd') && !hasShort(rest, 'a') && !hasShort(rest, 's') && !hasShort(rest, 'f')
 	case "config":
 		return hasLong(rest, "--get", "--get-all", "--get-regexp", "--list") || hasShort(rest, 'l')
+	}
+	return gitSubActionReadOnly(sub, rest)
+}
+
+// gitSubActionReadOnly 处理"git <sub> <action>"形态：只读动作白名单，其余一律非只读。
+func gitSubActionReadOnly(sub string, rest []string) bool {
+	s, _ := firstNonFlag(rest)
+	switch sub {
+	case "remote":
+		return s == "" || s == "show" || s == "get-url"
 	case "stash":
-		s, _ := firstNonFlag(rest)
 		return s == "list" || s == "show"
 	case "worktree", "submodule":
-		s, _ := firstNonFlag(rest)
 		return s == "list" || s == "status"
 	}
 	return false

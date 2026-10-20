@@ -106,6 +106,7 @@ func (a *Agent) Interrupt(req types.InterruptRequest) {
 	case types.InterruptRedirect:
 		// 将重定向意图字符串投递到 channel，由主循环在单线程内安全写入 sCtx.RawIntentTS。
 		if req.Redirect != "" {
+			a.pendingRedirectOwner.Store(req.OwnerTrusted)
 			select {
 			case a.pendingRedirectCh <- req.Redirect:
 			default:

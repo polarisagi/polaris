@@ -137,8 +137,9 @@ func (c *cc) writePaths(paths []string) verdict {
 }
 
 // SegmentPrefix 取一段命令用于"记住授权"的最窄前缀词：
-// 多子命令程序取"程序 + 子命令"（npm/pnpm/yarn run 再带脚本名），其余取整段词（超过 4 个词截前 3 个）。
-// 危险段取整段词精确匹配，避免一条放行规则覆盖同前缀下的其他危险变体。
+//   - 多子命令程序取"程序 + 子命令"（npm/pnpm/yarn run 再带脚本名）；
+//   - 其余非危险命令取第一个选项（-x/--x）之前的词，至多 3 个词（至少程序名本身）；
+//   - 危险段取整段词精确匹配，避免一条放行规则覆盖同前缀下的其他危险变体。
 func SegmentPrefix(words []string, class CmdClass) []string {
 	if len(words) == 0 {
 		return nil
@@ -152,10 +153,14 @@ func SegmentPrefix(words []string, class CmdClass) []string {
 	if class < CmdDangerous && subcommandPrograms()[prog] {
 		return subcommandPrefix(words)
 	}
-	if class >= CmdDangerous || len(words) <= 4 {
+	if class >= CmdDangerous {
 		return append([]string(nil), words...)
 	}
-	return append([]string(nil), words[:3]...)
+	end := 1
+	for end < len(words) && end < 3 && !strings.HasPrefix(words[end], "-") {
+		end++
+	}
+	return append([]string(nil), words[:end]...)
 }
 
 func subcommandPrograms() map[string]bool {

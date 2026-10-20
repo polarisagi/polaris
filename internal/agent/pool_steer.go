@@ -6,6 +6,15 @@ import "github.com/polarisagi/polaris/pkg/types"
 // 若会话存在且 Agent 处于 AgentStateLoop 或 AgentStateLoopExec 态，则直接入队而无需占用新 Slot。
 // 若回合已结束或正在收尾，返回 false，由网关按普通新回合处理（R2-12）。
 func (p *Pool) TrySteer(sessionID string, text string) bool {
+	return p.trySteer(sessionID, text, false)
+}
+
+// TrySteerOwner 同 TrySteer，但插话出自已认证的本地 owner（TaintLow，ADR-0007 修订）。
+func (p *Pool) TrySteerOwner(sessionID string, text string) bool {
+	return p.trySteer(sessionID, text, true)
+}
+
+func (p *Pool) trySteer(sessionID string, text string, owner bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -21,6 +30,9 @@ func (p *Pool) TrySteer(sessionID string, text string) bool {
 	st := entry.agent.sm.Current()
 	if st != types.AgentStateLoop && st != types.AgentStateLoopExec && st != types.AgentStateLoopAwait && st != types.AgentStateLoopRecall {
 		return false
+	}
+	if owner {
+		return entry.agent.SteerOwner(text)
 	}
 	return entry.agent.Steer(text)
 }

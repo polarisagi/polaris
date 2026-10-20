@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -78,6 +79,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		Attachments:     toDomainAttachments(req.Attachments),
 		ImageParts:      toDomainImageParts(req.ImageParts),
 		Channel:         "web",
+		OwnerTrusted:    ownerTrustedRequest(r),
 		Streaming:       true,
 		RunID:           req.RunID,
 		ReasoningEffort: req.ReasoningEffort,
@@ -135,4 +137,11 @@ func toDomainImageParts(parts []sseImagePart) []types.ImagePart {
 		})
 	}
 	return out
+}
+
+// ownerTrustedRequest 判定请求是否来自已认证的本地可信客户端（机器主人本人）。
+// 信任只取自鉴权上下文：匿名回环兜底（Authenticated=false）与远程 API 客户端都不算。
+func ownerTrustedRequest(r *http.Request) bool {
+	a := authcontext.FromContext(r.Context())
+	return a != nil && a.Authenticated && a.ClientType.IsLocalTrusted()
 }

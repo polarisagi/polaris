@@ -382,8 +382,12 @@ func (s *StateContext) DrainSteerQueueToMessages() bool {
 	copy(steers, s.LoopSteerQueue)
 	s.LoopSteerQueue = nil
 	round := s.LoopRound
-	if s.GlobalTaintLevel < types.TaintHigh {
-		s.GlobalTaintLevel = types.TaintHigh
+	// 全局污点只升不降，且按插话自身的等级并入：owner 本人的插话是 TaintLow，
+	// 不应把整轮拉到 High（ADR-0007 修订）；来自外部的插话仍是 High。
+	for _, st := range steers {
+		if st.Level() > s.GlobalTaintLevel {
+			s.GlobalTaintLevel = st.Level()
+		}
 	}
 	s.Mu.Unlock()
 

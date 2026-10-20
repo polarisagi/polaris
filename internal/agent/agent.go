@@ -44,6 +44,7 @@ type Agent struct {
 	provider           protocol.Provider             // LLM 调用入口（由 M1 提供）
 	Security           SecurityBundle                // 安全组件包（GR-6-006）
 	hitl               protocol.HITL                 // 人工审批网关
+	perm               permissionState               // 统一权限判定的装配与运行态（agent_permission.go，ADR-0117）
 	taintReviewDenied  map[string]bool               // 本回合被用户拒绝的 工具+参数 哈希；仅 S_VALIDATE Effect 读写，effectRunning 保证串行（agent_taint_review.go）
 	toolRegistry       protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
 	catalog            catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
@@ -137,6 +138,9 @@ type Agent struct {
 	// （select default 分支静默丢弃旧值），与 S_INTERRUPT 语义一致——只有最后
 	// 一次 Redirect 有效，历史意图在被挂起时就已失效。
 	pendingRedirectCh chan string
+	// pendingRedirectOwner 最近一次 Redirect 是否出自已认证的本地 owner（HTTP 边界判定）。
+	// 与 pendingRedirectCh 配对读写：通道只保留最后一条 redirect，标志同步取最后一次写入。
+	pendingRedirectOwner atomic.Bool
 
 	// [UP-06] 流式事件订阅者注册表：每个订阅者持独立缓冲通道。
 	// 为什么不用单一共享 channel：共享通道无法区分轮次，斜杠命令短路后

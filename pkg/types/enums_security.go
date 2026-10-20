@@ -97,6 +97,10 @@ const CheckpointDeviceControlReview = "device_control_review"
 // 批准即按节点参数内容哈希铸造 TaintExemptionToken。
 const CheckpointTaintReview = "taint_review"
 
+// CheckpointToolApproval 统一权限矩阵（policy.Decide）判为“需询问”的工具调用审批
+// （ADR-0117）。超时一律拒绝：没人应答绝不等于同意。
+const CheckpointToolApproval = "tool_approval"
+
 // TrustTier 五级信任体系（ADR-0016 §2.1）。
 // 替代 SignatureValid bool，使系统能区分技能/工具来源的信任级别。
 // 业务方法（ApprovalRequired 等）定义在本文件下方。

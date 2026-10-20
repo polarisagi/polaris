@@ -95,10 +95,14 @@ func (a *Agent) Run(ctx context.Context) error {
 				select {
 				case redirect := <-a.pendingRedirectCh:
 					if redirect != "" {
+						level := types.TaintHigh
+						if a.pendingRedirectOwner.Load() {
+							level = types.TaintLow // 已认证的本地 owner 本人改写意图（ADR-0007 修订）
+						}
 						a.sCtx.Mu.Lock()
 						a.sCtx.RawIntentTS = taint.NewTaintedString(
 							redirect,
-							taint.TaintSource{OriginTaintLevel: types.TaintHigh},
+							taint.TaintSource{OriginTaintLevel: level},
 							"user_interrupt_redirect",
 						)
 						a.sCtx.Mu.Unlock()

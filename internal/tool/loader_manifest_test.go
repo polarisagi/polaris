@@ -1,8 +1,9 @@
 package tool
 
 import (
-	"gopkg.in/yaml.v3"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )

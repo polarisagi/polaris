@@ -230,7 +230,7 @@ func (w *walker) redirect(r *syntax.Redirect) {
 	}
 	w.scanWord(r.Word)
 	switch r.Op {
-	case syntax.RdrOut, syntax.AppOut, syntax.ClbOut, syntax.RdrAll, syntax.AppAll, syntax.RdrInOut:
+	case syntax.RdrOut, syntax.AppOut, syntax.RdrClob, syntax.RdrAll, syntax.AppAll, syntax.RdrInOut:
 	case syntax.DplOut:
 		if s, dyn := wordString(r.Word, w.env.Home); !dyn && (s == "-" || isAllDigits(s)) {
 			return

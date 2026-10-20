@@ -132,6 +132,13 @@ HITLPrompt struct {
 	// 哈希必须精确匹配被拦截的内容，不能用 PromptText 的人类可读摘要代替。
 	// 非该转义场景的 HITLPrompt 一律留空。
 	ExemptionFieldContent []byte `json:"exemption_field_content,omitempty"`
+	// 以下四个字段仅 CheckpointToolApproval 使用（ADR-0117 决策五）：Reason 是向用户展示的
+	// 一句话询问理由；HardLimit 为真时审批卡不提供“以后不再询问”；RememberLabel 是勾选框的
+	// 单行说明；Items 是同一轮校验里全部待审节点（一轮只弹一张卡）。
+	Reason        string         `json:"reason,omitempty"`
+	HardLimit     bool           `json:"hard_limit,omitempty"`
+	RememberLabel string         `json:"remember_label,omitempty"`
+	Items         []ApprovalItem `json:"items,omitempty"`
 }
 
 type
@@ -148,6 +155,9 @@ type HITLResponse struct {
 	UserID    string
 	Approved  bool
 	Reason    string
+	// Remember 用户勾选了“以后不再询问”：由发起审批的 Agent 在批准后落库项目级规则，
+	// 硬限制项永远忽略该标志。
+	Remember bool `json:"remember,omitempty"`
 }
 
 // WithThinkingMode 设置思考模式。

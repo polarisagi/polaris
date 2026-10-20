@@ -29,6 +29,11 @@ const taintReviewWindow = 10 * time.Minute
 // 收敛性：每个节点本回合至多送审一次；批准后同一节点仍被拦（令牌未落库等装配缺陷）
 // 按原拦截处理，不空转。
 func (a *Agent) validateWithTaintReview(ctx context.Context, vCtx *protocol.DAGValidationContext) error {
+	// 统一权限判定先行（ADR-0117）：放行/获批的节点已铸造豁免令牌，L1 污点闸门随后自然通过；
+	// 未注入权限来源（单元测试等）时跳过，保留下面原有的污点复核路径。
+	if err := a.authorizePlan(ctx, vCtx); err != nil {
+		return apperr.Wrap(apperr.CodeForbidden, "s_validate", err)
+	}
 	reviewed := make(map[string]bool)
 	for {
 		err := a.dagValidator.Validate(ctx, vCtx)
