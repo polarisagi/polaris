@@ -353,7 +353,7 @@ func TestDDG_Status202PersistentIsRateLimited(t *testing.T) {
 
 	d := &ddg{endpoint: ts.URL, retryDelay: time.Millisecond}
 	_, err := d.search(context.Background(), ts.Client(), "golang", 5)
-	if !errors.Is(err, errRateLimited) {
+	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("应返回限流错误，got %v", err)
 	}
 	if hits.Load() != 2 {
@@ -374,7 +374,7 @@ func (s *stubEngine) search(context.Context, *http.Client, string, int) ([]resul
 
 // 主引擎限流且配置了其他引擎 → 降级成功并报告实际引擎名。
 func TestSearchWithFallback_DegradesToOtherEngine(t *testing.T) {
-	primary := &stubEngine{err: errRateLimited}
+	primary := &stubEngine{err: ErrRateLimited}
 	backup := &stubEngine{res: []result{{Title: "t", URL: "https://x"}}}
 	res, name, err := searchWithFallback(context.Background(), nil,
 		namedEngine{"duckduckgo", primary}, []namedEngine{{"brave", backup}}, "q", 5)
@@ -385,7 +385,7 @@ func TestSearchWithFallback_DegradesToOtherEngine(t *testing.T) {
 
 // 全部失败 → 结构化错误，列出各引擎原因；无降级配置时只含主引擎。
 func TestSearchWithFallback_AllFailStructuredError(t *testing.T) {
-	primary := &stubEngine{err: errRateLimited}
+	primary := &stubEngine{err: ErrRateLimited}
 	_, _, err := searchWithFallback(context.Background(), nil, namedEngine{"duckduckgo", primary}, nil, "q", 5)
 	if err == nil || !strings.Contains(err.Error(), "duckduckgo") || !strings.Contains(err.Error(), "web_search 失败") {
 		t.Fatalf("应返回含引擎原因的结构化错误: %v", err)

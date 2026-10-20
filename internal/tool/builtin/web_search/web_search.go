@@ -43,8 +43,8 @@ type ddg struct {
 // defaultRateLimitBackoff DDG 限流后的短退避：202 是其反爬响应，立即重试几乎必然再次命中。
 const defaultRateLimitBackoff = 2 * time.Second
 
-// errRateLimited 标记「被搜索引擎限流」，供上层决定是否降级到其他引擎。
-var errRateLimited = apperr.NewSentinel(apperr.CodeResourceExhausted, "web_search: rate limited")
+// ErrRateLimited 标记「被搜索引擎限流」，供上层决定是否降级到其他引擎。
+var ErrRateLimited = apperr.NewSentinel(apperr.CodeResourceExhausted, "web_search: rate limited")
 
 // isRateLimitStatus DDG 以 202（反爬挑战页）、429 表示限流；二者都不含搜索结果。
 func isRateLimitStatus(code int) bool {
@@ -133,7 +133,7 @@ func searchWithFallback(ctx context.Context, c *http.Client, primary namedEngine
 		reasons = append(reasons, fb.name+": "+ferr.Error())
 	}
 	code := apperr.CodeInternal
-	if errors.Is(err, errRateLimited) {
+	if errors.Is(err, ErrRateLimited) {
 		code = apperr.CodeResourceExhausted
 	}
 	return nil, "", apperr.New(code, "web_search 失败（可稍后重试，或换用其他信息来源）："+strings.Join(reasons, "；"))
@@ -248,7 +248,7 @@ func (d *ddg) search(ctx context.Context, c *http.Client, q string, n int) ([]re
 	}
 
 	body, err := d.fetch(ctx, c, target)
-	if errors.Is(err, errRateLimited) {
+	if errors.Is(err, ErrRateLimited) {
 		// 202/429 是限流而非结果页：短退避后重试 1 次。
 		delay := d.retryDelay
 		if delay <= 0 {
@@ -268,7 +268,7 @@ func (d *ddg) search(ctx context.Context, c *http.Client, q string, n int) ([]re
 	return parseDDGHTML(body, n)
 }
 
-// fetch 单次抓取 DDG 页面；限流状态码映射为 errRateLimited。
+// fetch 单次抓取 DDG 页面；限流状态码映射为 ErrRateLimited。
 func (d *ddg) fetch(ctx context.Context, c *http.Client, target string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
@@ -283,7 +283,7 @@ func (d *ddg) fetch(ctx context.Context, c *http.Client, target string) ([]byte,
 	defer resp.Body.Close()
 
 	if isRateLimitStatus(resp.StatusCode) {
-		return nil, apperr.Wrap(apperr.CodeResourceExhausted, fmt.Sprintf("web_search: ddg returned status %d (rate limited)", resp.StatusCode), errRateLimited)
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted, fmt.Sprintf("web_search: ddg returned status %d (rate limited)", resp.StatusCode), ErrRateLimited)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("web_search: ddg returned status %d", resp.StatusCode))

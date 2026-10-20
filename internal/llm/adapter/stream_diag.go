@@ -73,8 +73,14 @@ func (d *rawDump) Line(line string) {
 func (d *rawDump) write(line string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.f != nil {
-		_, _ = d.f.WriteString(line + "\n")
+	if d.f == nil {
+		return
+	}
+	if _, err := d.f.WriteString(line + "\n"); err != nil {
+		// 转储只是调试旁路：写失败（磁盘满等）不影响推理，但要留一条告警并停止继续写，避免刷屏。
+		slog.Warn("llm raw dump: write failed, dump disabled for this stream", "err", err)
+		_ = d.f.Close() // 旁路文件，关闭失败无可补救
+		d.f = nil
 	}
 }
 
