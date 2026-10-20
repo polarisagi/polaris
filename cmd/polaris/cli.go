@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,8 +13,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/term"
@@ -574,6 +577,29 @@ func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolin
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// 回合与连接解耦后（ADR-0116），关连接不再中止回合：Ctrl+C 必须显式调用 abort 端点，
+	// 否则 CLI 退出后回合会在守护进程里继续跑（空耗 token）。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req = req.WithContext(ctx)
+	var curSID atomic.Value
+	curSID.Store(sessionID)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+	var interrupted atomic.Bool
+	go func() {
+		select {
+		case <-sigCh:
+			interrupted.Store(true)
+			if sid, _ := curSID.Load().(string); sid != "" {
+				cliAbortSession(sid)
+			}
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -599,6 +625,14 @@ func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolin
 		case strings.HasPrefix(line, "data: "):
 			data := strings.TrimPrefix(line, "data: ")
 			switch evType {
+			case "session":
+				var se struct {
+					SessionID string `json:"session_id"`
+				}
+				if json.Unmarshal([]byte(data), &se) == nil && se.SessionID != "" {
+					curSID.Store(se.SessionID)
+					newSID = se.SessionID
+				}
 			case "thinking":
 				if !thinkingShown && cliTTY {
 					fmt.Print(clr(ansiDim, t("chat_think")))
@@ -635,9 +669,27 @@ func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolin
 		}
 	}
 	if err := sc.Err(); err != nil {
+		if interrupted.Load() {
+			return newSID, apperr.New(apperr.CodeInternal, "已中断")
+		}
 		return newSID, apperr.Wrap(apperr.CodeInternal, "读取 SSE 流失败", err)
 	}
 	return newSID, nil
+}
+
+// cliAbortSession 显式中止会话的运行中回合（尽力而为：失败只影响回合是否多跑一会儿）。
+func cliAbortSession(sessionID string) {
+	req, err := cliNewRequest("POST", "/v1/sessions/"+url.PathEscape(sessionID)+"/abort", nil)
+	if err != nil {
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("cli: abort 请求失败", "session", sessionID, "err", err)
+		return
+	}
+	resp.Body.Close()
 }
 
 // cliPrintSessions projectID 非空时只列该项目的会话。

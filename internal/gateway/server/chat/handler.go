@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
@@ -50,6 +51,10 @@ type ChatHandler struct {
 	// Orchestrator 会话编排领域服务（A-03，GD-13-008）。HandleAgentStream
 	// 瘦身后经此驱动完整会话轮次，见 sse.go。
 	Orchestrator session.Orchestrator
+
+	// TurnHub 回合注册表（ADR-0116）：回合与 HTTP 连接解耦，支持后台运行与重连。
+	TurnHub     *session.TurnHub
+	turnHubOnce sync.Once
 }
 
 type Dependencies struct {
@@ -145,6 +150,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		AudioService:       audio,
 		CompressionService: deps.CompressionService,
 		PromptService:      prompt,
+		TurnHub:            session.NewTurnHub(session.TurnHubConfig{}),
 	}
 
 	// [A-03] session.Orchestrator 依赖注入：全部以窄接口形式声明（HE-3），

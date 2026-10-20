@@ -18,6 +18,7 @@ import (
 //	KindComplete       → "complete"         ev.Payload 透传
 //	KindError          → "error"            ev.Payload 透传（{"code","message"}）
 //	KindSystemNotice   → "system_notice"    ev.Payload 透传
+//	KindSession        → "session"         {"session_id","turn_id"}（ADR-0116）
 //	KindToolCall       → 当前编排逻辑未产出（工具调用状态经 KindStatus{type:
 //	                     "tool_call"/"tool_result"} 传递），保留分支占位避免
 //	                     默认 case 静默吞掉未来扩展，行为等价于 KindStatus。
@@ -36,23 +37,34 @@ func newSSESink(w http.ResponseWriter, flusher http.Flusher) *sseSink {
 }
 
 func (s *sseSink) Emit(ev session.Event) error {
-	switch ev.Kind {
-	case session.KindDelta:
-		WriteSSE(s.w, s.flusher, "token", map[string]any{"content": ev.Text})
-	case session.KindReasoning:
-		WriteSSE(s.w, s.flusher, "reasoning", map[string]any{"content": ev.Text})
-	case session.KindStatus, session.KindToolCall:
-		WriteSSE(s.w, s.flusher, "status", ev.Payload)
-	case session.KindContextWarning:
-		WriteSSE(s.w, s.flusher, "context_warning", ev.Payload)
-	case session.KindComplete:
-		WriteSSE(s.w, s.flusher, "complete", ev.Payload)
-	case session.KindError:
-		WriteSSE(s.w, s.flusher, "error", ev.Payload)
-	case session.KindSystemNotice:
-		WriteSSE(s.w, s.flusher, "system_notice", ev.Payload)
-	case session.KindSteerAccepted:
-		WriteSSE(s.w, s.flusher, "steer_accepted", ev.Payload)
+	if name, payload, ok := sseFrame(ev); ok {
+		WriteSSE(s.w, s.flusher, name, payload)
 	}
 	return nil
+}
+
+// sseFrame 把领域事件映射为 wire 事件名与载荷；ok=false 表示该事件无 wire 对应。
+// 直连 sink（斜线命令/测试）与 TurnHub 订阅回放（sse_turn.go）共用同一映射。
+func sseFrame(ev session.Event) (name string, payload any, ok bool) {
+	switch ev.Kind {
+	case session.KindDelta:
+		return "token", map[string]any{"content": ev.Text}, true
+	case session.KindReasoning:
+		return "reasoning", map[string]any{"content": ev.Text}, true
+	case session.KindStatus, session.KindToolCall:
+		return "status", ev.Payload, true
+	case session.KindContextWarning:
+		return "context_warning", ev.Payload, true
+	case session.KindComplete:
+		return "complete", ev.Payload, true
+	case session.KindError:
+		return "error", ev.Payload, true
+	case session.KindSystemNotice:
+		return "system_notice", ev.Payload, true
+	case session.KindSteerAccepted:
+		return "steer_accepted", ev.Payload, true
+	case session.KindSession:
+		return "session", ev.Payload, true
+	}
+	return "", nil, false
 }

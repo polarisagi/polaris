@@ -37,6 +37,8 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		o.emitError(sink, "session_error", err.Error(), sessionID, err)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
+	// 会话 ID 此刻才对客户端可见：新会话前端须据此重连（ADR-0116）。
+	_ = sink.Emit(Event{Kind: KindSession, Payload: map[string]any{"session_id": sessionID}})
 	// SessionStart / UserPromptSubmit（hooks.json，ADR-0103 决策六）：阻断即拒绝本条消息，
 	// 附加上下文随本轮任务意图进入内核（污点内容，不进系统提示词）。
 	hookContext, blocked := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)

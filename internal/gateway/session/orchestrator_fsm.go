@@ -75,7 +75,9 @@ func (o *orchestrator) runFSMTurn(
 				return string(replyBuilder), errBuilder, false, viewIDs
 			}
 		case <-ctx.Done():
-			// [GD-13-002] 客户端断连时通知 Agent Kernel 强制中止，避免后台无感空跑
+			// [GD-13-002 复核 2026-10-20，ADR-0116] ctx 由 TurnHub 持有，仅显式中止
+			// （POST /v1/sessions/{id}/abort）或守护进程关停时取消；客户端断连不再
+			// 触发此处。原「断连即中止」语义已推翻，会话可后台运行。
 			if agentCtrl != nil {
 				agentCtrl.Interrupt(types.InterruptRequest{Action: types.InterruptAbort})
 			}

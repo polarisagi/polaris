@@ -133,6 +133,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.chatHandler.HandleGetSession)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.chatHandler.HandleGetSessionContext)
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/stream", s.chatHandler.HandleSessionStream) // ADR-0116 重订阅后台回合
+	mux.HandleFunc("POST /v1/sessions/{sessionID}/abort", s.chatHandler.HandleAbortSession)  // ADR-0116 显式中止
 	mux.HandleFunc("PUT /v1/sessions/{sessionID}/project", s.chatHandler.HandleMoveSession)
 
 	// 项目 API（ADR-0097）。读写均限本地可信客户端 / admin，见 chat/projects.go requireProjectAccess。

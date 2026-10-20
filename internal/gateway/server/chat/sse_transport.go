@@ -20,6 +20,13 @@ func WriteSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, pay
 	flusher.Flush()
 }
 
+// writeSSEWithID 同 WriteSSE，但带 `id: <seq>` 行，供客户端断线后按 after=<seq> 续传。
+func writeSSEWithID(w http.ResponseWriter, flusher http.Flusher, seq int64, eventType string, payload any) {
+	data, _ := json.Marshal(payload)
+	fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, eventType, data)
+	flusher.Flush()
+}
+
 // sseImagePart 前端上传的图片载荷（base64 字符串，不含 data URI 前缀）。
 type sseImagePart struct {
 	MimeType string `json:"mimeType"`

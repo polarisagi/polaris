@@ -345,6 +345,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.workflowStepWorkerCancel()
 	}
 	s.channelMgr.StopAll()
+	if s.chatHandler != nil {
+		// 后台回合不再随连接断开而结束，关停时须显式取消并等其落库已产出内容（ADR-0116）。
+		s.chatHandler.Shutdown(ctx)
+	}
 	if s.appsSandboxSrv != nil {
 		if err := s.appsSandboxSrv.Shutdown(ctx); err != nil {
 			slog.Warn("mcp apps: sandbox listener shutdown failed", "err", err)
