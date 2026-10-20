@@ -26,3 +26,4 @@ max_code_size_bytes = 16384
 'web_fetch.default_max_chars' = 12000
 'web_fetch.cache_max_rows' = 5000
 'web_fetch.host_min_interval_ms' = 1000
+lazy_activation = 'in_history'

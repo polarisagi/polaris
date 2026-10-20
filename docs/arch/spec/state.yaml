@@ -1011,8 +1011,9 @@ thresholds:
     prm_complexity_gate: 0.5 # toml:"prm.complexity_gate"
     prm_max_candidates: 3 # toml:"prm.max_candidates"
     prm_min_threshold: 0.4 # toml:"prm.min_threshold"
-    conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四；ADR-0105 决策二改为分块跳窗
-    conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，分块跳窗（ADR-0105 决策二）：越界时按 max_messages/2 步长一次丢前若干块
+    conversation_history_max_messages: 0 # toml:"conversation.history_max_messages"，ADR-0098 决策四；ADR-0105 决策二改为分块跳窗；ADR-0120 起默认不按条数限制
+    conversation_history_max_bytes: 0 # toml:"conversation.history_max_bytes"，分块跳窗（ADR-0105 决策二）；ADR-0120 起默认由 token 预算接管
+    conversation_history_max_tokens: 48000 # toml:"conversation.history_max_tokens"，ADR-0120 决策四：超出时一次丢到预算一半（分块跳窗，两次跳窗之间纯追加）
     prompt_phase_contracts_in_core: true # toml:"prompt.phase_contracts_in_core"，ADR-0105 决策九：四阶段契约并入 L0 稳定核，各阶段 L3 仅写选择器；false 回到 L3 全文模板
     thinking_perceive: low # toml:"thinking.perceive"，ADR-0101 决策三；"" = Provider 默认（DeepSeek 省略即 high）
     thinking_plan_initial: high # toml:"thinking.plan_initial"，规划阶梯 level 0 档位；升档见 plan_reasoning_complexity（ADR-0102 决策六）
@@ -1048,7 +1049,10 @@ thresholds:
     loop_turn_budget_tokens: 0 # toml:"loop.turn_budget_tokens"，0=不限 (WP2, ADR-0115)
     loop_turn_wall_seconds: 0 # toml:"loop.turn_wall_seconds"，0=不限 (WP2, ADR-0115)
     loop_observation_mask_after_rounds: 6 # toml:"loop.observation_mask_after_rounds"，T3 批量观察遮蔽轮数 (WP2, ADR-0115)
-    loop_observation_mask_batch: 4 # toml:"loop.observation_mask_batch"，T3 批量遮蔽批大小 (WP2, ADR-0115)
+    loop_observation_mask_batch: 4 # toml:"loop.observation_mask_batch"，T3 批量遮蔽批大小 (WP2, ADR-0115)；ADR-0120 起触发后一次遮蔽全部候选，本值仅作最少候选数
+    loop_observation_mask_trigger_tokens: 0 # toml:"loop.observation_mask_trigger_tokens"，ADR-0120 决策四：上下文估计达到才遮蔽；0=模型窗口 50%，无窗口信息时 64000
+    loop_observation_mask_min_tokens: 1024 # toml:"loop.observation_mask_min_tokens"，ADR-0120 决策四：只遮蔽不小于此值的工具结果
+    loop_recall_max_chars: 2000 # toml:"loop.recall_max_chars"，ADR-0120 决策四：回合自动召回文本上限，0=不限
     loop_completion: auto # toml:"loop.completion"，交互会话 auto, headless/委派/自动化 explicit (WP2, ADR-0115)
     model_select_max_output_price_per_mtok: 0 # toml:"model_select.max_output_price_per_mtok"，0=不限 (WP3, ADR-0115)
     model_catalog_refresh_hours: 24 # toml:"model_catalog.refresh_hours"，实时目录刷新周期 (WP3, ADR-0115)
@@ -1168,6 +1172,7 @@ thresholds:
     web_fetch_default_max_chars: 12000 # toml:"web_fetch.default_max_chars" — 网页正文抽取默认最大字符数/字符（ADR-0114）
     web_fetch_cache_max_rows: 5000 # toml:"web_fetch.cache_max_rows" — 网页条件请求缓存最大行数/行（ADR-0114）
     web_fetch_host_min_interval_ms: 1000 # toml:"web_fetch.host_min_interval_ms" — 同主机访问礼貌最小间隔/毫秒（ADR-0114）
+    lazy_activation: in_history # toml:"lazy_activation" — ADR-0120 决策三：in_history=tool_search 返回参数、经 call_tool 调用，tools 数组整场会话不变；tools_array=旧行为（追加进 tools 数组，打断前缀缓存）
     output_taint_defaults:
       builtin_fs_read: low
       mcp_any: high
