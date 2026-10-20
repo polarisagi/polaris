@@ -180,7 +180,7 @@ Alpine.store('cron', {
   },
 
   async del(id) {
-    if (!confirm('确认删除这个自动化任务？运行历史也会一并删除。')) return
+    if (!(await Alpine.store('dialog').confirm({ message: '确认删除这个自动化任务？运行历史也会一并删除。', danger: true }))) return
     try {
       await fetch(`/v1/automations/${id}`, { method: 'DELETE', headers: authHeaders() })
       this.list = this.list.filter(j => j.id !== id)

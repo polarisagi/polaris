@@ -6,16 +6,45 @@ import { WavRecorder } from '../audio/wav_recorder.js'
 // ══════════════════════════════════════════════════════════════════════════
 // store: chat（主对话状态机）
 // ══════════════════════════════════════════════════════════════════════════
-Alpine.store('chat', {
-  // States: IDLE | SUBMITTING | THINKING | STREAMING | TOOL_RUNNING | COMPLETE | ERROR
-  state: 'IDLE',
-  taskID: null,
+// ── 多会话运行时（ADR-0116：回合与连接解耦，会话可后台运行、多会话并行）──────────
+// runs：每个运行中/刚结束的回合一份状态，键为 sessionID（新会话在收到 session 事件前
+// 用临时键）。视图字段（state/currentTokens/…）是对「当前视图所属 run」的访问器：
+// 事件处理器写入各自的 run，只有视图所属的 run 才会驱动可见界面。
+// SSEClient 含私有字段，经 Alpine 响应式代理调用会抛 TypeError，故放模块级 Map。
+const sseClients = new Map() // run.rid -> SSEClient
+
+// 视图字段默认值（视图无 run 时读写 _idle）
+const idleDefaults = () => ({
+  state: 'IDLE', taskID: null, currentTokens: '', thinkingText: '', errorMsg: '',
+  contextWarning: null, compacting: false, phase: '', approvals: [], subagents: [],
+})
+const RUN_FIELDS = Object.keys(idleDefaults())
+
+function newRun(key, sessionID, messages) {
+  return {
+    rid: crypto.randomUUID(),
+    key,                 // runs 中的键
+    sessionID,           // 新会话在 session 事件前为 null
+    messages,            // 该会话的消息数组；run 在视图中时与 store.messages 是同一个数组
+    ...idleDefaults(),
+    state: 'SUBMITTING',
+    pendingToolCall: null,
+    aborting: false,     // 用户已点中断，等服务端终止事件
+    abortRequested: false, // 点中断时尚不知道 sessionID，待 session 事件后补发
+    finished: false,
+    title: '',
+  }
+}
+
+const chatStore = {
+  // 每个 run 的状态机: SUBMITTING | THINKING | STREAMING | TOOL_RUNNING | COMPLETE | ERROR
+  runs: {},
+  viewKey: null,         // 当前视图所属 run 的键；null = 无运行中回合的纯浏览视图
+  _idle: idleDefaults(),
+  _loadSeq: 0,
   sessionID: null,
   messages: [],          // [{role, content, toolCalls, aborted}]
-  currentTokens: '',     // 流式追加缓冲
-  thinkingText: '',      // 不进 messages[]
   thinkingOpen: true,
-  errorMsg: '',
   _historyIdx: -1,
   _inputHistory: [],     // 初始化输入历史数组，防止首次加载时未定义报错
   attachments: [],       // [{ uri, mime_type, name, dataUrl }]
@@ -29,13 +58,19 @@ Alpine.store('chat', {
   lastAbortedInput: null,  // 上次被中断的用户输入内容，用于恢复编辑按钮
   selectedModel: '',
   reasoningEffort: 'auto',
-  contextWarning: null,  // context_warning SSE 事件携带的数据
-  compacting: false,     // status/compacting 事件期间为 true
-  phase: '',             // 回合阶段键 perceive/plan/execute/reflect/respond（status/phase 事件，ADR-0098）
-  approvals: [],         // 本回合待用户确认的操作（status/approval_required 事件）；回合结束即清空
-  subagents: [],         // 本回合并行子智能体状态（status 事件带 agent_id/parent_id）
 
+  get viewRun() { return this.viewKey ? (this.runs[this.viewKey] || null) : null },
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
+
+  // 会话是否有仍在运行的本地回合（侧栏/会话页/项目页的脉动圆点；与服务端 running 字段取并集）
+  isSessionRunning(id) {
+    const r = id ? this.runs[id] : null
+    return !!(r && !r.finished && !r.aborting)
+  },
+  // 有回合正在后台（非当前视图）运行
+  get backgroundRunning() {
+    return Object.values(this.runs).some(r => !r.finished && !r.aborting && r.key !== this.viewKey)
+  },
 
   async fetchCapabilities() {
     try {
@@ -95,7 +130,7 @@ Alpine.store('chat', {
       if (Alpine.store('toast')) {
         Alpine.store('toast').show('error', `Failed to upload ${file.name}`);
       } else {
-        alert(`Failed to upload ${file.name}`);
+        Alpine.store('dialog').alert({ message: `Failed to upload ${file.name}` });
       }
     }
   },
@@ -192,7 +227,7 @@ Alpine.store('chat', {
 
     } catch (e) {
       console.error('Failed to start recording', e);
-      alert(Alpine.store('i18n').t('chat_stt_mic_error'));
+      Alpine.store('dialog').alert({ message: Alpine.store('i18n').t('chat_stt_mic_error') });
     }
   },
 
@@ -394,6 +429,11 @@ Alpine.store('chat', {
 
   async submit(input) {
     if (!input.trim() && this.attachments.length === 0 || this.isActive) return
+    // 本会话仍有后台回合在跑（例如 clearView 把视图摘走后）：服务端同会话同时只允许一个回合。
+    if (this.sessionID && this.isSessionRunning(this.sessionID)) return
+
+    // 刚点过中断的上一回合还在收尾：等它结束再发，避免撞 409 session_busy
+    if (this.sessionID) await this._awaitAborted(this.sessionID)
 
     // 新消息发出，清除上次中断状态
     this.lastAbortedInput = null
@@ -407,18 +447,17 @@ Alpine.store('chat', {
     if (this._inputHistory.length > 50) this._inputHistory.pop()
     this._historyIdx = -1
 
-    this.currentTokens = ''
-    this.thinkingText = ''
+    // 新建 run（继续已有会话时沿用会话 ID 作键；新会话用临时键，收到 session 事件后改键）
+    const key = this.sessionID || ('tmp_' + crypto.randomUUID())
+    this.runs[key] = newRun(key, this.sessionID, this.messages)
+    this.viewKey = key
+    const run = this.runs[key]
     this.thinkingOpen = true
-    this.errorMsg = ''
-    this.phase = ''
-    this.approvals = []
-    this.state = 'SUBMITTING'
 
     const attachmentsPayload = [...this.attachments];
     this.attachments = [];
 
-    window._activeSseClient = new SSEClient({
+    const client = new SSEClient({
       url: '/v1/agent/stream',
       body: {
         input,
@@ -430,38 +469,65 @@ Alpine.store('chat', {
         model_id: this.selectedModel || undefined,
         reasoning_effort: this.reasoningEffort !== 'auto' ? this.reasoningEffort : undefined,
       },
-      onEvent: (type, data) => this._onEvent(type, data),
-      onError: (err) => this._onError(err),
-      onComplete: () => this._onComplete(),
+      onEvent: (type, data) => this._onEvent(run.rid, type, data),
+      onError: (err) => this._onError(run.rid, err),
+      onComplete: () => this._onComplete(run.rid),
     })
-    window._activeSseClient.start()
+    sseClients.set(run.rid, client)
+    client.start()
   },
 
+  // 按 rid 取 run（key 会在 session 事件后改变，SSE 回调只认稳定的 rid）
+  _byRid(rid) {
+    return Object.values(this.runs).find(r => r.rid === rid) || null
+  },
+
+  // 点中断后上一回合在服务端还在收尾，最多等 3s 让其到达终止事件。
+  async _awaitAborted(sessionID) {
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      const r = this.runs[sessionID]
+      if (!r || !r.aborting || r.finished) return
+      await new Promise(res => setTimeout(res, 50))
+    }
+  },
+
+  // interrupt 中止当前视图所属会话的回合。abort 走 POST /v1/sessions/{id}/abort
+  // （连接断开不再中止回合，ADR-0116）；其余 action 沿用 taskID 接口。
   interrupt(action = 'abort') {
-    if (!this.taskID && !window._activeSseClient) return
+    const run = this.viewRun
+    if (!run || run.finished) return
+    if (action !== 'abort') {
+      if (run.taskID) {
+        fetch(`/v1/agent/${run.taskID}/interrupt`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ action }),
+        }).catch(e => console.error(e))
+      }
+      return
+    }
     // 记录最后一条用户消息内容，供"恢复编辑"按钮使用
-    if (action === 'abort') {
-      const lastUser = [...this.messages].reverse().find(m => m.role === 'user')
-      this.lastAbortedInput = lastUser ? lastUser.content : null
+    const lastUser = [...this.messages].reverse().find(m => m.role === 'user')
+    this.lastAbortedInput = lastUser ? lastUser.content : null
+    if (run.sessionID) {
+      this._postAbort(run.sessionID)
+    } else {
+      run.abortRequested = true // 还没拿到 session 事件，拿到后补发
     }
-    if (this.taskID) {
-      fetch(`/v1/agent/${this.taskID}/interrupt`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ action }),
-      }).catch(e => console.error(e))
-    }
-    if (window._activeSseClient) {
-      window._activeSseClient.stop()
-      window._activeSseClient = null
-    }
-    // 乐观更新：立即结束状态
-    if (action === 'abort') {
-      this._finalizeMessage(true)
-      this.state = 'COMPLETE'
-      this.thinkingOpen = false
-      Alpine.store('statusBar').poll()
-    }
+    // 乐观更新：立即结束可见状态；SSE 保持订阅直到服务端终止事件，期间忽略其余事件
+    run.aborting = true
+    this._finalizeMessage(run, true)
+    run.state = 'COMPLETE'
+    this.thinkingOpen = false
+    Alpine.store('statusBar').poll()
+  },
+
+  _postAbort(sessionID) {
+    fetch(`/v1/sessions/${encodeURIComponent(sessionID)}/abort`, {
+      method: 'POST',
+      headers: authHeaders(),
+    }).catch(e => console.error(e))
   },
 
   // restoreInput 将上次中断的用户消息恢复到输入框，并清除中断状态
@@ -651,70 +717,74 @@ Alpine.store('chat', {
     }
   },
 
-  _onEvent(type, data) {
+  _onEvent(rid, type, data) {
+    const run = this._byRid(rid)
+    if (!run || run.finished) return
+    // 用户已点中断：只等终止事件，其余事件（含迟到的 token）一律忽略
+    if (run.aborting && type !== 'complete' && type !== 'error') return
     switch (type) {
+      case 'session':
+        this._bindSession(run, data.session_id)
+        break
       case 'thinking':
-        this.state = 'THINKING'
-        this.thinkingText += data.content || ''
+        run.state = 'THINKING'
+        run.thinkingText += data.content || ''
         break
       case 'token':
-        this.state = 'STREAMING'
-        this.currentTokens += data.content || ''
+        run.state = 'STREAMING'
+        run.currentTokens += data.content || ''
         break
       case 'tool_call':
-        this.state = 'TOOL_RUNNING'
+        run.state = 'TOOL_RUNNING'
         // 追加到当前流式消息的 toolCalls
-        this._pendingToolCall = { name: data.name || '', input: data.input || {}, output: null }
+        run.pendingToolCall = { name: data.name || '', input: data.input || {}, output: null }
         break
       case 'tool_result':
-        this.state = 'STREAMING'
-        if (this._pendingToolCall) {
-          this._pendingToolCall.output = data.output || ''
+        run.state = 'STREAMING'
+        if (run.pendingToolCall) {
+          run.pendingToolCall.output = data.output || ''
           // 将工具调用记入当前 messages
-          if (this.messages.length > 0) {
-            const last = this.messages[this.messages.length - 1]
+          if (run.messages.length > 0) {
+            const last = run.messages[run.messages.length - 1]
             if (last.role === 'assistant') {
-              last.toolCalls.push({ ...this._pendingToolCall })
+              last.toolCalls.push({ ...run.pendingToolCall })
             }
           } else {
             // 还没有 assistant 消息，先创建占位
-            this.messages.push({ role: 'assistant', content: '', reasoningContent: '', toolCalls: [{ ...this._pendingToolCall }], aborted: false })
+            run.messages.push({ role: 'assistant', content: '', reasoningContent: '', toolCalls: [{ ...run.pendingToolCall }], aborted: false })
           }
-          this._pendingToolCall = null
+          run.pendingToolCall = null
         }
         break
       case 'complete':
-        if (data && data.session_id) {
-          this.sessionID = data.session_id
-          localStorage.setItem('polaris_session_id', data.session_id)
-        }
+        if (data && data.session_id) this._bindSession(run, data.session_id)
         if (data && data.duration_ms) {
-          const last = this.messages[this.messages.length - 1];
+          const last = run.messages[run.messages.length - 1];
           if (last && last.role === 'assistant') {
             last.taskDuration = data.duration_ms;
           }
         }
-        this._onComplete()
+        this._onComplete(rid, data)
         break
       case 'error':
-        this._onError(data)
+        this._onError(rid, data)
         break
       case 'context_warning':
-        this.contextWarning = data
+        run.contextWarning = data
         break
       case 'status':
         if (data.type === 'phase') {
-          this.phase = data.phase || ''
+          run.phase = data.phase || ''
         } else if (data.type === 'approval_required') {
           // 回合在内核侧阻塞等待裁决；超时按拒绝处理（后端 HITL 网关兜底）
-          this.approvals.push({ id: data.id, tool: data.tool || '', input: data.input || '', deadlineNs: data.deadline_ns || 0, busy: false })
+          run.approvals.push({ id: data.id, tool: data.tool || '', input: data.input || '', deadlineNs: data.deadline_ns || 0, busy: false })
         } else if (data.type === 'compacting') {
-          this.compacting = true
+          run.compacting = true
         } else if (data.type === 'compacted') {
-          this.compacting = false
+          run.compacting = false
           // 在当前消息列表末尾标记压缩节点，复用 compactionAfter 分隔线渲染
-          if (this.messages.length > 0) {
-            this.messages[this.messages.length - 1].compactionAfter = true
+          if (run.messages.length > 0) {
+            run.messages[run.messages.length - 1].compactionAfter = true
           }
         } else if (data.type === 'tool_ui') {
           // MCP Apps 视图快照（M8f-2）：挂到当前 assistant 消息，交给
@@ -728,20 +798,20 @@ Alpine.store('chat', {
             tool_result: data.tool_result,
             cancelled: !!data.cancelled,
           }
-          let last = this.messages[this.messages.length - 1]
+          let last = run.messages[run.messages.length - 1]
           if (!last || last.role !== 'assistant') {
             last = { role: 'assistant', content: '', reasoningContent: '', toolCalls: [], views: [], aborted: false }
-            this.messages.push(last)
+            run.messages.push(last)
           }
           if (!last.views) last.views = []
           last.views.push(viewRef)
         }
         if (data && data.agent_id) {
-          if (!this.subagents) this.subagents = []
-          let sa = this.subagents.find(s => s.id === data.agent_id)
+          if (!run.subagents) run.subagents = []
+          let sa = run.subagents.find(s => s.id === data.agent_id)
           if (!sa) {
             sa = { id: data.agent_id, parent_id: data.parent_id || '', status: 'running', message: '' }
-            this.subagents.push(sa)
+            run.subagents.push(sa)
           }
           if (data.type === 'subagent_output') {
             // 子智能体正文输出不进入助手回复（R5-01），只在树节点下展示
@@ -757,25 +827,73 @@ Alpine.store('chat', {
     }
 
     // 从响应体读取 taskID
-    if (data && data.task_id && !this.taskID) {
-      this.taskID = data.task_id
+    if (data && data.task_id && !run.taskID) {
+      run.taskID = data.task_id
     }
   },
 
-  _onComplete() {
-    if (this.state === 'ERROR') {
-      window._activeSseClient = null
-      return
+  // 会话 ID 一经确定（session 事件 / complete 载荷）：新会话 run 由临时键改为 sessionID 键。
+  _bindSession(run, sid) {
+    if (!sid) return
+    if (run.sessionID !== sid) run.sessionID = sid
+    if (run.key !== sid) {
+      const old = run.key
+      this.runs[sid] = run
+      delete this.runs[old]
+      run.key = sid
+      if (this.viewKey === old) this.viewKey = sid
     }
-    this._finalizeMessage(false)
-    this.phase = ''
-    this.approvals = []
-    this.subagents = []
-    this.state = 'COMPLETE'
-    this.thinkingOpen = false
-    this.thinkingText = ''
-    window._activeSseClient = null
-    Alpine.store('statusBar').poll()
+    if (this.viewKey === sid) {
+      this.sessionID = sid
+      try { localStorage.setItem('polaris_session_id', sid) } catch { /* 私有窗口 */ }
+    }
+    if (run.abortRequested) {
+      run.abortRequested = false
+      this._postAbort(sid)
+    }
+  },
+
+  // run 收尾：释放 SSE；不在视图中的 run 直接移除（历史以库为准，回到该会话时重新加载）。
+  _closeRun(run) {
+    run.finished = true
+    run.aborting = false
+    sseClients.get(run.rid)?.stop()
+    sseClients.delete(run.rid)
+    if (this.viewKey !== run.key && this.runs[run.key] === run) delete this.runs[run.key]
+  },
+
+  // 后台会话的完成/出错提示：可点击跳转到该会话。
+  _notifyBackground(run, ok) {
+    const i18n = Alpine.store('i18n')
+    const firstUser = run.messages.find(m => m.role === 'user')
+    const title = run.title || (firstUser ? firstUser.content.slice(0, 30) : '') || run.sessionID || ''
+    const sid = run.sessionID
+    Alpine.store('toast').show(ok ? 'ok' : 'error',
+      i18n.t(ok ? 'session_done_toast' : 'session_error_toast').replace('{0}', title), 8000,
+      { onClick: sid ? () => { this.loadSession(sid); Alpine.store('nav').navigate('chat') } : null })
+  },
+
+  _onComplete(rid, data) {
+    const run = this._byRid(rid)
+    if (!run || run.finished) return
+    const inView = this.viewKey === run.key
+    if (run.state === 'ERROR') { this._closeRun(run); return }
+    const wasAborting = run.aborting
+    if (!wasAborting) {
+      this._finalizeMessage(run, false)
+      run.phase = ''
+      run.approvals = []
+      run.subagents = []
+      run.state = 'COMPLETE'
+      if (inView) this.thinkingOpen = false
+      run.thinkingText = ''
+    }
+    this._closeRun(run)
+    if (inView) {
+      if (!wasAborting) Alpine.store('statusBar').poll()
+    } else if (!wasAborting) {
+      this._notifyBackground(run, true)
+    }
   },
 
   // resolveApproval 回复回合内的审批请求。裁决只经 HITL 网关（/v1/approvals），
@@ -798,53 +916,63 @@ Alpine.store('chat', {
     }
   },
 
-  _onError(err) {
+  _onError(rid, err) {
+    const run = this._byRid(rid)
+    if (!run || run.finished) return
+    const inView = this.viewKey === run.key
+    err = err || {}
+    if (run.aborting) { this._closeRun(run); return }
     const isAbort = err.code === 'aborted' || err.code === 'interrupted'
-    this._finalizeMessage(isAbort)
-    this.phase = ''
-    this.approvals = []
-    this.state = 'ERROR'
-    this.errorMsg = err.message || '连接中断'
-    window._activeSseClient?.stop()
-    window._activeSseClient = null
+    if (err.code === 'session_busy') {
+      // 本条消息根本没被服务端接受：撤掉乐观插入的用户消息，提示稍后重试
+      const last = run.messages[run.messages.length - 1]
+      if (last && last.role === 'user') run.messages.pop()
+      err = { ...err, message: Alpine.store('i18n').t('session_busy') }
+    } else {
+      this._finalizeMessage(run, isAbort)
+    }
+    run.phase = ''
+    run.approvals = []
+    run.state = 'ERROR'
+    run.errorMsg = err.message || '连接中断'
+    this._closeRun(run)
+    if (!inView) this._notifyBackground(run, false)
   },
 
-  _finalizeMessage(aborted = false) {
-    const content = sanitizeContent(this.currentTokens)
-    const reasoningContent = sanitizeContent(this.thinkingText)
+  _finalizeMessage(run, aborted = false) {
+    const content = sanitizeContent(run.currentTokens)
+    const reasoningContent = sanitizeContent(run.thinkingText)
     if (!content && !aborted && !reasoningContent) return
+    const msgs = run.messages
     // 检查是否已有 assistant 消息（tool_result 路径可能提前创建）
-    const last = this.messages[this.messages.length - 1]
+    const last = msgs[msgs.length - 1]
     if (last && last.role === 'assistant' && !last.content) {
       last.content = content
       last.reasoningContent = reasoningContent
       last.aborted = aborted
     } else if (content || aborted || reasoningContent) {
-      this.messages.push({ role: 'assistant', content, reasoningContent, toolCalls: [], aborted })
+      msgs.push({ role: 'assistant', content, reasoningContent, toolCalls: [], aborted })
     }
-    
-    if (!aborted && content && this.ttsEnabled) {
-      this.toggleSpeakText(this.messages.length - 1, content.replace(/<[^>]+>/g, '')); // Strip basic HTML for TTS
+
+    if (!aborted && content && this.ttsEnabled && this.viewKey === run.key) {
+      this.toggleSpeakText(msgs.length - 1, content.replace(/<[^>]+>/g, '')); // Strip basic HTML for TTS
     }
-    this.currentTokens = ''
+    run.currentTokens = ''
   },
 
+  // 把当前视图摘下来：不停止任何 SSE——仍在运行的回合继续在后台跑（ADR-0116）。
   clearView() {
     mcpAppsHost.teardownAll('session_changed')
-    this.messages = []
-    this.currentTokens = ''
-    this.thinkingText = ''
-    this.errorMsg = ''
-    this.contextWarning = null
-    this.compacting = false
-    this.state = 'IDLE'
+    const run = this.viewRun
+    if (run && run.finished && this.runs[run.key] === run) delete this.runs[run.key]
+    this.viewKey = null
+    this.messages = []   // 新数组；仍在运行的 run 持有旧数组的引用
+    this._idle = idleDefaults()
     this.lastAbortedInput = null
-    window._activeSseClient?.stop()
-    window._activeSseClient = null
-    this.taskID = null
   },
 
   newSession() {
+    this._loadSeq++
     this.clearView()
     this.sessionID = null
     this._inputHistory = []
@@ -865,12 +993,25 @@ Alpine.store('chat', {
   },
 
   async loadSession(sessionID) {
+    const seq = ++this._loadSeq
     this.clearView()
     this.sessionID = sessionID
+
+    // 该会话在本页仍有进行中的回合：直接接回视图（run 持有的 messages 已含用户消息与流式产物）
+    const live = this.runs[sessionID]
+    if (live && !live.finished) {
+      this.viewKey = live.key
+      this.messages = live.messages
+      return
+    }
+    if (live) delete this.runs[sessionID] // 已结束的残留，以库为准
+
     try {
       const r = await fetch(`/v1/sessions/${sessionID}?max_chars=50000`, { headers: authHeaders() })
+      if (seq !== this._loadSeq) return // 期间用户又切走了
       if (!r.ok) return
       const d = await r.json()
+      if (seq !== this._loadSeq) return
       // 归档项目不接收新会话：恢复其中的会话时不把它设为"当前项目"，否则随后点"新会话"会被拒。
       const proj = d.project_id ? Alpine.store('projects').byID(d.project_id) : null
       if (proj && !proj.archived) Alpine.store('projects').setCurrent(d.project_id)
@@ -891,7 +1032,47 @@ Alpine.store('chat', {
         aborted: m.aborted || false,
         compactionAfter: d.compaction_events?.some(e => e.at_message_id === m.id) || false,
       }))
+      // 服务端回合仍在后台运行（刷新页面 / 桌面窗口重开）：重新订阅，回放后接实时。
+      if (d.running) this._attachRun(sessionID)
     } catch { /* 静默失败，空历史 */ }
   },
-})
+
+  // 订阅服务端已在运行的回合（不 POST，不产生新回合）。回放从 seq=0 开始，
+  // 用户消息已随历史加载，故这里只会重建助手侧的流式产物。
+  _attachRun(sessionID) {
+    this.runs[sessionID] = newRun(sessionID, sessionID, this.messages)
+    this.viewKey = sessionID
+    const run = this.runs[sessionID]
+    run.state = 'THINKING'
+    const client = new SSEClient({
+      url: '',
+      method: 'GET',
+      sessionID,
+      onEvent: (type, data) => this._onEvent(run.rid, type, data),
+      onError: (err) => this._onError(run.rid, err),
+      onComplete: () => this._onComplete(run.rid),
+      // 回合恰好刚过保留期：没有可订阅的了，按已结束处理，以库为准
+      onNoContent: () => {
+        this._closeRun(run)
+        if (this.viewKey === run.key) {
+          delete this.runs[run.key]
+          this.viewKey = null
+          this.loadSession(sessionID)
+        }
+      },
+    })
+    sseClients.set(run.rid, client)
+    client.start()
+  },
+}
+
+// 视图字段 → 当前视图所属 run 的访问器（无 run 时落到 _idle）
+Object.defineProperties(chatStore, Object.fromEntries(RUN_FIELDS.map(k => [k, {
+  enumerable: true,
+  configurable: true,
+  get() { const r = this.viewRun; return r ? r[k] : this._idle[k] },
+  set(v) { const r = this.viewRun; if (r) r[k] = v; else this._idle[k] = v },
+}])))
+
+Alpine.store('chat', chatStore)
 

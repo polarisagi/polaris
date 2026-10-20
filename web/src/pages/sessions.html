@@ -8,6 +8,14 @@
       </div>
     </div>
 
+    <!-- 项目过滤条（项目页「查看全部」跳入） -->
+    <div x-show="$store.sessions.projectFilter" x-cloak class="mb-4 flex items-center gap-2">
+      <span class="badge badge-outline gap-1">
+        <span x-text="$store.i18n.t('projects_chat_label') + '：' + $store.projects.name($store.sessions.projectFilter)"></span>
+        <button class="btn btn-ghost btn-xs btn-circle h-4 w-4 min-h-0" @click="$store.sessions.clearProjectFilter()" :title="$store.i18n.t('sessions_clear_filter')">✕</button>
+      </span>
+    </div>
+
     <!-- Loading State -->
     <div x-show="$store.sessions.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
       <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
@@ -31,6 +39,10 @@
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-1">
                 <span x-show="sess.source && sess.source !== 'web'" x-text="$store.sessions.sourceIcon(sess.source)" class="text-base-content/60" :title="sess.source"></span>
+                <span x-show="$store.sessions.isRunning(sess)" class="relative flex h-2 w-2 shrink-0" :title="$store.i18n.t('session_running')">
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                </span>
                 <h3 class="font-bold text-sm truncate" x-text="sess.title || sess.id"></h3>
                 <span x-show="sess.project_id && sess.project_id !== 'default'" class="badge badge-ghost badge-sm shrink-0" x-text="$store.projects.name(sess.project_id)"></span>
               </div>

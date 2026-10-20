@@ -15,8 +15,9 @@ import { authHeaders } from './utils.js'
 //     且 event.origin === 该 view 的沙箱源，不满足直接丢弃。
 //   - 发往沙箱代理 iframe 的消息一律带精确 targetOrigin（沙箱源），不使用 '*'。
 //   - 来自 MCP 服务器的字符串（服务器名、工具名、URL、消息文本）在确认对话框里
-//     只经浏览器原生 confirm()/window.open() 展示——原生对话框只渲染纯文本，
-//     不解释 HTML，天然满足"一律 textContent"的约束，不走 innerHTML 拼接。
+//     只经应用内对话框（store/dialog.js，x-text 纯文本渲染）与 window.open() 展示，
+//     不解释 HTML，满足"一律 textContent"的约束，不走 innerHTML 拼接。
+//     （桌面 WKWebView 的原生 confirm 不弹框，故不再使用原生对话框。）
 // ============================================================================
 
 const PROTOCOL_VERSION = '2026-01-26'
@@ -361,7 +362,7 @@ class McpAppView {
     }
   }
 
-  _handleOpenLink(id, params) {
+  async _handleOpenLink(id, params) {
     const url = params && params.url
     let parsed
     try {
@@ -374,9 +375,9 @@ class McpAppView {
       this._respondError(id, -32000, 'Policy violation')
       return
     }
-    // 原生 confirm()：浏览器只渲染纯文本，服务器/View 提供的 URL 字符串不会被
-    // 当作 HTML 解释，天然满足"一律 textContent"的约束。
-    const ok = window.confirm(t('mcp_apps_open_link_confirm', '允许该应用打开外部链接？') + '\n\n' + parsed.href)
+    // 应用内对话框（store/dialog.js）经 x-text 渲染，只显示纯文本，服务器/View 提供的
+    // URL 字符串不会被当作 HTML 解释，与原生 confirm() 同等满足"一律 textContent"约束。
+    const ok = await Alpine.store('dialog').confirm({ message: t('mcp_apps_open_link_confirm', '允许该应用打开外部链接？') + '\n\n' + parsed.href })
     if (!ok) {
       this._respondError(id, -32000, 'Link opening denied by user')
       return
@@ -385,7 +386,7 @@ class McpAppView {
     this._respond(id, {})
   }
 
-  _handleUIMessage(id, params) {
+  async _handleUIMessage(id, params) {
     const text = params && params.content && params.content.text
     if (typeof text !== 'string' || !text) {
       this._respondError(id, -32000, 'Invalid message format')
@@ -397,7 +398,7 @@ class McpAppView {
       return
     }
     const label = t('mcp_apps_message_from_app', '来自应用') + ' (' + this.ref.serverId + ')'
-    const ok = window.confirm(label + '\n\n' + text)
+    const ok = await Alpine.store('dialog').confirm({ message: label + '\n\n' + text })
     if (!ok) {
       this._respondError(id, -32000, 'Message sending denied')
       return

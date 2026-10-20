@@ -7,6 +7,7 @@ import { authHeaders } from '../utils.js'
 // ══════════════════════════════════════════════════════════════════════════
 const DEFAULT_ID = 'default'
 const LS_KEY = 'polaris_project_id'
+const RECENT_LIMIT = 2
 
 function readCurrent() {
   try { return localStorage.getItem(LS_KEY) || DEFAULT_ID } catch { return DEFAULT_ID }
@@ -30,8 +31,8 @@ Alpine.store('projects', {
   loading: false,
   showArchived: false,
   current: readCurrent(),    // 新会话归属的项目
-  selectedID: null,          // 项目页右侧详情所选项目
-  sessions: [],              // 所选项目的会话
+  selectedID: null,          // 项目页当前展开（手风琴）的项目；默认不展开任何项目
+  sessions: [],              // 展开项目的最近会话（至多 RECENT_LIMIT 条）
   sessionsLoading: false,
   form: emptyForm(),
 
@@ -40,6 +41,12 @@ Alpine.store('projects', {
   name(id) { const p = this.byID(id); return p ? p.name : (id || '') },
   get selected() { return this.byID(this.selectedID) },
   get active() { return this.list.filter(p => !p.archived) },
+  // 项目页可见项目：默认项目置顶；归档项目仅在「显示已归档」开启时出现。
+  get visible() {
+    return this.list
+      .filter(p => this.showArchived || !p.archived)
+      .sort((a, b) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0))
+  },
 
   async load() {
     this.loading = true
@@ -63,18 +70,35 @@ Alpine.store('projects', {
   },
 
   // ── 项目页 ────────────────────────────────────────────
+  // 展开/收起项目（同时只展开一个）；展开时只拉最近 RECENT_LIMIT 个会话。
+  async toggleProject(id) {
+    if (this.selectedID === id) { this.selectedID = null; this.sessions = []; return }
+    await this.openProject(id)
+  },
+
   async openProject(id) {
     this.selectedID = id
+    this.sessions = []
     await this.loadSessions()
+  },
+
+  // 「查看全部」：带项目过滤跳转会话页。
+  viewAllSessions(p) {
+    const s = Alpine.store('sessions')
+    s.projectFilter = p.id
+    Alpine.store('nav').navigate('sessions')
+    s.load()
   },
 
   async loadSessions() {
     if (!this.selectedID) { this.sessions = []; return }
     this.sessionsLoading = true
+    const id = this.selectedID
     try {
-      const r = await fetch(`/v1/sessions?project_id=${encodeURIComponent(this.selectedID)}`, { headers: authHeaders() })
+      const r = await fetch(`/v1/sessions?project_id=${encodeURIComponent(id)}&limit=${RECENT_LIMIT}`, { headers: authHeaders() })
       if (!r.ok) return
       const d = await r.json()
+      if (this.selectedID !== id) return // 加载期间用户已展开别的项目
       this.sessions = d.sessions || []
     } catch { /* 静默 */ } finally {
       this.sessionsLoading = false
@@ -134,10 +158,16 @@ Alpine.store('projects', {
 
   async remove(p) {
     const msg = Alpine.store('i18n').t('projects_delete_confirm').replace('{0}', p.name)
-    if (!confirm(msg)) return
-    const r = await fetch(`/v1/projects/${p.id}`, { method: 'DELETE', headers: authHeaders() })
-    if (!r.ok) { Alpine.store('toast').show('error', await errText(r)); return }
+    if (!(await Alpine.store('dialog').confirm({ message: msg, danger: true }))) return
+    try {
+      const r = await fetch(`/v1/projects/${p.id}`, { method: 'DELETE', headers: authHeaders() })
+      if (!r.ok) { Alpine.store('toast').show('error', await errText(r)); return }
+    } catch (err) {
+      Alpine.store('toast').show('error', `${Alpine.store('i18n').t('delete_failed')}: ${err.message}`)
+      return
+    }
     if (this.selectedID === p.id) { this.selectedID = null; this.sessions = [] }
+    Alpine.store('toast').show('ok', Alpine.store('i18n').t('deleted'))
     await this.load()
   },
 
@@ -146,6 +176,6 @@ Alpine.store('projects', {
       method: 'PUT', headers: jsonHeaders(), body: JSON.stringify({ project_id: projectID }),
     })
     if (!r.ok) { Alpine.store('toast').show('error', await errText(r)); return }
-    await Promise.all([this.load(), this.loadSessions()])
+    await Promise.all([this.load(), this.loadSessions(), Alpine.store('sessions').load()])
   },
 })

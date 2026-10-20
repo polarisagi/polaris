@@ -317,7 +317,7 @@ Alpine.store('workflow', {
   },
 
   async del(id) {
-    if (!confirm('确认删除这个工作流？执行历史也会一并删除。')) return
+    if (!(await Alpine.store('dialog').confirm({ message: '确认删除这个工作流？执行历史也会一并删除。', danger: true }))) return
     try {
       await fetch(`/v1/workflows/${id}`, { method: 'DELETE', headers: authHeaders() })
       this.list = this.list.filter(w => w.id !== id)

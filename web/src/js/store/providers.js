@@ -195,6 +195,7 @@ Alpine.store('providers', {
   async remove(id) {
     const r = await fetch(`/v1/providers/${id}`, { method: 'DELETE', headers: authHeaders() })
     if (r.ok) { await this.load(); Alpine.store('toast').show('ok', '已删除') }
+    else Alpine.store('toast').show('error', `删除失败: HTTP ${r.status}`)
   },
 
   async test(id) {
@@ -243,7 +244,7 @@ Alpine.store('providers', {
   },
 
   async removeModel(providerID, modelID) {
-    if (!confirm('确认删除这个模型配置？')) return
+    if (!(await Alpine.store('dialog').confirm({ message: '确认删除这个模型配置？', danger: true }))) return
     const r = await fetch(`/v1/providers/${providerID}/models/${modelID}`, { method: 'DELETE', headers: authHeaders() })
     if (r.ok) {
       await this.load()
