@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	compact "github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -35,6 +36,18 @@ const (
 //
 // 纯函数（par_inv_03）：同输入同字节。
 func WindowConversationHistory(history []types.Message, maxMessages, maxBytes int) (anchor string, kept []types.Message) {
+	return WindowConversationHistoryBudget(history, maxMessages, maxBytes, 0)
+}
+
+// WindowConversationHistoryBudget 在 WindowConversationHistory 的基础上叠加 token 预算（ADR-0120 决策四）：
+// 估计 token 超过 maxTokens 时一次丢到预算的一半。丢弃点取条数/字节/token 三个阶梯函数的最大值，
+// 仍是历史内容的单调阶梯函数，两次跳窗之间 L2 纯追加。maxBytes<=0 且 maxTokens>0 时，
+// 单条上限取预算的一半（换算为字节），防止一条超大粘贴独占预算。
+func WindowConversationHistoryBudget(history []types.Message, maxMessages, maxBytes, maxTokens int) (anchor string, kept []types.Message) {
+	perMsgCap := maxBytes
+	if perMsgCap <= 0 && maxTokens > 0 {
+		perMsgCap = maxTokens * compact.CharsPerToken / 2
+	}
 	msgs := make([]types.Message, 0, len(history))
 	for _, m := range history {
 		if m.Role == "system" || strings.TrimSpace(m.Content) == "" {
@@ -46,13 +59,16 @@ func WindowConversationHistory(history []types.Message, maxMessages, maxBytes in
 		}
 		content := m.Content
 		// 单条上限：超大单条只保留尾部。截断只取决于这条消息自身，不破坏"旧消息字节不变"。
-		if maxBytes > 0 && len(content) > maxBytes {
-			content = tailRunes(content, maxBytes)
+		if perMsgCap > 0 && len(content) > perMsgCap {
+			content = tailRunes(content, perMsgCap)
 		}
 		msgs = append(msgs, types.Message{Role: role, Content: content})
 	}
 
 	drop := historyDropCount(msgs, maxMessages, maxBytes)
+	if d := historyTokenDropCount(msgs, maxTokens); d > drop {
+		drop = d
+	}
 	if drop == 0 {
 		return "", msgs
 	}
@@ -101,6 +117,31 @@ func historyDropCount(msgs []types.Message, maxMessages, maxBytes int) int {
 		}
 	}
 	return drop
+}
+
+// historyTokenDropCount 按 token 预算计算丢弃条数：模拟历史逐条追加，累计超过 maxTokens 时从头丢到
+// 不超过 maxTokens/2。逐条模拟让结果只取决于历史内容本身，且随追加单调、按整块跳变。
+// 至少保留最后一条。maxTokens<=0 不限。
+func historyTokenDropCount(msgs []types.Message, maxTokens int) int {
+	if maxTokens <= 0 || len(msgs) <= 1 {
+		return 0
+	}
+	drop, acc := 0, 0
+	for k := range msgs {
+		acc += messageTokens(msgs[k])
+		if acc <= maxTokens {
+			continue
+		}
+		for acc > maxTokens/2 && drop < k {
+			acc -= messageTokens(msgs[drop])
+			drop++
+		}
+	}
+	return drop
+}
+
+func messageTokens(m types.Message) int {
+	return compact.RoughTokens([]types.Message{m})
 }
 
 // renderHistoryAnchor 生成被丢弃部分的确定性概要：总条数 + 最近若干条的角色与首行截断。

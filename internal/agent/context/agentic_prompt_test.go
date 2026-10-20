@@ -33,7 +33,7 @@ func TestBuildAgenticPrompt_NoStagedPhaseContracts(t *testing.T) {
 			t.Errorf("agentic 提示词不应含 staged 阶段内容 %q", banned)
 		}
 	}
-	if !strings.Contains(got, "AGENTIC LOOP INSTRUCTIONS") {
+	if !strings.Contains(got, "Loop mode:") {
 		t.Error("agentic 提示词必须含循环模式指令 kernel/loop.md")
 	}
 

@@ -54,11 +54,15 @@ class _PolarisClient:
             raise RuntimeError(resp.get("error", "call_many failed"))
         return resp.get("results")
 
-    def tools(self):
+    def tools(self, query=None):
         resp = self._send({"action": "tools"})
         if not resp.get("ok"):
             raise RuntimeError(resp.get("error", "list tools failed"))
-        return resp.get("tools")
+        found = resp.get("tools") or []
+        if query:
+            q = str(query).lower()
+            found = [t for t in found if q in t.get("name", "").lower() or q in t.get("description", "").lower()]
+        return found
 
 _client = _PolarisClient()
 call = _client.call

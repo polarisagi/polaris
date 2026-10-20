@@ -41,7 +41,7 @@ func WriteConversationHistory(b *prompt.PromptBuilder, sCtx *StateContext) {
 	sCtx.Mu.RUnlock()
 
 	th := config.CurrentThresholds().M4Kernel
-	anchor, kept := WindowConversationHistory(history, th.ConversationHistoryMaxMessages, th.ConversationHistoryMaxBytes)
+	anchor, kept := WindowConversationHistoryBudget(history, th.ConversationHistoryMaxMessages, th.ConversationHistoryMaxBytes, th.ConversationHistoryMaxTokens)
 	src := taint.TaintSource{Module: "session", OriginTaintLevel: types.TaintHigh}
 	if anchor != "" {
 		// 锚定摘要由被丢弃的不可信历史派生，同样是数据：user 角色 + TaintHigh 围栏。

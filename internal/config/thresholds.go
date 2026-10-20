@@ -169,10 +169,13 @@ type M4KernelThresholds struct {
 	PRMMinThreshold   float64 `toml:"prm.min_threshold"`   // 0.4 — 全部候选低于此分数时兜底取第一个候选
 	PRMScorerModel    string  `toml:"prm.scorer_model"`    // "" — 留空则沿用 Provider 默认路由，不强制指定 budget-tier 模型名
 
-	// 对话历史进入内核的上限（ADR-0098 决策四；ADR-0105 决策二改为分块跳窗）：越界时一次丢弃前若干块
-	// （步长 = max_messages/2），四个阶段共用同一 L2。
-	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
-	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
+	// 对话历史进入内核的上限（ADR-0098 决策四；ADR-0105 决策二改为分块跳窗；ADR-0120 决策四改为 token 预算）：
+	// 越界时一次丢弃前若干块，四个阶段共用同一 L2。0 = 该维度不限。
+	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 0
+	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 0
+	// ConversationHistoryMaxTokens 历史 token 预算（ADR-0120 决策四）：超出时一次丢到预算的一半。
+	// 缓存命中价约为未命中价 1/50，保留历史的边际成本很低，而丢历史会让模型重读、重问。
+	ConversationHistoryMaxTokens int `toml:"conversation.history_max_tokens"` // 48000
 
 	// PromptPhaseContractsInCore 阶段契约库并入稳定核（ADR-0105 决策九）：true 且存在 ImmutableCore 时，
 	// 四阶段契约（PERCEIVE/PLAN/REFLECT/RESPOND）整体渲染进 L0，各阶段 L3 只写一条「当前阶段」选择器，
@@ -270,6 +273,13 @@ type M4KernelThresholds struct {
 	LoopObservationMaskAfterRounds int `toml:"loop.observation_mask_after_rounds"` // 6
 	// LoopObservationMaskBatch 观察遮蔽触发时单次批量驱逐的轮数。
 	LoopObservationMaskBatch int `toml:"loop.observation_mask_batch"` // 4
+	// LoopObservationMaskTriggerTokens 回合上下文估计达到该值才遮蔽（ADR-0120 决策四）；0 = 取模型上下文
+	// 窗口的 50%，无窗口信息时 64000。遮蔽会让被遮蔽点之后的全部前缀失效，小上下文时得不偿失。
+	LoopObservationMaskTriggerTokens int `toml:"loop.observation_mask_trigger_tokens"` // 0
+	// LoopObservationMaskMinTokens 只遮蔽估计不少于该值的工具结果（小结果遮蔽省不下钱）。
+	LoopObservationMaskMinTokens int `toml:"loop.observation_mask_min_tokens"` // 1024
+	// LoopRecallMaxChars 回合首条消息里自动召回文本的上限（字符），0 = 不限。
+	LoopRecallMaxChars int `toml:"loop.recall_max_chars"` // 2000
 	// LoopCompletion 回合完成判定方式："auto"（无工具调用即完成）或 "explicit"（必须调用 finish 工具）。
 	LoopCompletion string `toml:"loop.completion"` // "auto"
 	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（WP5，ADR-0115）。
@@ -418,6 +428,10 @@ type M7ToolThresholds struct {
 	WebFetchDefaultMaxChars      int    `toml:"web_fetch.default_max_chars"`        // 12000
 	WebFetchCacheMaxRows         int    `toml:"web_fetch.cache_max_rows"`           // 5000
 	WebFetchHostMinIntervalMs    int    `toml:"web_fetch.host_min_interval_ms"`     // 1000
+	// LazyActivation 延迟工具的激活方式（ADR-0120 决策三）："in_history"（默认）= tool_search 只返回参数、
+	// 模型经 call_tool 调用，tools 数组整场会话不变；"tools_array" = 旧行为，把命中工具追加进下一轮 tools 数组
+	// （tools 位于消息之前，追加会让其后全部历史失去前缀缓存）。
+	LazyActivation string `toml:"lazy_activation"` // "in_history"
 }
 
 type M8OrchestratorThresholds struct {
@@ -634,8 +648,9 @@ func DefaultThresholds() Thresholds {
 			PRMMaxCandidates:               3,
 			PRMMinThreshold:                0.4,
 			PRMScorerModel:                 "",
-			ConversationHistoryMaxMessages: 20,
-			ConversationHistoryMaxBytes:    24576,
+			ConversationHistoryMaxMessages: 0,
+			ConversationHistoryMaxBytes:    0,
+			ConversationHistoryMaxTokens:   48000,
 			PromptPhaseContractsInCore:     true,
 			ThinkingPerceive:               "low",
 			ThinkingPlanInitial:            "high",
@@ -666,17 +681,20 @@ func DefaultThresholds() Thresholds {
 			AgentsMaxConcurrent:          4,
 			SecretGetMaxPerTurn:          5,
 			// WP2 agentic 循环内核阈值默认值
-			LoopMode:                       defaultLoopMode(),
-			LoopRunawayGuardRounds:         200,
-			LoopTurnBudgetUSD:              0,
-			LoopTurnBudgetTokens:           0,
-			LoopTurnWallSeconds:            0,
-			LoopObservationMaskAfterRounds: 6,
-			LoopObservationMaskBatch:       4,
-			LoopCompletion:                 "auto",
-			JobsKillOnSessionEnd:           true,
-			SleepTimeIdleMinutes:           10,
-			SleepTimeEnabled:               nil,
+			LoopMode:                         defaultLoopMode(),
+			LoopRunawayGuardRounds:           200,
+			LoopTurnBudgetUSD:                0,
+			LoopTurnBudgetTokens:             0,
+			LoopTurnWallSeconds:              0,
+			LoopObservationMaskAfterRounds:   6,
+			LoopObservationMaskBatch:         4,
+			LoopObservationMaskTriggerTokens: 0,
+			LoopObservationMaskMinTokens:     1024,
+			LoopRecallMaxChars:               2000,
+			LoopCompletion:                   "auto",
+			JobsKillOnSessionEnd:             true,
+			SleepTimeIdleMinutes:             10,
+			SleepTimeEnabled:                 nil,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,
@@ -732,6 +750,7 @@ func DefaultThresholds() Thresholds {
 			WebFetchDefaultMaxChars:      12000,
 			WebFetchCacheMaxRows:         5000,
 			WebFetchHostMinIntervalMs:    1000,
+			LazyActivation:               "in_history",
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,

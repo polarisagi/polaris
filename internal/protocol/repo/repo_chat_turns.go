@@ -21,6 +21,8 @@ type ChatTurnRepository interface {
 	AppendTurnSteps(ctx context.Context, rows []TurnStepRow) error
 	// ListTurnSteps 返回一个回合的全部行（含摘要行），按 seq 升序。session 不匹配的 turn 视为不存在。
 	ListTurnSteps(ctx context.Context, sessionID, turnID string) ([]TurnStepRow, error)
+	// ListSessionToolSteps 返回会话内全部 kind=tool 的步骤行，按 turn_id、seq 升序（回合摘要用，ADR-0120 决策四）。
+	ListSessionToolSteps(ctx context.Context, sessionID string) ([]TurnStepRow, error)
 	// TurnSummaries 返回会话内每个回合的摘要行 JSON（turn_id → data），供会话加载一次取齐。
 	TurnSummaries(ctx context.Context, sessionID string) (map[string][]byte, error)
 	// AttachTurnMeta 给 assistant 消息写回合 ID 与用量摘要 JSON。

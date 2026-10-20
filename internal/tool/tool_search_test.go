@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -27,8 +26,7 @@ func TestToolSearch(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 
-	var res map[string]any
-	if err := json.Unmarshal(out, &res); err != nil {
-		t.Fatalf("invalid json")
+	if len(out) == 0 {
+		t.Fatal("expected text output")
 	}
 }

@@ -210,6 +210,11 @@ func (cwm *ContextWindowManager) SetCurrentUsage(tokens int) {
 }
 
 // MaxTokens 返回本管理器的上下文窗口容量（供压缩预算计算复用同一上限）。
+// currentUsageTokens 最近一次 SetCurrentUsage 记录的整段请求估计（观察遮蔽成本门控用，ADR-0120 决策四）。
+func (cwm *ContextWindowManager) currentUsageTokens() int {
+	return cwm.currentUsage
+}
+
 func (cwm *ContextWindowManager) MaxTokens() int {
 	return cwm.maxTokens
 }

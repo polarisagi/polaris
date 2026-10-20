@@ -55,6 +55,20 @@ func (b *PromptBuilder) WriteStable(msg types.Message) {
 	b.layers[protocol.LayerStable] = append(b.layers[protocol.LayerStable], msg)
 }
 
+// LayerMessages 返回某一层已写入消息的副本（会话层冻结快照用，ADR-0120 决策二）。
+func (b *PromptBuilder) LayerMessages(layer int) []types.Message {
+	if layer < 0 || layer >= protocol.LayerCount {
+		return nil
+	}
+	return append([]types.Message(nil), b.layers[layer]...)
+}
+
+// WriteSessionSnapshot 原样重放此前冻结的 L1 会话层消息。只进层次序、不进 zone：
+// 快照里的消息在首次写入时已按各自写入方法完成围栏与污点处理，重放不得再改写一个字节。
+func (b *PromptBuilder) WriteSessionSnapshot(msgs []types.Message) {
+	b.layers[protocol.LayerSession] = append(b.layers[protocol.LayerSession], msgs...)
+}
+
 // WritePhaseSystem 写入 L3 的 system 文本（易变层：日期/AmbientContext/扩展状态等由进程内
 // 组件生成的运行期提示）。空串忽略。
 func (b *PromptBuilder) WritePhaseSystem(content string) {

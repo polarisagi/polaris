@@ -122,7 +122,6 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 	prompt := NewPromptAssemblyService(
 		deps.PromptMgr,
 		deps.SoulMDContent,
-		nil,
 		deps.BaseSystemPromptTpl,
 		deps.Registry,
 		deps.ServerPlatform,

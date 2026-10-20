@@ -203,7 +203,9 @@ func (p *Pool) acquireInner(ctx context.Context, sessionID string, background bo
 		// 语义上与"全新 session"完全等价，避免锁定窗口。
 		curr := entry.agent.sm.Current()
 		if curr == types.AgentStateComplete || curr == types.AgentStateFailed {
+			prev := entry.agent
 			entry = p.newPoolEntry(sessionID)
+			entry.agent.inheritSessionLayer(prev)
 			p.sessions[sessionID] = entry
 		}
 	}

@@ -64,23 +64,26 @@ func TestAgenticLoop_ObservationMasking_T3Batch(t *testing.T) {
 	agent.sCtx.LoopObservationMaskAfterRounds = 2
 	agent.sCtx.LoopObservationMaskBatch = 2
 
-	// 注入两条工具结果消息
+	// 注入两条大工具结果（≥ observation_mask_min_tokens），并让上下文估计越过触发阈值（窗口 50%）。
+	big1, big2 := "large output 1 "+strings.Repeat("x", 5000), "large output 2 "+strings.Repeat("y", 5000)
 	agent.sCtx.LoopMessages = []types.Message{
 		{
 			Role:    "user",
-			Content: "large output 1",
+			Content: big1,
 			Parts: []any{
-				map[string]any{"type": "tool_result", "tool_use_id": "c1", "content": "large output 1"},
+				map[string]any{"type": "tool_result", "tool_use_id": "c1", "content": big1},
 			},
 		},
 		{
 			Role:    "user",
-			Content: "large output 2",
+			Content: big2,
 			Parts: []any{
-				map[string]any{"type": "tool_result", "tool_use_id": "c2", "content": "large output 2"},
+				map[string]any{"type": "tool_result", "tool_use_id": "c2", "content": big2},
 			},
 		},
 	}
+	agent.cwm = NewContextWindowManager(4000)
+	agent.cwm.SetCurrentUsage(3000)
 
 	agent.applyLoopObservationMasking(context.Background())
 
@@ -385,5 +388,34 @@ func TestAgenticLoop_SteerTaint_BlocksWriteToolInNextRound(t *testing.T) {
 	}
 	if !writeBlockedMsg {
 		t.Fatalf("期望在消息中记录写类工具被 L1_taint 拦截的错误响应，实际消息: %+v", agent.sCtx.LoopMessages)
+	}
+}
+
+// TestAgenticLoop_ObservationMasking_CostGate 成本门控（ADR-0120 决策四）：上下文未达阈值、或结果太小，都不遮蔽。
+func TestAgenticLoop_ObservationMasking_CostGate(t *testing.T) {
+	mk := func(content string) []types.Message {
+		return []types.Message{{
+			Role: "user", Content: content,
+			Parts: []any{map[string]any{"type": "tool_result", "tool_use_id": "c1", "content": content}},
+		}}
+	}
+	for name, tc := range map[string]struct {
+		content string
+		usage   int
+	}{
+		"below trigger": {strings.Repeat("x", 5000), 100},
+		"small result":  {"tiny", 3000},
+	} {
+		agent := NewAgentWithDefaults("test-obs-gate")
+		agent.sCtx.LoopRound = 10
+		agent.sCtx.LoopObservationMaskAfterRounds = 2
+		agent.sCtx.LoopObservationMaskBatch = 1
+		agent.sCtx.LoopMessages = mk(tc.content)
+		agent.cwm = NewContextWindowManager(4000)
+		agent.cwm.SetCurrentUsage(tc.usage)
+		agent.applyLoopObservationMasking(context.Background())
+		if strings.HasPrefix(agent.sCtx.LoopMessages[0].Content, "[output masked") {
+			t.Fatalf("%s: 不应遮蔽", name)
+		}
 	}
 }

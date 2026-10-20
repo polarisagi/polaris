@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -21,7 +20,6 @@ type PromptAssemblyService struct {
 	PromptMgr               protocol.PromptFacade
 	SoulMDContent           *string
 	ContextRefExpander      *authcontext.ContextRefExpander
-	PersonaRefiner          *agentctx.PersonaRefiner
 	BaseSystemPromptTpl     string
 	ActivatedSystemPromptMu sync.RWMutex
 	ActivatedSystemPrompt   string
@@ -50,7 +48,6 @@ type skillEmbedEntry struct {
 func NewPromptAssemblyService(
 	promptMgr protocol.PromptFacade,
 	soulMDContent *string,
-	personaRefiner *agentctx.PersonaRefiner,
 	baseSystemPromptTpl string,
 	registry protocol.LLMRegistry,
 	serverPlatform string,
@@ -65,7 +62,6 @@ func NewPromptAssemblyService(
 	return &PromptAssemblyService{
 		PromptMgr:             promptMgr,
 		SoulMDContent:         soulMDContent,
-		PersonaRefiner:        personaRefiner,
 		BaseSystemPromptTpl:   baseSystemPromptTpl,
 		Registry:              registry,
 		ServerPlatform:        serverPlatform,

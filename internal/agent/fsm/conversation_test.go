@@ -155,3 +155,51 @@ func TestWindowConversationHistory_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// token 预算（ADR-0120 决策四）：两次跳窗之间纯追加；跳窗次数远少于回合数；至少保留最后一条。
+func TestWindowConversationHistoryBudget_AppendOnlyAndJumps(t *testing.T) {
+	long := func(n int) []types.Message {
+		h := make([]types.Message, 0, n)
+		for i := 0; i < n; i++ {
+			role := "user"
+			if i%2 == 1 {
+				role = "assistant"
+			}
+			h = append(h, types.Message{Role: role, Content: fmt.Sprintf("msg-%03d ", i) + strings.Repeat("x", 400)})
+		}
+		return h
+	}
+	const budget = 2000 // 每条约 100 token，约 20 条触发一次跳窗
+	prevAnchor, prevKept := WindowConversationHistoryBudget(long(1), 0, 0, budget)
+	jumps := 0
+	for n := 2; n <= 300; n++ {
+		anchor, kept := WindowConversationHistoryBudget(long(n), 0, 0, budget)
+		if len(kept) == 0 {
+			t.Fatalf("n=%d 至少保留最后一条", n)
+		}
+		if anchor == prevAnchor {
+			for i := range prevKept {
+				if i >= len(kept) || kept[i].Content != prevKept[i].Content {
+					t.Fatalf("n=%d 未跳窗但第 %d 条变化", n, i)
+				}
+			}
+		} else {
+			jumps++
+		}
+		prevAnchor, prevKept = anchor, kept
+	}
+	if jumps == 0 || jumps > 300/8 {
+		t.Fatalf("跳窗次数 %d 不合理（预算应约每 10 条跳一次）", jumps)
+	}
+}
+
+// 单条超大粘贴在只配 token 预算时按预算一半截断，不独占全部预算。
+func TestWindowConversationHistoryBudget_PerMessageCap(t *testing.T) {
+	h := []types.Message{{Role: "user", Content: strings.Repeat("y", 100000)}, {Role: "assistant", Content: "ok"}}
+	_, kept := WindowConversationHistoryBudget(h, 0, 0, 1000)
+	for _, m := range kept {
+		if len(m.Content) > 1000*4/2 {
+			t.Fatalf("单条未按预算一半截断: %d 字节", len(m.Content))
+		}
+	}
+}

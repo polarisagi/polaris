@@ -33,6 +33,7 @@ func WriteSessionLayer(ctx context.Context, b *prompt.PromptBuilder, memory prot
 	trusted := sCtx.WorkspaceContextTrusted
 	untrusted := sCtx.WorkspaceContextUntrusted
 	extInfo := sCtx.InstalledExtensionsInfo
+	prefs := sCtx.SessionPreferencesBlock
 	sCtx.Mu.RUnlock()
 
 	if sysEnv != "" {
@@ -45,6 +46,16 @@ func WriteSessionLayer(ctx context.Context, b *prompt.PromptBuilder, memory prot
 		if blocks, err := memory.ListCoreMemory(ctx, sCtx.AgentID, sCtx.SessionID); err == nil && len(blocks) > 0 {
 			b.WriteCoreMemory(blocks)
 		}
+	}
+	if prefs != "" {
+		safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
+			prefs, taint.TaintSource{Module: "persona", OriginTaintLevel: types.TaintNone}, "session_preferences"))
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "WriteSessionLayer: sanitize session preferences", err)
+		}
+		b.SetLayer(protocol.LayerSession)
+		b.WriteInstruction(safe)
+		b.ResetLayer()
 	}
 	WriteAgentProfile(b, sCtx)
 
@@ -164,45 +175,76 @@ func WriteAgenticUsage(b *prompt.PromptBuilder, tokens int, cost float64, wallSe
 	b.WritePhaseSystem(fmt.Sprintf("[usage] tokens=%d cost≈$%.4f wall=%.1fs", tokens, cost, wallSeconds))
 }
 
-// FinishAgenticLayered 补齐 L0 稳定核，按 L0..L4 组装前缀，并在 L4 回合消息之后追加末尾易变块（R3-01）。
-// 易变块为单条 user 消息，依次包含 core.VolatileContent()、T7 计量行、收尾告警。
-// 该易变块不写入 LoopMessages，每轮按最新计量重新生成，保证 L0..L4 字节前缀严格稳定（T1）。
+// FinishAgenticLayered 补齐 L0 稳定核，按 L0..L4 组装前缀，并在 L4 回合消息之后追加调用级易变尾巴（R3-01）。
 //
-// L0 只取可变稳定核（StableMessage），**不带** "# PHASE CONTRACTS" 阶段契约段：契约库是
-// Perceive/Plan/Reflect/Respond 四阶段的输出格式（TaskModel/DAG JSON 等），其导语要求模型
-// 去找末尾的 "# ACTIVE PHASE" 选择器——agentic 循环没有阶段、也不写选择器，模型在思考链里
-// 反复困惑"我在 Perceive 阶段该输出 TaskModel JSON？"（2026-10-20 实测），既误导又白付约 2.5K token。
-// 循环模式的指令只来自 L3 的 kernel/loop.md。
-func FinishAgenticLayered(b *prompt.PromptBuilder, memory protocol.MemoryFacade, usageText, warnPrompt string) []types.Message {
+// L0 = 可变稳定核（StableMessage）+ 循环指令 loopInstr（kernel/loop.md）。loop.md 是静态文本，
+// 此前位于历史之后的 L3，每个新回合都随历史后移而落到前缀之外（ADR-0120 决策二第 4 条）。
+// L0 **不带** "# PHASE CONTRACTS" 阶段契约段：契约是 Perceive/Plan/Reflect/Respond 四阶段的
+// 输出格式，agentic 循环没有阶段，带上只会误导模型并白付约 2.5K token（2026-10-20 实测）。
+//
+// 调用级尾巴只含 T7 计量行与收尾告警（每次调用都变，必须在最末、且不写入 LoopMessages）。
+// 日期、扩展状态、ambient 技能等回合级易变信息由回合首条 user 消息携带（Agent.turnOpeningContentLocked），
+// 回合内位置固定，第二次调用起即可命中缓存（ADR-0120 决策二第 5 条）。
+func FinishAgenticLayered(b *prompt.PromptBuilder, memory protocol.MemoryFacade, loopInstr *types.Message, usageText, warnPrompt string) []types.Message {
 	if memory != nil {
 		if core := memory.ImmutableCore(); core != nil {
 			b.WriteStable(core.StableMessage())
 		}
 	}
+	if loopInstr != nil {
+		b.WriteStable(*loopInstr)
+	}
 	msgs := b.BuildLayered()
 
-	var volatileParts []string
-	if memory != nil {
-		if core := memory.ImmutableCore(); core != nil {
-			if vc := core.VolatileContent(); vc != "" {
-				volatileParts = append(volatileParts, vc)
-			}
-		}
-	}
+	var tail []string
 	if usageText != "" {
-		volatileParts = append(volatileParts, usageText)
+		tail = append(tail, usageText)
 	}
 	if warnPrompt != "" {
-		volatileParts = append(volatileParts, warnPrompt)
+		tail = append(tail, warnPrompt)
 	}
-
-	if len(volatileParts) > 0 {
+	if len(tail) > 0 {
 		msgs = append(msgs, types.Message{
 			Role:    "user",
-			Content: strings.Join(volatileParts, "\n\n"),
+			Content: strings.Join(tail, "\n\n"),
 		})
 	}
 	return msgs
+}
+
+// loopInstruction 返回循环模式指令（kernel/loop.md）的 L0 system 消息。
+func loopInstruction() *types.Message {
+	tmpl, err := configs.LoadPromptTemplate("kernel/loop.md", nil)
+	if err != nil || strings.TrimSpace(tmpl) == "" {
+		tmpl = "Loop mode: the turn ends when you answer without a tool call, or when you call finish with a summary."
+	}
+	safe, _ := taint.SanitizeToSafe(taint.NewTaintedString(
+		tmpl, taint.TaintSource{OriginTaintLevel: types.TaintNone}, "system_prompt"))
+	m := safe.IntoMessage("system")
+	return &m
+}
+
+// writeFrozenSessionLayer 写入会话层（L1）。会话内首次调用时完整渲染并冻结到 sCtx，之后原样重放
+// （ADR-0120 决策二第 3 条）。渲染失败不冻结，下次调用重试。
+func writeFrozenSessionLayer(ctx context.Context, b *prompt.PromptBuilder, memory protocol.MemoryFacade, sCtx *StateContext) error {
+	sCtx.Mu.RLock()
+	snap := sCtx.SessionLayerSnapshot
+	sCtx.Mu.RUnlock()
+	if snap == nil {
+		tmp := prompt.NewPromptBuilder()
+		if err := WriteSessionLayer(ctx, tmp, memory, sCtx); err != nil {
+			return err
+		}
+		snap = tmp.LayerMessages(protocol.LayerSession)
+		if snap == nil {
+			snap = []types.Message{}
+		}
+		sCtx.Mu.Lock()
+		sCtx.SessionLayerSnapshot = snap
+		sCtx.Mu.Unlock()
+	}
+	b.WriteSessionSnapshot(snap)
+	return nil
 }
 
 // BuildAgenticPrompt 组装 Agentic 循环单轮请求的提示词：
@@ -212,15 +254,12 @@ func BuildAgenticPrompt(ctx context.Context, memory protocol.MemoryFacade, sCtx 
 	b := prompt.NewPromptBuilder()
 
 	// 1. L1 会话层
-	if err := WriteSessionLayer(ctx, b, memory, sCtx); err != nil {
+	if err := writeFrozenSessionLayer(ctx, b, memory, sCtx); err != nil {
 		slog.Warn("prompt: agentic session layer write failed", "err", err)
 	}
 
 	// 2. L2 历史层
 	WriteConversationHistory(b, sCtx)
-
-	// 3. L3 阶段层：内核指令（每回合保持不变的内容）
-	WriteKernelInstruction(b, "kernel/loop.md", "You are Polaris in agentic loop mode. Use available tools to fulfill user goals. When done, reply clearly or call finish.")
 
 	// 4. L4 回合层：如果 roundMsgs 为空，写入初始 RawIntentTS；否则逐条写入 roundMsgs
 	if len(roundMsgs) == 0 {
@@ -240,5 +279,5 @@ func BuildAgenticPrompt(ctx context.Context, memory protocol.MemoryFacade, sCtx 
 	warnPrompt := sCtx.LoopWarningPrompt
 	sCtx.Mu.RUnlock()
 
-	return FinishAgenticLayered(b, memory, usageText, warnPrompt), nil
+	return FinishAgenticLayered(b, memory, loopInstruction(), usageText, warnPrompt), nil
 }

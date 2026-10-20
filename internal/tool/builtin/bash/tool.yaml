@@ -1,5 +1,5 @@
 name: bash
-description: "Execute a bash command in a sandboxed environment. Restricted to allowed working directories. Use for shell operations, scripting, and CLI tools."
+description: "Run a shell command in the sandbox, restricted to the allowed working directories. background=true runs it as a job (see job_status/job_output); session_id keeps a persistent shell across calls."
 version: "1.0.0"
 capability: write-local
 risk_level: high

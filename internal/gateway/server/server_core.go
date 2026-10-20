@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/action/hook"
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/gateway/elicitation"
 	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -282,15 +281,6 @@ func (s *Server) SetPluginCreator(pc plugin.PluginGenerator) {
 	s.pluginCreator = pc
 	if s.pluginHandler != nil {
 		s.pluginHandler.PluginCreator = pc
-	}
-}
-
-// SetPersonaRefiner 注入用户画像精炼器（M05 §2.3），与 internal/agent 共享同一
-// 进程级单例（cmd/polaris/boot_agent.go 构造 + Load）。nil 时 ChatHandler
-// 跳过用户偏好画像注入（消费端见 chat/system_prompt.go）。
-func (s *Server) SetPersonaRefiner(pr *agentctx.PersonaRefiner) {
-	if s.chatHandler != nil && s.chatHandler.PromptService != nil {
-		s.chatHandler.PromptService.PersonaRefiner = pr
 	}
 }
 

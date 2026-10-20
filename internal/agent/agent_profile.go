@@ -26,6 +26,10 @@ func (a *Agent) SetAgentProfile(p *types.AgentProfileSpec) {
 
 	a.sCtx.Mu.Lock()
 	defer a.sCtx.Mu.Unlock()
+	// 角色改变会话层内容（画像/指令），冻结的会话层快照随之作废（ADR-0120 决策二第 3 条）。
+	if a.sCtx.AgentProfile != p {
+		a.sCtx.SessionLayerSnapshot = nil
+	}
 	a.sCtx.AgentProfile = p
 	if p != nil && p.MaxTurns > 0 && (a.sCtx.MaxStepsLimit == 0 || a.sCtx.MaxStepsLimit > p.MaxTurns) {
 		a.sCtx.MaxStepsLimit = p.MaxTurns
@@ -180,4 +184,20 @@ func delegateTarget(toolName string, args []byte) string {
 		return ""
 	}
 	return in.Target
+}
+
+// inheritSessionLayer 回合间沿用上一回合 Agent 的会话层冻结快照（ADR-0120 决策二第 3 条）。
+// 内核按回合新建 Agent（Pool.acquireInner），不继承则每回合都重渲染会话层，核心记忆块等
+// 任何变化都让其后全部历史失去前缀缓存。快照随池条目存活，条目被 GC（会话空闲）后自然刷新。
+func (a *Agent) inheritSessionLayer(prev *Agent) {
+	if prev == nil || prev.sCtx == nil || a.sCtx == nil {
+		return
+	}
+	prev.sCtx.Mu.RLock()
+	snap, prefs := prev.sCtx.SessionLayerSnapshot, prev.sCtx.SessionPreferencesBlock
+	prev.sCtx.Mu.RUnlock()
+	a.sCtx.Mu.Lock()
+	a.sCtx.SessionLayerSnapshot = snap
+	a.sCtx.SessionPreferencesBlock = prefs
+	a.sCtx.Mu.Unlock()
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,11 @@ const EnvLLMRawDump = "POLARIS_LLM_RAW_DUMP"
 // rawDumpDir 每次流式请求读取一次环境变量（廉价），避免包级可变状态；
 // 取值为空即关闭。
 func rawDumpDir() string { return os.Getenv(EnvLLMRawDump) }
+
+// EnvLLMRawDumpFull 为 "1" 时额外落盘完整请求体（与 .sse 同名、后缀 .req.json），
+// 供 tools/cache_diff.go 比较相邻两次请求定位前缀缓存失配（ADR-0120 决策八）。
+// 请求体不含鉴权头，但含完整对话：只在本机排障时开启，用完删除目录。
+const EnvLLMRawDumpFull = "POLARIS_LLM_RAW_DUMP_FULL"
 
 // rawDump 单条流的转储句柄；nil 表示未开启，所有方法对 nil 安全。
 type rawDump struct {
@@ -59,6 +65,9 @@ func newRawDump(dir string, req *OpenAIRequest) *rawDump {
 	})
 	d := &rawDump{f: f}
 	d.write("# request " + string(summary))
+	if os.Getenv(EnvLLMRawDumpFull) == "1" {
+		writeFullRequest(strings.TrimSuffix(f.Name(), ".sse")+".req.json", req)
+	}
 	return d
 }
 
@@ -94,5 +103,17 @@ func (d *rawDump) Close() {
 	if d.f != nil {
 		_ = d.f.Close()
 		d.f = nil
+	}
+}
+
+// writeFullRequest 以 0600 写完整请求体；失败只告警，不影响推理。
+func writeFullRequest(path string, req *OpenAIRequest) {
+	body, err := json.MarshalIndent(req, "", " ")
+	if err != nil {
+		slog.Warn("llm raw dump: marshal full request failed", "err", err)
+		return
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		slog.Warn("llm raw dump: write full request failed", "path", path, "err", err)
 	}
 }

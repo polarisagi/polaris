@@ -78,7 +78,7 @@ func (o *orchestrator) continueOnStopHooks(
 		}
 		cancel()
 		history = append(history, types.Message{Role: "assistant", Content: reply})
-		agentCtrl.SetConversationHistory(history)
+		agentCtrl.SetConversationHistory(o.withTurnDigests(ctx, sessionID, history))
 		slog.Info("session: Stop hook requested continuation", "session", sessionID, "round", i+1)
 		next, inferErr, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
 			"<stop-hook>\n"+v.Reason+"\n</stop-hook>", types.TaintHigh) // hook 文本不是 owner 的输入

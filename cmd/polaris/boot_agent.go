@@ -101,11 +101,6 @@ type AgentBundle struct {
 	// Subagents 子 Agent 执行器（fork 技能与 agent 类型 hook 经此运行）
 	Subagents *orchestrator.SubagentRunner
 
-	// PersonaRefiner 用户画像精炼器（M05 §2.3），跨 agent-0/AgentPool/ChatHandler
-	// 共享同一进程级单例；boot_server.go 通过 Server.SetPersonaRefiner 注入 ChatHandler
-	// 用于系统提示词组装（消费端见 chat/system_prompt.go）。
-	PersonaRefiner *agentctx.PersonaRefiner
-
 	// SamplingMonitor 连续采样退化监控（M12 §9），boot_server.go 通过
 	// Server.SetSamplingMonitor 注入 ChatHandler，供生产回复流量 1% 抽样
 	// + LLM Judge 打分回灌 RecordSample（见 sampling_scorer.go）。
@@ -285,9 +280,8 @@ func buildAgent(
 			}
 		})
 	})
-	// PersonaRefiner（M05 §2.3）：agent-0 与 AgentPool 派生 Agent 共享同一进程级
-	// 单例（2026-07-13 deadcode 复核发现完整实现但从未接线：NewPersonaRefiner/
-	// Load/RefineAtSessionEnd/Save/ToUserPreferences 此前零生产调用点）。
+	// PersonaRefiner（M05 §2.3）：agent-0 与 AgentPool 派生 Agent 共享同一进程级单例；
+	// 内核在会话层首次渲染时快照其稳定维度（ADR-0120 决策二）。
 	a.InjectPersonaRefiner(personaRefiner)
 
 	// GD-14-005 工作区上下文协议：装载器为进程级共享（无状态，只读配置）。
@@ -587,7 +581,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// PersonaRefiner（M05 §2.3）：单进程单例，Load() 一次性从 preferences 表加载
 	// 冷启动画像；provider 用 sb.Router 供 RefineAtSessionEnd 生成 InteractionSummary。
-	personaRefiner := agentctx.NewPersonaRefiner(sb.Store.DB(), sb.Router)
+	personaRefiner := agentctx.NewPersonaRefiner(sb.Store.DB())
 	if err := personaRefiner.Load(ctx); err != nil {
 		slog.Warn("polaris: persona refiner load failed, using defaults", "err", err)
 	}
@@ -1324,7 +1318,6 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Subagents:            subagentRunner,
 		Supervisor:           sv,
 		ReaperStop:           reaperStop,
-		PersonaRefiner:       personaRefiner,
 		SamplingMonitor:      samplingMonitor,
 		SleepTimeCoordinator: coordinator,
 	}, nil

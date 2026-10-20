@@ -31,10 +31,13 @@ func hintCatalog() *CompositeCatalog {
 func TestToolsHint_ListsDeferredOnly(t *testing.T) {
 	cc := hintCatalog()
 	h := cc.ToolsHint(context.Background())
-	for _, want := range []string{"Loaded: read_file, tool_search", "switch_model 切换当前会话使用的模型", "image_generate", "fs(list)", "weather"} {
+	for _, want := range []string{"switch_model 下一轮切换模型或思考档", "image_generate Generate an image from a prompt", "fs(list)", "weather", "call_tool {"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("hint 缺 %q：\n%s", want, h)
 		}
+	}
+	if strings.Contains(h, "read_file") {
+		t.Errorf("核心工具已在 function 列表里，不应出现在索引：\n%s", h)
 	}
 	if strings.Contains(h, "很长的细节") {
 		t.Errorf("简述应只取第一句：\n%s", h)
@@ -82,5 +85,16 @@ func TestDefaultCoreSet_Bounded(t *testing.T) {
 	cc := NewCompositeCatalog()
 	if !cc.IsCore("tool_search") || cc.IsCore("switch_model") {
 		t.Fatal("默认核心集应含 tool_search、不含 switch_model")
+	}
+}
+
+// 英文描述按词边界截断，不再截出半个单词（ADR-0120 决策三第 6 条）。
+func TestToolBrief_WordBoundary(t *testing.T) {
+	got := toolBrief("Trigger an explicit reflection on past events to generate high-level insights and lessons for later reuse")
+	if !strings.HasSuffix(got, "…") || strings.HasSuffix(strings.TrimSuffix(got, "…"), "reus") {
+		t.Fatalf("应在词边界截断: %q", got)
+	}
+	if strings.Contains(got, "re…") && !strings.Contains(got, "reflection") {
+		t.Fatalf("截断过短: %q", got)
 	}
 }

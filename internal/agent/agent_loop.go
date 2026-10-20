@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/config"
@@ -114,7 +116,11 @@ func (a *Agent) runExecuteLoop(ctx context.Context) error {
 		}
 	}
 
-	// 3. 构建单层批 DAGPlan，经过 S_VALIDATE 四层校验链并执行
+	// 3. call_tool 解包（ADR-0120 决策三）后构建单层批 DAGPlan，经过 S_VALIDATE 四层校验链并执行
+	calls, badCalls := a.unwrapCallTools(calls)
+	for _, b := range badCalls {
+		a.appendToolErrorMessages([]types.InferToolCall{b.call}, "Error: "+b.msg)
+	}
 	if len(calls) > 0 {
 		suspended, err := a.executeBatchWithDelegation(ctx, calls)
 		if err != nil {
@@ -228,7 +234,7 @@ func (a *Agent) runLoopRecall(ctx context.Context) error {
 	var recallText string
 	var recallTaint types.TaintLevel
 	var recallErr error
-	if a.memory != nil && intentText != "" {
+	if a.memory != nil && intentText != "" && !trivialIntent(intentText) {
 		recallText, recallTaint, recallErr = agentctx.TurnRecallText(
 			ctx,
 			a.memory,
@@ -244,6 +250,8 @@ func (a *Agent) runLoopRecall(ctx context.Context) error {
 		)
 	}
 
+	recallText = capRecallText(recallText, config.CurrentThresholds().M4Kernel.LoopRecallMaxChars)
+
 	if recallErr != nil {
 		slog.WarnContext(ctx, "agentic_loop: recall failed, degrading to no recall", "err", recallErr)
 		metrics.RecordLoopRecallFailure(ctx)
@@ -254,11 +262,12 @@ func (a *Agent) runLoopRecall(ctx context.Context) error {
 		recallTaint = types.TaintNone
 	}
 
+	volatile := a.turnVolatileContent()
 	a.sCtx.Mu.Lock()
-	content := taint.Spotlighting(a.sCtx.RawIntentTS)
-	if recallText != "" {
-		content = "## Recalled Context\n" + recallText + "\n\n" + content
+	if a.sCtx.SessionLayerSnapshot == nil && a.personaRefiner != nil {
+		a.sCtx.SessionPreferencesBlock = a.personaRefiner.PreferencesBlock()
 	}
+	content := a.turnOpeningContentLocked(volatile, recallText)
 	msgTaint := a.sCtx.RawIntentTS.Level()
 	if recallText != "" {
 		// 与 staged 的 writePlanRecall 同口径：召回非空即至少 TaintMedium，
@@ -285,4 +294,47 @@ func (a *Agent) runLoopRecall(ctx context.Context) error {
 
 	a.asyncIntent(types.TriggerLoopRecallDone)
 	return nil
+}
+
+// turnOpeningContentLocked 组装回合首条 user 消息：回合级易变块 + 召回 + 围栏后的用户意图。调用方持有 sCtx.Mu。
+//
+// 回合级易变块（日期、扩展连接状态、本回合 ambient 技能）放在这里而不是每次调用的末尾：它在回合内
+// 位置固定，从第二次调用起按命中价计费；放在末尾则每次调用都按未命中重发（ADR-0120 决策二第 5 条）。
+// 抽出为纯函数是为了让前缀稳定门控（prefix_stability_test.go）与生产走同一条组装路径。
+func (a *Agent) turnOpeningContentLocked(volatile, recallText string) string {
+	content := taint.Spotlighting(a.sCtx.RawIntentTS)
+	if recallText != "" {
+		content = "## Recalled Context\n" + recallText + "\n\n" + content
+	}
+	if volatile != "" {
+		content = "<turn_context>\n" + volatile + "\n</turn_context>\n\n" + content
+	}
+	return content
+}
+
+// turnVolatileContent 读取网关本回合写入 ImmutableCore 的易变层（日期/扩展状态/ambient 技能）。
+func (a *Agent) turnVolatileContent() string {
+	if a.memory == nil {
+		return ""
+	}
+	core := a.memory.ImmutableCore()
+	if core == nil {
+		return ""
+	}
+	return core.VolatileContent()
+}
+
+// trivialIntent 寒暄/短确认类意图（少于 6 个字符且不含问号）跳过自动召回：召回文本按未命中价计费，
+// 对"好的""继续"这类输入没有信息增益（ADR-0120 决策四第 3 条）。
+func trivialIntent(intent string) bool {
+	t := strings.TrimSpace(intent)
+	return utf8.RuneCountInString(t) < 6 && !strings.ContainsAny(t, "?？")
+}
+
+// capRecallText 把召回文本截断到 maxChars 个字符（0 = 不限），截断处注明。
+func capRecallText(text string, maxChars int) string {
+	if maxChars <= 0 || utf8.RuneCountInString(text) <= maxChars {
+		return text
+	}
+	return string([]rune(text)[:maxChars]) + "\n…（召回已截断，需要更多请用 memory_search）"
 }

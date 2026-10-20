@@ -72,7 +72,7 @@ type Agent struct {
 	subagentCtrl       SubagentController       // 子智能体控制器（Pool 实现），用于直接插话与中止控制（R2-14）
 	subagentIDsMu      sync.Mutex               // 保护 spawnedSubagentIDs
 	spawnedSubagentIDs []string                 // 当前 Agent 派生过的全部子智能体 ID，用于并发统计（R2-14）
-	personaRefiner     *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
+	personaRefiner     *agentctx.PersonaRefiner // 用户画像（M05 §2.3）；会话层首次渲染时快照稳定维度，nil 时不渲染
 	// profileTools 子 Agent 角色的工具限制（SetAgentProfile 写入；执行入口与目录视图读取）。
 	profileTools atomic.Pointer[catalog.ToolRestriction]
 	skillForker  SkillForker // 可选；nil 时 context: fork 技能按普通技能内联执行

@@ -72,8 +72,8 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("read_file failed: %s", result.Error)
 	}
-	if string(result.Output) != "hello polaris" {
-		t.Errorf("expected 'hello polaris', got %q", result.Output)
+	if string(result.Output) != "1\thello polaris\n" {
+		t.Errorf("expected numbered line, got %q", result.Output)
 	}
 }
 

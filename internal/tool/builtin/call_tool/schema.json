@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Exact tool name."
+    },
+    "arguments": {
+      "type": "object",
+      "description": "The tool's arguments as described by tool_search."
+    }
+  },
+  "required": ["name", "arguments"]
+}

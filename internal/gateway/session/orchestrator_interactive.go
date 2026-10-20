@@ -220,7 +220,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	}
 	// 内核按回合新建 Agent，对上文一无所知；历史须随每轮显式注入（ADR-0098 决策四）。
 	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
-	agentCtrl.SetConversationHistory(history[:len(history)-1])
+	agentCtrl.SetConversationHistory(o.withTurnDigests(ctx, sessionID, history[:len(history)-1]))
 	agentCtrl.SetModelLock(req.ModelID)
 	// 步骤时间线与回合元数据（ADR-0118）：回合 ID 先交给内核，之后该回合的 llm_calls 才带得上 turn_id。
 	ctx, turnID, stepRec := o.beginTurnSteps(ctx, sink, sessionID, agentCtrl)

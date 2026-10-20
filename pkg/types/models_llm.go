@@ -136,6 +136,8 @@ type Message struct {
 	CacheBreakpoint bool
 	// Round 记录该消息产生时的 agentic 循环轮次（结构化字段，用于生命周期管理与观察遮蔽判定）。
 	Round int
+	// TurnID 会话历史中 assistant 消息所属回合（chat_messages.turn_id），供回合摘要关联步骤；不发给 Provider。
+	TurnID string
 	// TaintLevel 记录该消息所携带的污点等级（ADR-0007 / P4）。
 	TaintLevel TaintLevel
 }

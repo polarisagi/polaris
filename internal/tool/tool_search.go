@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -19,10 +20,6 @@ import (
 // semanticMatchThreshold 语义检索的最低余弦相似度，低于此值的候选不返回，
 // 避免懒加载模式下 tool_search 把不相关工具也激活进会话（污染 tool_use 列表）。
 const semanticMatchThreshold = 0.3
-
-// toolSearchMaxResults 单次 tool_search 调用返回的工具数上限。
-// 与 M13-bis-Extension-Registry.md §4 的 `LIMIT 10` 设计一致。
-const toolSearchMaxResults = 10
 
 // toolEmbeddingCacheMaxEntries 缓存条目上限（D-B6-02 修复：原实现无淘汰机制，
 // 长期运行下动态注册/注销工具、MCP server 工具、LLM 生成技能会导致 byKey
@@ -181,44 +178,38 @@ func sessionIDFromCtx(ctx context.Context) string {
 	return ""
 }
 
-type toolSearchSummary struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Source      string `json:"source"`
-}
+// toolSearchDefaultLimit / toolSearchMaxLimit 单次返回条数的默认值与上限（ADR-0120 决策三）。
+const (
+	toolSearchDefaultLimit = 5
+	toolSearchMaxLimit     = 20
+)
 
-// activateAndSummarize 把匹配结果激活到当前会话（若有）并转换为对外 JSON 结构。
-func activateAndSummarize(compCatalog *catalog.CompositeCatalog, sessionID string, matches []scoredTool) []toolSearchSummary {
-	results := make([]toolSearchSummary, 0, len(matches))
-	for _, m := range matches {
-		if sessionID != "" {
-			compCatalog.ActivateTool(sessionID, m.entry.Name)
-		}
-		results = append(results, toolSearchSummary{
-			Name:        m.entry.Name,
-			Description: m.entry.Description,
-			Source:      string(m.entry.Source),
-		})
-	}
-	return results
-}
-
-// MakeToolSearchFn 让 Agent 在已注册工具集中按名称/描述关键词搜索，并把命中的工具激活到当前会话
-// （基于 ctx 的 TaskID）；激活后的工具在**下一轮**请求的 tools 数组里出现。
+// MakeToolSearchFn 让 Agent 在已注册工具集中按名称/描述关键词搜索未加载的工具。
+//
+// 默认（m7_tool.lazy_activation = "in_history"，ADR-0120 决策三）：返回命中工具的完整描述与紧凑参数
+// schema，模型随即经常驻元工具 call_tool 调用；不改 tools 数组——tools 位于消息之前，追加一个工具就让
+// 其后全部历史失去前缀缓存。结果进入历史后按命中价计费。"tools_array" 保留旧行为（激活进下一轮 tools）。
 //
 // 匹配策略（ADR-0119）：关键词/BM25 是基线，任何机器可用；Embedder 可用时叠加语义检索
-// （复用 M1 Embedder + internal/ffi VecCosineF32），两路结果合并去重后按分数降序，最多 toolSearchMaxResults 条。
+// （复用 M1 Embedder + internal/ffi VecCosineF32），两路结果合并去重后按分数降序。
 // 懒加载模式下已常驻的核心工具不返回（它们已经可调用，返回只会占用结果名额）。
+// 点名精确匹配时只返回该工具；无命中时给出最接近的 3 个名称。
 func MakeToolSearchFn(compCatalog *catalog.CompositeCatalog, embedder search.Embedder) sandbox.InProcessFn {
 	embCache := newToolEmbeddingCache()
 
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args struct {
 			Query string `json:"query"`
+			Limit int    `json:"limit"`
 		}
 		if err := json.Unmarshal(input, &args); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "tool_search: invalid args", err)
+			return nil, apperr.Wrap(apperr.CodeInvalidInput, "tool_search: invalid args", err)
 		}
+		limit := args.Limit
+		if limit <= 0 {
+			limit = toolSearchDefaultLimit
+		}
+		limit = min(limit, toolSearchMaxLimit)
 
 		all := compCatalog.List(ctx, types.TrustUntrusted) // search across all
 		if compCatalog.LazyActive(ctx, types.TrustUntrusted) {
@@ -226,21 +217,120 @@ func MakeToolSearchFn(compCatalog *catalog.CompositeCatalog, embedder search.Emb
 		}
 		query := strings.TrimSpace(args.Query)
 
+		if exact, ok := exactMatch(all, query); ok {
+			return renderToolSearch(compCatalog, ctx, []protocol.CatalogEntry{exact}), nil
+		}
+
 		matcher := newToolSearchMatcher(embedder, embCache, len(all))
 		matcher.matchSemantic(ctx, all, query)
 		matcher.matchKeywords(all, query)
 
-		matches := matcher.sortedTop(toolSearchMaxResults)
-		results := activateAndSummarize(compCatalog, sessionIDFromCtx(ctx), matches)
-
-		out := map[string]any{"tools": results, "total": len(results)}
-		if len(results) > 0 {
-			out["note"] = "已激活，下一轮可直接调用；参数以下一轮收到的工具定义为准。"
-		} else {
-			out["note"] = "没有匹配的工具。换用工具名或更具体的关键词再试一次。"
+		matches := matcher.sortedTop(limit)
+		if len(matches) == 0 {
+			return []byte(noMatchText(all, query)), nil
 		}
-		return json.Marshal(out)
+		entries := make([]protocol.CatalogEntry, 0, len(matches))
+		for _, m := range matches {
+			entries = append(entries, m.entry)
+		}
+		return renderToolSearch(compCatalog, ctx, entries), nil
 	}
+}
+
+// exactMatch query 恰为某个工具名（忽略大小写与首尾空白）时返回该工具。
+func exactMatch(all []protocol.CatalogEntry, query string) (protocol.CatalogEntry, bool) {
+	for _, e := range all {
+		if query != "" && strings.EqualFold(e.Name, query) {
+			return e, true
+		}
+	}
+	return protocol.CatalogEntry{}, false
+}
+
+// renderToolSearch 渲染命中结果：每个工具一段"名称: 完整描述 / params: 紧凑 schema"，末行说明调用方式。
+// tools_array 模式下同时把命中工具激活进下一轮 tools 数组（旧行为）。
+func renderToolSearch(compCatalog *catalog.CompositeCatalog, ctx context.Context, entries []protocol.CatalogEntry) []byte {
+	activate := config.CurrentThresholds().M7Tool.LazyActivation == "tools_array"
+	sessionID := sessionIDFromCtx(ctx)
+	var sb strings.Builder
+	for i, e := range entries {
+		if activate && sessionID != "" {
+			compCatalog.ActivateTool(sessionID, e.Name)
+		}
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString(e.Name + ": " + strings.TrimSpace(e.Description) + "\n")
+		sb.WriteString("params: " + compactSchema(e.Parameters))
+	}
+	if activate {
+		sb.WriteString("\n\nThese tools are now in your function list from the next step.")
+	} else {
+		sb.WriteString("\n\nCall with call_tool {\"name\": \"<name>\", \"arguments\": {...}}.")
+	}
+	return []byte(sb.String())
+}
+
+// compactSchema 紧凑 JSON（去掉顶层 $schema/title/description/$id），失败时返回 "{}"。
+func compactSchema(params any) string {
+	m, ok := params.(map[string]any)
+	if ok {
+		trimmed := make(map[string]any, len(m))
+		for k, v := range m {
+			switch k {
+			case "$schema", "title", "description", "$id":
+				continue
+			}
+			trimmed[k] = v
+		}
+		params = trimmed
+	}
+	if params == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(params)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+// noMatchText 无命中时列出名称最接近的 3 个工具（按公共子串长度），让模型换个说法或直接点名。
+func noMatchText(all []protocol.CatalogEntry, query string) string {
+	q := strings.ToLower(query)
+	type cand struct {
+		name  string
+		score int
+	}
+	cands := make([]cand, 0, len(all))
+	for _, e := range all {
+		cands = append(cands, cand{e.Name, commonSubstrLen(q, strings.ToLower(e.Name))})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score > cands[j].score
+		}
+		return cands[i].name < cands[j].name
+	})
+	var near []string
+	for i := 0; i < len(cands) && i < 3; i++ {
+		near = append(near, cands[i].name)
+	}
+	return "No matching tool. Closest names: " + strings.Join(near, ", ") + ". Try the exact name or other keywords."
+}
+
+func commonSubstrLen(a, b string) int {
+	best := 0
+	for i := range a {
+		for j := range b {
+			k := 0
+			for i+k < len(a) && j+k < len(b) && a[i+k] == b[j+k] {
+				k++
+			}
+			best = max(best, k)
+		}
+	}
+	return best
 }
 
 // excludeCore 去掉常驻核心工具（已在 tools 数组里，无需激活）。

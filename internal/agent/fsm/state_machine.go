@@ -212,6 +212,13 @@ type StateContext struct {
 
 	// SysEnvSnapshot 是启动时获取的系统静态快照，注入到每个 Prompt 头部
 	SysEnvSnapshot string
+	// SessionLayerSnapshot 会话层（L1）在会话首次组装时渲染一次后冻结（ADR-0120 决策二）：
+	// 核心记忆块、画像、工作区与扩展目录在会话内的变化不再逐调用改写前缀——回合内一次
+	// core_memory_edit 曾让其后全部历史失去前缀缓存。nil = 尚未渲染；SetAgentProfile 等
+	// 改变会话身份的入口置 nil 触发重渲染。
+	SessionLayerSnapshot []types.Message
+	// SessionPreferencesBlock 会话层渲染时一并冻结的用户画像稳定维度（PersonaRefiner.PreferencesBlock）。
+	SessionPreferencesBlock string
 
 	// InstalledExtensionsInfo 包含当前系统已安装的扩展清单
 	InstalledExtensionsInfo string

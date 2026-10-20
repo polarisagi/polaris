@@ -1,0 +1,4 @@
+name: call_tool
+description: "Call a tool that is not in your function list (listed in the tool index or returned by tool_search). Same permissions, approvals and logging as a direct call."
+capability: read-only
+risk_level: low

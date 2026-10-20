@@ -65,7 +65,7 @@ func formatCost(c float64) string {
 
 func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx *StateContext, roundMsgs []types.Message) []types.Message {
 	b := prompt.NewPromptBuilder()
-	if wErr := WriteSessionLayer(ctx, b, mem, sCtx); wErr != nil {
+	if wErr := writeFrozenSessionLayer(ctx, b, mem, sCtx); wErr != nil {
 		slog.WarnContext(ctx, "agentic_loop: WriteSessionLayer fallback failed", "err", wErr)
 	}
 	WriteConversationHistory(b, sCtx)
@@ -80,10 +80,10 @@ func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx 
 		if !intent.IsEmpty() {
 			b.WriteUserData(intent)
 		}
-		return FinishAgenticLayered(b, mem, "", warnPrompt)
+		return FinishAgenticLayered(b, mem, loopInstruction(), "", warnPrompt)
 	}
 	for _, m := range roundMsgs {
 		b.WriteTurnMessage(m)
 	}
-	return FinishAgenticLayered(b, mem, "", warnPrompt)
+	return FinishAgenticLayered(b, mem, loopInstruction(), "", warnPrompt)
 }

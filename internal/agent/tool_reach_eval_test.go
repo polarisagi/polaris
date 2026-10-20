@@ -6,7 +6,7 @@ package agent
 // 用确定性的可达性代理衡量"工具选择准确率"：对 adr0114 与 adr0119 两组 EvalCase 里每个期望工具，
 //   - 改前（全量下发）：工具在首轮 tools 数组里即可达；
 //   - 改后（懒加载）：在核心集里直接可达；否则按 case 的检索词（缺省用 user_input 原句）走真实 tool_search，
-//     命中并激活后，下一轮 tools 数组里出现才算可达。
+//     结果里返回了该工具（含参数）且 call_tool 常驻，才算可达（ADR-0120 决策三：历史内激活，不改 tools 数组）。
 // 它度量的是"检索通路不丢工具"，不是模型的选择能力（那需要上线后用 llm_calls 复核，见报告）。
 
 import (
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -39,7 +40,7 @@ func expectedTools(c protocol.EvalCase) []string {
 	raw, _ := c.Expected["expected_tool_sequence"].([]any)
 	var out []string
 	for _, r := range raw {
-		if n, ok := r.(string); ok && n != "tool_search" {
+		if n, ok := r.(string); ok && n != "tool_search" && n != "call_tool" {
 			out = append(out, n)
 		}
 	}
@@ -99,10 +100,11 @@ func runReach(t *testing.T, cases []protocol.EvalCase, lazy, useQuery bool) (rea
 				q = sq
 			}
 			in, _ := json.Marshal(map[string]string{"query": q})
-			if _, err := search(ctx, in); err != nil {
+			out, err := search(ctx, in)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if schemaHas(cc.Schemas(ctx, types.TrustUntrusted), name) {
+			if !lazy && schemaHas(cc.Schemas(ctx, types.TrustUntrusted), name) || lazy && schemaHas(first, "call_tool") && searchReturned(string(out), name) {
 				st.reached++
 				st.viaSearch++
 			} else {
@@ -111,6 +113,16 @@ func runReach(t *testing.T, cases []protocol.EvalCase, lazy, useQuery bool) (rea
 		}
 	}
 	return st, misses
+}
+
+// searchReturned tool_search 文本结果里是否返回了该工具（每段以 "名称: " 开头且带 params 行）。
+func searchReturned(out, name string) bool {
+	for _, block := range strings.Split(out, "\n\n") {
+		if strings.HasPrefix(block, name+": ") && strings.Contains(block, "\nparams: ") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestToolReachability_BeforeAfter(t *testing.T) {
@@ -141,8 +153,8 @@ func TestToolReachability_NonCoreNeedsSearchFirst(t *testing.T) {
 				t.Errorf("%s: %s 不应在首轮 tools 里（它不是核心工具）", c.ID, name)
 			}
 		}
-		if !schemaHas(first, "tool_search") {
-			t.Fatalf("%s: 首轮必须含 tool_search", c.ID)
+		if !schemaHas(first, "tool_search") || !schemaHas(first, "call_tool") {
+			t.Fatalf("%s: 首轮必须含 tool_search 与 call_tool", c.ID)
 		}
 	}
 }

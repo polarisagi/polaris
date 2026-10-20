@@ -74,6 +74,29 @@ func (s *SQLiteChatTurnRepository) ListTurnSteps(ctx context.Context, sessionID,
 	return out, nil
 }
 
+func (s *SQLiteChatTurnRepository) ListSessionToolSteps(ctx context.Context, sessionID string) ([]protorepo.TurnStepRow, error) {
+	rows, err := s.r.QueryContext(ctx, `SELECT turn_id, session_id, seq, parent_id, kind, data, created_at
+		FROM chat_turn_steps WHERE session_id = ? AND kind = 'tool' ORDER BY turn_id, seq`, sessionID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "ListSessionToolSteps", err)
+	}
+	defer rows.Close()
+	var out []protorepo.TurnStepRow
+	for rows.Next() {
+		var r protorepo.TurnStepRow
+		var data string
+		if err := rows.Scan(&r.TurnID, &r.SessionID, &r.Seq, &r.ParentID, &r.Kind, &data, &r.CreatedAtMs); err != nil {
+			return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "ListSessionToolSteps: scan", err)
+		}
+		r.Data = []byte(data)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "ListSessionToolSteps: rows", err)
+	}
+	return out, nil
+}
+
 func (s *SQLiteChatTurnRepository) TurnSummaries(ctx context.Context, sessionID string) (map[string][]byte, error) {
 	rows, err := s.r.QueryContext(ctx, `SELECT turn_id, data FROM chat_turn_steps WHERE session_id = ? AND seq = 0`, sessionID)
 	if err != nil {
