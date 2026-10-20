@@ -35,7 +35,7 @@
   </div>
 
   <!-- Thinking Panel -->
-  <div class="mx-auto mt-4 w-full max-w-3xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText" x-cloak>
+  <div class="mx-auto mt-4 w-full max-w-3xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText && !$store.chat.turn" x-cloak>
     <div class="border border-base-300 rounded-[1.25rem] overflow-hidden bg-base-200/50 w-fit max-w-2xl shadow-sm">
     <div class="flex items-center gap-2 p-2 px-4 cursor-pointer text-base-content/60 text-sm font-medium hover:bg-base-300/50 transition-colors" @click="$store.chat.toggleThinking()">
       <span x-show="$store.chat.state === 'THINKING'" class="loading loading-spinner loading-xs"></span>
@@ -43,6 +43,53 @@
       <svg class="w-4 h-4 ml-auto transition-transform" :class="{ '-rotate-90': !$store.chat.thinkingOpen }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
     </div>
     <div class="p-3 px-4 text-base-content/70 italic whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-base-300 text-sm" x-show="$store.chat.thinkingOpen" x-text="$store.chat.thinkingText"></div>
+    </div>
+  </div>
+
+  <!-- 步骤时间线（实时，ADR-0118）：回合进行中显示"正在做什么"，可展开；回合结束后并入助手消息 -->
+  <div class="mx-auto mt-3 w-full max-w-3xl px-4 shrink-0" x-show="$store.chat.turn && $store.chat.turn.running" x-cloak>
+    <div x-data="stepTimeline(() => $store.chat.turn, () => $store.chat.sessionID)" x-show="has" x-cloak class="step-timeline w-full max-w-full text-xs">
+      <!-- 折叠摘要行 / 实时当前步骤 -->
+      <button type="button" class="flex w-full min-w-0 items-center gap-2 rounded-xl border border-base-300 bg-base-100/70 px-3 py-1.5 text-left text-base-content/70 transition-colors hover:bg-base-200"
+              @click="toggle()" :aria-expanded="open">
+        <span x-show="turn && turn.running" class="loading loading-spinner loading-xs shrink-0 text-primary"></span>
+        <span x-show="!(turn && turn.running)" class="shrink-0">🧭</span>
+        <span class="min-w-0 flex-1 truncate">
+          <template x-if="current"><span x-text="icon(current) + ' ' + current.title"></span></template>
+          <template x-if="!current"><span x-text="summaryLine"></span></template>
+        </span>
+        <span x-show="current" class="shrink-0 text-base-content/40" x-text="summaryLine"></span>
+        <svg class="h-4 w-4 shrink-0 transition-transform" :class="{ '-rotate-90': !open }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+      </button>
+      <!-- 展开的竖向时间线 -->
+      <div x-show="open" x-cloak class="mt-2 pl-1">
+        <div x-show="turn && turn.loading" class="py-2 text-base-content/50" x-text="$store.i18n.t('loading')"></div>
+        <div x-show="turn && turn.error" class="py-2 text-error" x-text="$store.i18n.t('step_load_failed')"></div>
+        <div x-show="turn && turn.summary && turn.summary.omitted > 0" class="pb-1 text-base-content/50" x-text="$store.i18n.t('step_omitted').replace('{0}', turn.summary.omitted)"></div>
+        <ol class="relative border-s border-base-300">
+          <template x-for="row in rows" :key="row.step.id">
+            <li class="relative min-w-0 pb-2 ps-4" :style="`margin-left:${row.depth * 14}px`">
+              <span class="absolute -start-[5px] top-1.5 h-2.5 w-2.5 rounded-full border border-base-100"
+                    :class="row.step.status === 'running' ? 'bg-info animate-pulse' : row.step.status === 'error' ? 'bg-error' : row.step.status === 'denied' ? 'bg-warning' : row.step.status === 'cancelled' ? 'bg-base-content/30' : 'bg-success'"></span>
+              <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span x-text="icon(row.step)"></span>
+                <span class="min-w-0 break-words font-medium text-base-content/90" style="overflow-wrap:anywhere" x-text="row.step.title"></span>
+                <span :class="statusCls(row.step)" x-text="statusMark(row.step)"></span>
+                <span class="text-base-content/40" x-show="row.step.duration_ms > 0" x-text="$store.fmt.secs(row.step.duration_ms)"></span>
+                <span class="text-base-content/40" x-show="row.step.tokens" x-text="row.step.tokens ? `${$store.fmt.tok(row.step.tokens.in)} ${$store.i18n.t('usage_in')} · ${$store.fmt.tok(row.step.tokens.out)} ${$store.i18n.t('usage_out')}` : ''"></span>
+              </div>
+              <div x-show="row.step.args_preview" class="mt-0.5 break-words font-mono text-base-content/50" style="overflow-wrap:anywhere" x-text="row.step.args_preview"></div>
+              <div x-show="row.step.result_preview" class="mt-0.5 whitespace-pre-wrap break-words text-base-content/70" style="overflow-wrap:anywhere" x-text="row.step.result_preview"></div>
+              <template x-if="row.step.kind === 'thinking' && row.step.content">
+                <div>
+                  <button type="button" class="text-base-content/50 underline-offset-2 hover:underline" @click="row.step._open = !row.step._open" x-text="row.step._open ? $store.i18n.t('step_hide_thought') : $store.i18n.t('step_show_thought')"></button>
+                  <div x-show="row.step._open" class="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words italic text-base-content/60" style="overflow-wrap:anywhere" x-text="row.step.content"></div>
+                </div>
+              </template>
+            </li>
+          </template>
+        </ol>
+      </div>
     </div>
   </div>
 
@@ -135,7 +182,7 @@
                      x-init="$nextTick(() => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 }); window.addEventListener('resize', () => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 })">
                   
                   <div x-ref="content" class="transition-all duration-300 relative" :class="{ 'max-h-32 overflow-hidden': !expanded }">
-                    <template x-if="msg.reasoningContent">
+                    <template x-if="msg.reasoningContent && !msg.turn">
                       <div class="mb-4 border border-base-300 rounded-xl overflow-hidden bg-base-300/30 text-sm shadow-sm">
                         <div class="flex items-center gap-2 p-2 px-3 cursor-pointer text-base-content/60 font-medium hover:bg-base-300/50 transition-colors" @click="thinkingOpen = !thinkingOpen">
                           <span x-text="$store.i18n.t('chat_thought') || 'Thought Process'"></span>
@@ -144,7 +191,7 @@
                         <div class="p-3 px-4 text-base-content/70 italic whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-base-300" x-show="thinkingOpen" x-text="msg.reasoningContent"></div>
                       </div>
                     </template>
-                    <template x-if="msg.toolCalls && msg.toolCalls.length > 0">
+                    <template x-if="msg.toolCalls && msg.toolCalls.length > 0 && !msg.turn">
                       <div class="mb-4">
                         <div class="collapse collapse-arrow bg-base-100 border border-base-300 shadow-sm text-xs rounded-xl">
                           <input type="checkbox" name="toolcall-collapse" />
@@ -186,6 +233,54 @@
                       </div>
                     </template>
                     
+                    <template x-if="msg.turn">
+                      <div class="mb-3">
+                        <div x-data="stepTimeline(() => msg.turn, () => $store.chat.sessionID)" x-show="has" x-cloak class="step-timeline w-full max-w-full text-xs">
+                          <!-- 折叠摘要行 / 实时当前步骤 -->
+                          <button type="button" class="flex w-full min-w-0 items-center gap-2 rounded-xl border border-base-300 bg-base-100/70 px-3 py-1.5 text-left text-base-content/70 transition-colors hover:bg-base-200"
+                                  @click="toggle()" :aria-expanded="open">
+                            <span x-show="turn && turn.running" class="loading loading-spinner loading-xs shrink-0 text-primary"></span>
+                            <span x-show="!(turn && turn.running)" class="shrink-0">🧭</span>
+                            <span class="min-w-0 flex-1 truncate">
+                              <template x-if="current"><span x-text="icon(current) + ' ' + current.title"></span></template>
+                              <template x-if="!current"><span x-text="summaryLine"></span></template>
+                            </span>
+                            <span x-show="current" class="shrink-0 text-base-content/40" x-text="summaryLine"></span>
+                            <svg class="h-4 w-4 shrink-0 transition-transform" :class="{ '-rotate-90': !open }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+                          </button>
+                          <!-- 展开的竖向时间线 -->
+                          <div x-show="open" x-cloak class="mt-2 pl-1">
+                            <div x-show="turn && turn.loading" class="py-2 text-base-content/50" x-text="$store.i18n.t('loading')"></div>
+                            <div x-show="turn && turn.error" class="py-2 text-error" x-text="$store.i18n.t('step_load_failed')"></div>
+                            <div x-show="turn && turn.summary && turn.summary.omitted > 0" class="pb-1 text-base-content/50" x-text="$store.i18n.t('step_omitted').replace('{0}', turn.summary.omitted)"></div>
+                            <ol class="relative border-s border-base-300">
+                              <template x-for="row in rows" :key="row.step.id">
+                                <li class="relative min-w-0 pb-2 ps-4" :style="`margin-left:${row.depth * 14}px`">
+                                  <span class="absolute -start-[5px] top-1.5 h-2.5 w-2.5 rounded-full border border-base-100"
+                                        :class="row.step.status === 'running' ? 'bg-info animate-pulse' : row.step.status === 'error' ? 'bg-error' : row.step.status === 'denied' ? 'bg-warning' : row.step.status === 'cancelled' ? 'bg-base-content/30' : 'bg-success'"></span>
+                                  <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                    <span x-text="icon(row.step)"></span>
+                                    <span class="min-w-0 break-words font-medium text-base-content/90" style="overflow-wrap:anywhere" x-text="row.step.title"></span>
+                                    <span :class="statusCls(row.step)" x-text="statusMark(row.step)"></span>
+                                    <span class="text-base-content/40" x-show="row.step.duration_ms > 0" x-text="$store.fmt.secs(row.step.duration_ms)"></span>
+                                    <span class="text-base-content/40" x-show="row.step.tokens" x-text="row.step.tokens ? `${$store.fmt.tok(row.step.tokens.in)} ${$store.i18n.t('usage_in')} · ${$store.fmt.tok(row.step.tokens.out)} ${$store.i18n.t('usage_out')}` : ''"></span>
+                                  </div>
+                                  <div x-show="row.step.args_preview" class="mt-0.5 break-words font-mono text-base-content/50" style="overflow-wrap:anywhere" x-text="row.step.args_preview"></div>
+                                  <div x-show="row.step.result_preview" class="mt-0.5 whitespace-pre-wrap break-words text-base-content/70" style="overflow-wrap:anywhere" x-text="row.step.result_preview"></div>
+                                  <template x-if="row.step.kind === 'thinking' && row.step.content">
+                                    <div>
+                                      <button type="button" class="text-base-content/50 underline-offset-2 hover:underline" @click="row.step._open = !row.step._open" x-text="row.step._open ? $store.i18n.t('step_hide_thought') : $store.i18n.t('step_show_thought')"></button>
+                                      <div x-show="row.step._open" class="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words italic text-base-content/60" style="overflow-wrap:anywhere" x-text="row.step.content"></div>
+                                    </div>
+                                  </template>
+                                </li>
+                              </template>
+                            </ol>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+
                     <div x-html="renderMarkdown(msg.content)" class="prose prose-sm prose-base-content max-w-none break-words"></div>
 
                     <!-- MCP Apps 视图（M8f-2，io.modelcontextprotocol/ui）：每个视图对应一个由
@@ -210,6 +305,11 @@
                     <button class="btn btn-xs btn-ghost" @click="expanded = false; $nextTick(() => { $el.closest('.chat-bubble').scrollIntoView({behavior:'smooth', block:'center'}) })" x-text="$store.i18n.t('chat_collapse_all')"></button>
                   </div>
                 </div>
+
+                <!-- 用量脚注（A4）：本回合输入 / 命中 / 输出 / 估算费用 / 耗时 -->
+                <div class="mt-1 pl-1 text-[11px] text-base-content/40" x-show="msg.usage" x-cloak
+                     :title="$store.fmt.hint"
+                     x-text="msg.usage ? `${$store.fmt.tok(msg.usage.input)} ${$store.i18n.t('usage_in')} · ${$store.fmt.pct(msg.usage.input > 0 ? msg.usage.cache_hit / msg.usage.input : 0)} ${$store.i18n.t('usage_hit')} · ${$store.fmt.tok(msg.usage.output)} ${$store.i18n.t('usage_out')} · ≈${$store.fmt.money(msg.usage.cost_usd)}${msg.usage.duration_ms > 0 ? ' · ' + $store.fmt.secs(msg.usage.duration_ms) : ''}` : ''"></div>
 
                 <!-- 播放语音按钮：悬浮时显示 -->
                 <div class="flex justify-start mt-1 pl-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">

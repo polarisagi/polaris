@@ -68,7 +68,7 @@
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
           <div class="card-body p-5">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_cost')"></h3>
-            <div class="font-mono font-bold text-xl" x-text="`¥ ${$store.statusBar.costCNY.toFixed(4)}`"></div>
+            <div class="font-mono font-bold text-xl" x-text="`≈ ${$store.fmt.money($store.statusBar.costUSD)}`" :title="$store.fmt.hint"></div>
           </div>
         </div>
 
