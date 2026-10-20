@@ -736,9 +736,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// llm_calls 保留期（ADR-0105 决策八）：写连接清理。启动时先跑一次——桌面外壳/开发机常在 6h 内
 	// 重启，只挂 ticker 会让保留期永远不生效；清理分批，不会长时间独占单写连接。
 	llmCallRepo := repo.NewSQLiteLLMCallRepository(sb.Store.DB())
+	turnStepRepo := repo.NewSQLiteChatTurnRepository(sb.Store.DB(), sb.Store.DB())
 	pruneLLMCalls := func(ctx context.Context) {
 		if _, err := pruneLLMCallsByRetention(ctx, llmCallRepo, sb.Cfg.Thresholds.M1Router.UsageRetentionDays, time.Now()); err != nil {
 			slog.Warn("polaris: llm_calls retention prune failed", "err", err)
+		}
+		// 会话步骤时间线保留期（ADR-0118）：默认 0 = 永久保留。
+		if _, err := pruneTurnStepsByRetention(ctx, turnStepRepo, sb.Cfg.Thresholds.M13Interface.TurnStepsRetentionDays, time.Now()); err != nil {
+			slog.Warn("polaris: chat_turn_steps retention prune failed", "err", err)
 		}
 	}
 	concurrent.SafeGo(ctx, "boot_tools.memory_forgetting", func(ctx context.Context) {

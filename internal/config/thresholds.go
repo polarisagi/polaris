@@ -535,6 +535,9 @@ type M13InterfaceThresholds struct {
 	PipelineLLMMaxOutputTokens     int `toml:"pipeline.llm_max_output_tokens"`     // 2000
 	// PipelineWriteAllowlist 管线免审批写工具白名单（ADR-0114 决策八）；空列表表示所有写工具都需 hitl 审批。
 	PipelineWriteAllowlist []string `toml:"pipeline.write_allowlist"` // [knowledge_ingest, mcp__polaris-knowledge-base__kb_save]
+	// TurnStepsRetentionDays 会话步骤时间线（chat_turn_steps，ADR-0118）保留天数；0 = 永久保留。
+	// 步骤只供用户回看，从不进模型上下文，到期清理只删步骤，不动消息与用量账本。
+	TurnStepsRetentionDays int `toml:"turn_steps.retention_days"` // 0
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
