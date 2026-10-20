@@ -127,8 +127,28 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			timeout = 60 * time.Minute
 		}
 
-		bgCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		// 运行预算可暂停：等待用户审批（无人值守审批，ADR-0117 追记）期间不计时，并把运行/自动化切到
+		// suspended（UI 显示“等待批准”），批准后恢复 running。
+		bgCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		budgetCtx := bgCtx // bgCtx 之后会被 WithValue 重新赋值，监督协程只持有不再变化的副本
+		concurrent.SafeGo(context.Background(), "cronadmin.executeAutomation.budget", func(context.Context) {
+			superviseRunBudget(budgetCtx, cancel, timeout, approvalPollInterval,
+				sessionWaitingForApproval(ca.HITLGateway, sessionID),
+				func(waiting bool) {
+					st := "running"
+					if waiting {
+						st = "suspended"
+					}
+					uctx := context.WithoutCancel(budgetCtx)
+					if err := ca.AutomationRepo.UpdateRunStatus(uctx, runID, st, "", ""); err != nil {
+						slog.Warn("automation: update run status failed", "run", runID, "status", st, "err", err)
+					}
+					if err := ca.AutomationRepo.UpdateAutomationStatus(uctx, a.ID, st); err != nil {
+						slog.Warn("automation: update automation status failed", "id", a.ID, "status", st, "err", err)
+					}
+				})
+		})
 
 		// 注入上下文（Sandbox Level / Cedar Rules）
 		bgCtx = context.WithValue(bgCtx, ctxKeySandboxLevel, a.SandboxLevel)

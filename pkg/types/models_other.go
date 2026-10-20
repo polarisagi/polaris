@@ -139,6 +139,11 @@ HITLPrompt struct {
 	HardLimit     bool           `json:"hard_limit,omitempty"`
 	RememberLabel string         `json:"remember_label,omitempty"`
 	Items         []ApprovalItem `json:"items,omitempty"`
+	// Unattended 为真表示发起审批的回合无人在对话界面前（cron / workflow / webhook，ADR-0117 追记）：
+	// 审批进入待审批队列等待用户事后处理，等待期限取 M13 hitl.default_deadline_min_long（默认 24 小时）。
+	// SessionID 是发起审批的会话，供自动化页把待审批项关联到对应的运行。
+	Unattended bool   `json:"unattended,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
 }
 
 type

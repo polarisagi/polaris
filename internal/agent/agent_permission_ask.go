@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -94,7 +95,30 @@ func (a *Agent) buildApprovalPrompt(asks []pendingAsk, mode types.PermissionMode
 		p.RememberLabel = strings.Join(labels, "；")
 	}
 	p.PromptText = approvalPromptText(items)
+	if a.isBackgroundTurn() {
+		// 无人值守回合（ADR-0117 追记）：不拒绝，进待审批队列；等待期限放宽到小时级，超时仍视为拒绝。
+		p.Unattended = true
+		p.DeadlineNs = time.Now().Add(unattendedApprovalWindow()).UnixNano()
+		a.sCtx.Mu.RLock()
+		p.SessionID = a.sCtx.SessionID
+		a.sCtx.Mu.RUnlock()
+	}
 	return p
+}
+
+// unattendedApprovalWindow 无人值守审批的等待期限：M13 hitl.default_deadline_min_long（默认 1440 分钟=24 小时）。
+func unattendedApprovalWindow() time.Duration {
+	if m := config.CurrentThresholds().M13Interface.HITLDefaultDeadlineMinLong; m > 0 {
+		return time.Duration(m) * time.Minute
+	}
+	return 24 * time.Hour
+}
+
+// isBackgroundTurn 本回合是否经 AcquireHeadless 获取（无人在对话界面前）。
+func (a *Agent) isBackgroundTurn() bool {
+	a.sCtx.Mu.RLock()
+	defer a.sCtx.Mu.RUnlock()
+	return a.sCtx.BackgroundTurn
 }
 
 func batchReason(items []types.ApprovalItem) string {

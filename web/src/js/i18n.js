@@ -769,6 +769,12 @@ export const zh = {
   automation_webhook_unbound:      '未绑定',
   automation_webhook_empty:        '暂无 Webhook 触发任务。',
   automation_approvals_timeout:    '已超时',
+  automation_status_waiting_approval: '等待批准',
+  approvals_unattended_badge:      '自动化任务',
+  approvals_unattended_hint:       '自动化任务正在等你批准。长时间未处理将视为拒绝，任务会收到“被拒绝”的结果后继续。',
+  approvals_unattended_toast:      '有 {0} 项自动化操作等待你的批准',
+  approvals_unattended_notify_title: 'Polaris 需要你的批准',
+  approvals_waiting_banner:        '有自动化任务在等待批准，请在「待审批」标签处理',
 
   // ── 配置向导新增 key ──────────────────────────────────────────────────────
   onboard_step_channel:  '第三方接入',
@@ -1638,6 +1644,12 @@ export const en = {
   automation_webhook_unbound: 'Unbound',
   automation_webhook_empty: 'No Webhook trigger tasks.',
   automation_approvals_timeout: 'Timeout',
+  automation_status_waiting_approval: 'Waiting for approval',
+  approvals_unattended_badge: 'Automation',
+  approvals_unattended_hint: 'An automation is waiting for your approval. If left unanswered it is treated as denied and the run continues with a "denied" result.',
+  approvals_unattended_toast: '{0} automation action(s) waiting for your approval',
+  approvals_unattended_notify_title: 'Polaris needs your approval',
+  approvals_waiting_banner: 'Automations are waiting for approval. Open the Approvals tab to handle them.',
 
   onboard_step_channel: 'Channels',
   onboard_ph_provider: '{ openai_compat: "DeepSeek V4", anthropic: "Claude", google_agent_platform: "Gemini", ollama: "Local Ollama" }',
