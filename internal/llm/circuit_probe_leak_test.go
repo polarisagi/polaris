@@ -15,7 +15,7 @@ func TestSelectBest_DoesNotLeakHalfOpenProbe(t *testing.T) {
 	// cheap 成本低、健康分高；pricey 冷却期满进入可探测状态但分数更低，不会被选中。
 	reg.RegisterWithRole("cheap", "cheap", "general", &mockRouterProvider{id: "cheap"})
 	reg.RegisterWithRole("pricey", "pricey", "general", &mockRouterProvider{id: "pricey",
-		caps: types.ProviderCapabilities{CostPer1KInput: 9}})
+		caps: types.ProviderCapabilities{CostPerMTokInput: 9}})
 
 	pricey := reg.entries["pricey"]
 	pricey.cb.RecordFailure() // maxFailures=1 → Open

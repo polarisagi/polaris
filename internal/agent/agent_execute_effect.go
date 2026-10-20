@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/polarisagi/polaris/internal/llm/pricing"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 
@@ -549,9 +550,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 					a.sCtx.LoopLastUsageTokens += callTokens
 					if a.provider != nil {
 						caps := a.provider.Capabilities()
-						callCost := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
-							float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
-							float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+						callCost := pricing.CostFor(resp.Model, caps, resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
 						a.sCtx.LoopLastUsageCost += callCost
 					}
 					if !a.sCtx.LoopTurnStartTime.IsZero() {

@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     id               TEXT PRIMARY KEY,
     created_at       INTEGER NOT NULL,             -- Unix 毫秒，调用发起时刻
     session_id       TEXT    NOT NULL DEFAULT '',  -- ctx 中的任务/会话作用域（CtxTaskIDKey），后台调用可为空
+    turn_id          TEXT    NOT NULL DEFAULT '',  -- ctx 中的回合 ID（protocol.TurnIDFrom），与 chat_messages.turn_id 同值；后台调用可为空
     purpose          TEXT    NOT NULL DEFAULT '',  -- InferOptions.Purpose：perceive/plan/reflect/respond/consolidate_summary/...
     provider         TEXT    NOT NULL,             -- 注册名（providers 表 name）
     model_id         TEXT    NOT NULL DEFAULT '',  -- 实际模型 ID（请求显式指定优先，否则 Provider.ModelID()）
@@ -18,10 +19,11 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     output_tokens    INTEGER NOT NULL DEFAULT 0,   -- 全部输出 token（含推理）
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,   -- 其中推理 token
     latency_ms       INTEGER NOT NULL DEFAULT 0,
-    cost_usd         REAL    NOT NULL DEFAULT 0,   -- 按 ProviderCapabilities 费率估算
+    cost_usd         REAL    NOT NULL DEFAULT 0,   -- 估算费用，币种 USD；单价为 USD/百万 token，取自 internal/llm/pricing 目录（目录外模型回退适配器费率）
     error            TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_session ON llm_calls(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_model ON llm_calls(model_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_turn ON llm_calls(turn_id) WHERE turn_id != '';

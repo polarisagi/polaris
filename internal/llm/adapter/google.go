@@ -69,8 +69,8 @@ func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *
 			SupportsVision:    true, // Gemini 全系支持图像输入
 			SupportsVideo:     true, // Gemini 1.5+ 支持视频文件输入
 			MaxContextTokens:  1000000,
-			CostPer1KInput:    0.075,
-			CostPer1KOutput:   0.30,
+			CostPerMTokInput:  0.075,
+			CostPerMTokOutput: 0.30,
 		},
 		tbr: tbr,
 	}

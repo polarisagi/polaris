@@ -6,6 +6,7 @@ type LLMUsageRecord struct {
 	ID              string
 	CreatedAtMs     int64
 	SessionID       string
+	TurnID          string // ctx 中的回合 ID（protocol.TurnIDFrom），无则空
 	Purpose         string
 	Provider        string
 	ModelID         string

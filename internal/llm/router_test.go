@@ -78,9 +78,9 @@ var errProviderUnavailable = apperr.New(apperr.CodeProviderExhausted, "provider 
 func TestInferenceRouter_Failover(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	// primary: 第一次调用失败
-	primary := &mockProvider{failCount: 1, caps: types.ProviderCapabilities{CostPer1KInput: 1.0}}
+	primary := &mockProvider{failCount: 1, caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}}
 	// secondary: 始终成功
-	secondary := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 2.0}}
+	secondary := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 2.0}}
 
 	reg.Register("primary", "Primary", primary)
 	reg.Register("secondary", "Secondary", secondary)
@@ -114,9 +114,9 @@ func TestInferenceRouter_AllProvidersCircuitOpen(t *testing.T) {
 func TestInferenceRouter_HealthScorePreference(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	// cheap: 低成本，始终成功
-	cheap := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1, SupportsStreaming: true}}
+	cheap := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1, SupportsStreaming: true}}
 	// expensive: 高成本
-	expensive := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0, SupportsStreaming: true}}
+	expensive := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 9.0, SupportsStreaming: true}}
 
 	reg.Register("cheap", "Cheap", cheap)
 	reg.Register("expensive", "Expensive", expensive)
@@ -254,7 +254,7 @@ func TestInferenceRouter_CrossPoolFallback(t *testing.T) {
 	reg.RegisterWithRole("reasoning-p1", "ReasoningP1", "reasoning", &mockFailProvider{})
 
 	// general Pool：始终成功的 Provider
-	generalProvider := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}}
+	generalProvider := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}}
 	reg.RegisterWithRole("general-p1", "GeneralP1", "general", generalProvider)
 
 	router := NewInferenceRouter(reg, nil)

@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     -- AppendMessageIdempotent 的 INSERT OR IGNORE 不会因重投产生重复消息行。
     -- 允许 NULL（历史行/未走该路径的行），SQLite UNIQUE 索引视多个 NULL 互不冲突。
     dedupe_key  TEXT,
+    -- turn_id: 产生本条 assistant 消息的回合 ID（与 chat_turn_steps.turn_id / llm_calls.turn_id 同值）；
+    -- usage: 本回合用量摘要 JSON {input,cache_hit,output,cost_usd,llm_calls,duration_ms}。
+    -- 均只对 assistant 消息有值，其余为空串。
+    turn_id     TEXT    NOT NULL DEFAULT '',
+    usage       TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
@@ -58,6 +63,22 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_msg_dedupe_key ON chat_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+-- chat_turn_steps: 回合中间步骤时间线（ADR-0118）。服务端持久化而非浏览器本地存储：会话可在后台运行，
+-- 步骤发生时页面未必打开；桌面外壳与浏览器、多设备必须看到同一份。步骤**永不发送给模型**。
+-- 一行一个步骤，步骤结束（phase=end）时写入终态；data 为 step 事件 JSON（title/tool/args_preview/
+-- result_preview/status/started_at/duration_ms/tokens...）。单回合上限 300 步 / 256KB，超出只保留计数与首尾。
+CREATE TABLE IF NOT EXISTS chat_turn_steps (
+    turn_id    TEXT    NOT NULL,
+    session_id TEXT    NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    seq        INTEGER NOT NULL,
+    parent_id  TEXT    NOT NULL DEFAULT '',
+    kind       TEXT    NOT NULL,
+    data       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,  -- Unix 毫秒，供"步骤保留天数"清理
+    PRIMARY KEY (turn_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_turn_steps_session ON chat_turn_steps(session_id, created_at);
 
 -- chat_app_views: MCP Apps（io.modelcontextprotocol/ui）工具调用产生的 UI 视图
 -- 快照（M8f-1，HE-6 State-in-DB）。view_id 由网关侧 crypto/rand 生成

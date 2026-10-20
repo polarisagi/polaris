@@ -27,9 +27,28 @@ ProviderCapabilities struct {
 	// 兼容端点为 false，避免向不认识该字段的端点发送未知参数。
 	SupportsPromptCacheKey bool
 	MaxContextTokens       int
-	CostPer1KInput         float64
-	CostPer1KOutput        float64
-	CostPer1KCacheHit      float64
+	// 费率单位一律为 USD / 百万 token（per MTok）。此前字段名写 Per1K 而各 Provider 填的是
+	// 每百万价（OpenAI 0.15、Anthropic 3.0），换算处再除以 1000 时整体偏差 1000 倍，llm_calls
+	// 里出现一次 1.2 万 token 记约 2 美元的错账。字段名写明单位，换算只允许走 CostUSD。
+	CostPerMTokInput    float64
+	CostPerMTokOutput   float64
+	CostPerMTokCacheHit float64 // 0 = 无单独命中价，命中部分按输入价计
+}
+
+// CostUSD 按费率估算一次调用的费用（USD）。input 为含命中的全部输入 token（llm_calls 口径），
+// cacheHit 为其中命中前缀缓存的部分，命中部分按命中价计、其余按输入价计。
+func (c ProviderCapabilities) CostUSD(input, cacheHit, output int) float64 {
+	return CostUSD(c.CostPerMTokInput, c.CostPerMTokCacheHit, c.CostPerMTokOutput, input, cacheHit, output)
+}
+
+// CostUSD 单价全部为 USD / 百万 token；hitPrice<=0 表示无单独命中价，命中部分按 inPrice 计。
+func CostUSD(inPrice, hitPrice, outPrice float64, input, cacheHit, output int) float64 {
+	cacheHit = max(min(cacheHit, input), 0)
+	if hitPrice <= 0 {
+		hitPrice = inPrice
+	}
+	miss := input - cacheHit
+	return (float64(miss)*inPrice + float64(cacheHit)*hitPrice + float64(output)*outPrice) / 1e6
 }
 
 type

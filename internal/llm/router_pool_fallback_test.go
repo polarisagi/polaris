@@ -17,7 +17,7 @@ import (
 // "不限 role 全局兜底"就是为此存在，删掉它即回归。
 func TestCrossPoolFallback_RoleLessProviderStillServed(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	local := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}}
+	local := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}}
 	reg.Register("ollama-local", "Local LLM", local) // role == ""
 
 	router := NewInferenceRouter(reg, nil)
@@ -43,7 +43,7 @@ func TestCrossPoolFallback_EmptyPoolTriggersFallback(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	// 只有 general Pool，reasoning Pool 为空
 	reg.RegisterWithRole("general-p1", "GeneralP1", "general",
-		&mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}})
+		&mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}})
 
 	router := NewInferenceRouter(reg, nil)
 	resp, err := router.Infer(context.Background(),
@@ -65,7 +65,7 @@ func TestCrossPoolFallback_EmptyPoolTriggersFallback(t *testing.T) {
 func TestStreamCrossPoolFallback_EmitsNotice(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	reg.RegisterWithRole("general-p1", "GeneralP1", "general",
-		&mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}})
+		&mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}})
 
 	router := NewInferenceRouter(reg, nil)
 	ch, err := router.StreamInfer(context.Background(),
@@ -104,7 +104,7 @@ func TestStreamCrossPoolFallback_EmitsNotice(t *testing.T) {
 func TestNoPoolSpecified_KeepsGlobalBest(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	reg.RegisterWithRole("reasoning-p1", "ReasoningP1", "reasoning",
-		&mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}})
+		&mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}})
 
 	router := NewInferenceRouter(reg, nil)
 	resp, err := router.Infer(context.Background(), []types.Message{{Role: "user", Content: "hi"}})
@@ -121,7 +121,7 @@ func TestNoPoolSpecified_KeepsGlobalBest(t *testing.T) {
 func TestCrossPoolFallback_DefaultPoolFallbackIsSilent(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	reg.RegisterWithRole("general-p1", "GeneralP1", "general",
-		&mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}})
+		&mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}})
 	router := NewInferenceRouter(reg, nil)
 	msgs := []types.Message{{Role: "user", Content: "hi"}}
 
@@ -144,8 +144,8 @@ func TestCrossPoolFallback_DefaultPoolFallbackIsSilent(t *testing.T) {
 // 即便备用条目健康分更高（成本更低）。
 func TestGeneralPool_PrefersDefaultModel(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	chat := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 5.0}}
-	spare := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}
+	chat := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 5.0}}
+	spare := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1}}
 	reg.RegisterWithRole("chat", "Chat", "default", chat)
 	reg.RegisterWithRole("spare", "Spare", "general", spare)
 
@@ -163,7 +163,7 @@ func TestGeneralPool_PrefersDefaultModel(t *testing.T) {
 // 已失败条目不得在后续档位被原样重试（此前降级各档以 nil 跳过集择优）。
 func TestPoolFallback_DoesNotRetrySameEntry(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	chat := &mockProvider{failCount: 100, caps: types.ProviderCapabilities{CostPer1KInput: 1.0}}
+	chat := &mockProvider{failCount: 100, caps: types.ProviderCapabilities{CostPerMTokInput: 1.0}}
 	reg.RegisterWithRole("chat", "Chat", "default", chat)
 
 	router := NewInferenceRouter(reg, nil)
@@ -180,8 +180,8 @@ func TestPoolFallback_DoesNotRetrySameEntry(t *testing.T) {
 // TestPickProvider_ExactRole PickProvider("reasoning") 只取 reasoning 条目，不混入 general 备用。
 func TestPickProvider_ExactRole(t *testing.T) {
 	reg := NewProviderRegistry(config.M1RouterThresholds{})
-	reasoning := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0}}
-	spare := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}
+	reasoning := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 9.0}}
+	spare := &mockProvider{caps: types.ProviderCapabilities{CostPerMTokInput: 0.1}}
 	reg.RegisterWithRole("r", "R", "reasoning", reasoning)
 	reg.RegisterWithRole("g", "G", "general", spare)
 

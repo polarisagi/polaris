@@ -17,7 +17,7 @@ import (
 // status: "success" | "error" | "failover"
 // latencyMs: 调用端到端耗时（ms）
 // inputTokens / outputTokens / cacheHitTokens: 来自 types.ProviderResponse.Usage
-// costUSD: 本次调用费用（USD），由调用方按 Capabilities().CostPer1K* 计算
+// costUSD: 本次调用费用（USD），由调用方按 Capabilities().CostUSD 计算（费率单位 USD/百万 token）
 //
 // 调用方: internal/llm/router.go Infer() / failover()
 func RecordLLMCall(

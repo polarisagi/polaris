@@ -48,7 +48,7 @@ type AnthropicOption func(*AnthropicAdapter)
 func WithAnthropicPromptCaching() AnthropicOption {
 	return func(a *AnthropicAdapter) {
 		a.enablePromptCaching = true
-		a.caps.CostPer1KCacheHit = 0.30 // Anthropic cache read: $0.30/1M tokens
+		a.caps.CostPerMTokCacheHit = 0.30 // Anthropic cache read: $0.30/1M tokens
 	}
 }
 
@@ -96,8 +96,8 @@ func NewAnthropicAdapter(model string, credPool *llmparent.CredentialPool, clien
 			SupportsThinking:  true,
 			SupportsVision:    true, // Claude 3+ 全系支持图像输入
 			MaxContextTokens:  200000,
-			CostPer1KInput:    3.0,
-			CostPer1KOutput:   15.0,
+			CostPerMTokInput:  3.0,
+			CostPerMTokOutput: 15.0,
 		},
 	}
 	for _, opt := range opts {
