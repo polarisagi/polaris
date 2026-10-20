@@ -147,6 +147,8 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		ChannelRepo:           s.channelRepo,
 		ProjectRepo:           s.projectRepo,
 		ApprovalRules:         repo.NewSQLiteApprovalRuleRepository(rwDB),
+		TurnRepo:              repo.NewSQLiteChatTurnRepository(rwDB, db),
+		UsageRepo:             usageQueryRepo(db),
 		ProviderRepo:          s.providerRepo,
 		SystemRepo:            s.systemRepo,
 		AgentPool:             agentPool,
@@ -398,4 +400,12 @@ func (s *Server) LocalToken() string {
 		return *p
 	}
 	return ""
+}
+
+// usageQueryRepo 构造会话/回合用量查询仓库；db 为 nil 时返回 nil 接口（避免"非 nil 接口包 nil 指针"）。
+func usageQueryRepo(db protocol.SQLQuerier) protorepo.LLMSessionUsageRepository {
+	if db == nil {
+		return nil
+	}
+	return repo.NewSQLiteLLMUsageQuery(db)
 }

@@ -26,6 +26,8 @@ func sseFrame(ev session.Event) (name string, payload any, ok bool) {
 		return "steer_accepted", ev.Payload, true
 	case session.KindSession:
 		return "session", ev.Payload, true
+	case session.KindStep:
+		return "step", ev.Payload, true
 	}
 	return "", nil, false
 }

@@ -56,6 +56,9 @@ type ChatHandler struct {
 	// TurnHub 回合注册表（ADR-0116）：回合与 HTTP 连接解耦，支持后台运行与重连。
 	TurnHub     *session.TurnHub
 	turnHubOnce sync.Once
+
+	// TurnRepo 回合步骤与回合元数据（ADR-0118）；nil 时步骤只实时推送、不落库，历史接口不带步骤摘要。
+	TurnRepo repo.ChatTurnRepository
 }
 
 type Dependencies struct {
@@ -85,6 +88,9 @@ type Dependencies struct {
 	BinDir                string
 	WorkspaceDir          string
 	HTTPClient            *http.Client
+	// TurnRepo/UsageRepo：回合步骤落库与回合用量汇总（ADR-0118）。任一为 nil 则对应能力关闭。
+	TurnRepo  repo.ChatTurnRepository
+	UsageRepo repo.LLMSessionUsageRepository
 }
 
 // NewChatHandler 故意不做构造函数级 fail-closed nil 强制校验（2026-07-08 复核
@@ -175,7 +181,9 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		TranscriptDir: deps.TranscriptDir,
 		DataDir:       deps.DataDir,
 		WorkspaceDir:  deps.WorkspaceDir,
+		Turns:         newTurnStore(deps.TurnRepo, deps.UsageRepo),
 	})
+	h.TurnRepo = deps.TurnRepo
 
 	return h
 }

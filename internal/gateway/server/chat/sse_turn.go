@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -54,6 +55,8 @@ func (h *ChatHandler) startTurn(w http.ResponseWriter, r *http.Request, sessionI
 		httputil.RespondError(w, "", apperr.New(apperr.CodeInternal, "server shutting down"), http.StatusServiceUnavailable)
 		return nil
 	}
+	// 回合 ID 随 ctx 下发：编排层据此把 llm_calls / chat_turn_steps / chat_messages 关联到同一个回合（ADR-0118）。
+	turnCtx = protocol.WithTurnID(turnCtx, turn.ID)
 	concurrent.SafeGo(turnCtx, "gateway.turn", func(ctx context.Context) {
 		defer cancel()
 		defer turn.Finish()

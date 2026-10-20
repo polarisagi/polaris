@@ -130,8 +130,8 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 		if a.sCtx.SessionID != "" {
 			ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
 		}
-		if a.sCtx.TurnID != "" {
-			ctx = protocol.WithTurnID(ctx, a.sCtx.TurnID)
+		if id := a.sCtx.CtxTurnID(); id != "" {
+			ctx = protocol.WithTurnID(ctx, id)
 		}
 	}
 	// anomalyFilter 恒非 nil（NewAgent 默认构造，见 agent.go），随任务域 ctx 一并

@@ -74,8 +74,8 @@ func (a *Agent) executeLoopToolCallRaw(ctx context.Context, call types.InferTool
 
 	taskID := a.sCtx.SessionID
 	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, taskID)
-	if a.sCtx.TurnID != "" {
-		toolCtx = protocol.WithTurnID(toolCtx, a.sCtx.TurnID)
+	if id := a.sCtx.CtxTurnID(); id != "" {
+		toolCtx = protocol.WithTurnID(toolCtx, id)
 	}
 	toolCtx = context.WithValue(toolCtx, protocol.CtxModelSwitcherKey{}, a)
 	toolCtx = context.WithValue(toolCtx, protocol.CtxSubagentManagerKey{}, a)

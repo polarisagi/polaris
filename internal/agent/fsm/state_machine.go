@@ -282,7 +282,11 @@ type StateContext struct {
 
 // AgenticTurn 承载 agentic 循环单个回合的全部瞬态状态（R2-01 / ADR-0115）。
 type AgenticTurn struct {
-	TurnID                         string
+	TurnID string
+	// ExternalTurnID 由网关在 SendIntent 之前注入的回合 ID（ADR-0118）：llm_calls.turn_id、chat_turn_steps.turn_id、
+	// chat_messages.turn_id 要与网关 TurnHub 的回合 ID 同值才能互相 JOIN；内核自生成的 uuid 网关侧不可知。
+	// ResetAgenticTurn 消费后清空，故每回合须重新注入。
+	ExternalTurnID                 string
 	LoopRound                      int
 	LoopMessages                   []types.Message
 	LoopRunawayLimit               int
@@ -310,9 +314,22 @@ type AgenticTurn struct {
 	LoopStream                     // 已流式推送的文本（R5-02）
 }
 
+// CtxTurnID 本回合写入 ctx 的回合 ID：网关已注入但尚未被 ResetAgenticTurn 消费的 ExternalTurnID 优先，
+// 否则取内核 TurnID。调用方需持 Mu（读）。
+func (s *StateContext) CtxTurnID() string {
+	if s.ExternalTurnID != "" {
+		return s.ExternalTurnID
+	}
+	return s.TurnID
+}
+
 // ResetAgenticTurn 一次性清零回合瞬态状态（轮次、消息、待执行调用、预算累计、警告标记、插话队列和 summary），并生成新的 TurnID（R2-01 / R2-05 / R4-04）。
 func (s *StateContext) ResetAgenticTurn() {
-	s.TurnID = uuid.NewString()
+	if s.ExternalTurnID != "" {
+		s.TurnID, s.ExternalTurnID = s.ExternalTurnID, ""
+	} else {
+		s.TurnID = uuid.NewString()
+	}
 	s.LoopRound = 0
 	s.LoopMessages = nil
 	s.LoopTurnStartTime = time.Time{}

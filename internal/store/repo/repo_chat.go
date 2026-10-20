@@ -258,7 +258,7 @@ func (r *SQLiteChatRepository) ListMessages(ctx context.Context, sessionID strin
 		limit = -1 // SQLite: LIMIT -1 = no upper bound
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, reasoning_content, tool_calls, file_offset, file_length, created_at, updated_at
+		`SELECT id, session_id, role, content, reasoning_content, tool_calls, file_offset, file_length, created_at, updated_at, turn_id, usage
 		FROM chat_messages WHERE session_id=? ORDER BY id ASC LIMIT ?`, sessionID, limit)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListMessages", err)
@@ -268,7 +268,7 @@ func (r *SQLiteChatRepository) ListMessages(ctx context.Context, sessionID strin
 	var result []types.ChatMessageRow
 	for rows.Next() {
 		var row types.ChatMessageRow
-		if err := rows.Scan(&row.ID, &row.SessionID, &row.Role, &row.Content, &row.ReasoningContent, &row.ToolCalls, &row.FileOffset, &row.FileLength, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.SessionID, &row.Role, &row.Content, &row.ReasoningContent, &row.ToolCalls, &row.FileOffset, &row.FileLength, &row.CreatedAt, &row.UpdatedAt, &row.TurnID, &row.Usage); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListMessages scan", err)
 		}
 		result = append(result, row)

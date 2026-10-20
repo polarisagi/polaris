@@ -206,3 +206,13 @@ func validationFeedback(plan *protocol.DAGPlan, err error) string {
 	}
 	return fmt.Sprintf("plan rejected by %s for tool %q: %s", ve.Layer, tool, ve.Reason)
 }
+
+// SetTurnID 注入网关侧的回合 ID（ADR-0118）。与 SetTaskIntent 同一时序（SendIntent 之前，FSM 空闲）。
+// 只写 ExternalTurnID、不碰 TurnID：TurnID 非空在内核里表示"处于 agentic 回合中"（影响阶段事件与回合状态落库），
+// 提前赋值会改变这些既有判据。LLM 调用的 ctx 经 StateContext.CtxTurnID 取值，agentic 回合开始时
+// ResetAgenticTurn 再把它转成 TurnID。
+func (a *Agent) SetTurnID(id string) {
+	a.sCtx.Mu.Lock()
+	a.sCtx.ExternalTurnID = id
+	a.sCtx.Mu.Unlock()
+}

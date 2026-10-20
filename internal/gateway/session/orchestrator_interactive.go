@@ -221,6 +221,14 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
 	agentCtrl.SetConversationHistory(history[:len(history)-1])
 	agentCtrl.SetModelLock(req.ModelID)
+	// 步骤时间线与回合元数据（ADR-0118）：回合 ID 先交给内核，之后该回合的 llm_calls 才带得上 turn_id。
+	ctx, turnID, stepRec := o.beginTurnSteps(ctx, sink, sessionID, agentCtrl)
+	turnFinished := false
+	defer func() {
+		if !turnFinished { // 任何提前返回路径（推理错误、空回复……）也要收口步骤并落库
+			stepRec.finalize(true)
+		}
+	}()
 	reply, inferErr, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput, inputTaintLevel(req))
 	if !aborted && inferErr == "" && reply != "" {
 		var stopViewIDs []string
@@ -240,6 +248,8 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 				slog.Error("session: saveMessage assistant (aborted turn)", "session", sessionID, "err", err)
 			}
 			o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
+			turnFinished = true
+			o.finishTurnMeta(saveCtx, stepRec, turnID, messageID, 0, true)
 			saveCancel()
 		}
 		return &Result{SessionID: sessionID, Reply: reply, Aborted: true}, nil
@@ -263,12 +273,15 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer saveCancel()
 
+	var turnExtra map[string]any
 	if reply != "" {
 		messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs)
 		if err != nil {
 			slog.Error("session: saveMessage assistant", "session", sessionID, "err", err)
 		}
 		o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
+		turnFinished = true
+		turnExtra = o.finishTurnMeta(saveCtx, stepRec, turnID, messageID, inferLatencyMs, false)
 		o.persistence.SampleAndScoreReply(sessionID, req.Input, reply)
 		if tw != nil {
 			tw.WriteTurn("assistant", reply, inferLatencyMs, 0)
@@ -294,10 +307,14 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		"client_cancelled", ctx.Err() != nil,
 	)
 
-	_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
+	complete := map[string]any{
 		"session_id":  sessionID,
 		"duration_ms": inferLatencyMs,
-	}})
+	}
+	for k, v := range turnExtra { // turn_id / usage / steps（ADR-0118）
+		complete[k] = v
+	}
+	_ = sink.Emit(Event{Kind: KindComplete, Payload: complete})
 
 	return &Result{SessionID: sessionID, Reply: reply, LatencyMs: inferLatencyMs}, nil
 }

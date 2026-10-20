@@ -48,6 +48,8 @@ const (
 	// KindSession 对应 wire 事件 "session"：会话 ID 一经确定（含新会话）立即推送，
 	// Payload {session_id}；TurnHub 据此登记新会话并补 turn_id（ADR-0116）。
 	KindSession
+	// KindStep 对应 wire 事件 "step"（ADR-0118 步骤时间线），Payload 即 Step 的 JSON。
+	KindStep
 )
 
 // Event 领域事件。Text 用于 KindDelta 增量文本；Payload 用于 KindStatus /
