@@ -207,3 +207,36 @@ func TestGateway_CooldownKeepsPending(t *testing.T) {
 		t.Fatalf("status: %s", st)
 	}
 }
+
+// 无人值守的工具审批（ADR-0117 追记）：待审期间留在 Pending（带 Unattended/SessionID，供自动化页关联运行），
+// 期限到了无人应答则落 denied/auto_deny，且不再出现在 Pending。
+func TestGateway_UnattendedToolApprovalPendingThenTimeoutDenies(t *testing.T) {
+	gw, db := newTestGateway(t)
+	done := make(chan *types.HITLResponse, 1)
+	go func() {
+		r, _ := gw.Prompt(context.Background(), types.HITLPrompt{
+			ID: "h-un", CheckpointType: types.CheckpointToolApproval, Unattended: true, SessionID: "sess-cron-1",
+			DeadlineNs: time.Now().Add(300 * time.Millisecond).UnixNano(),
+		})
+		done <- r
+	}()
+	waitPending(t, gw, "h-un")
+	pend, _ := gw.Pending(context.Background())
+	if len(pend) != 1 || !pend[0].Unattended || pend[0].SessionID != "sess-cron-1" {
+		t.Fatalf("pending must expose unattended + session: %+v", pend)
+	}
+	select {
+	case r := <-done:
+		if r == nil || r.Approved {
+			t.Fatalf("timeout must deny: %+v", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt did not time out")
+	}
+	if st, by, _, _ := rowOf(t, db, "h-un"); st != "denied" || by != "auto_deny" {
+		t.Fatalf("row: %s %s", st, by)
+	}
+	if pend, _ := gw.Pending(context.Background()); len(pend) != 0 {
+		t.Fatalf("ghost pending: %+v", pend)
+	}
+}

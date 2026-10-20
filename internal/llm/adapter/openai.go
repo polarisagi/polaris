@@ -253,33 +253,24 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 	defer llmparent.ClearBytes(apiKey)
 
 	tok := llmparent.NewTiktokenTokenizer(a.model)
-	rawCh, err := a.client.SendStreamRequest(ctx, cancel, apiKey, apiReq, tok.EstimateRequest(req))
+	rawCh, err := a.client.SendStreamRequest(ctx, nil, apiKey, apiReq, tok.EstimateRequest(req))
 	cred.RecordResult(err)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.StreamInfer", err)
 	}
 
 	outCh := make(chan types.StreamEvent, 100)
 	// [SafeGo] 计费/缓存指标转发：畸形事件触发 panic 此前会直接崩进程。
+	var addTokens func(int64)
+	if a.tbr != nil {
+		addTokens = a.tbr.Add
+	}
 	concurrent.SafeGo(ctx, "llm.adapter.openai_stream_relay", func(context.Context) {
 		defer close(outCh)
-		for ev := range rawCh {
-			if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
-				if a.tbr != nil {
-					// SendStreamRequest 仅在末事件（收到完整 usage 后）填充 InputTokens/
-					// OutputTokens，中间 delta 事件该字段为 0，故此处不会重复计数。
-					a.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens))
-				}
-			}
-			if ev.Usage.CacheHitTokens > 0 || ev.Usage.InputTokens > 0 {
-				metrics.RecordLLMCacheHit("openai", req.Model, ev.Usage.CacheHitTokens > 0)
-			}
-			select {
-			case outCh <- ev:
-			case <-ctx.Done():
-				return
-			}
-		}
+		relayStreamEvents(ctx, rawCh, outCh, "openai", req.Model, addTokens, cancel)
 	})
 	return outCh, nil
 }

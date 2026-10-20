@@ -12,8 +12,8 @@ Alpine.store('nav', {
     if (page === 'projects' || page === 'chat') Alpine.store('projects').load()
     if (page === 'skills')     Alpine.store('skills').load()
     if (page === 'plugins')    Alpine.store('plugins').load()
-    if (page === 'automation') { Alpine.store('cron').load(); Alpine.store('approvals').startPolling() }
-    else                       { Alpine.store('approvals').stopPolling() }
+    if (page === 'automation') Alpine.store('cron').load()
+    Alpine.store('approvals').setFast(page === 'automation')
     if (page === 'chat') Alpine.store('elicitations').startPolling()
     else                 Alpine.store('elicitations').stopPolling()
     // logs 由浮动抽屉控制，不受 nav 干预

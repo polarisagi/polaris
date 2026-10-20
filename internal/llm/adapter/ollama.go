@@ -131,12 +131,12 @@ func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 	apiReq.Model = a.model
 	tok := &llmparent.SimpleTokenizer{}
 
-	raw, err := a.client.SendStreamRequest(ctx, cancel, nil, apiReq, tok.EstimateRequestTokens(req))
+	raw, err := a.client.SendStreamRequest(ctx, nil, nil, apiReq, tok.EstimateRequestTokens(req))
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "OllamaAdapter.StreamInfer", err)
-	}
-	if a.tbr == nil {
-		return raw, nil
 	}
 	// [SafeGo] R-04：此前直接透传 raw，未接入 TokenBurnRate，本地推理的
 	// 单流硬阻断（预算探测）在 Ollama 上完全失效。中间层转发协程对齐
@@ -144,8 +144,13 @@ func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 	out := make(chan types.StreamEvent, cap(raw))
 	concurrent.SafeGo(ctx, "llm.ollama.stream_tbr", func(context.Context) {
 		defer close(out)
+		// 超时 ctx 的 cancel 必须等 relay 排空 raw 之后再触发，否则尾部事件被 ctx.Done 抢先丢弃
+		// （与 openai.go 同一根因，见 REPORT B2）。无 tbr 时本层也保留，仅作为 cancel 的归属点。
+		if cancel != nil {
+			defer cancel()
+		}
 		for ev := range raw {
-			if ev.Usage.InputTokens+ev.Usage.OutputTokens > 0 {
+			if a.tbr != nil && ev.Usage.InputTokens+ev.Usage.OutputTokens > 0 {
 				a.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens))
 			}
 			select {

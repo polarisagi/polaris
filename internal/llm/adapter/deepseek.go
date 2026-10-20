@@ -196,33 +196,26 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
 	tok := llmparent.NewTiktokenTokenizer("deepseek-v4")
-	rawCh, err := d.client.SendStreamRequest(ctx, cancel, apiKey, apiReq, tok.EstimateRequest(req))
+	rawCh, err := d.client.SendStreamRequest(ctx, nil, apiKey, apiReq, tok.EstimateRequest(req))
 	// 建连/握手阶段的结果先行回报；建连成功后逐块解码期间的错误（rawCh 内部）
 	// 属于流中断，现有设计未对单块错误做凭证级分类，维持原有粒度不扩大改动范围。
 	cred.RecordResult(err)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.StreamInfer", err)
 	}
 
 	outCh := make(chan types.StreamEvent, 100)
 	// [SafeGo] 计费/缓存指标转发：畸形事件触发 panic 此前会直接崩进程。
+	var addTokens func(int64)
+	if d.tbr != nil {
+		addTokens = d.tbr.Add
+	}
 	concurrent.SafeGo(ctx, "llm.adapter.deepseek_stream_relay", func(context.Context) {
 		defer close(outCh)
-		for ev := range rawCh {
-			if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
-				if d.tbr != nil {
-					d.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens))
-				}
-			}
-			if ev.Usage.CacheHitTokens > 0 || ev.Usage.InputTokens > 0 {
-				metrics.RecordLLMCacheHit("deepseek", req.Model, ev.Usage.CacheHitTokens > 0)
-			}
-			select {
-			case outCh <- ev:
-			case <-ctx.Done():
-				return
-			}
-		}
+		relayStreamEvents(ctx, rawCh, outCh, "deepseek", req.Model, addTokens, cancel)
 	})
 	return outCh, nil
 }

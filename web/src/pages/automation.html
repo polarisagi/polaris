@@ -18,6 +18,12 @@
       </div>
     </div>
 
+    <!-- 无人值守审批提示：自动化运行卡在“等待批准”时，任何标签页都能看到入口 -->
+    <div class="alert alert-warning shadow-sm mb-6 cursor-pointer" x-show="$store.approvals.unattendedCount() > 0 && tab !== 'approvals'" x-cloak
+         @click="tab = 'approvals'; $store.approvals.requestNotifyPermission()">
+      <span x-text="$store.i18n.t('approvals_waiting_banner')"></span>
+    </div>
+
     <!-- Routine Tab -->
     <div x-show="tab === 'routine'" class="space-y-6">
       <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
@@ -73,7 +79,8 @@
               <div class="mt-4 pt-4 border-t border-base-300 text-xs text-base-content/70 flex items-center gap-2">
                 <template x-if="job.last_run_at">
                   <div class="flex items-center gap-1.5 w-full">
-                    <div class="w-2 h-2 rounded-full" :class="job.last_run_status === 'ok' ? 'bg-success' : job.last_run_status === 'error' ? 'bg-error' : 'bg-warning'"></div>
+                    <div class="w-2 h-2 rounded-full" :class="job.last_run_status === 'ok' ? 'bg-success' : job.last_run_status === 'error' ? 'bg-error' : job.last_run_status === 'suspended' ? 'bg-warning animate-pulse' : 'bg-warning'"></div>
+                    <span class="text-warning font-medium" x-show="job.last_run_status === 'suspended'" x-text="$store.i18n.t('automation_status_waiting_approval')"></span>
                     <span x-text="new Date(job.last_run_at).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})"></span>
                     <span class="ml-auto" x-show="job.run_count > 0" x-text="`${$store.i18n.t('automation_run_count').replace('{0}', job.run_count)}`"></span>
                   </div>
@@ -140,7 +147,7 @@
       <div class="space-y-4">
         <template x-for="req in $store.approvals.list" :key="req.id">
           <div class="card bg-base-200 border-l-4 shadow-sm"
-               x-data="{ remaining: 0, _ti: null, comment: '', bucket: '', init() { this.bucket = $store.approvals.riskBucket(req.risk_level); const tick = () => { this.remaining = req._remainingMs() }; tick(); this._ti = setInterval(tick, 1000); this.$cleanup = () => clearInterval(this._ti) } }"
+               x-data="{ remaining: 0, _ti: null, comment: '', remember: false, bucket: '', init() { this.bucket = $store.approvals.riskBucket(req.risk_level); const tick = () => { this.remaining = req._remainingMs() }; tick(); this._ti = setInterval(tick, 1000); this.$cleanup = () => clearInterval(this._ti) } }"
                :class="bucket === 'critical' ? 'border-error bg-error/10' : bucket === 'high' ? 'border-error' : bucket === 'medium' ? 'border-warning' : 'border-success'">
             <div class="card-body p-5">
               <div class="flex justify-between items-start mb-2">
@@ -151,15 +158,31 @@
                 <div class="badge font-bold uppercase text-[10px]" :class="bucket === 'critical' ? 'badge-error animate-pulse' : bucket === 'high' ? 'badge-error badge-outline' : bucket === 'medium' ? 'badge-warning badge-outline' : 'badge-success badge-outline'" x-text="bucket"></div>
               </div>
 
-              <div class="bg-base-100 rounded-box p-3 my-3 text-sm text-base-content/70 whitespace-pre-wrap border border-base-300" x-text="req.prompt_text"></div>
-              
-              <input id="comment" name="comment" type="text" class="input input-sm input-bordered w-full text-xs" :placeholder="$store.i18n.t('tasks_note_optional')" x-model="comment" />
-              
+              <div class="text-xs text-warning mt-1" x-show="req.unattended" x-text="$store.i18n.t('approvals_unattended_hint')"></div>
+              <div class="bg-base-100 rounded-box p-3 my-3 text-sm text-base-content/70 whitespace-pre-wrap border border-base-300" x-show="!(req.items && req.items.length)" x-text="req.prompt_text"></div>
+              <!-- 与对话内审批卡同形：逐项展示工具与入参 -->
+              <div class="space-y-2 my-3" x-show="req.items && req.items.length">
+                <div class="text-xs text-base-content/70" x-show="req.reason" x-text="req.reason"></div>
+                <template x-for="(it, idx) in (req.items || [])" :key="idx">
+                  <div>
+                    <div class="text-xs"><span class="text-base-content/60" x-text="$store.i18n.t('chat_approval_tool')"></span> <code x-text="it.tool"></code> <span class="text-base-content/50" x-text="'· ' + it.reason"></span></div>
+                    <pre class="text-xs bg-base-200 rounded p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all" x-show="it.input" x-text="it.input"></pre>
+                  </div>
+                </template>
+              </div>
+              <div class="text-xs text-warning" x-show="req.hard_limit" x-text="$store.i18n.t('chat_approval_hard_limit')"></div>
+              <label class="flex items-center gap-2 text-xs mt-2 cursor-pointer" x-show="req.remember_label && !req.hard_limit">
+                <input type="checkbox" class="checkbox checkbox-xs" :id="'ap-remember-' + req.id" :name="'ap-remember-' + req.id" x-model="remember">
+                <span x-text="$store.i18n.t('chat_approval_remember').replace('{0}', req.remember_label)"></span>
+              </label>
+
+              <input id="comment" name="comment" type="text" class="input input-sm input-bordered w-full text-xs mt-2" :placeholder="$store.i18n.t('tasks_note_optional')" x-model="comment" />
+
               <div class="card-actions justify-between items-center mt-4 pt-4 border-t border-base-300">
-                <div class="font-mono text-sm font-bold" :class="remaining > 60000 ? 'text-success' : remaining > 0 ? 'text-warning' : 'text-error'" x-text="remaining > 0 ? `⏱ ${Math.floor(remaining/60000)}:${String(Math.floor((remaining%60000)/1000)).padStart(2,'0')}` : '⌛ ' + $store.i18n.t('automation_approvals_timeout')"></div>
+                <div class="font-mono text-sm font-bold" :class="remaining > 60000 ? 'text-success' : remaining > 0 ? 'text-warning' : 'text-error'" x-text="remaining > 0 ? (remaining >= 3600000 ? `⏱ ${Math.floor(remaining/3600000)}h ${String(Math.floor((remaining%3600000)/60000)).padStart(2,'0')}m` : `⏱ ${Math.floor(remaining/60000)}:${String(Math.floor((remaining%60000)/1000)).padStart(2,'0')}`) : '⌛ ' + $store.i18n.t('automation_approvals_timeout')"></div>
                 <div class="flex gap-2">
-                  <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="$store.approvals.resolve(req.id, 'deny', comment)" x-text="$store.i18n.t('approvals_deny')"></button>
-                  <button class="btn btn-sm btn-primary" :disabled="remaining <= 0" @click="$store.approvals.resolve(req.id, 'approve', comment)" x-text="$store.i18n.t('approvals_approve')"></button>
+                  <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="$store.approvals.resolve(req.id, 'deny', comment, false)" x-text="$store.i18n.t('approvals_deny')"></button>
+                  <button class="btn btn-sm btn-primary" :disabled="remaining <= 0" @click="$store.approvals.resolve(req.id, 'approve', comment, remember)" x-text="$store.i18n.t('approvals_approve')"></button>
                 </div>
               </div>
             </div>

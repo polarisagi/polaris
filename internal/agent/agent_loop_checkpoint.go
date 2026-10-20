@@ -162,6 +162,8 @@ func (a *Agent) ResumeAgenticLoop(turnID string, messages []types.Message, taint
 	if turnID == "" || len(messages) == 0 {
 		return false
 	}
+	// 纵深防御：无论调用方是否已修复，续跑前再确保历史里没有悬空的 tool_calls。
+	messages = RepairDanglingToolCalls(messages)
 	a.sCtx.Mu.Lock()
 	a.sCtx.TurnID = turnID
 	a.sCtx.LoopRound = round
@@ -176,38 +178,76 @@ func (a *Agent) ResumeAgenticLoop(turnID string, messages []types.Message, taint
 	return true
 }
 
-// CompleteInterruptedToolCalls 检查消息序列尾部是否存在未完成的工具调用；若有，回填执行中断结果（R2-05）。
+// interruptedToolResultText 回填给被中断工具调用的结果文本。
+const interruptedToolResultText = "执行中断，结果未知，请自行检查后决定是否重试"
+
+// CompleteInterruptedToolCalls 是 RepairDanglingToolCalls 的兼容入口（R2-05）。
 func CompleteInterruptedToolCalls(messages []types.Message) []types.Message {
+	return RepairDanglingToolCalls(messages)
+}
+
+// RepairDanglingToolCalls 修复崩溃恢复重放历史中“悬空”的工具调用：
+//   - 任一 assistant 消息里的 tool_use 若没有紧随其后的 tool_result，就在该 assistant 的结果段末尾补一条
+//     “执行中断”结果（而不是只修最后一条、也不是追加到整个序列末尾——后面若已有 steer/user 消息，
+//     追加到末尾仍会让 tool 消息不紧跟 tool_calls）；
+//   - 找不到对应 tool_use 的孤儿 tool_result 降级为普通 user 文本（保留信息，去掉协议非法的 tool 块）。
+//
+// DeepSeek/OpenAI 兼容协议要求 assistant.tool_calls 之后必须紧跟与每个 id 对应的 tool 消息，
+// 否则整个请求返回 400（"insufficient tool messages following tool_calls message"）。
+func RepairDanglingToolCalls(messages []types.Message) []types.Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	lastAssistantIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "assistant" {
-			lastAssistantIdx = i
-			break
+	out := make([]types.Message, 0, len(messages)+2)
+	for i := 0; i < len(messages); i++ {
+		m := messages[i]
+		if m.Role != "assistant" {
+			if isToolResultMessage(m) {
+				// 孤儿 tool_result：前面没有声明它的 assistant.tool_use。协议上不能保留 tool 块，
+				// 但其文本（错误回填、委派结果等）仍有信息价值，降级为普通 user 文本。
+				if m.Content != "" {
+					m.Role, m.Parts = "user", nil
+					out = append(out, m)
+				}
+				continue
+			}
+			out = append(out, m)
+			continue
 		}
-	}
-	if lastAssistantIdx == -1 {
-		return messages
-	}
-
-	lastAssistant := messages[lastAssistantIdx]
-	callIDs := extractToolUseIDs(lastAssistant.Parts)
-	if len(callIDs) == 0 {
-		return messages
-	}
-
-	existingResults := extractToolResultIDs(messages[lastAssistantIdx+1:])
-	result := append([]types.Message(nil), messages...)
-	for _, id := range callIDs {
-		if !existingResults[id] {
-			toolResultMsg := makeToolResultMessage(id, "执行中断，结果未知，请自行检查后决定是否重试")
-			toolResultMsg.Round = lastAssistant.Round
-			result = append(result, toolResultMsg)
+		out = append(out, m)
+		ids := extractToolUseIDs(m.Parts)
+		if len(ids) == 0 {
+			continue
 		}
+		declared := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			declared[id] = true
+		}
+		have := make(map[string]bool, len(ids))
+		j := i + 1
+		for ; j < len(messages) && isToolResultMessage(messages[j]); j++ {
+			rids := extractToolResultIDs(messages[j : j+1])
+			keep := false
+			for id := range rids {
+				if declared[id] {
+					keep = true
+					have[id] = true
+				}
+			}
+			if keep {
+				out = append(out, messages[j])
+			}
+		}
+		for _, id := range ids {
+			if !have[id] {
+				synth := makeToolResultMessage(id, interruptedToolResultText)
+				synth.Round = m.Round
+				out = append(out, synth)
+			}
+		}
+		i = j - 1
 	}
-	return result
+	return out
 }
 
 func extractToolUseIDs(parts []any) []string {

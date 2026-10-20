@@ -122,7 +122,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'sessions')   Alpine.store('sessions').load()
   if (page === 'skills')     Alpine.store('skills').load()
   if (page === 'plugins')    Alpine.store('plugins').load()
-  if (page === 'automation') { Alpine.store('cron').load(); Alpine.store('approvals').startPolling() }
+  if (page === 'automation') Alpine.store('cron').load()
+  Alpine.store('approvals').startPolling(page === 'automation')
   if (page === 'chat') { Alpine.store('elicitations').startPolling(); Alpine.store('chat').fetchCapabilities?.(); }
   if (page === 'eval')       { void 0 }
 

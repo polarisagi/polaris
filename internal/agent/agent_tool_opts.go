@@ -105,3 +105,18 @@ func finishToolSchema() types.ToolSchema {
 func (a *Agent) candidateToolOptions(ctx context.Context, uniform bool) []types.InferOption {
 	return a.toolInferOptions(ctx, types.AgentStateReflect, uniform)
 }
+
+// loopEmptyRecoveryOpts 空输出恢复链第 2 档的调用选项（B3.2）：
+// 已有工具结果 → tool_choice=none 强制基于现有结果收尾；尚无 → 关闭思考模式再试一次。
+// tool_choice 仅在同时下发 tools 时生效（保留 tools 也使缓存前缀不失配）。
+func (a *Agent) loopEmptyRecoveryOpts() []types.InferOption {
+	plan := a.sCtx.LoopEmptyRecoveryPlan()
+	var opts []types.InferOption
+	if plan.ForbidTools {
+		opts = append(opts, types.WithToolChoice("none"))
+	}
+	if plan.DisableThinking {
+		opts = append(opts, types.WithThinkingMode(types.ThinkingDisabled))
+	}
+	return opts
+}

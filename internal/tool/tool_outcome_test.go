@@ -108,3 +108,20 @@ func TestExecuteTool_SessionEventCarriesOutcome(t *testing.T) {
 		t.Fatalf("失败事件 payload 应带 error: %v", w.output)
 	}
 }
+
+// 失败路径的空 Output（如 web_search 被 DDG 限流返回 202）不是解码失败：
+// 事件照常写入，错误文本进 output.error，且不产生「反序列化失败」告警。
+func TestWriteToolCallOutcome_EmptyOutputOnFailure_NoDecodeWarn(t *testing.T) {
+	writer := &fakeSessionEventWriter{}
+	ctx := context.WithValue(context.Background(), protocol.CtxSessionIDKey{}, "sess-3")
+
+	res := &types.ToolResult{Output: nil}
+	writeToolCallOutcome(ctx, writer, "web_search", []byte(`{"query":"x"}`), res, "web_search: ddg returned status 202", false, 5)
+
+	if writer.writeCallCount != 1 {
+		t.Fatalf("事件应写入一次，got %d", writer.writeCallCount)
+	}
+	if got, _ := writer.output["error"].(string); got != "web_search: ddg returned status 202" {
+		t.Errorf("错误文本应进 output.error，got %v", writer.output)
+	}
+}

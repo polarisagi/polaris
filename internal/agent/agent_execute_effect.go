@@ -372,6 +372,9 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			// uniform_tools 实验开关（ADR-0105 决策三，默认 false=行为不变）见 agent_tool_opts.go。
 			inferOpts = append(inferOpts, a.toolInferOptions(ctx, a.sm.Current(),
 				config.CurrentThresholds().M4Kernel.CacheUniformTools)...)
+			if a.sm.Current() == types.AgentStateLoop {
+				inferOpts = append(inferOpts, a.loopEmptyRecoveryOpts()...)
+			}
 			// [M04 §8 崩溃恢复回放] 全局回放模式下优先按顺序消费注入的历史 LLM
 			// 调用录像，不发起真实 Provider 调用（g_inv_08 零 LLM 重放约束）。
 			// 队列耗尽的瞬间立即翻转全局 ReplayMode=false 并落入真实调用分支——
@@ -497,6 +500,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				}
 				if a.sm.Current() == types.AgentStateLoop {
 					a.sCtx.Mu.Lock()
+					a.sCtx.LoopLastReasoning = resp.ReasoningContent
 					if len(resp.ToolCalls) > 0 {
 						a.sCtx.LoopPendingToolCalls = resp.ToolCalls
 						parts := make([]any, 0, len(resp.ToolCalls)+1)
@@ -572,7 +576,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 						"schema_ref", llmEff.SchemaRef, "state", a.sm.Current(), "err", schemaErr)
 				}
 				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), fillContent)
-				a.reportUnusableFill(ctx, nextState, err, resp)
+				a.reportUnusableFill(ctx, nextState, err, resp, len(fillContent))
 			}
 		}
 

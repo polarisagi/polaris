@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -80,9 +81,13 @@ func writeToolCallOutcome(ctx context.Context, sessionWriter SessionEventWriter,
 	}
 	var outMap map[string]any
 	if res != nil {
-		if err := json.Unmarshal(res.Output, &outMap); err != nil {
-			slog.Warn("tool: outcome output 反序列化失败，按空处理", "tool_name", toolName, "err", err)
-			metrics.RecordToolOutcomeDecodeFailure(ctx, toolName)
+		// 失败路径的 Output 往往为空（错误在 errMsg/res.Error 里，如 web_search 被限流）：
+		// 空输出不是解码失败，不告警、不计失败指标；非空却非法的 JSON 才是真正的解码失败。
+		if len(bytes.TrimSpace(res.Output)) > 0 {
+			if err := json.Unmarshal(res.Output, &outMap); err != nil {
+				slog.Warn("tool: outcome output 反序列化失败，按空处理", "tool_name", toolName, "err", err)
+				metrics.RecordToolOutcomeDecodeFailure(ctx, toolName)
+			}
 		}
 	} else if errMsg != "" {
 		outMap = map[string]any{"error": errMsg}

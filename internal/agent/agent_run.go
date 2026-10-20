@@ -179,6 +179,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 
 		case result := <-a.effectDone:
+			idleTimer.Reset(time.Duration(idleTimeout) * time.Second) // effect 结束也是活动，不应在紧随其后被判空闲
 			if result.Err != nil {
 				// [HE-1] Effect 错误此前只经 Run() 返回值上抛，既不进流、也只在
 				// pool.go 那层打一条不含错误来源阶段的 warn。
@@ -193,6 +194,13 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-idleTimer.C:
 			if a.sm.Current() == types.AgentStateSuspended {
 				// 已经在 Suspended 状态，静默等待意图唤醒
+				continue
+			}
+			// 只有真正空闲（S_IDLE 且无 effect 在跑）才允许挂起。回合内的长耗时工具、等待人工审批
+			// （无人值守审批可长达 24 小时）都会超过空闲超时；此前计时器在非 Idle 态仍会 ForceState 成
+			// S_SUSPENDED，工具返回后的 TriggerLoopExecDone 便报 "no transition from 11 with trigger 24"。
+			if a.sm.Current() != types.AgentStateIdle || a.effectRunning.Load() {
+				idleTimer.Reset(time.Duration(idleTimeout) * time.Second)
 				continue
 			}
 			// Suspend-on-Idle：持久化状态后退出，由上层 Supervisor 决定是否重启

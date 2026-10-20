@@ -143,6 +143,24 @@
 - **排查起点**：`docs/arch/M07-Tool-Action-Layer.md`、`internal/tool/builtin/bash/bash.go`；修复见 R2-02。
 
 
+### 症状 23：loop: LLM returned empty output after retry / 流式调用 token 恒为 0
+- **症状特征**：模型“只思考不回答”导致回合失败；`llm_calls` 流式调用 input/output tokens 为 0。
+- **归类模块**：M01 / M04
+- **根因类别**：① 适配器 relay 在 SSE 读完后立即 `cancel()`，与 `outCh<-ev` 的 select 竞争丢失流尾事件（content/tool_calls/usage）；② usage 在 DeepSeek 的 finish_reason 块（choices 非空）被丢弃；③ 旧重试原样重发同一请求。
+- **排查起点**：`internal/llm/adapter/stream.go`、`deepseek.go`；设 `POLARIS_LLM_RAW_DUMP=<dir>` 抓原始 SSE（见 M03 §8-bis）；日志 `llm fill unusable`/`llm stream: summary`；M04 §1.2 第 16 项。
+
+### 症状 24：no transition from 11 with trigger 24 / 回合中途莫名 S_SUSPENDED
+- **症状特征**：长耗时工具或等待审批后，回合以 `no transition from 11 with trigger 24` 中止。
+- **归类模块**：M04
+- **根因类别**：空闲计时器在回合内触发，`Dispatch(Suspend)` 失败后 `ForceState(Suspended)`。现仅 S_IDLE 且无 effect 才挂起。
+- **排查起点**：`internal/agent/agent_run.go` idleTimer 分支；M04 §2。
+
+### 症状 25：崩溃恢复续跑 DeepSeek 400（tool_calls 后缺 tool 消息）
+- **症状特征**：重启后续跑 agentic 回合报 400 insufficient tool messages。
+- **归类模块**：M04
+- **根因类别**：重放历史里 assistant.tool_use 没有紧随的 tool_result（旧修复只补最后一条且追加到末尾）。
+- **排查起点**：`internal/agent/agent_loop_checkpoint.go` `RepairDanglingToolCalls`；M04 §8。
+
 **维护规范**：
 
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。
@@ -155,8 +173,8 @@
 <!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `M13-Interface-Scheduler.md` | L3 接口 | 34K | 见下方 [M13 补充](#m13-补充) |
-| `M04-Agent-Kernel.md` | L1 内核 | 29K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
+| `M13-Interface-Scheduler.md` | L3 接口 | 35K | 见下方 [M13 补充](#m13-补充) |
+| `M04-Agent-Kernel.md` | L1 内核 | 30K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 29K | 状态机 + 全模块阈值（唯一权威） |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
@@ -168,8 +186,8 @@
 | `M10-Knowledge-RAG.md` | L2 知识 | 14K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
 | `M09-Self-Improvement-Engine.md` | L2 自演化 | 13K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
 | `M02-Storage-Fabric.md` | L0 存储 | 13K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
+| `M03-Observability.md` | L0 可观测 | 12K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
 | `M06-Skill-Library.md` | L1 技能 | 12K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
-| `M03-Observability.md` | L0 可观测 | 11K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
 | `M12-Eval-Harness.md` | L3 评测 | 10K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |
 | `ARCHITECTURE.md` | 总览 | 9K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
 | `ROADMAP.md` | 路线 | 7K | 时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载） |

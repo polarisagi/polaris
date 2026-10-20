@@ -182,6 +182,10 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		buf := make([]byte, 4096)
 		scanner.Buffer(buf, maxBufBytes)
 
+		// 原始流转储（POLARIS_LLM_RAW_DUMP，默认关闭，nil 安全）：只写请求摘要与 SSE 行，不写鉴权信息。
+		dump := newRawDump(rawDumpDir(), req)
+		defer dump.Close()
+
 		// 跨 chunk 聚合 tool_call 参数：index → 状态
 		toolBuilders := map[int]*toolCallState{}
 		accumulatedOutputTokens := 0
@@ -193,6 +197,33 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		// 截断（length）、内容过滤、只输出了思考链等根因。
 		var textBytes, reasoningBytes, completionTokens int
 		sawToolCall := false
+		toolCallsEmitted := 0
+		// usageLatest/usageDirty：usage 可能出现在任意块（OpenAI 末尾空 choices 块；DeepSeek 在带
+		// finish_reason 的块内，delta.content=""）。随事件发出即清 dirty；流结束时仍 dirty 则补发一次。
+		var usageLatest types.Usage
+		usageDirty := false
+		// 流结束 Debug 摘要（B1）：无论正常结束、取消还是出错都留一条，定位"空输出"时
+		// 可直接对照 text/reasoning/tool_calls/finish_reason/usage。
+		defer func() {
+			slog.Debug("llm stream: summary",
+				"text_bytes", textBytes, "reasoning_bytes", reasoningBytes,
+				"tool_calls", toolCallsEmitted, "finish_reason", lastFinishReason,
+				"input_tokens", usageLatest.InputTokens, "output_tokens", usageLatest.OutputTokens,
+				"cache_hit_tokens", usageLatest.CacheHitTokens)
+		}()
+		flushUsage := func() (ctxDone bool) {
+			if !usageDirty {
+				return false
+			}
+			usageDirty = false
+			emittedAny = true
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: usageLatest, FinishReason: lastFinishReason}:
+				return false
+			case <-ctx.Done():
+				return true
+			}
+		}
 		logIfEmpty := func() {
 			if textBytes == 0 && !sawToolCall {
 				slog.Warn("llm stream: ended without content or tool calls",
@@ -225,6 +256,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			if len(strings.TrimSpace(line)) == 0 {
 				continue
 			}
+			dump.Line(line)
 
 			data, ok := strings.CutPrefix(line, "data: ")
 			if !ok {
@@ -232,7 +264,9 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			}
 			if data == "[DONE]" {
 				sawToolCall = sawToolCall || len(toolBuilders) > 0
+				toolCallsEmitted += len(toolBuilders)
 				flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
+				flushUsage()
 				logIfEmpty()
 				return
 			}
@@ -250,6 +284,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			var currentUsage types.Usage
 			if chunk.Usage != nil {
 				currentUsage = chunk.Usage.toUsage()
+				usageLatest, usageDirty = currentUsage, true
 				// API 返回的精确值优先；更新累计输出 token，供后续 cancel 补偿用
 				accumulatedOutputTokens = chunk.Usage.CompletionTokens
 				completionTokens = chunk.Usage.CompletionTokens
@@ -258,8 +293,9 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			if len(chunk.Choices) == 0 {
 				if chunk.Usage != nil {
 					select {
-					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage}:
+					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage, FinishReason: lastFinishReason}:
 						emittedAny = true
+						usageDirty = false
 					case <-ctx.Done():
 						return
 					}
@@ -292,8 +328,11 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 					accumulatedOutputTokens += len([]rune(delta.Content)) / 3
 				}
 				select {
-				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage}:
+				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage, FinishReason: lastFinishReason}:
 					emittedAny = true
+					if chunk.Usage != nil {
+						usageDirty = false
+					}
 				case <-ctx.Done():
 					return
 				}
@@ -320,6 +359,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 				if len(toolBuilders) > 0 {
 					emittedAny = true
 					sawToolCall = true
+					toolCallsEmitted += len(toolBuilders)
 				}
 				if ctxDone := emitCollectedToolCalls(ctx, ch, toolBuilders); ctxDone {
 					return
@@ -334,8 +374,10 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			// "no valid SSE data frame" 错误，上游同时收到工具调用与流错误。
 			sawToolCall = true
 			emittedAny = true
+			toolCallsEmitted += len(toolBuilders)
 		}
 		flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
+		flushUsage()
 		logIfEmpty()
 		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 			select {

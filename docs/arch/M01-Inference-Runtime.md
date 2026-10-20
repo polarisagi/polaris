@@ -5,7 +5,7 @@
 > **语言**：Go　|　**代码**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:25 不变量速查 / 1:40 默认模型 / 2:46 Provider接口 / 3:52 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:121 Token预算 / 6:182 SemanticCache / 7:204 Fallback / 8:234 363 本地推理local_only / 9:277 416 ModelVersion / 12:292 453 (SOFT)降级 / 10:309 470 凭证池+速率追踪 / 13:325 490 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:25 不变量速查 / 1:40 默认模型 / 2:46 Provider接口 / 3:52 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:121 Token预算 / 6:187 SemanticCache / 7:209 Fallback / 8:239 363 本地推理local_only / 9:282 416 ModelVersion / 12:297 453 (SOFT)降级 / 10:314 470 凭证池+速率追踪 / 13:330 490 依赖 -->
 
 ---
 
@@ -168,6 +168,11 @@ Token 经济（缓存稳定前缀、cheap-first、账本）→ ADR-0105。
 - **L3**：预算耗尽 → 硬阻断
 
 TokenBurnDetector 仅做单流检测；系统级燃烧速率从 M3 `polaris_token_burn_rate` Gauge 单源读取。
+
+### 5.3-bis 流式 usage 归集与流尾保护（2026-10）
+
+- **usage 位置因厂商而异**：OpenAI 在 `choices` 为空的尾块；DeepSeek 在 `finish_reason` 块（`choices` 非空、`content:""`）。`adapter/stream.go` 解析器对两种位置统一处理——记录最新 usage，流结束（`[DONE]`/EOF）时若尚未随其它事件发出，则补发**恰好一条**带 `Usage` + `FinishReason` 的事件（此前 finish 块 usage 被丢，`llm_calls` 流式调用 token 恒为 0）。表驱动用例：`stream_usage_test.go`（OpenAI/DeepSeek/tool_calls finish/stop finish/无 usage）。
+- **流尾事件不得被取消竞争吞掉**：OpenAI 兼容适配器（`deepseek.go`/`openai.go`/`ollama.go`）的 relay goroutine 在 `outCh<-ev` 与 `<-ctx.Done()` 两个 case 同时就绪时 Go 随机选择；原实现在 SSE 读完后立即 `cancel()`，尾部事件（含最终 content/tool_calls/usage）有概率被丢，表现为“只有 reasoning 的空输出”。现 `SendStreamRequest` 不再持有 cancel，relay 排空 rawCh 后才 `defer cancel()`。回归：`TestDeepSeekStreamInfer_TailEventsSurviveCancel`（400 帧思考 × 40 次，慢消费者）。
 
 ### 5.4 trackStreamCost
 

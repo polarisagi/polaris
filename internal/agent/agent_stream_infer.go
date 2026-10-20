@@ -22,6 +22,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 	var usage types.Usage
 	var inferErr error
 	var toolCalls []types.InferToolCall
+	var finishReason string
 
 	for ev := range ch {
 		switch ev.Type {
@@ -34,7 +35,8 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 			})
 		case types.StreamTextDelta:
 			content.WriteString(ev.Content)
-			if audience == protocol.AudienceUser {
+			// 适配器会单独补发"空正文 + usage"事件（A：用量随终态事件到达），空增量不是用户可见 token。
+			if audience == protocol.AudienceUser && ev.Content != "" {
 				a.publishStreamEvent(types.AgentStreamEvent{
 					Type:       types.AgentStreamEventToken,
 					Content:    ev.Content,
@@ -65,11 +67,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 				inferErr = apperr.New(apperr.CodeCancelled, "推理流被中断: "+ev.Content).WithRetryAfter(5)
 			}
 		}
-		if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
-			usage.InputTokens = ev.Usage.InputTokens
-			usage.OutputTokens = ev.Usage.OutputTokens
-			usage.CacheHitTokens = ev.Usage.CacheHitTokens
-		}
+		foldStreamMeta(ev, &finishReason, &usage)
 	}
 
 	if inferErr != nil {
@@ -80,6 +78,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 		ReasoningContent: reasoning.String(),
 		ToolCalls:        toolCalls,
 		Usage:            usage,
+		FinishReason:     finishReason,
 	}, nil
 }
 
@@ -110,4 +109,17 @@ func (a *Agent) acceptStreamToolCall(payload string, audience protocol.LLMAudien
 		})
 	}
 	return types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input}, true
+}
+
+// foldStreamMeta 把单个流事件携带的终态元数据（finish_reason、usage）折叠进累计值：
+// 适配器保证 usage 只在终态事件出现一次，后到者覆盖先到者。
+func foldStreamMeta(ev types.StreamEvent, finishReason *string, usage *types.Usage) {
+	if ev.FinishReason != "" {
+		*finishReason = ev.FinishReason
+	}
+	if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
+		usage.InputTokens = ev.Usage.InputTokens
+		usage.OutputTokens = ev.Usage.OutputTokens
+		usage.CacheHitTokens = ev.Usage.CacheHitTokens
+	}
 }
