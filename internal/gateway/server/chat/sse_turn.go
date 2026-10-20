@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,7 +91,9 @@ func streamSubscription(ctx context.Context, w http.ResponseWriter, flusher http
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			_, _ = w.Write([]byte(": ping\n\n"))
+			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
+				return // 客户端已断开：仅退订，回合继续（ADR-0116）
+			}
 			flusher.Flush()
 		}
 	}
@@ -107,7 +110,9 @@ func prepareSSE(w http.ResponseWriter) (http.Flusher, bool) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // 关闭 nginx 缓冲
 	// SSE 长连接：禁用写超时
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		slog.Debug("chat: sse set write deadline unsupported", "error", err)
+	}
 	return flusher, true
 }
 

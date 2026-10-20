@@ -23,6 +23,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ── ANSI 颜色（仅 TTY 生效）─────────────────────────────────────────────────
@@ -588,7 +589,7 @@ func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolin
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
 	var interrupted atomic.Bool
-	go func() {
+	concurrent.SafeGo(ctx, "cli.interrupt_watch", func(context.Context) {
 		select {
 		case <-sigCh:
 			interrupted.Store(true)
@@ -598,7 +599,7 @@ func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolin
 			cancel()
 		case <-ctx.Done():
 		}
-	}()
+	})
 
 	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)

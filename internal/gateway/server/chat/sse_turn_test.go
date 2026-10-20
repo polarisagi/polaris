@@ -139,7 +139,7 @@ func TestAgentStream_DisconnectKeepsTurnRunningAndReplays(t *testing.T) {
 	defer re.Body.Close()
 	go func() { time.Sleep(50 * time.Millisecond); close(f.release) }()
 	evs := readEvents(t, re.Body, "complete")
-	var names []string
+	names := make([]string, 0, len(evs))
 	for _, e := range evs {
 		names = append(names, e.name)
 	}

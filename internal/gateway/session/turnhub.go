@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // TurnHub 回合注册表（ADR-0116 会话回合与连接解耦）：按 sessionID 持有当前/最近一次
@@ -251,10 +253,10 @@ func (h *TurnHub) Shutdown(ctx context.Context) {
 	h.mu.Unlock()
 
 	waited := make(chan struct{})
-	go func() {
+	concurrent.SafeGo(ctx, "turnhub.shutdown_wait", func(context.Context) {
 		h.wg.Wait()
 		close(waited)
-	}()
+	})
 	select {
 	case <-waited:
 	case <-ctx.Done():
