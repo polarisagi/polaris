@@ -777,7 +777,11 @@ const chatStore = {
           run.phase = data.phase || ''
         } else if (data.type === 'approval_required') {
           // 回合在内核侧阻塞等待裁决；超时按拒绝处理（后端 HITL 网关兜底）
-          run.approvals.push({ id: data.id, tool: data.tool || '', input: data.input || '', deadlineNs: data.deadline_ns || 0, busy: false })
+          run.approvals.push({
+            id: data.id, tool: data.tool || '', input: data.input || '', deadlineNs: data.deadline_ns || 0, busy: false,
+            reason: data.reason || '', hardLimit: !!data.hard_limit, rememberLabel: data.remember_label || '',
+            items: Array.isArray(data.items) ? data.items : [], remember: false,
+          })
         } else if (data.type === 'compacting') {
           run.compacting = true
         } else if (data.type === 'compacted') {
@@ -906,7 +910,7 @@ const chatStore = {
       const r = await fetch(`/v1/approvals/${encodeURIComponent(id)}/resolve`, {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ action, comment: '' }),
+        body: JSON.stringify({ action, comment: '', remember: action === 'approve' && !item.hardLimit && !!item.remember }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       this.approvals = this.approvals.filter(a => a.id !== id)

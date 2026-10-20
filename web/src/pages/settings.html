@@ -8,7 +8,7 @@
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'providers' }" @click="tab = 'providers'" x-text="$store.i18n.t('nav_providers')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'channels' }" @click="tab = 'channels'; if (!_chLoaded) { $store.channels.load(); _chLoaded = true }" x-text="$store.i18n.t('nav_channels')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'config' }" @click="tab = 'config'; if (!_cfgLoaded) { $store.config.load(); _cfgLoaded = true }" x-text="$store.i18n.t('nav_config')"></a>
-        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'computer' }" @click="tab = 'computer'" x-text="$store.i18n.t('nav_computer')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'computer' }" @click="tab = 'computer'; $store.computer.loadRules()" x-text="$store.i18n.t('nav_computer')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'mesh' }" @click="tab = 'mesh'; if (!_meshLoaded) { $store.mesh.load(); _meshLoaded = true }" x-text="$store.i18n.t('nav_mesh')"></a>
       </div>
     </div>
@@ -603,6 +603,26 @@ dim = 2560</code></pre>
                 <p class="text-xs text-base-content/60" x-text="$store.i18n.t('computer_mode_full_desc')"></p>
               </div>
             </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 已记住的授权：审批卡勾选“以后不再询问”后按项目保存的最窄规则，可逐条删除 -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card-body p-6">
+          <h4 class="font-bold" x-text="$store.i18n.t('perm_rules_title')"></h4>
+          <p class="text-xs text-base-content/60 mb-4" x-text="$store.i18n.t('perm_rules_desc')"></p>
+          <p class="text-xs text-base-content/50" x-show="store.rules.length === 0" x-text="$store.i18n.t('perm_rules_empty')"></p>
+          <div class="space-y-2">
+            <template x-for="r in store.rules" :key="r.id">
+              <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300">
+                <span class="badge badge-outline badge-sm shrink-0" x-text="$store.i18n.t('perm_rule_kind_' + r.kind)"></span>
+                <code class="text-xs flex-1 min-w-0 truncate" x-text="r.pattern" :title="r.pattern"></code>
+                <span class="text-xs text-base-content/50 shrink-0 hidden sm:inline" x-text="store.projectName(r.project_id)"></span>
+                <span class="text-xs text-base-content/50 shrink-0" x-text="$store.i18n.t('perm_rule_hits').replace('{0}', r.hit_count)"></span>
+                <button class="btn btn-ghost btn-xs text-error" @click="store.deleteRule(r.id)" x-text="$store.i18n.t('perm_rule_delete')"></button>
+              </div>
+            </template>
           </div>
         </div>
       </div>

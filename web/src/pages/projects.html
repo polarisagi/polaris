@@ -35,6 +35,7 @@
             <div class="flex items-center gap-3 text-xs text-base-content/60 pl-5">
               <span class="font-mono truncate flex-1 min-w-0" x-text="p.root_path || $store.i18n.t('projects_no_dir')" :title="p.root_path"></span>
               <span class="shrink-0" x-text="$store.i18n.t('projects_session_count').replace('{0}', p.session_count)"></span>
+              <span class="shrink-0" x-show="p.remembered_rules > 0" x-text="$store.i18n.t('projects_remembered_rules').replace('{0}', p.remembered_rules)"></span>
               <span class="shrink-0 hidden sm:inline" x-text="new Date(p.updated_at || p.created_at).toLocaleString('zh-CN')"></span>
             </div>
           </div>
