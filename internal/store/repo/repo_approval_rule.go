@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	protorepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -16,12 +17,12 @@ import (
 
 // SQLiteApprovalRuleRepository 实现 protorepo.ApprovalRuleRepository。
 type SQLiteApprovalRuleRepository struct {
-	db *sql.DB
+	db protocol.SQLQuerier
 }
 
 var _ protorepo.ApprovalRuleRepository = (*SQLiteApprovalRuleRepository)(nil)
 
-func NewSQLiteApprovalRuleRepository(db *sql.DB) *SQLiteApprovalRuleRepository {
+func NewSQLiteApprovalRuleRepository(db protocol.SQLQuerier) *SQLiteApprovalRuleRepository {
 	return &SQLiteApprovalRuleRepository{db: db}
 }
 

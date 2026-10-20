@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -153,4 +154,31 @@ func (sm *StateMachine) shouldActivateExtensions(sCtx *StateContext) (goal strin
 		return "", false
 	}
 	return goal, true
+}
+
+// activateExtWithRetry 重规划时带退避的扩展激活；耗尽重试后降级返回（degraded=true）。
+func (sm *StateMachine) activateExtWithRetry(ctx context.Context, goal string) ([]ExtActivatedHint, bool) {
+	const maxRetries = 2
+	var hints []ExtActivatedHint
+	var err error
+
+	for attempt := 1; attempt <= maxRetries+1; attempt++ {
+		hints, err = sm.activator.FindAndActivate(ctx, goal)
+		if err == nil {
+			return hints, false
+		}
+		slog.Warn("extension_activator: failed to activate extensions for replan", "attempt", attempt, "err", err)
+		if attempt <= maxRetries {
+			select {
+			case <-ctx.Done():
+				return nil, true
+			case <-time.After(time.Duration(attempt) * time.Second):
+				// Exponential backoff or simple backoff
+			}
+		}
+	}
+
+	// Exhausted retries
+	metrics.GlobalReplanExtActivationDegradedTotal.Add(1)
+	return nil, true
 }
