@@ -94,6 +94,7 @@ ADR 被代码引用时，源文件头部加：
 | 0116 | 会话回合与连接解耦（后台运行）：TurnHub、重连回放、显式中止，推翻「断连即中止」 | Accepted | 2026-10-20 |
 | 0117 | 权限模式与工具审批矩阵：单一 permission_mode、能力分级 fail-closed、owner 输入分级、policy.Decide 与硬限制、项目级「以后不再询问」 | Accepted | 2026-10-20 |
 | 0118 | 会话步骤时间线与用量可见性：价目 USD/百万 token 按模型取价、turn_id 归属、`step` 事件、有界落库与懒加载、为什么不放本地存储、令牌复用与 401 自愈 | Accepted | 2026-10-20 |
+| 0119 | 首轮输入 token 瘦身：懒加载与 Embedder 解耦、静态核心集、系统提示一行索引、tool_search 关键词/BM25、描述与运营指令压缩、token 门控与可达性评测 | Accepted | 2026-10-20 |
 
 
 

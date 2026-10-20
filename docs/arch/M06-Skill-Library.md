@@ -131,7 +131,7 @@ fuzz 测试（10,000 随机输入）由 `make fuzz-skill` 驱动，见 `internal
 
 加权融合 + 上下文预算渐进披露（name+desc → workflow summary → full instructions）。降级链：embedding 维度变化切 FTS5/BM25 + Lazy Re-embedding；`cognitive`/`embedFn` 不可用整体降级为 `SQLiteRegistryImpl` 内存二次过滤（`fallbackSelect`）。
 
-**当前技能发现由 `search_tools` 统一承担**：技能以 ToolSkill 源进入 CompositeCatalog，`search_tools` 向量检索动态激活。
+**当前技能发现由 `tool_search` 统一承担**：技能以 ToolSkill 源进入 CompositeCatalog，`tool_search` 关键词/BM25 检索（有 Embedder 时叠加向量）动态激活（ADR-0119）。
 
 ### 3.2 结构签名匹配
 

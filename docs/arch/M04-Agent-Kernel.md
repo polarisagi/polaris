@@ -313,7 +313,7 @@ PRM 在 **S_PLAN** 对多个候选 DAG 并发打分选优；与 §4.5 StepScorer
 RouteReasoning:
 0. si = `Agent.surpriseCalc.CurrentSurprise(taskID)` 或退化路径 `ComputeBasic(nil, toolSeq)`；均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath。**
 1. `0 < si < 0.3` → FastPath：合成 S_PERCEIVE 结果跳过 LLM，S_PLAN 同样旁路；skillCache 命中直接执行 Wasm，不兼容 fall through。
-2. 未命中或 si ≥ 0.3 → 走 Plan（`providerRouter.Route`）。工具选择：原 `M6.SkillSelector.SelectTopK` 已废弃，由 M13-bis CompositeCatalog 懒加载 + `search_tools` 元工具取代（工具总数超 LazyLoadThreshold 时 LLM 主动检索并动态激活，覆盖 builtin + MCP + skill，见 M13-bis §4）；System 1 意图匹配由 `SkillIntentMatcher` 独立承担（`cmd/polaris/boot_agent.go`）。**Tool Selection > Tool Design**：禁止把全部工具列表塞给 LLM。
+2. 未命中或 si ≥ 0.3 → 走 Plan（`providerRouter.Route`）。工具选择：原 `M6.SkillSelector.SelectTopK` 已废弃，由 M13-bis CompositeCatalog 懒加载 + `tool_search` 取代（工具总数超 LazyLoadThreshold 时仅常驻核心集，其余在系统提示里留一行索引，LLM 经 `tool_search` 关键词/BM25 检索并激活，不依赖 Embedder，覆盖 builtin + MCP + skill，见 M13-bis §4 与 ADR-0119）；System 1 意图匹配由 `SkillIntentMatcher` 独立承担（`cmd/polaris/boot_agent.go`）。**Tool Selection > Tool Design**：禁止把全部工具列表塞给 LLM。
 3. buildMessages：见 §1.1 五层前缀账本。
 
 **AgentPool（ADR-0025 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）；每个 sessionID 一个独立 `Agent`，容量由 `TierParams.MaxConcurrentAgents` 限制；超容量 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。idle 超 10 分钟由 `Pool.GC()` 回收（调用 `Shutdown()` 停循环）。`Pool.Acquire` 对新建 Agent 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（实现 `internal/agent/pool.go`）。

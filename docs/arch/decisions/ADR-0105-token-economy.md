@@ -85,7 +85,7 @@
 ## 决策六：工具定义下发与 Provider 缓存接线（原 ADR-0101 决策五、原 ADR-0102 决策五、原 ADR-0105 决策三）
 
 - S_PLAN 文本工具目录只列名称；参数 schema 与描述仅经原生 tools 下发。`SupportsTools=false` 的 `LocalAdapter` 在适配器内用 `withToolsAsText` 渲染 `WithTools`；新增不支持原生 tools 的适配器须同样渲染。
-- tools 数组只追加：核心工具按名排序在前，`search_tools` 固定其后，本会话激活的工具按激活顺序追加（`catalog/composite.go`）。
+- tools 数组只追加：核心工具按名排序在前，`tool_search` 固定其后（ADR-0119：核心集改为静态 14 个，懒加载不再依赖 Embedder），本会话激活的工具按激活顺序追加（`catalog/composite.go`）。
 - OpenAI 兼容：按能力位发 `prompt_cache_key`（`hash(agent_id)`，无 PII）与可配 `openai.prompt_cache_retention`（默认不传）；Anthropic `anthropic.cache_ttl`（`5m`|`1h`，默认 5m）；DeepSeek 自动前缀缓存；Google 写 `cachedContentTokenCount` 到 `Usage.CacheHitTokens`。
 - 实验开关 `m4_kernel.cache.uniform_tools`（默认 false）：Perceive/Reflect/Respond 也下发 Plan 的 tools 并设 `tool_choice=none`；是否默认开启须以 `llm_calls` 实测决定（HE-4）。
 
