@@ -64,7 +64,7 @@ internal/        28 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
   llm/           adapter/ stt/ tts/ audiorun/ audioassets/ embedonnx/ modelregistry/ safecall/
   ffi/ sysinfo/ downloader/ runtimeinfo/   Rust 桥接（purego）/ 硬件采集 / 通用下载 / 运行时状态（run/，ADR-0096）
   # 通用契约（所有层可引用）
-  protocol/      跨模块类型与接口契约；repo/ pb/ schema/（DDL SQL（46 个，SSoT））
+  protocol/      跨模块类型与接口契约；repo/ pb/ schema/（DDL SQL（47 个，SSoT））
   config/        配置加载 + 编译期不变量 + 系统参数单一事实源 (system_params.go)
   lint/          CI 静态扫描规则
 
@@ -108,7 +108,7 @@ rust/substrate/  Rust FFI 库（Cedar + SurrealDB-Core，purego，ADR-0011）
 5. `docs/arch/spec/state.yaml` — 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 局部读
 6. `docs/specs/0X-*.md` — 按域选读（见 INDEX 加载策略表）；写新代码前读 `07-Reference-Implementation.md` 标杆；写任何 Agent/LLM/Tool/RAG/Memory 代码前必读 `09-LLM-Agent-Production.md`
 7. `internal/protocol/` — 跨模块类型与接口契约
-8. `internal/protocol/schema/NNN_*.sql` — DDL SSoT（001~013 + 015~024 + 029~050，共 46 个 SQL 文件；014 永久留空）；`ls internal/protocol/schema/*.sql` 即得（46 个）。014、025~028 刻意预留不复用（014 随 ADR-0114 废弃删除预留，025~027 已合并重构，028 apps 随 ADR-0103 删除），不得报为"缺失"。修改前必读目标表文件
+8. `internal/protocol/schema/NNN_*.sql` — DDL SSoT（001~013 + 015~024 + 029~052，共 47 个 SQL 文件；014 永久留空）；`ls internal/protocol/schema/*.sql` 即得（47 个）。014、025~028 刻意预留不复用（014 随 ADR-0114 废弃删除预留，025~027 已合并重构，028 apps 随 ADR-0103 删除），不得报为"缺失"。修改前必读目标表文件
 
 
 **禁止**：未读 INDEX 直接加载多个 M_X；默认加载 `ROADMAP.md` `DIAGRAMS.md`（人类参考层）；全量预读 `ARCHITECTURE.md`。

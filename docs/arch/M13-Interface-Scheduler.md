@@ -72,7 +72,8 @@ CLI 是**薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调�
 | 编排管理 | `POST /v1/admin/tasks/{pattern-mapreduce,pattern-parallel,pattern-sequential,pattern-swarm,pattern-dag,pipeline,csv-fanout}`；`GET /v1/agents` | |
 | HITL | `GET /v1/approvals/pending`；`POST /v1/approvals/{id}/resolve`（approve/deny） | §2.4 |
 | 多节点 | `/v1/mesh/{self,peers,invites,tokens,settings}`（含 `PUT /v1/mesh/settings`，设置页「多节点」Tab）；`GET /.well-known/agent-card.json`；`/v1/a2a/tasks`；对外 A2A 1.0 门面 `/a2a/v1` | ADR-0111；实现 `internal/gateway/mesh/` 与 `internal/gateway/server/meshapi/` |
-| 偏好/电脑操控 | `GET /v1/preferences`；`PUT /v1/preferences/{key}`（含 `computer_use_mode`、`permission_mode`） | §8.8 |
+| 偏好/电脑操控 | `GET /v1/preferences`；`PUT /v1/preferences/{key}`（含统一权限模式 `permission_mode`） | §8.8 |
+| 审批规则 | `GET /v1/approval-rules[?project_id=]`；`DELETE /v1/approval-rules/{id}`；`POST /v1/approvals/{id}/resolve` body 含 `remember` | §8.8、ADR-0117 |
 | 语音 | `POST /v1/audio/{speech,transcriptions,stt/install,tts/install}`；`GET /v1/audio/status` | §8.4，ADR-0110 |
 | 评测/嵌入 | `POST /v1/eval/{run,benchmark}`；`/v1/eval/meta-audit`；`POST /v1/embedding/rebench` | M12，ADR-0109 |
 | 导出/导入 | `GET /v1/export/{trajectories,backup}`；`POST /v1/import/backup`（幂等 upsert）；`POST /v1/workspace/upload`；`POST /v1/vault/rotate-master-key` | |
@@ -440,7 +441,7 @@ HTTP 层出站适配器（`internal/gateway/egress/`，`EgressGateway` 实现 `h
 **ResolveApproval**: ① pending 查找 → Approved/Denied+Comment ② 持久化+审计 ③ `[MutationBus]` → `[EventLog]`。
 **ReloadOnStartup**: 加载 pending → 超时检查 → 超时则 ApprovalTimeout；未超时则重启计时器 + 重通知（dedup: SHA-256(requestID+retry_seq)，>50 条 → 仅最近 50 + M3 CRITICAL）。
 
-**权限模式联动**（inv_M13_07）：`ApprovalRequest.PermissionMode` 仅电脑/浏览器操控类 checkpoint（`CheckpointDeviceControlReview`，由 `interceptComputerUse` 发起）填充，取值对应「设置 → 设备操控 → 权限模式」（`default`/`auto_review`/`full_access`）：
+**权限模式联动**（inv_M13_07，ADR-0117 修订）：统一权限模式 `permission_mode`（`default`/`auto_review`/`full_access`）由 `policy.Decide` 在 S_VALIDATE 判定；需询问的节点合并为一张 `CheckpointToolApproval` 审批卡（`approval_required` 事件含 `reason`/`hard_limit`/`remember_label`/`items[]`），**超时一律 auto_deny**。`CheckpointDeviceControlReview` 仅在未接入权限源的遗留路径使用，下列旧语义仅对其适用：
 - `full_access`：`interceptComputerUse` 的 `needHITL` 恒 `false`，正常不发起审批；`resolveTimeoutAction` 的 `full_access → auto_approve` 是防御性兜底，保证即使仍发起审批且无人应答，行为也与"自主执行"承诺一致，而非卡死。
 - `auto_review`/`default`：走通用兜底 `kill_pause`——高危操作需人审，超时不放行是设计如此。
 - 该联动**只作用于电脑操控类 checkpoint**，不影响扩展安装审查（`security_review`，TrustTier + Cedar `install_extension_permit`）、L3/L4 自我改进晋升（`l3_strategy_modify`/`l4_multi_sig`）、自动化预执行（`automation_pre_run`）——二者是独立的两个轴，不得混淆。
@@ -759,19 +760,18 @@ automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线�
 
 ---
 
-## 8.8 设置：权限模式与电脑操控（`/settings` → `电脑操控` Tab）
+## 8.8 设置：权限模式（`/settings` → `权限` Tab）
 
 偏好存 `preferences` 表（`key TEXT PK, value TEXT`），经 `PUT /v1/preferences/{key}`（body `{ value }`）写入：
 
 | key | value | 说明 |
 |-----|-------|------|
-| `computer_use_mode` | `default` \| `auto_review`（默认）\| `full_access` | 设备操控权限模式（前端 `$store.computer`） |
+| `permission_mode` | `default` \| `auto_review`（默认）\| `full_access` | 统一权限模式（前端 `$store.computer`）；旧键 `computer_use_mode` 启动/读取时迁移后弃用 |
 | `computer_any_app_enabled` | `"true"`/`"false"` | 是否允许任意应用 |
 | `computer_chrome_enabled` | `"true"`/`"false"` | 是否启用 Chrome 深度交互 |
-| `permission_mode` | 同上三值 | 写入 Cedar 上下文 `permission_mode`（`internal/security/policy/gate_builtin_rules.go`） |
 
-- **模式语义**：`full_access`（完全访问）→ `interceptComputerUse()`（`internal/agent/agent_execute_util.go`）不发起 HITL，超时兜底 `auto_approve`；`auto_review` / `default` → 高危操作触发 HITL，超时 `kill_pause`。详见 §2.4 权限模式联动、M07 §7.1。
-- **模式切换**：`PUT /v1/preferences/computer_use_mode` UPSERT `preferences` 并热更新 Agent 配置，由 M11 PolicyGate 为当前 Session 重签对应级别 Capability Token。
+- **模式语义**：`full_access` 除硬限制外不再询问；`auto_review` 读取、工作区内常规操作、安全命令自动，其余询问；`default` 仅读取自动。每次工具调用实时读取。详见 ADR-0117、M11 §2.3.1。
+- **模式切换**：`PUT /v1/preferences/permission_mode`，下一次工具调用即生效。"已记住的授权"存 `approval_rules` 表（项目级，设置页「权限」Tab 可逐条删除）。
 - **Chrome 深度交互**：启用后 `browser_use` / `computer_use` 经 `interceptComputerUse()` 放行，通过 MCP puppeteer 或 CDP 执行 `click(x,y)` / `type(text)` / `read_dom()`；所有 DOM 读取内容进入 `TaintLevel=High`（外部 Web 内容，inv_M7_02）。
 
 ---

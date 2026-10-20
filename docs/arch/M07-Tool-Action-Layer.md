@@ -365,7 +365,7 @@ DryRun结果→[EventLog]（tool.dry_run_result），Reflexion回顾。
 - **耗时追踪**: 底层追踪表（`decision_log` / `agent_actions`）须录入 `created_at` 与 `updated_at`
 - **GUI Action Loop**: `see → decide → act` 循环 `maxSteps` 次：Capture + UITree → VLM DecideAction（主干）→ MCP Command → executeAction → GUIResult
 
-**HITL 拦截门控**（`interceptComputerUse`，`internal/agent/agent_execute_util.go`）：触发工具 `computer_use`、`browser_use`；受全局 `permission_mode`（`PreferencesRepo.GetPermissionMode`）控制：`full_access` 自动放行（依赖 Cedar 最终防线）/ `auto_review`（默认）仅危险动作触发 HITL / `default` 全部触发。危险动作：`computer_use` 的 `key/type/left_click/right_click/double_click/left_click_drag`；`browser_use` 的 `click/type/key`。HITL 路径 `a.hitl.Prompt()`，deny 返回 `CodeForbidden`（任务中止）。
+**HITL 拦截门控**（`interceptComputerUse`，`internal/agent/agent_execute_util.go`）：接入权限源后仅保留 Cedar `CheckPolicy` 预检；模式判定与审批统一由 `policy.Decide`（S_VALIDATE，`agent_permission.go`）完成，见 ADR-0117。未接入权限源的遗留路径仍按 `permission_mode`（`PreferencesRepo.GetPermissionMode`）：`full_access` 放行 / `auto_review` 仅危险动作 HITL / `default` 全部 HITL。危险动作：`computer_use` 的 `key/type/left_click/right_click/double_click/left_click_drag`；`browser_use` 的 `click/type/key`。deny 返回 `CodeForbidden`。能力分级新增 `CapReadNetwork`（`web_fetch`/`web_search`/`feed_fetch`），加载器对缺失/未知 `capability` 报错，MCP/技能经 `EffectiveCapability()` fail-closed。
 
 ### 7.2 LAM（Large Action Model）— ComputerUseEngine
 

@@ -1,6 +1,6 @@
 # ADR-0007: TaintLevel 五级 + 只升不降 + Sanitizer 受控降级
 
-> 状态：Accepted ｜ 首次：2026-05-16 ｜ 最近复核：2026-10-12 ｜ 含原 ADR-0045/0047 ｜ 模块：M11 `internal/security/taint/`
+> 状态：Accepted ｜ 首次：2026-05-16 ｜ 最近复核：2026-10-20 ｜ 含原 ADR-0045/0047 ｜ 模块：M11 `internal/security/taint/`
 > 实现详情：[M11 §2.3-2.5](../M11-Policy-Safety.md)、[00-Dict §4](../00-Global-Dictionary.md)
 
 ## 决策一：五级传播 + 四种受控降级
@@ -19,6 +19,10 @@ GD-13-004 否决简化提案、GD-14-003 重申采纳：三级或 Boolean 方案
 
 复用既有 `ExemptionVault`，不新建存储。四个降级函数中 `SanitizeByDeterministicTransform` 经 [ADR-0062](./ADR-0062-deadcode-final-settlement.md) 复核恢复保留（刻意不接入 S_VALIDATE，无统一可验证触发点，deadcode 白名单豁免），其余三个已生产接线。
 
+## 决策四：输入来源分级——owner 本人输入为 TaintLow（2026-10-20 修订）
+
+此前所有用户输入一律 `TaintHigh`，凡由它派生参数的非只读工具在 L1 必被拦截，日常对话处处弹审批。修订后按**来源**定级：经已认证的本地可信客户端（web/desktop/cli）进入的 owner 本人输入、回合中途插话与 Redirect 标 `TaintLow`；信任由 HTTP 边界依据鉴权上下文判定，不取请求体自报，且仅对本地客户端渠道生效。外部渠道（telegram/webhook/plugin_channel/cron/workflow）、匿名回环兜底、远程 API、对端节点、Stop hook 续跑、工具输出、网页内容、记忆召回保持原等级；全局污点仍只升不降（插话并入按各自等级取最大值）。该放宽与能力分级 fail-closed、硬限制同批落地，见 [ADR-0117](./ADR-0117-permission-mode-and-tool-approval-matrix.md)。
+
 ## 反例守护 / 已驳方案
 
 - 对 LLM 输出做 keyword/regex 过滤即降级 — 概率过滤非物理边界
@@ -34,6 +38,7 @@ GD-13-004 否决简化提案、GD-14-003 重申采纳：三级或 Boolean 方案
 |---|---|
 | 2026-05-16 | 初版 |
 | 2026-07-28 | 合并 ADR-0045/0047 |
+| 2026-10-20 | 决策四：owner 本人输入按来源定级为 TaintLow（ADR-0117） |
 
 ## 引用代码
 

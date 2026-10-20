@@ -120,10 +120,14 @@ TaintLevel/TaintedString/SafeString/TaintSource/PropagateTaint 类型定义见 `
 | 级别 | 语义 | 来源 | Slot |
 |------|------|------|------|
 | TaintNone (0) | 系统编译期内容 | system slot / compiled prompts | instruction |
-| TaintLow (1) | 用户原始输入 | instruction slot / workspace 内文件 | instruction |
+| TaintLow (1) | 用户原始输入（仅限 owner 经已认证本地可信客户端 web/desktop/cli 输入，ADR-0007 决策四；外部渠道输入仍为 High） | instruction slot / workspace 内文件 | instruction |
 | TaintMedium (2) | 受信第三方输出 | 白名单 MCP（Model Context Protocol，模型上下文协议） / allowlist connector | data (不可进 instruction) |
 | TaintHigh (3) | 不受信外部内容 | 抓取网页 / 未知 MCP / shell stdout | data (不可进 instruction) |
 | TaintUserReviewed (4) | 用户显式 review 后降级 | 用户确认操作 | data (不可进 instruction) |
+
+### 2.3.1 权限模式与硬限制 [Permission-Decide]
+
+ADR-0117：S_VALIDATE 对每个计划节点调用确定性的 `policy.Decide`（`internal/security/policy/approval*.go`，不调用 LLM），顺序为 硬限制 → 读取类 → full_access → 已记住授权 → auto_review 自动放行 → 询问。**硬限制在三档模式（含 full_access）下都询问，且不可被已记住的授权覆盖**：① 灾难性命令（`sudo`/`su`/`doas`/`pkexec`、`mkfs*`、删根/家目录、`dd` 写块设备）；② 凭据外流（本回合读取过凭据后的任何联网操作）；③ 参数污点 ≥ High 且操作敏感（写网络、特权、危险 shell、工作区外写入、高风险写入、键鼠 UI 输入）。shell 命令由 `cmdclass` 基于语法树逐段分类。
 
 ### 2.4 传播规则 [Taint-Prop]
 
