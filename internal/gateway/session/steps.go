@@ -360,18 +360,7 @@ func (r *stepRecorder) onToolCall(ev types.AgentStreamEvent, parent, scope strin
 }
 
 func (r *stepRecorder) onToolResult(ev types.AgentStreamEvent, parent, scope string) {
-	var st *stepState
-	if ev.CallID != "" {
-		st = r.byCall[scope+"|"+ev.CallID]
-	}
-	if st == nil { // 无 CallID 或错过了开始事件：按同工具最早的未结束步骤配对
-		for _, c := range r.order {
-			if c.Kind == StepKindTool && !c.done && c.Tool == ev.ToolName && c.scope == scope {
-				st = c
-				break
-			}
-		}
-	}
+	st := r.findToolStep(ev, scope)
 	if st == nil {
 		st = r.newStep(fmt.Sprintf("tool-r%d", r.seq+1), parent, StepKindTool, ev.ToolName, scope)
 		st.Tool = ev.ToolName
@@ -394,20 +383,40 @@ func (r *stepRecorder) onToolResult(ev types.AgentStreamEvent, parent, scope str
 			status = StepStatusDenied
 		}
 	}
-	// 配对的审批步骤随之落定。
-	for i, ap := range r.approvals {
-		if ap != nil && ap.Tool == ev.ToolName && ap.scope == scope {
-			ap.DurationMs = max(r.ms()-ap.StartedAt, 0)
-			if status == StepStatusDenied {
-				r.end(ap, StepStatusDenied)
-			} else {
-				r.end(ap, StepStatusOK)
-			}
-			r.approvals[i] = nil
-			break
+	r.settleApproval(ev.ToolName, scope, status)
+	r.end(st, status)
+}
+
+// findToolStep 按 CallID 找对应的工具步骤；无 CallID 或错过开始事件时按同工具最早的未结束步骤配对。
+func (r *stepRecorder) findToolStep(ev types.AgentStreamEvent, scope string) *stepState {
+	if ev.CallID != "" {
+		if st := r.byCall[scope+"|"+ev.CallID]; st != nil {
+			return st
 		}
 	}
-	r.end(st, status)
+	for _, c := range r.order {
+		if c.Kind == StepKindTool && !c.done && c.Tool == ev.ToolName && c.scope == scope {
+			return c
+		}
+	}
+	return nil
+}
+
+// settleApproval 让与该工具配对的审批步骤随工具结果落定（被拒则记 denied，否则 ok）。
+func (r *stepRecorder) settleApproval(tool, scope, toolStatus string) {
+	for i, ap := range r.approvals {
+		if ap == nil || ap.Tool != tool || ap.scope != scope {
+			continue
+		}
+		ap.DurationMs = max(r.ms()-ap.StartedAt, 0)
+		if toolStatus == StepStatusDenied {
+			r.end(ap, StepStatusDenied)
+		} else {
+			r.end(ap, StepStatusOK)
+		}
+		r.approvals[i] = nil
+		return
+	}
 }
 
 // finalize 回合收尾：把未结束的步骤收口，落库尾部与摘要行，返回摘要。aborted 时未完成的工具记 cancelled。

@@ -67,52 +67,31 @@ type updateAutomationReq struct {
 	ProjectID       *string `json:"project_id"`
 }
 
+// setIfPresent 在 PATCH 字段非 nil 时覆盖目标值。
+func setIfPresent[T any](dst *T, src *T) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
 func applyAutomationPatch(in *AutomationInput, req updateAutomationReq) {
-	if req.Name != nil {
-		in.Name = *req.Name
-	}
-	if req.Prompt != nil {
-		in.Prompt = *req.Prompt
-	}
-	if req.TriggerType != nil {
-		in.TriggerType = *req.TriggerType
-	}
-	if req.CronSchedule != nil {
-		in.CronSchedule = *req.CronSchedule
-	}
-	if req.ChannelID != nil {
-		in.ChannelID = *req.ChannelID
-	}
-	if req.WorkingDir != nil {
-		in.WorkingDir = *req.WorkingDir
-	}
-	if req.EnvType != nil {
-		in.EnvType = *req.EnvType
-	}
-	if req.ReasoningEffort != nil {
-		in.ReasoningEffort = *req.ReasoningEffort
-	}
-	if req.ResultAction != nil {
-		in.ResultAction = *req.ResultAction
-	}
-	if req.CedarRulesJSON != nil {
-		in.CedarRulesJSON = *req.CedarRulesJSON
-	}
+	setIfPresent(&in.Name, req.Name)
+	setIfPresent(&in.Prompt, req.Prompt)
+	setIfPresent(&in.TriggerType, req.TriggerType)
+	setIfPresent(&in.CronSchedule, req.CronSchedule)
+	setIfPresent(&in.ChannelID, req.ChannelID)
+	setIfPresent(&in.WorkingDir, req.WorkingDir)
+	setIfPresent(&in.EnvType, req.EnvType)
+	setIfPresent(&in.ReasoningEffort, req.ReasoningEffort)
+	setIfPresent(&in.ResultAction, req.ResultAction)
+	setIfPresent(&in.CedarRulesJSON, req.CedarRulesJSON)
 	if req.Enabled != nil {
 		in.Enabled = req.Enabled
 	}
-	if req.RequiresHITL != nil {
-		in.RequiresHITL = *req.RequiresHITL
-	}
-	if req.RiskLevel != nil {
-		in.RiskLevel = *req.RiskLevel
-	}
-	if req.EventFilter != nil {
-		in.EventFilter = *req.EventFilter
-	}
-	if req.ProjectID != nil {
-		in.ProjectID = *req.ProjectID
-	}
+	setIfPresent(&in.RequiresHITL, req.RequiresHITL)
+	setIfPresent(&in.RiskLevel, req.RiskLevel)
+	setIfPresent(&in.EventFilter, req.EventFilter)
+	setIfPresent(&in.ProjectID, req.ProjectID)
 }
 
 // HandleUpdateAutomation 更新指定自动化任务。

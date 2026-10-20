@@ -174,24 +174,10 @@ func RepriceLLMCalls(db *sql.DB, nowMs int64) (updated int64, err error) {
 	if _, err = tx.Exec(repriceBackupDDL); err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "reprice: backup table", err)
 	}
-	rows, err := tx.Query("SELECT DISTINCT model_id FROM llm_calls")
+	models, err := distinctModelIDs(tx)
 	if err != nil {
-		return 0, apperr.Wrap(apperr.CodeInternal, "reprice: models", err)
+		return 0, err
 	}
-	var models []string
-	for rows.Next() {
-		var m string
-		if err = rows.Scan(&m); err != nil {
-			rows.Close()
-			return 0, apperr.Wrap(apperr.CodeInternal, "reprice: scan", err)
-		}
-		models = append(models, m)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return 0, apperr.Wrap(apperr.CodeInternal, "reprice: iterate models", err)
-	}
-	rows.Close()
 	for _, m := range models {
 		p, ok := pricing.Lookup(m)
 		if !ok {
@@ -248,4 +234,25 @@ func RevertLLMCostReprice(db *sql.DB) (restored int64, err error) {
 		return 0, apperr.Wrap(apperr.CodeInternal, "reprice revert: commit", err)
 	}
 	return restored, nil
+}
+
+// distinctModelIDs 列出 llm_calls 中出现过的全部 model_id。
+func distinctModelIDs(tx *sql.Tx) ([]string, error) {
+	rows, err := tx.Query("SELECT DISTINCT model_id FROM llm_calls")
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "reprice: models", err)
+	}
+	defer rows.Close()
+	var models []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "reprice: scan", err)
+		}
+		models = append(models, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "reprice: iterate models", err)
+	}
+	return models, nil
 }

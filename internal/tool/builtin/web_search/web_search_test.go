@@ -399,7 +399,7 @@ func TestSearchWithFallback_AllFailStructuredError(t *testing.T) {
 // fallbackEngines 只启用配置里已有凭据的引擎，不凭空启用。
 func TestFallbackEngines_OnlyConfigured(t *testing.T) {
 	names := func(es []namedEngine) []string {
-		var out []string
+		out := make([]string, 0, len(es))
 		for _, e := range es {
 			out = append(out, e.name)
 		}
