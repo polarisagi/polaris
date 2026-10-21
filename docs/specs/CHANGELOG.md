@@ -5,6 +5,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-22（updater：开发构建禁用在线更新 + 替换前预检/备份）
+
+- **[行为]** `Version=="dev"` 构建：`CheckLatest` 恒 `has_update=false`（`VersionInfo.dev_build=true`），`TriggerUpdate` 同步返回 `CodeInvalidInput`。原因：dev 曾恒判有更新并跳过降级校验，release v2.5.0（schema 048）覆盖开发二进制（库已到 054）致启动 fatal 崩溃循环。
+- **[行为]** Unix `applyUpdate` 替换前先执行新二进制 `version` 预检（10s，须含目标版本号），并留存 `<exe>.prev` / `lib.prev` 供手动回滚。
+- **[前端]** `update.js` 轮询容忍守护进程重启失联、恢复后自动刷新、3 分钟超时报错；dev 构建隐藏「立即更新」。
+
 ## 2026-10-21（ADR-0120 缓存优先上下文与工具层 — 含**规范/契约变更**）
 
 - **[契约]** 新增内置工具 `call_tool`/`session_search`/`session_read`/`goal`；`tool_search` 改为返回描述+精简 schema 的文本；`read_file` 新增 `offset`/`limit` 与行号输出。

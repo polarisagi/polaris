@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
@@ -21,7 +23,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-func (m *Manager) applyUpdate(archivePath string) error {
+func (m *Manager) applyUpdate(archivePath, targetVersion string) error {
 	exePath, err := m.executableFn()
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "resolve executable", err)
@@ -56,6 +58,30 @@ func (m *Manager) applyUpdate(archivePath string) error {
 
 	targetLibDir := filepath.Join(filepath.Dir(exePath), "lib")
 
+	if runtime.GOOS != "windows" {
+		// 预检：新二进制连 version 都跑不起来（架构不符/损坏/动态库缺失）时，替换后
+		// 守护进程会在 launchd/systemd 下崩溃循环且无从恢复，所以替换前先试跑。
+		ctxProbe, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		out, probeErr := m.probeBinaryFn(ctxProbe, newBinPath)
+		cancel()
+		want := strings.TrimPrefix(targetVersion, "v")
+		if probeErr != nil || !strings.Contains(out, want) {
+			os.Remove(newBinPath)   //nolint:errcheck
+			os.RemoveAll(newLibDir) //nolint:errcheck
+			if probeErr != nil {
+				return apperr.Wrap(apperr.CodeInternal, "updater: 新二进制预检失败，已放弃替换", probeErr)
+			}
+			return apperr.New(apperr.CodeInternal,
+				fmt.Sprintf("updater: 新二进制预检版本不符（期望 %s，实际输出 %q），已放弃替换", want, strings.TrimSpace(out)))
+		}
+		// 替换前留存旧版本，崩溃循环时可手动回滚（mv <exe>.prev <exe>）。
+		if err := backupCurrent(exePath, targetLibDir); err != nil {
+			os.Remove(newBinPath)   //nolint:errcheck
+			os.RemoveAll(newLibDir) //nolint:errcheck
+			return err
+		}
+	}
+
 	// 原子替换（Unix 可替换运行中文件；Windows 需延迟脚本）
 	errRename := os.Rename(newBinPath, exePath)
 	if errRename != nil {
@@ -73,6 +99,62 @@ func (m *Manager) applyUpdate(archivePath string) error {
 	}
 
 	return replaceUnixLibs(newLibDir, targetLibDir)
+}
+
+// probeBinary 执行 `<path> version` 并返回合并输出。
+func probeBinary(ctx context.Context, path string) (string, error) {
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	return string(out), err
+}
+
+// backupCurrent 把当前二进制与 lib 目录留存为 <exe>.prev / lib.prev（覆盖旧备份）。
+// 二进制优先硬链接（零拷贝，且随后的 rename 只替换目录项，旧 inode 保留）。
+func backupCurrent(exePath, libDir string) error {
+	prevBin := exePath + ".prev"
+	os.Remove(prevBin) //nolint:errcheck
+	if err := os.Link(exePath, prevBin); err != nil {
+		if err := copyFile(exePath, prevBin, 0o755); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "updater: 备份当前二进制失败", err)
+		}
+	}
+	prevLib := filepath.Join(filepath.Dir(exePath), "lib.prev")
+	os.RemoveAll(prevLib) //nolint:errcheck
+	entries, err := os.ReadDir(libDir)
+	if err == nil {
+		if err := os.MkdirAll(prevLib, 0o755); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "updater: 备份 lib 目录失败", err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if err := copyFile(filepath.Join(libDir, e.Name()), filepath.Join(prevLib, e.Name()), 0o755); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "updater: 备份 lib 文件失败", err)
+			}
+		}
+	}
+	slog.Info("updater: 已备份当前版本，崩溃循环时可手动回滚", "binary", prevBin, "lib", prevLib)
+	return nil
+}
+
+func copyFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "open "+src, err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "create "+dst, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return apperr.Wrap(apperr.CodeInternal, "copy "+src, err)
+	}
+	if err := out.Close(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "close "+dst, err)
+	}
+	return nil
 }
 
 func replaceUnixLibs(newLibDir, targetLibDir string) error {

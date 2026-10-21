@@ -1,6 +1,8 @@
 package updater
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +12,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,7 +202,7 @@ func TestApplyUpdate(t *testing.T) {
 	fakeArchive := filepath.Join(tmpDir, "fake.zip")
 	os.WriteFile(fakeArchive, []byte("not a zip"), 0644)
 
-	err := m.applyUpdate(fakeArchive)
+	err := m.applyUpdate(fakeArchive, "v2.0.0")
 	if err == nil {
 		t.Errorf("expected error for invalid archive")
 	}
@@ -243,5 +247,110 @@ func TestManager_doUpdate_ErrorPath(t *testing.T) {
 
 	if m.GetVersionInfo().UpdateStatus != StatusError {
 		t.Errorf("expected status error, got %v", m.GetVersionInfo().UpdateStatus)
+	}
+}
+
+func TestCheckLatest_DevBuildNoUpdate(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/polarisagi/polaris/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.5.0", "body": "n", "html_url": "u"})
+	})
+	m := New("dev", "", "", &http.Client{Transport: &mockTransport{handler: mux}})
+	m.CheckLatest(context.Background())
+	info := m.GetVersionInfo()
+	if info.HasUpdate {
+		t.Error("dev 构建不应有更新")
+	}
+	if !info.DevBuild {
+		t.Error("dev 构建应标记 DevBuild")
+	}
+	if info.Latest != "v2.5.0" {
+		t.Errorf("dev 构建仍应填充 Latest，got %q", info.Latest)
+	}
+}
+
+func TestTriggerUpdate_DevBuildRejected(t *testing.T) {
+	m := New("dev", "", "", http.DefaultClient)
+	err := m.TriggerUpdate(context.Background(), "v2.5.0")
+	if err == nil {
+		t.Fatal("dev 构建应拒绝在线更新")
+	}
+	if !apperr.IsCode(err, apperr.CodeInvalidInput) {
+		t.Errorf("期望 CodeInvalidInput，got %v", err)
+	}
+	if m.GetVersionInfo().UpdateStatus != StatusIdle {
+		t.Error("拒绝后状态应保持 idle")
+	}
+}
+
+// writeTestArchive 构造含 polaris 二进制与 lib/libx.so 的 tar.gz。
+func writeTestArchive(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for name, body := range map[string]string{"polaris": "new binary", "lib/libx.so": "new lib"} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		tw.Write([]byte(body))
+	}
+	tw.Close()
+	gz.Close()
+}
+
+func setupApplyUpdate(t *testing.T) (m *Manager, exe, archive string) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix 替换路径")
+	}
+	dir := t.TempDir()
+	exe = filepath.Join(dir, "polaris")
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "lib"), 0o755)
+	os.WriteFile(filepath.Join(dir, "lib", "libx.so"), []byte("old lib"), 0o644)
+	archive = filepath.Join(dir, "a.tar.gz")
+	writeTestArchive(t, archive)
+	m = New("v1.0.0", "", "", http.DefaultClient)
+	m.executableFn = func() (string, error) { return exe, nil }
+	return m, exe, archive
+}
+
+func TestApplyUpdate_ProbeMismatchKeepsBinary(t *testing.T) {
+	m, exe, archive := setupApplyUpdate(t)
+	m.probeBinaryFn = func(ctx context.Context, p string) (string, error) { return "polaris v9.9.9\n", nil }
+	if err := m.applyUpdate(archive, "v2.0.0"); err == nil {
+		t.Fatal("预检版本不符应返回错误")
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "old binary" {
+		t.Errorf("二进制不应被替换，got %q", b)
+	}
+	for _, p := range []string{exe + ".new", filepath.Join(filepath.Dir(exe), "lib.new"), exe + ".prev"} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s 应不存在", p)
+		}
+	}
+}
+
+func TestApplyUpdate_ProbeOKCreatesPrev(t *testing.T) {
+	m, exe, archive := setupApplyUpdate(t)
+	m.probeBinaryFn = func(ctx context.Context, p string) (string, error) {
+		return "polaris v2.0.0\n", nil
+	}
+	if err := m.applyUpdate(archive, "v2.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "new binary" {
+		t.Errorf("二进制应已替换，got %q", b)
+	}
+	if b, _ := os.ReadFile(exe + ".prev"); string(b) != "old binary" {
+		t.Errorf(".prev 应为旧二进制，got %q", b)
+	}
+	b, _ := os.ReadFile(filepath.Join(filepath.Dir(exe), "lib.prev", "libx.so"))
+	if !strings.Contains(string(b), "old lib") {
+		t.Errorf("lib.prev 应保留旧库，got %q", b)
 	}
 }

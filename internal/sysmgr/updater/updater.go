@@ -43,11 +43,13 @@ const (
 
 // VersionInfo 是 /v1/system/version 端点的响应结构。
 type VersionInfo struct {
-	Current      string    `json:"current"`
-	CommitHash   string    `json:"commit_hash,omitempty"`
-	BuildDate    string    `json:"build_date,omitempty"`
-	Latest       string    `json:"latest,omitempty"`
-	HasUpdate    bool      `json:"has_update"`
+	Current    string `json:"current"`
+	CommitHash string `json:"commit_hash,omitempty"`
+	BuildDate  string `json:"build_date,omitempty"`
+	Latest     string `json:"latest,omitempty"`
+	HasUpdate  bool   `json:"has_update"`
+	// DevBuild 标识源码构建（Version=="dev"）：不参与在线更新，前端据此隐藏更新入口。
+	DevBuild     bool      `json:"dev_build"`
 	ReleaseNotes string    `json:"release_notes,omitempty"`
 	ReleaseURL   string    `json:"release_url,omitempty"`
 	UpdateStatus Status    `json:"update_status"`
@@ -75,17 +77,22 @@ type Manager struct {
 	// 全局 trustStore 是 sync.OnceValue，求值后改不回去，测试无法构造已开通状态。
 	// 空切片 = 签名未开通，见 anchorChecksumTrust。
 	releaseKeys []releaseKey
+
+	// probeBinaryFn 在替换前执行新二进制的 version 子命令并返回输出，
+	// 可注入以便测试（默认 probeBinary 走 os/exec）。
+	probeBinaryFn func(ctx context.Context, path string) (string, error)
 }
 
 // New 创建 Manager。currentVersion / commitHash / buildDate 由 main.Version 等 ldflags 变量传入。
 func New(currentVersion, commitHash, buildDate string, client *http.Client) *Manager {
 	return &Manager{
-		current:      currentVersion,
-		commitHash:   commitHash,
-		buildDate:    buildDate,
-		client:       client,
-		releaseKeys:  trustStore(),
-		executableFn: os.Executable,
+		current:       currentVersion,
+		commitHash:    commitHash,
+		buildDate:     buildDate,
+		client:        client,
+		releaseKeys:   trustStore(),
+		executableFn:  os.Executable,
+		probeBinaryFn: probeBinary,
 		exitFn: func(code int) {
 			slog.Warn("updater: restart requested, exiting", "code", code)
 			os.Exit(code)
@@ -94,6 +101,7 @@ func New(currentVersion, commitHash, buildDate string, client *http.Client) *Man
 			Current:      currentVersion,
 			CommitHash:   commitHash,
 			BuildDate:    buildDate,
+			DevBuild:     currentVersion == "dev",
 			UpdateStatus: StatusIdle,
 		},
 	}
@@ -172,9 +180,9 @@ func (m *Manager) CheckLatest(ctx context.Context) {
 
 	var hasUpdate bool
 	if latest != "" {
-		if current == "dev" {
-			hasUpdate = true
-		} else {
+		// 开发构建从源码构建、通常领先于最新 release，用 release 覆盖等于降级，
+		// 会毁掉开发环境（2026-10-22 事故：v2.5.0 schema 048 < 库 054 → 崩溃循环）。
+		if current != "dev" {
 			cur := strings.TrimPrefix(current, "v")
 			tgt := strings.TrimPrefix(latest, "v")
 			// semverCompare(tgt, cur) > 0 已隐含正确处理相等版本（返回 0/false），
@@ -191,6 +199,7 @@ func (m *Manager) CheckLatest(ctx context.Context) {
 		BuildDate:    m.buildDate,
 		Latest:       latest,
 		HasUpdate:    hasUpdate,
+		DevBuild:     current == "dev",
 		ReleaseNotes: release.Body,
 		ReleaseURL:   release.HTMLURL,
 		UpdateStatus: StatusIdle,
@@ -231,6 +240,10 @@ func (m *Manager) TriggerUpdate(ctx context.Context, version string) error {
 	if version == "" {
 		return apperr.New(apperr.CodeInvalidInput, "updater: version is required")
 	}
+	if m.current == "dev" {
+		return apperr.New(apperr.CodeInvalidInput,
+			"updater: 开发构建不支持在线更新，请 git pull 后运行 scripts/restart.sh")
+	}
 	m.mu.RLock()
 	status := m.info.UpdateStatus
 	m.mu.RUnlock()
@@ -239,8 +252,8 @@ func (m *Manager) TriggerUpdate(ctx context.Context, version string) error {
 		return apperr.New(apperr.CodeConflict, fmt.Sprintf("updater: update already in progress (%s)", status))
 	}
 
-	// 降级攻击防护：拒绝安装不比当前版本更新的版本（dev 版本跳过校验）
-	if m.current != "dev" && version != "dev" {
+	// 降级攻击防护：拒绝安装不比当前版本更新的版本（dev 构建已在上方前置拒绝）
+	if version != "dev" {
 		cur := strings.TrimPrefix(m.current, "v")
 		tgt := strings.TrimPrefix(version, "v")
 		if semverCompare(tgt, cur) <= 0 {
@@ -317,7 +330,7 @@ func (m *Manager) doUpdate(ctx context.Context, version string) error {
 	slog.Info("updater: download verified, installing", "archive", archivePath)
 	m.setStatus(StatusInstalling)
 
-	if err := m.applyUpdate(archivePath); err != nil {
+	if err := m.applyUpdate(archivePath, version); err != nil {
 		m.setError(err.Error())
 		return err
 	}

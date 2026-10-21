@@ -9,6 +9,8 @@ Alpine.store('update', {
   current: '',       // 由后端 /v1/system/version 提供
   latest: '',        // 由 GitHub API 提供
   hasUpdate: false,
+  devBuild: false,   // 源码构建不参与在线更新（用 release 覆盖等于降级）
+  _polling: false,
   status: 'idle',    // idle | downloading | verifying | installing | restarting | error
   error: '',
   releaseURL: '',
@@ -36,10 +38,11 @@ Alpine.store('update', {
       if (!resp.ok) return
       const d = await resp.json()
       this.current = d.current || ''
-      
+      this.devBuild = d.dev_build || false
+
       if (d.latest) {
         this.latest = d.latest
-        this.hasUpdate = d.has_update || false
+        this.hasUpdate = this.devBuild ? false : (d.has_update || false)
         this.releaseURL = d.release_url || ''
       }
 
@@ -47,6 +50,8 @@ Alpine.store('update', {
       if (d.update_status && d.update_status !== 'idle') {
         this.status = d.update_status
         this.error  = d.update_error || ''
+        // 刷新页面时后端仍在更新：恢复轮询，否则状态永远停在中间态
+        if (this.busy) this._pollStatus()
       }
     } catch { /* 静默失败 */ }
   },
@@ -66,7 +71,7 @@ Alpine.store('update', {
       this.latest       = rel.tag_name || ''
       this.releaseURL   = rel.html_url || ''
       this.releaseNotes = rel.body     || ''
-      this.hasUpdate    = this._isNewer(this.latest, this.current)
+      this.hasUpdate    = this.devBuild ? false : this._isNewer(this.latest, this.current)
     } catch { /* GitHub 不可达时静默跳过 */ }
   },
 
@@ -93,17 +98,47 @@ Alpine.store('update', {
     }
   },
 
-  // 每 2s 轮询后端进度，直到不再 busy
+  // 每 2s 轮询后端进度。installing/restarting 阶段守护进程会退出重启，
+  // 请求失败是预期行为，不能当作终止条件；恢复后刷新页面以加载新前端。
   _pollStatus() {
+    if (this._polling) return
+    this._polling = true
+    const startCurrent = this.current
+    const deadline = Date.now() + 3 * 60 * 1000
+    let wasLost = false
     const iv = setInterval(async () => {
+      const stop = () => { clearInterval(iv); this._polling = false }
+      if (Date.now() > deadline) {
+        stop()
+        const zh = (Alpine.store('i18n')?.lang ?? 'zh') === 'zh'
+        this.status = 'error'
+        this.error  = zh
+          ? '更新后服务未在 3 分钟内恢复，请查看 ~/.polaris/logs/polaris.log'
+          : 'Service did not recover within 3 minutes after update. Check ~/.polaris/logs/polaris.log'
+        return
+      }
+      let d
       try {
-        const resp = await fetch('/v1/system/version')
-        if (!resp.ok) return
-        const d = await resp.json()
-        this.status = d.update_status || 'idle'
-        this.error  = d.update_error  || ''
-        if (!this.busy) clearInterval(iv)
-      } catch { clearInterval(iv) }
+        const resp = await fetch('/v1/system/version', { cache: 'no-store' })
+        if (!resp.ok) { wasLost = true; return }
+        d = await resp.json()
+      } catch { wasLost = true; return }
+
+      const st = d.update_status || 'idle'
+      if (st === 'error') {
+        stop()
+        this.status = 'error'
+        this.error  = d.update_error || ''
+        return
+      }
+      if ((startCurrent && d.current && d.current !== startCurrent) || (wasLost && st === 'idle')) {
+        stop()
+        location.reload()
+        return
+      }
+      this.status = st
+      this.error  = d.update_error || ''
+      if (!this.busy) stop()
     }, 2000)
   },
 

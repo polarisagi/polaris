@@ -127,6 +127,11 @@
         <span x-text="$store.update.current || 'dev'" x-cloak></span>
       </div>
       
+      <!-- 开发构建：不提供在线更新，仅提示最新发布版本 -->
+      <div x-show="$store.update.devBuild && $store.update.latest" x-cloak
+           class="text-xs text-base-content/40 px-4 font-mono"
+           x-text="$store.i18n.lang === 'zh' ? ('开发构建 · 最新发布 ' + $store.update.latest) : ('Dev build · latest release ' + $store.update.latest)"></div>
+
       <!-- 热更新 (如果有新版本或者出错) -->
       <div x-show="$store.update.hasUpdate || $store.update.status === 'error'"
            x-cloak
