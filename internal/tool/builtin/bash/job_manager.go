@@ -45,6 +45,22 @@ type jobProcess struct {
 	cmd  *exec.Cmd
 	file *os.File
 	mu   sync.RWMutex
+	// done 在 waiter 完成进程回收、日志关闭与最终 meta 落盘后关闭。
+	done chan struct{}
+}
+
+// killWaitTimeout 是 Kill 后等待 waiter 收尾的上限；SIGKILL 下回收很快，超时仅告警。
+const killWaitTimeout = 2 * time.Second
+
+// waitDone 等待 waiter 收尾，超时只告警不报错。必须在释放 proc.mu 之后调用。
+func (proc *jobProcess) waitDone(jobID string) {
+	timer := time.NewTimer(killWaitTimeout)
+	defer timer.Stop()
+	select {
+	case <-proc.done:
+	case <-timer.C:
+		slog.Warn("bash job_manager: wait waiter timeout after kill", "job_id", jobID)
+	}
 }
 
 func (proc *jobProcess) handleWaitResult(waitErr error) {
@@ -172,6 +188,7 @@ func (jm *JobManager) StartJob(
 		meta: meta,
 		cmd:  cmd,
 		file: logFile,
+		done: make(chan struct{}),
 	}
 
 	jm.mu.Lock()
@@ -183,6 +200,7 @@ func (jm *JobManager) StartJob(
 	}
 
 	concurrent.SafeGo(context.Background(), "job_manager.waiter", func(context.Context) {
+		defer close(proc.done)
 		waitErr := cmd.Wait()
 		_ = logFile.Close()
 		proc.handleWaitResult(waitErr)
@@ -305,6 +323,8 @@ func (jm *JobManager) GetJobOutput(jobID string, tailLines int) (string, error) 
 }
 
 // KillJob 终止一个正在运行的后台任务。
+// 返回即保证进程已回收、日志文件已关闭、最终 meta 已落盘（超时除外）：
+// 调用方随后清理或读取任务目录时不会与 waiter 的收尾写入竞争。
 func (jm *JobManager) KillJob(jobID string) (*JobMeta, error) {
 	if err := validateJobID(jobID); err != nil {
 		return nil, err
@@ -323,9 +343,9 @@ func (jm *JobManager) KillJob(jobID string) (*JobMeta, error) {
 	}
 
 	proc.mu.Lock()
-	defer proc.mu.Unlock()
-
+	killed := false
 	if proc.meta.Status == JobStatusRunning {
+		killed = true
 		if proc.cmd != nil {
 			if kErr := killProcessGroup(proc.cmd); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
 				slog.Debug("bash job_manager: kill process failed", "job_id", jobID, "err", kErr)
@@ -337,8 +357,13 @@ func (jm *JobManager) KillJob(jobID string) (*JobMeta, error) {
 			slog.Warn("bash job_manager: write killed meta failed", "job_id", jobID, "err", wErr)
 		}
 	}
-
 	metaCopy := proc.meta
+	proc.mu.Unlock()
+
+	// waiter 的 handleWaitResult 需要 proc.mu，必须解锁后再等待，否则死锁。
+	if killed {
+		proc.waitDone(jobID)
+	}
 	return &metaCopy, nil
 }
 
@@ -361,7 +386,8 @@ func (jm *JobManager) CleanupSessionJobs(sessionID string) {
 
 	for _, proc := range toKill {
 		proc.mu.Lock()
-		if proc.meta.Status == JobStatusRunning {
+		killed := proc.meta.Status == JobStatusRunning
+		if killed {
 			if proc.cmd != nil {
 				if kErr := killProcessGroup(proc.cmd); kErr != nil && !errors.Is(kErr, os.ErrProcessDone) {
 					slog.Debug("bash job_manager: kill session process failed", "job_id", proc.meta.JobID, "err", kErr)
@@ -373,6 +399,12 @@ func (jm *JobManager) CleanupSessionJobs(sessionID string) {
 				slog.Warn("bash job_manager: write session killed meta failed", "job_id", proc.meta.JobID, "err", wErr)
 			}
 		}
+		jobID := proc.meta.JobID
 		proc.mu.Unlock()
+
+		// 解锁后等待 waiter 收尾，语义同 KillJob。
+		if killed {
+			proc.waitDone(jobID)
+		}
 	}
 }
