@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {"type": "string", "description": "Words or a phrase to find. Several words must all appear."},
+    "session_id": {"type": "string", "description": "Search only this session (optional)."},
+    "since": {"type": "string", "description": "Only messages on/after this date, YYYY-MM-DD or RFC3339 (optional)."},
+    "limit": {"type": "integer", "description": "Max hits, default 8, max 30."}
+  },
+  "required": ["query"]
+}

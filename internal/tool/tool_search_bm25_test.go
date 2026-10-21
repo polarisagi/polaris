@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -50,15 +52,20 @@ func searchWith(t *testing.T, cc *catalog.CompositeCatalog, session, query strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var res struct {
-		Tools []struct{ Name string } `json:"tools"`
-	}
-	if err := json.Unmarshal(out, &res); err != nil {
-		t.Fatal(err)
-	}
-	names := make([]string, len(res.Tools))
-	for i, x := range res.Tools {
-		names[i] = x.Name
+	return parseSearchNames(string(out))
+}
+
+// parseSearchNames 从 tool_search 的文本输出里取命中工具名：每段 "名称: 描述\nparams: ..."，
+// 末段是调用说明（ADR-0120 决策三）。
+func parseSearchNames(out string) []string {
+	var names []string
+	for _, block := range strings.Split(out, "\n\n") {
+		if !strings.Contains(block, "\nparams: ") {
+			continue
+		}
+		if i := strings.Index(block, ": "); i > 0 {
+			names = append(names, block[:i])
+		}
 	}
 	return names
 }
@@ -94,18 +101,50 @@ func TestToolSearch_KeywordWithoutEmbedder(t *testing.T) {
 				t.Errorf("query %q: 核心工具不应出现在结果里：%v", c.query, got)
 			}
 		}
-		// 激活后下一轮 Schemas 带上该工具，且追加在核心之后。
+		// 默认 in_history：tools 数组不变（只有核心工具），模型经 call_tool 调用（ADR-0120 决策三）。
 		ctx := context.WithValue(context.Background(), protocol.CtxTaskIDKey{}, "s")
-		ss := cc.Schemas(ctx, types.TrustUntrusted)
-		found := false
-		for _, s := range ss[2:] {
-			if s.Name == c.want {
-				found = true
-			}
+		if ss := cc.Schemas(ctx, types.TrustUntrusted); len(ss) != 2 {
+			t.Errorf("query %q: in_history 模式下 tools 数组不应变化，got %d 个", c.query, len(ss))
 		}
-		if !found {
-			t.Errorf("query %q: %s 未被激活", c.query, c.want)
+	}
+}
+
+// 结果直接带参数 schema 与 call_tool 用法；点名精确匹配只返回该工具。
+func TestToolSearch_ReturnsParamsAndExactMatch(t *testing.T) {
+	cc := lazySearchCatalog()
+	fn := MakeToolSearchFn(cc, nil)
+	out, err := fn(context.Background(), []byte(`{"query":"switch_model"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if names := parseSearchNames(got); len(names) != 1 || names[0] != "switch_model" {
+		t.Fatalf("点名应只返回该工具: %v\n%s", names, got)
+	}
+	if !strings.Contains(got, "params: ") || !strings.Contains(got, "call_tool") {
+		t.Fatalf("应返回参数与 call_tool 用法:\n%s", got)
+	}
+}
+
+// tools_array 模式保留旧行为：命中工具激活进下一轮 tools 数组。
+func TestToolSearch_ToolsArrayModeActivates(t *testing.T) {
+	prev := config.Get()
+	c := config.Config{Thresholds: config.DefaultThresholds()}
+	c.Thresholds.M7Tool.LazyActivation = "tools_array"
+	config.Update(&c)
+	t.Cleanup(func() { config.Update(prev) })
+
+	cc := lazySearchCatalog()
+	_ = searchWith(t, cc, "s", "switch_model")
+	ctx := context.WithValue(context.Background(), protocol.CtxTaskIDKey{}, "s")
+	found := false
+	for _, s := range cc.Schemas(ctx, types.TrustUntrusted) {
+		if s.Name == "switch_model" {
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("tools_array 模式下应激活进 tools 数组")
 	}
 }
 
@@ -113,5 +152,9 @@ func TestToolSearch_NoMatchGivesHint(t *testing.T) {
 	cc := lazySearchCatalog()
 	if got := searchWith(t, cc, "s", "zzzzqqq"); len(got) != 0 {
 		t.Fatalf("不应有匹配：%v", got)
+	}
+	out, _ := MakeToolSearchFn(cc, nil)(context.Background(), []byte(`{"query":"zzzzqqq"}`))
+	if !strings.Contains(string(out), "Closest names") {
+		t.Fatalf("无命中应给出最接近的名称: %s", out)
 	}
 }

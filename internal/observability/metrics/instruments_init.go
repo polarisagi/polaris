@@ -96,6 +96,13 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	)
 	ie.capture("polaris.llm.cache_hit_rate", err)
 
+	InstrLLMPrefixCacheHitRatio, err = meter.Float64Histogram(
+		"polaris.llm.prefix_cache_hit_ratio",
+		metric.WithDescription("每次内核调用的前缀缓存命中率 (label: purpose, call_index_bucket=1|2-5|6+)，ADR-0120"),
+		metric.WithExplicitBucketBoundaries(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0),
+	)
+	ie.capture("polaris.llm.prefix_cache_hit_ratio", err)
+
 	// API 费用（USD）
 	InstrAPIcostUSD, err = meter.Float64Counter(
 		"polaris.api.cost_usd_total",

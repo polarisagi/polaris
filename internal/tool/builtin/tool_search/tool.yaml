@@ -1,4 +1,4 @@
 name: tool_search
-description: "按名称或关键词搜索尚未加载的工具并激活；激活后下一轮即可调用（参数以那一轮收到的定义为准）。系统提示里的“未加载”清单就是它的检索范围；已列在 Loaded 里的工具无需搜索。"
+description: "Find tools that are not loaded. Returns each match's purpose and parameters so you can call it right away with call_tool. Matches names, descriptions and Chinese/English keywords."
 capability: read-only
 risk_level: low

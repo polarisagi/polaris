@@ -122,6 +122,12 @@
     <span x-text="$store.i18n.t('chat_compacting')"></span>
   </div>
 
+  <!-- 目标续跑提示（ADR-0120 决策七）-->
+  <div class="mx-4 mt-2 alert alert-info shadow-sm shrink-0 py-2" x-show="$store.chat.goalRound" x-cloak>
+    <span class="loading loading-spinner loading-xs"></span>
+    <span x-text="$store.i18n.t('chat_goal_continue') + ' ' + $store.chat.goalRound"></span>
+  </div>
+
   <!-- Messages -->
   <div class="min-h-0 relative transition-all duration-500" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? 'flex-none' : 'flex-1'">
     <button x-show="!atBottom" @click="scrollBottom()" x-cloak class="btn btn-circle btn-primary btn-sm absolute bottom-4 right-6 z-20 shadow-lg opacity-90">↓</button>

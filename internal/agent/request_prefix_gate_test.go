@@ -86,8 +86,13 @@ func TestRequestPrefixGate_ThreeTurns(t *testing.T) {
 
 // 会话历史越过跳窗阈值的回合：L2 合法变化（锚定摘要），L0..L1 仍须是前缀；跳窗后的回合恢复纯追加。
 func TestRequestPrefixGate_HistorySkipWindow(t *testing.T) {
+	// 本用例验证按条数的分块跳窗；ADR-0120 起默认由 token 预算接管，这里显式回到 20 条窗口。
+	setGateThresholds(t, func(th *config.Thresholds) {
+		th.M4Kernel.ConversationHistoryMaxMessages = 20
+		th.M4Kernel.ConversationHistoryMaxTokens = 0
+	})
 	e := newGateEnv(t)
-	h := gateHistory(19) // 默认窗口 20 条：19 条不跳窗
+	h := gateHistory(19) // 窗口 20 条：19 条不跳窗
 	h = appendTurn(h, "第一轮提问", e.runTurn(1, h, "第一轮提问", gateToolScript(false)))
 	h = appendTurn(h, "第二轮提问", e.runTurn(2, h, "第二轮提问", gateToolScript(false))) // 21 条：跳窗
 	e.runTurn(3, h, "第三轮提问", gateToolScript(false))                             // 23 条：同一锚点，纯追加

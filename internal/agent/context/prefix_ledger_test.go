@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -153,6 +154,11 @@ func TestPrefixLedger_AdjacentTurnsAppendOnly(t *testing.T) {
 
 // 跳窗：越过 history_max_messages 后 L2 首位是锚定摘要；摘要只在跳窗时变化。
 func TestPrefixLedger_WindowJump(t *testing.T) {
+	// 按条数的分块跳窗；ADR-0120 起默认由 token 预算接管，这里显式回到 20 条窗口。
+	withThresholds(t, func(th *config.Thresholds) {
+		th.M4Kernel.ConversationHistoryMaxMessages = 20
+		th.M4Kernel.ConversationHistoryMaxTokens = 0
+	})
 	mem := newLedgerMemory("")
 	l2First := func(n int) types.Message {
 		msgs, err := BuildPerceiveContext(context.Background(), mem, newLedgerCtx(ledgerHistory(n), "q"), nil)

@@ -51,22 +51,9 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 		}
 	}
 
-	// 用户显式偏好画像（PersonaRefiner，M05 §2.3）：与上方 Stage3.5 UserProfile
-	// 互补——UserProfile 是从 Episodic 事件自动合成的行为事实，PersonaRefiner 是
-	// 结构化偏好维度（language_pref/response_style/output_format/expertise）+
-	// 会话结束 LLM 摘要，二者数据来源与更新频率不同，分别写入 ImmutableCore 不同
-	// 字段（2026-07-13 deadcode 复核：ToUserPreferences 此前构造了返回值但从未
-	// 被任何调用方使用，ic.UserPreferences 也从未在 renderSystemPrompt 中渲染，
-	// 见 working_mem.go §5.7 补齐）。
-	if s.PersonaRefiner != nil {
-		if ic.UserPreferences == nil {
-			ic.UserPreferences = make(map[string]string)
-		}
-		for _, p := range s.PersonaRefiner.ToUserPreferences() {
-			ic.UserPreferences[p.Dimension] = p.PreferenceText
-		}
-	}
-
+	// 用户画像稳定维度不再写入共享的 ic.UserPreferences：它由内核在会话层首次渲染时快照
+	// （ADR-0120 决策二）。此前每请求把含 interaction_summary 的画像写进稳定层，且 ic 跨会话
+	// 共享，每回合都让稳定层字节变化、其后全部历史失去前缀缓存。
 	// M9 激活的系统提示词优先覆盖（general taskType）
 	// 三层组装时 SystemPromptTemplate 非空则全量走模板渲染，跳过 stable 层组装
 	s.ActivatedSystemPromptMu.RLock()
@@ -91,11 +78,8 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 
 	// 模型感知工具调用引导：模板模式（{{.ModelGuidance}}）和三层模式均需注入，移除旧的 "" 守卫。
 	if prompt.NeedsToolUseEnforcement(modelID) {
+		// 不再兜底注入"必须立即调用工具"：同义规则已在 operational/directives.md（ADR-0120 决策五：去重）。
 		ic.ModelGuidance = s.PromptMgr.ModelSpecificGuidance(modelID)
-		if ic.ModelGuidance == "" {
-			// 通用工具调用强制引导（兜底）
-			ic.ModelGuidance = "有工具可用时必须立即调用，禁止仅输出执行计划或说明性描述。"
-		}
 	} else {
 		ic.ModelGuidance = ""
 	}

@@ -169,10 +169,11 @@ type M4KernelThresholds struct {
 	PRMMinThreshold   float64 `toml:"prm.min_threshold"`   // 0.4 — 全部候选低于此分数时兜底取第一个候选
 	PRMScorerModel    string  `toml:"prm.scorer_model"`    // "" — 留空则沿用 Provider 默认路由，不强制指定 budget-tier 模型名
 
-	// 对话历史进入内核的上限（ADR-0098 决策四；ADR-0105 决策二改为分块跳窗）：越界时一次丢弃前若干块
-	// （步长 = max_messages/2），四个阶段共用同一 L2。
-	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
-	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
+	// 对话历史进入内核的上限（ADR-0098/0105；ADR-0120 决策四改为 token 预算）：越界一次丢弃前若干块，0=不限。
+	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 0
+	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 0
+	// ConversationHistoryMaxTokens 历史 token 预算（ADR-0120 决策四）：超出时一次丢到一半。
+	ConversationHistoryMaxTokens int `toml:"conversation.history_max_tokens"` // 48000
 
 	// PromptPhaseContractsInCore 阶段契约库并入稳定核（ADR-0105 决策九）：true 且存在 ImmutableCore 时，
 	// 四阶段契约（PERCEIVE/PLAN/REFLECT/RESPOND）整体渲染进 L0，各阶段 L3 只写一条「当前阶段」选择器，
@@ -270,6 +271,10 @@ type M4KernelThresholds struct {
 	LoopObservationMaskAfterRounds int `toml:"loop.observation_mask_after_rounds"` // 6
 	// LoopObservationMaskBatch 观察遮蔽触发时单次批量驱逐的轮数。
 	LoopObservationMaskBatch int `toml:"loop.observation_mask_batch"` // 4
+	// LoopObservationMaskTriggerTokens 上下文估计达到该值才遮蔽（ADR-0120 决策四）；0=窗口的 50%，无窗口信息 64000。
+	LoopObservationMaskTriggerTokens int `toml:"loop.observation_mask_trigger_tokens"` // 0
+	LoopObservationMaskMinTokens     int `toml:"loop.observation_mask_min_tokens"`     // 1024：只遮蔽不少于该值的工具结果
+	LoopRecallMaxChars               int `toml:"loop.recall_max_chars"`                // 2000：自动召回文本上限（字符），0=不限
 	// LoopCompletion 回合完成判定方式："auto"（无工具调用即完成）或 "explicit"（必须调用 finish 工具）。
 	LoopCompletion string `toml:"loop.completion"` // "auto"
 	// JobsKillOnSessionEnd 会话结束时是否清理该会话启动的后台进程（WP5，ADR-0115）。
@@ -418,6 +423,8 @@ type M7ToolThresholds struct {
 	WebFetchDefaultMaxChars      int    `toml:"web_fetch.default_max_chars"`        // 12000
 	WebFetchCacheMaxRows         int    `toml:"web_fetch.cache_max_rows"`           // 5000
 	WebFetchHostMinIntervalMs    int    `toml:"web_fetch.host_min_interval_ms"`     // 1000
+	// LazyActivation 延迟工具激活方式（ADR-0120 决策三）："in_history"（默认，经 call_tool）| "tools_array"（旧行为，断缓存）。
+	LazyActivation string `toml:"lazy_activation"` // "in_history"
 }
 
 type M8OrchestratorThresholds struct {
@@ -616,50 +623,49 @@ func DefaultThresholds() Thresholds {
 			},
 		},
 		M4Kernel: M4KernelThresholds{
-			MaxReplanAttempts:              3,
-			DefaultBudget:                  50000,
-			MaxSteps:                       24, // ADR-0098 决策七/八：7 + 观察循环 2×5 + 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1
-			Tier0MaxConcurrent:             4,
-			SuspendIdleThresholdMin:        5,
-			PlanDAGMaxNodes:                50,
-			PlanDAGMaxDepth:                10,
-			L3WatchdogMaxPerHour:           10,
-			WorldModelSkipThreshold:        0.8,
-			SnapshotIntervalSteps:          1000,
-			SnapshotRetentionCount:         5,
-			ReplanExtensionActivationSecs:  3,
-			SurpriseHintThreshold:          0.6,
-			PRMEnabled:                     false,
-			PRMComplexityGate:              0.5,
-			PRMMaxCandidates:               3,
-			PRMMinThreshold:                0.4,
-			PRMScorerModel:                 "",
-			ConversationHistoryMaxMessages: 20,
-			ConversationHistoryMaxBytes:    24576,
-			PromptPhaseContractsInCore:     true,
-			ThinkingPerceive:               "low",
-			ThinkingPlanInitial:            "high",
-			ThinkingReflect:                "low",
-			ModelPoolPerceive:              "default",
-			ModelPoolPlanInitial:           "default",
-			ModelPoolPlanReplan:            "reasoning",
-			ModelPoolReflect:               "default",
-			ModelPoolRespond:               "default",
-			ModelPoolLoop:                  "default",
-			ModelPoolValidate:              "default",
-			PlanReasoningComplexity:        0.7,
-			ReflectSkipComplexity:          0.4,
-			RecallItemMaxChars:             400,
-			RecallMaxTokens:                1200,
-			RecallMinScore:                 0,
-			RecallMinScoreRatio:            0,
-			RecallWeightReflection:         1.2,
-			RecallWeightEpisodic:           1.1,
-			RecallWeightSemantic:           1.0,
-			RecallWeightRAG:                1.0,
-			RecallRerankTopN:               12,
-			RecallRerankMinProb:            0.5,
-			RecallRAGMinSurprise:           0.3,
+			MaxReplanAttempts:             3,
+			DefaultBudget:                 50000,
+			MaxSteps:                      24, // ADR-0098 决策七/八：7 + 观察循环 2×5 + 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1
+			Tier0MaxConcurrent:            4,
+			SuspendIdleThresholdMin:       5,
+			PlanDAGMaxNodes:               50,
+			PlanDAGMaxDepth:               10,
+			L3WatchdogMaxPerHour:          10,
+			WorldModelSkipThreshold:       0.8,
+			SnapshotIntervalSteps:         1000,
+			SnapshotRetentionCount:        5,
+			ReplanExtensionActivationSecs: 3,
+			SurpriseHintThreshold:         0.6,
+			PRMEnabled:                    false,
+			PRMComplexityGate:             0.5,
+			PRMMaxCandidates:              3,
+			PRMMinThreshold:               0.4,
+			PRMScorerModel:                "",
+			ConversationHistoryMaxTokens:  48000,
+			PromptPhaseContractsInCore:    true,
+			ThinkingPerceive:              "low",
+			ThinkingPlanInitial:           "high",
+			ThinkingReflect:               "low",
+			ModelPoolPerceive:             "default",
+			ModelPoolPlanInitial:          "default",
+			ModelPoolPlanReplan:           "reasoning",
+			ModelPoolReflect:              "default",
+			ModelPoolRespond:              "default",
+			ModelPoolLoop:                 "default",
+			ModelPoolValidate:             "default",
+			PlanReasoningComplexity:       0.7,
+			ReflectSkipComplexity:         0.4,
+			RecallItemMaxChars:            400,
+			RecallMaxTokens:               1200,
+			RecallMinScore:                0,
+			RecallMinScoreRatio:           0,
+			RecallWeightReflection:        1.2,
+			RecallWeightEpisodic:          1.1,
+			RecallWeightSemantic:          1.0,
+			RecallWeightRAG:               1.0,
+			RecallRerankTopN:              12,
+			RecallRerankMinProb:           0.5,
+			RecallRAGMinSurprise:          0.3,
 			// WP1 信任档位与快照阈值默认值
 			CheckpointThrottleMaxPerTurn: 20,
 			CheckpointRetentionCount:     10,
@@ -673,6 +679,8 @@ func DefaultThresholds() Thresholds {
 			LoopTurnWallSeconds:            0,
 			LoopObservationMaskAfterRounds: 6,
 			LoopObservationMaskBatch:       4,
+			LoopObservationMaskMinTokens:   1024,
+			LoopRecallMaxChars:             2000,
 			LoopCompletion:                 "auto",
 			JobsKillOnSessionEnd:           true,
 			SleepTimeIdleMinutes:           10,
@@ -732,6 +740,7 @@ func DefaultThresholds() Thresholds {
 			WebFetchDefaultMaxChars:      12000,
 			WebFetchCacheMaxRows:         5000,
 			WebFetchHostMinIntervalMs:    1000,
+			LazyActivation:               "in_history",
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,

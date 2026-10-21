@@ -67,6 +67,7 @@ func (s *ChatPersistenceService) ListMessages(ctx context.Context, sessionID str
 			Role:             r.Role,
 			Content:          r.Content,
 			ReasoningContent: r.ReasoningContent,
+			TurnID:           r.TurnID,
 		})
 	}
 	return msgs, nil

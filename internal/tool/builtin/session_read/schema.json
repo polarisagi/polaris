@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {"type": "string", "description": "Session to read (optional when message_id is given)."},
+    "message_id": {"type": "integer", "description": "Center message, from session_search."},
+    "around": {"type": "integer", "description": "Messages before and after the center, default 6, max 20."}
+  }
+}

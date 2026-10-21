@@ -21,6 +21,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/agent_status"
 	"github.com/polarisagi/polaris/internal/tool/builtin/agent_stop"
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
+	"github.com/polarisagi/polaris/internal/tool/builtin/call_tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin/checkpoint_list"
 	"github.com/polarisagi/polaris/internal/tool/builtin/checkpoint_restore"
 	"github.com/polarisagi/polaris/internal/tool/builtin/csv_parse"
@@ -31,6 +32,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_datetime"
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_task_result"
 	"github.com/polarisagi/polaris/internal/tool/builtin/glob"
+	"github.com/polarisagi/polaris/internal/tool/builtin/goal"
 	"github.com/polarisagi/polaris/internal/tool/builtin/grep"
 	"github.com/polarisagi/polaris/internal/tool/builtin/job_kill"
 	"github.com/polarisagi/polaris/internal/tool/builtin/job_output"
@@ -44,6 +46,8 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_tool_ref"
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
 	"github.com/polarisagi/polaris/internal/tool/builtin/secret_get"
+	"github.com/polarisagi/polaris/internal/tool/builtin/session_read"
+	"github.com/polarisagi/polaris/internal/tool/builtin/session_search"
 	"github.com/polarisagi/polaris/internal/tool/builtin/spawn_agents"
 	"github.com/polarisagi/polaris/internal/tool/builtin/str_replace_editor"
 	"github.com/polarisagi/polaris/internal/tool/builtin/switch_model"
@@ -147,6 +151,9 @@ func RegisterBuiltinTools(
 
 		// 模型自选与目录工具（ADR-0115 WP3）
 		{"list_models", list_models.MakeListModelsFn(db, modelCatalogMgr)},
+		// 跨会话对话检索（ADR-0120 决策六），只读。
+		{"session_search", session_search.MakeSessionSearchFn(db)},
+		{"session_read", session_read.MakeSessionReadFn(db)},
 		{"switch_model", switch_model.MakeSwitchModelFn()},
 
 		// 并行子智能体与控制工具（ADR-0115 WP4）
@@ -160,6 +167,9 @@ func RegisterBuiltinTools(
 		{"job_status", job_status.MakeJobStatusFn(bash.GetDefaultJobManager())},
 		{"job_output", job_output.MakeJobOutputFn(bash.GetDefaultJobManager())},
 		{"job_kill", job_kill.MakeJobKillFn(bash.GetDefaultJobManager())},
+
+		// 历史内激活的元工具（ADR-0120 决策三）：真正的分发在内核解包，这里只登记元数据与直调兜底。
+		{"call_tool", call_tool.CallToolFn},
 	}...)
 
 	defs = append(defs, automationToolDefs(autoSvc)...)
@@ -171,6 +181,7 @@ func RegisterBuiltinTools(
 			return apperr.Wrap(apperr.CodeInternal,
 				fmt.Sprintf("builtin_tools: load meta for %q", d.name), err)
 		}
+		applyDescriptionOverride(&meta, pol)
 		sbx.Register(meta.Name, d.fn)
 		if err := toolReg.Register(meta); err != nil {
 			return apperr.Wrap(apperr.CodeInternal,
@@ -246,4 +257,39 @@ func fullProfileToolDefs(
 		}...)
 	}
 	return out
+}
+
+// applyDescriptionOverride 对随运行配置变化的工具描述做启动期覆盖。
+func applyDescriptionOverride(meta *types.Tool, pol policy.Policy) {
+	if meta.Name == "bash" {
+		meta.Description = bashDescription(pol)
+	}
+}
+
+// bashDescription 按信任档位给出 bash 的真实执行环境（ADR-0120 决策三第 7 条）。描述在启动时确定、
+// 整个进程不变（tools 数组字节稳定）；此前一律写"sandboxed、限定工作目录"，full 档下与事实不符，
+// 模型会因此回避本可以直接做的事。
+func bashDescription(pol policy.Policy) string {
+	const tail = " background=true runs it as a job (see job_status/job_output); session_id keeps a persistent shell across calls."
+	if pol.SandboxDisabled && pol.AllowedPathsOpen {
+		return "Run a shell command directly on the host." + tail
+	}
+	return "Run a shell command in the sandbox, restricted to the allowed working directories." + tail
+}
+
+// RegisterGoalTool 注册跨回合目标工具（ADR-0120 决策七）。单独成函数以免继续膨胀
+// RegisterBuiltinTools 的签名；goals 为 nil 时不注册（该工具调用无意义）。
+func RegisterGoalTool(sbx *sandbox.InProcessSandbox, toolReg *tool.InMemoryToolRegistry, goals repo.GoalRepository) error {
+	if goals == nil {
+		return nil
+	}
+	meta, err := tool.GetBuiltinToolMeta("goal")
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "builtin_tools: load meta for goal", err)
+	}
+	sbx.Register(meta.Name, goal.MakeGoalFn(goals))
+	if err := toolReg.Register(meta); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "builtin_tools: register goal", err)
+	}
+	return nil
 }

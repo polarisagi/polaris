@@ -593,3 +593,11 @@ func clipBytes(s string, n int) string {
 	}
 	return s[:cut] + "\n…（已截断）"
 }
+
+// toolCount 本回合（含续跑）累计工具调用步数；nil 接收者返回 0。
+func (r *stepRecorder) toolCount() int {
+	if r == nil {
+		return 0
+	}
+	return r.sum.Tools
+}

@@ -91,6 +91,8 @@ type Dependencies struct {
 	// TurnRepo/UsageRepo：回合步骤落库与回合用量汇总（ADR-0118）。任一为 nil 则对应能力关闭。
 	TurnRepo  repo.ChatTurnRepository
 	UsageRepo repo.LLMSessionUsageRepository
+	// GoalRepo 跨回合目标（ADR-0120 决策七）；nil 时不做目标续跑。
+	GoalRepo repo.GoalRepository
 }
 
 // NewChatHandler 故意不做构造函数级 fail-closed nil 强制校验（2026-07-08 复核
@@ -122,7 +124,6 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 	prompt := NewPromptAssemblyService(
 		deps.PromptMgr,
 		deps.SoulMDContent,
-		nil,
 		deps.BaseSystemPromptTpl,
 		deps.Registry,
 		deps.ServerPlatform,
@@ -182,6 +183,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		DataDir:       deps.DataDir,
 		WorkspaceDir:  deps.WorkspaceDir,
 		Turns:         newTurnStore(deps.TurnRepo, deps.UsageRepo),
+		Goals:         goalStore(deps.GoalRepo),
 	})
 	h.TurnRepo = deps.TurnRepo
 
@@ -244,4 +246,12 @@ func (h *ChatHandler) ListMessages(ctx context.Context, sessionID string) ([]app
 
 func (h *ChatHandler) SampleAndScoreReply(sessionID, query, response string) {
 	h.PersistenceService.SampleAndScoreReply(sessionID, query, response)
+}
+
+// goalStore 把可能为 nil 的 GoalRepository 转成 session.GoalStore；避免 nil 接口值被装箱成非 nil。
+func goalStore(r repo.GoalRepository) session.GoalStore {
+	if r == nil {
+		return nil
+	}
+	return r
 }

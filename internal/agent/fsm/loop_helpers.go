@@ -22,8 +22,24 @@ func getLastAssistantText(sCtx *StateContext, fill []byte) string {
 	return ""
 }
 
-func formatUsageLine(tokens int, cost float64, wallSeconds float64) string {
-	return "[usage] tokens=" + itoa(tokens) + " cost≈$" + formatCost(cost) + " wall=" + itoa(int(wallSeconds)) + "s"
+// formatUsageLine 调用级计量行（ADR-0120 决策八）：
+// [usage] ctx=<当前估计>/<窗口> cache=<本回合命中率>% turn=$<本回合费用> session=$<会话费用> wall=<秒>s
+// 位于请求末尾，不影响前缀；数值取整以保持短。
+func formatUsageLine(ctxTokens, window, turnInput, turnCacheHit int, turnCost, sessionCost, wallSeconds float64) string {
+	cache := "-"
+	if turnInput > 0 {
+		cache = itoa(turnCacheHit*100/turnInput) + "%"
+	}
+	return "[usage] ctx=" + formatK(ctxTokens) + "/" + formatK(window) + " cache=" + cache +
+		" turn=$" + formatCost(turnCost) + " session=$" + formatCost(sessionCost) + " wall=" + itoa(int(wallSeconds)) + "s"
+}
+
+// formatK 把 token 数写成 "12.3k"；小于 1000 原样。
+func formatK(n int) string {
+	if n < 1000 {
+		return itoa(n)
+	}
+	return itoa(n/1000) + "." + itoa(n%1000/100) + "k"
 }
 
 func itoa(i int) string {
@@ -65,7 +81,7 @@ func formatCost(c float64) string {
 
 func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx *StateContext, roundMsgs []types.Message) []types.Message {
 	b := prompt.NewPromptBuilder()
-	if wErr := WriteSessionLayer(ctx, b, mem, sCtx); wErr != nil {
+	if wErr := writeFrozenSessionLayer(ctx, b, mem, sCtx); wErr != nil {
 		slog.WarnContext(ctx, "agentic_loop: WriteSessionLayer fallback failed", "err", wErr)
 	}
 	WriteConversationHistory(b, sCtx)
@@ -80,10 +96,10 @@ func fallbackAgenticPrompt(ctx context.Context, mem protocol.MemoryFacade, sCtx 
 		if !intent.IsEmpty() {
 			b.WriteUserData(intent)
 		}
-		return FinishAgenticLayered(b, mem, "", warnPrompt)
+		return FinishAgenticLayered(b, mem, loopInstruction(), "", warnPrompt)
 	}
 	for _, m := range roundMsgs {
 		b.WriteTurnMessage(m)
 	}
-	return FinishAgenticLayered(b, mem, "", warnPrompt)
+	return FinishAgenticLayered(b, mem, loopInstruction(), "", warnPrompt)
 }

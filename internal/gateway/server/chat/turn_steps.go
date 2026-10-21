@@ -47,6 +47,24 @@ func (t *turnStore) TurnUsage(ctx context.Context, turnID string) (session.TurnU
 	return session.TurnUsageSummary{Calls: u.Calls, Input: u.InputTokens, CacheHit: u.CacheHitTokens, Output: u.OutputTokens, CostUSD: u.CostUSD}, nil
 }
 
+// SessionToolSteps 会话内各回合的工具步骤（turn_id → 步骤，按 seq 升序），供回合摘要（ADR-0120 决策四）。
+// 解析失败的行跳过：摘要是增强，不能因一行坏数据拖垮回合。
+func (t *turnStore) SessionToolSteps(ctx context.Context, sessionID string) (map[string][]session.Step, error) {
+	rows, err := t.steps.ListSessionToolSteps(ctx, sessionID)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // repo 层已带上下文
+	}
+	out := make(map[string][]session.Step)
+	for _, r := range rows {
+		var st session.Step
+		if json.Unmarshal(r.Data, &st) != nil {
+			continue
+		}
+		out[r.TurnID] = append(out[r.TurnID], st)
+	}
+	return out, nil
+}
+
 func (t *turnStore) AttachTurnMeta(ctx context.Context, messageID int64, turnID, usageJSON string) error {
 	return t.steps.AttachTurnMeta(ctx, messageID, turnID, usageJSON) //nolint:wrapcheck // 同上
 }

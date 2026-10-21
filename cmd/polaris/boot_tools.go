@@ -409,6 +409,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
 
+	if err := builtin.RegisterGoalTool(inProcSandbox, toolReg, repo.NewSQLiteGoalRepository(sb.Store.DB())); err != nil {
+		slog.Warn("polaris: goal tool registration failed", "err", err)
+	}
+
 	// ─── §6.5 Skill Library (L1 M6) ─────────────────────────────────────────
 	skillRegistry := skill.NewSQLiteRegistry(sb.Store.DB())
 

@@ -179,3 +179,21 @@ func TestSemanticMem(t *testing.T) {
 	// Test StoreStats
 	_, _ = mem.StoreStats()
 }
+
+func TestSemanticMem_EntityDigest(t *testing.T) {
+	store := testutil.NewMockStore()
+	mem := NewSemanticMem(store, &testutil.MockIntentSubmitter{})
+	ctx := context.Background()
+	if n, names, err := mem.EntityDigest(ctx, 5); err != nil || n != 0 || len(names) != 0 {
+		t.Fatalf("空库: %d %v %v", n, names, err)
+	}
+	for _, name := range []string{"Alpha", "Beta", "Gamma"} {
+		if err := mem.UpsertFact(ctx, types.Entity{Name: name, Type: "project"}, types.TaintNone); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, names, err := mem.EntityDigest(ctx, 2)
+	if err != nil || n != 3 || len(names) != 2 {
+		t.Fatalf("got %d %v %v", n, names, err)
+	}
+}

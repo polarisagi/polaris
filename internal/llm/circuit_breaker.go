@@ -68,10 +68,15 @@ func (cb *circuitBreaker) Allow() bool {
 		return true
 	case circuitOpen:
 		if time.Now().UnixNano() > cb.openUntil.Load() {
+			// 先独占探测权、再迁移状态：若先迁到 HalfOpen 再置 probing，迁移与置位之间到达的
+			// 并发请求会在 HalfOpen 分支抢到探测权，导致同时放行两个探针。
+			if !cb.probing.CompareAndSwap(false, true) {
+				return false
+			}
 			if cb.state.CompareAndSwap(int32(circuitOpen), int32(circuitHalfOpen)) {
-				cb.probing.Store(true)
 				return true // 仅本次 CAS 成功的 goroutine 获得探测权
 			}
+			cb.probing.Store(false)
 			return false // 其余并发请求视为仍处于 Open
 		}
 		return false

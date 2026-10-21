@@ -238,7 +238,8 @@ func memoryPageOutTool() types.Tool {
 			"(e.g. details of a sub-task you've already finished), while keeping it durably retrievable " +
 			"later via memory_search or memory_page_in. Use this when you notice context pressure " +
 			"(long-running task, core memory getting crowded) and want to free up space without losing " +
-			"the information permanently.",
+			"the information permanently." +
+			" Changes are saved immediately; in the current session the result shown here is what you see, and the always-visible memory block refreshes at the next context refresh (new session).",
 		Version:     "1.0.0",
 		Source:      types.ToolBuiltin,
 		TrustTier:   types.TrustSystem,
@@ -266,7 +267,8 @@ func memoryPageInTool() types.Tool {
 	return types.Tool{
 		Name: "memory_page_in",
 		Description: "Page a previously paged-out core memory block back into every-prompt visibility. " +
-			"Use this when you determine that a previously deprioritized piece of context is relevant again.",
+			"Use this when you determine that a previously deprioritized piece of context is relevant again." +
+			" Changes are saved immediately; in the current session the result shown here is what you see, and the always-visible memory block refreshes at the next context refresh (new session).",
 		Version:     "1.0.0",
 		Source:      types.ToolBuiltin,
 		TrustTier:   types.TrustSystem,

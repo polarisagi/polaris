@@ -3,28 +3,11 @@ package agentctx
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-
-	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/types"
 )
-
-type mockPersonaProvider struct{}
-
-func (m *mockPersonaProvider) Infer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
-	return &types.ProviderResponse{Content: "A detailed user."}, nil
-}
-func (m *mockPersonaProvider) StreamInfer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
-	return nil, nil
-}
-func (m *mockPersonaProvider) Tokenizer() protocol.TokenizerAdapter { return nil }
-func (m *mockPersonaProvider) Capabilities() types.ProviderCapabilities {
-	return types.ProviderCapabilities{}
-}
-func (m *mockPersonaProvider) ModelID() string { return "mock" }
-func (m *mockPersonaProvider) Close() error    { return nil }
 
 func TestPersonaRefiner(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -40,7 +23,7 @@ func TestPersonaRefiner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pr := NewPersonaRefiner(db, &mockPersonaProvider{})
+	pr := NewPersonaRefiner(db)
 
 	// Load empty
 	err = pr.Load(context.Background())
@@ -65,30 +48,19 @@ func TestPersonaRefiner(t *testing.T) {
 		t.Fatalf("unexpected save error: %v", err)
 	}
 
-	// Refine
-	err = pr.RefineAtSessionEnd(context.Background(), []types.Message{
-		{Role: "user", Content: "Hello"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected refine error: %v", err)
+	block := pr.PreferencesBlock()
+	if !strings.Contains(block, "- language_pref: en") || !strings.Contains(block, "- expertise: expert") {
+		t.Errorf("PreferencesBlock missing dims: %q", block)
 	}
-
-	prof = pr.Profile()
-	if prof.InteractionSummary != "A detailed user." {
-		t.Errorf("refine failed: %s", prof.InteractionSummary)
-	}
-
-	// ToUserPreferences
-	prefs := pr.ToUserPreferences()
-	if len(prefs) != 5 {
-		t.Errorf("expected 5 prefs, got %d", len(prefs))
+	if strings.Contains(block, "interaction_summary") {
+		t.Errorf("PreferencesBlock must not include interaction_summary: %q", block)
 	}
 }
 
-func TestPersonaRefiner_NilProvider(t *testing.T) {
-	pr := NewPersonaRefiner(nil, nil)
-	err := pr.RefineAtSessionEnd(context.Background(), []types.Message{{Role: "user", Content: "x"}})
-	if err != nil {
-		t.Fatalf("expected nil")
+func TestPersonaRefiner_EmptyDims(t *testing.T) {
+	pr := NewPersonaRefiner(nil)
+	pr.Update(map[string]string{"language_pref": "", "response_style": "", "output_format": "", "expertise": ""})
+	if got := pr.PreferencesBlock(); got != "" {
+		t.Fatalf("all-empty dims should render empty, got %q", got)
 	}
 }

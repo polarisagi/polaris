@@ -11,7 +11,8 @@ func coreMemoryEditTool() types.Tool {
 			"Operations: list (keys, sizes, limits; call first if unsure), get, set (overwrite/create), append, " +
 			"replace (exact old_str→new_str; must match once unless replace_all; prefer over set for large blocks), " +
 			"delete, describe (record a block's purpose). Read-only blocks can't change; writes over a block's byte " +
-			"limit are rejected — summarize or split instead of retrying.",
+			"limit are rejected — summarize or split instead of retrying." +
+			" Changes are saved immediately; in the current session the result shown here is what you see, and the always-visible memory block refreshes at the next context refresh (new session).",
 		Version:     "2.0.0",
 		Source:      types.ToolBuiltin,
 		TrustTier:   types.TrustSystem,

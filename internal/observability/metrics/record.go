@@ -396,3 +396,31 @@ func RecordWorkflowRunSkipped(ctx context.Context, reason string) {
 		))
 	}
 }
+
+// CallIndexBucket 把回合内第几次内核调用归到有限集合（1 / 2-5 / 6+），作指标标签。
+func CallIndexBucket(callIndex int) string {
+	switch {
+	case callIndex <= 1:
+		return "1"
+	case callIndex <= 5:
+		return "2-5"
+	default:
+		return "6+"
+	}
+}
+
+// RecordLLMPrefixCacheHitRatio 记录一次内核调用的前缀缓存命中率（ADR-0120 决策八）。
+// inputTokens 为"全部输入（含命中）"；inputTokens<=0 或 instrument 为 nil 时静默跳过。
+func RecordLLMPrefixCacheHitRatio(ctx context.Context, purpose string, callIndex, inputTokens, cacheHitTokens int) {
+	if InstrLLMPrefixCacheHitRatio == nil || inputTokens <= 0 {
+		return
+	}
+	ratio := float64(cacheHitTokens) / float64(inputTokens)
+	if ratio > 1 {
+		ratio = 1
+	}
+	InstrLLMPrefixCacheHitRatio.Record(ctx, ratio, metric.WithAttributes(
+		attribute.String("purpose", purpose),
+		attribute.String("call_index_bucket", CallIndexBucket(callIndex)),
+	))
+}

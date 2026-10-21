@@ -22,13 +22,16 @@ var (
 	// InstrLLMInputTokens / InstrLLMCacheHitTokens（ADR-0105 决策八）：按 purpose+provider 切分的
 	// 输入 token 与其中的前缀缓存命中 token。命中率由查询侧算
 	// rate(cache_hit)/rate(input)——比导出 ratio gauge 正确（ratio 不可跨实例/时间窗聚合）。
-	InstrLLMInputTokens      metric.Int64Counter
-	InstrLLMCacheHitTokens   metric.Int64Counter
-	InstrAPIcostUSD          metric.Float64Counter
-	InstrBurnStage3Total     metric.Int64Counter
-	InstrLLMCacheHitRate     metric.Float64Histogram // (ISSUE-04)
-	InstrGoroutinePanicTotal metric.Int64Counter
-	InstrDbWriterPanicTotal  metric.Int64Counter
+	InstrLLMInputTokens    metric.Int64Counter
+	InstrLLMCacheHitTokens metric.Int64Counter
+	InstrAPIcostUSD        metric.Float64Counter
+	InstrBurnStage3Total   metric.Int64Counter
+	InstrLLMCacheHitRate   metric.Float64Histogram // (ISSUE-04)
+	// InstrLLMPrefixCacheHitRatio 每次内核调用的前缀缓存命中率（ADR-0120 决策八），
+	// 标签 purpose、call_index_bucket(1|2-5|6+)；首调命中率是跨回合前缀稳定的直接度量。
+	InstrLLMPrefixCacheHitRatio metric.Float64Histogram
+	InstrGoroutinePanicTotal    metric.Int64Counter
+	InstrDbWriterPanicTotal     metric.Int64Counter
 
 	// M7 工具调用 & 沙箱
 	InstrToolCallsTotal metric.Int64Counter

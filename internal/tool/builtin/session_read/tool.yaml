@@ -1,0 +1,11 @@
+name: session_read
+description: "Read messages of a past conversation: around one message (message_id) or the latest of a session (session_id)."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - memory
+  - history

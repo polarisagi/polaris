@@ -115,22 +115,22 @@ func (a *Agent) recordCodeActTaintBypass(ctx context.Context, profile policy.Tru
 func codeActToolSchema() types.ToolSchema {
 	return types.ToolSchema{
 		Name:        "code_act",
-		Description: "在沙箱中执行 Python 或 Bash 脚本。可以用 polaris.call() / polaris.call_many() 调用其他工具，只有 print 输出会返回。",
+		Description: "Run a Python or Bash script in the sandbox. In Python, polaris.call(name, **args) calls a registered tool (loaded or not; outside the full trust profile only read-only tools) and returns its result; polaris.call_many([...]) runs calls concurrently; polaris.tools(query) lists callable tools. Only what the script prints is returned to you. Use it for multi-step data work so intermediate results stay out of your context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"language": map[string]any{
 					"type":        "string",
 					"enum":        []string{"python", "bash"},
-					"description": "执行脚本的语言环境 (python 或 bash)",
+					"description": "Script language.",
 				},
 				"code": map[string]any{
 					"type":        "string",
-					"description": "要执行的脚本代码内容",
+					"description": "Script source.",
 				},
 				"session_id": map[string]any{
 					"type":        "string",
-					"description": "可选的状态会话ID，用于跨调用共享执行上下文",
+					"description": "Optional; reuse to keep interpreter state across calls.",
 				},
 			},
 			"required": []string{"language", "code"},

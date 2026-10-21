@@ -10,22 +10,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/llm/safecall"
-	"github.com/polarisagi/polaris/internal/prompt"
-	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // UserProfile 5 维用户画像。
-// 写路径: PersonaRefiner.Update / RefineAtSessionEnd
-// 读路径: ToUserPreferences → ImmutableCore.UserPreferences 注入
+// 写路径: PersonaRefiner.Update
+// 读路径: PreferencesBlock → 内核会话层快照（ADR-0120 决策二）
 type UserProfile struct {
 	// LanguagePref 用户首选语言，影响回复语言选择。
 	LanguagePref string `json:"language_pref"` // zh-CN | en | mixed
@@ -35,7 +30,8 @@ type UserProfile struct {
 	OutputFormat string `json:"output_format"` // markdown | plain | code-first
 	// Expertise 领域专业程度（影响解释深度和术语使用）。
 	Expertise string `json:"expertise"` // novice | intermediate | expert
-	// InteractionSummary LLM 在会话结束时生成的用户特征摘要（≤200 字）。
+	// InteractionSummary 历史字段：曾由每回合一次的 LLM 调用生成并注入稳定层，ADR-0120 起
+	// 不再生成也不再注入；保留字段只为兼容已持久化的 JSON。
 	InteractionSummary string `json:"interaction_summary"`
 	// UpdatedAt Unix 秒，记录最近更新时间。
 	UpdatedAt int64 `json:"updated_at"`
@@ -45,18 +41,16 @@ const profilePreferenceKey = "user_profile"
 
 // PersonaRefiner 从会话信号中精炼用户画像，跨会话持久化。
 type PersonaRefiner struct {
-	db       protocol.SQLQuerier
-	provider protocol.Provider // 用于 RefineAtSessionEnd（可 nil，则跳过 LLM 更新）
-	mu       sync.Mutex
-	profile  *UserProfile
+	db      protocol.SQLQuerier
+	mu      sync.Mutex
+	profile *UserProfile
 }
 
-// NewPersonaRefiner 创建 PersonaRefiner。provider 为 nil 时跳过会话结束 LLM 摘要更新。
-func NewPersonaRefiner(db protocol.SQLQuerier, provider protocol.Provider) *PersonaRefiner {
+// NewPersonaRefiner 创建 PersonaRefiner。
+func NewPersonaRefiner(db protocol.SQLQuerier) *PersonaRefiner {
 	return &PersonaRefiner{
-		db:       db,
-		provider: provider,
-		profile:  defaultUserProfile(),
+		db:      db,
+		profile: defaultUserProfile(),
 	}
 }
 
@@ -132,60 +126,6 @@ func (pr *PersonaRefiner) Update(signals map[string]string) {
 	}
 }
 
-// RefineAtSessionEnd 会话结束时用 LLM 更新 InteractionSummary（可选，provider 为 nil 时跳过）。
-// msgs 为本次会话消息列表（非 system 部分）。
-func (pr *PersonaRefiner) RefineAtSessionEnd(ctx context.Context, msgs []types.Message) error {
-	if pr.provider == nil || len(msgs) == 0 {
-		return nil
-	}
-
-	var sb strings.Builder
-	for _, m := range msgs {
-		if m.Role == "system" {
-			continue
-		}
-		sb.WriteString(m.Role)
-		sb.WriteString(": ")
-		// 截断单条消息避免超长
-		c := m.Content
-		if len(c) > 200 {
-			c = c[:200] + "..."
-		}
-		sb.WriteString(c)
-		sb.WriteByte('\n')
-	}
-
-	// Prompt 统一走 internal/prompt/templates 管理（A-12 修复）；转录文本（sb.String()）
-	// 来自用户/助手真实对话内容，非完全可信，用 prompt.NewRandomBoundary() 生成的随机
-	// 边界符包裹，防止其中夹带的类指令文本被 LLM 误当作系统指令执行。
-	boundaryStart, boundaryEnd := prompt.NewRandomBoundary()
-	userPrompt, tmplErr := templates.Render("persona_refine.tmpl", map[string]string{
-		"BoundaryStart": boundaryStart,
-		"BoundaryEnd":   boundaryEnd,
-		"Transcript":    sb.String(),
-	})
-	if tmplErr != nil {
-		return nil //nolint:nilerr // 模板渲染失败不阻断会话结束流程，同 LLM 失败处理方式
-	}
-
-	resp, err := safecall.Infer(ctx, pr.provider, []types.Message{{Role: "user", Content: userPrompt}}, types.WithMaxTokens(200), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose(types.PurposePersonaRefine))
-	if err != nil {
-		return nil //nolint:nilerr // LLM 失败不阻断会话结束流程
-	}
-
-	// A-01 修复：LLM 返回空/纯空白内容时保留旧值，不用空字符串静默覆盖已有画像摘要。
-	summary := strings.TrimSpace(resp.Content)
-	if summary == "" {
-		slog.Warn("persona refiner: empty LLM response, keep previous interaction summary")
-		return nil
-	}
-
-	pr.mu.Lock()
-	pr.profile.InteractionSummary = summary
-	pr.mu.Unlock()
-	return nil
-}
-
 // Profile 返回当前用户画像的快照（只读副本）。
 func (pr *PersonaRefiner) Profile() UserProfile {
 	pr.mu.Lock()
@@ -193,24 +133,26 @@ func (pr *PersonaRefiner) Profile() UserProfile {
 	return *pr.profile
 }
 
-// ToUserPreferences 将画像转换为 types.UserPreference 列表，供 ImmutableCore 注入。
-func (pr *PersonaRefiner) ToUserPreferences() []types.UserPreference {
+// PreferencesBlock 渲染四个稳定维度，供内核会话层在会话开始时快照一次（ADR-0120 决策二）。
+// 不含 InteractionSummary：它曾每回合由 LLM 重写并注入稳定层，使每个新回合的前缀缓存全部失效。
+// 维度顺序固定，空值跳过；全部为空返回 ""。
+func (pr *PersonaRefiner) PreferencesBlock() string {
 	pr.mu.Lock()
 	p := *pr.profile
 	pr.mu.Unlock()
-
-	prefs := []types.UserPreference{
-		{Dimension: "language_pref", PreferenceText: p.LanguagePref, Confidence: 0.9},
-		{Dimension: "response_style", PreferenceText: p.ResponseStyle, Confidence: 0.8},
-		{Dimension: "output_format", PreferenceText: p.OutputFormat, Confidence: 0.8},
-		{Dimension: "expertise", PreferenceText: p.Expertise, Confidence: 0.7},
+	var lines []string
+	for _, kv := range [][2]string{
+		{"language_pref", p.LanguagePref},
+		{"response_style", p.ResponseStyle},
+		{"output_format", p.OutputFormat},
+		{"expertise", p.Expertise},
+	} {
+		if v := strings.TrimSpace(kv[1]); v != "" {
+			lines = append(lines, "- "+kv[0]+": "+v)
+		}
 	}
-	if p.InteractionSummary != "" {
-		prefs = append(prefs, types.UserPreference{
-			Dimension:      "interaction_summary",
-			PreferenceText: p.InteractionSummary,
-			Confidence:     0.6,
-		})
+	if len(lines) == 0 {
+		return ""
 	}
-	return prefs
+	return "## Learned user preferences\nDefaults inferred from past sessions; the user's words in this conversation override them.\n" + strings.Join(lines, "\n")
 }
