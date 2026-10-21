@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -25,26 +26,6 @@ const (
 	maxSingleURLBytes      = 1 << 19 // 单个 URL 上限 512KB
 	httpFetchTimeout       = 15 * time.Second
 )
-
-// sensitiveBlockedPaths 敏感路径前缀——命中则拒绝展开。
-//
-// 定位：workDir 根目录断言（见 resolveFile）才是**主控制**，本表是"即便落在
-// 工作区内也永不内联"的第二层。因此这里只收录与凭据/账户强相关的路径片段，
-// 不试图穷举系统文件——穷举黑名单在主控制存在时既无必要也不可能完备。
-func sensitiveBlockedPaths() []string {
-	return []string{
-		".ssh", ".aws", ".kube", ".docker",
-		"id_rsa", ".npmrc", ".netrc",
-		".config/gcloud", ".config/gh",
-		"credentials", ".env",
-		".git/config",
-		// 类 Unix 账户与凭据文件：把 workDir 配到 /etc 这类宽目录时，
-		// 根目录断言会全部放行，仍需本层兜住（2026-08-13 轮实测缺口）。
-		// 刻意写成不带前导斜杠的**路径片段**，与上面几条同构：resolveFile 会对
-		// abs 解符号链接，macOS 上 /etc → /private/etc，写死绝对前缀会匹配不上。
-		"etc/passwd", "etc/shadow", "etc/sudoers",
-	}
-}
 
 // ─── 引用模式 ───────────────────────────────────────────────────────────────────
 
@@ -86,20 +67,12 @@ func WithWorkDir(dir string) func(*ContextRefExpander) {
 
 // ─── 敏感路径检测 ──────────────────────────────────────────────────────────────
 
+// isSensitivePath 判定 @file 引用是否落在敏感路径。判据只有一份：policy 路径目录（ADR-0122 决策二），
+// 不在此另维护清单。按写口径取类别——持久化落点（.git/config、shell rc）与系统目录读出来也不该内联给模型；
+// workDir 根目录断言（见 resolveFile）仍是主控制，这里是"即便落在工作区内也永不内联"的第二层。
 func isSensitivePath(path string) bool {
-	clean := filepath.Clean(path)
-	for _, blocked := range sensitiveBlockedPaths() {
-		if matched, _ := filepath.Match(blocked, clean); matched {
-			return true
-		}
-		if strings.Contains(clean, string(filepath.Separator)+blocked) {
-			return true
-		}
-		if strings.HasPrefix(clean, blocked+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
+	pc := policy.ClassifyPath(filepath.Clean(path), true, nil)
+	return pc.Self || pc.Blocked() || policy.PathHitsSensitiveFragment(path)
 }
 
 // ─── 展开主流程 ────────────────────────────────────────────────────────────────

@@ -127,6 +127,16 @@ func (c *cc) pathsState(paths []string) pathResult {
 // writePaths 对"写入这些路径"的命令统一出结论：根内安全，根外危险，无法确认未知。
 func (c *cc) writePaths(paths []string) verdict {
 	for _, p := range paths {
+		if !hasDyn(p) {
+			c.w.classifyPathWord(p, true) // 写口径：持久化/系统目录命中硬限制
+		}
+	}
+	for _, p := range paths {
+		if !hasDyn(p) && isBlockDevice(p) {
+			return catastropheV("disk_write_device")
+		}
+	}
+	for _, p := range paths {
 		if isShellRC(p) {
 			return dangerV("modify_shell_rc")
 		}

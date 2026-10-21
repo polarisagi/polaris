@@ -10,8 +10,8 @@ import (
 // 命令安全分类器（ADR-0117 决策四）：把一条 shell 命令确定性地分为 安全/未知/危险/灾难性。
 // 纯函数 + 表驱动，不调用 LLM、不执行命令；复合命令（&& || ; | 子 shell $() 反引号）逐段分类，
 // 取最严一段。解析失败、动态命令名、无法确认路径的参数一律按"未知"处理（fail-closed 到询问，
-// 而不是放行）。与 internal/security/classifier 的正则风险分级互补：后者是工具内第二道防线，
-// 本分类器决定"要不要先问人"。
+// 而不是放行）。这是仓库里唯一的 shell 分析器（ADR-0122 决策一）：语法树为主判据，
+// 原文正则扫描（cmdclass_raw.go）为兜底。
 
 // CmdClass 命令分级，数值越大越严。
 type CmdClass int
@@ -59,21 +59,29 @@ type CmdVerdict struct {
 	Reason   string // 最严一段的原因代码
 	Network  bool   // 含联网命令（数据外泄硬限制用）
 	Segments []CmdSegment
-	// SelfProtected / SensitivePath：静态可解析的路径词落入自保护 / 敏感路径（ADR-0121 决策四）。
-	SelfProtected bool
-	SensitivePath bool
+	// SelfProtected / SensitiveReason：静态可解析的路径词落入自保护 / 目录文件敏感类
+	// （ADR-0121 决策四、ADR-0122 决策二）；SensitiveReason 为硬限制原因码，空串表示未命中。
+	SelfProtected   bool
+	SensitiveReason string
 }
 
-// ClassifyCommand 对 cmd 分级。
+// ClassifyCommand 对 cmd 分级：语法树分类为主，原文兜底扫描（rawScan）结果取最严。
 func ClassifyCommand(cmd string, env CmdEnv) CmdVerdict {
 	w := newWalker(env)
 	file, err := parseBash(cmd)
+	var v CmdVerdict
 	if err != nil || len(file.Stmts) == 0 {
-		return CmdVerdict{Class: CmdUnknown, Reason: "unparsable_command"}
+		file = nil
+		v = CmdVerdict{Class: CmdUnknown, Reason: "unparsable_command"}
+	} else {
+		w.stmts(file.Stmts)
+		v = CmdVerdict{Class: w.worst, Reason: w.reason, Network: w.network, Segments: w.segs,
+			SelfProtected: w.selfHit, SensitiveReason: w.sensReason}
 	}
-	w.stmts(file.Stmts)
-	return CmdVerdict{Class: w.worst, Reason: w.reason, Network: w.network, Segments: w.segs,
-		SelfProtected: w.selfHit, SensitivePath: w.sensHit}
+	if r := rawScan(cmd, file, env, w.catalog()); r != "" && v.Class < CmdCatastrophic {
+		v.Class, v.Reason = CmdCatastrophic, r
+	}
+	return v
 }
 
 type walker struct {
@@ -87,7 +95,9 @@ type walker struct {
 	depth   int
 	tab     cmdTable
 	selfHit bool
-	sensHit bool
+	// sensReason 路径词命中目录文件敏感类的最严原因码。
+	sensReason string
+	cat        *PathCatalog
 }
 
 func newWalker(env CmdEnv) *walker {
@@ -145,6 +155,12 @@ func (w *walker) command(cmd syntax.Command) {
 		w.stmt(c.Stmt)
 	case *syntax.IfClause, *syntax.WhileClause, *syntax.ForClause, *syntax.CaseClause:
 		w.compound(c)
+	case *syntax.FuncDecl:
+		// 函数定义本身不执行，但 fork bomb 形态（函数体内自己管道调用自己）必须在定义处拦下
+		if isForkBomb(c) {
+			w.mark(CmdCatastrophic, "fork_bomb")
+		}
+		w.stmt(c.Body)
 	case *syntax.TestClause, *syntax.ArithmCmd, nil:
 		// 条件/算术表达式本身无副作用
 	default:
@@ -262,9 +278,17 @@ func (w *walker) classifyPathWord(word string, write bool) {
 	if !ok {
 		return
 	}
-	self, sens := pathClassFor(abs, write, w.env.Home)
-	w.selfHit = w.selfHit || self
-	w.sensHit = w.sensHit || sens
+	pc := w.catalog().Classify(abs, write, w.roots)
+	w.selfHit = w.selfHit || pc.Self
+	w.sensReason = strongerReason(w.sensReason, pc.reason())
+}
+
+// catalog 惰性构造路径目录：一次分类内复用，避免逐路径词重建。
+func (w *walker) catalog() *PathCatalog {
+	if w.cat == nil {
+		w.cat = newPathCatalogHome(w.env.Home)
+	}
+	return w.cat
 }
 
 // writeTarget 判定重定向写入目标：/dev/null 等放行，工作区外危险，无法确认未知。
@@ -276,6 +300,10 @@ func (w *walker) writeTarget(word *syntax.Word) {
 	}
 	switch s {
 	case "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty":
+		return
+	}
+	if isBlockDevice(s) {
+		w.mark(CmdCatastrophic, "disk_write_device")
 		return
 	}
 	if isShellRC(s) {

@@ -27,7 +27,7 @@ func (bareWrapper) WrapArgv(_ context.Context, sctx protocol.SandboxContext) (*p
 func TestMakeBashFn_BackgroundJob(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
-	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", pol)
 
 	ctx := protocol.WithPreApproved(context.Background())
 	input := `{"command":"echo 'job_bg_done'","background":true,"session_id":"s_bg_1"}`
@@ -88,7 +88,7 @@ func TestMakeBashFn_PersistentSession_StatePersists(t *testing.T) {
 	})
 	defer pSbx.Shutdown()
 
-	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, pol, pSbx)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", pol, pSbx)
 	ctx := protocol.WithPreApproved(context.Background())
 
 	// 1. 设置环境变量与函数

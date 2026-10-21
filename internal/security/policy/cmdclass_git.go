@@ -32,11 +32,12 @@ func (c *cc) gitSubcommand() (sub string, rest []string, risky bool) {
 
 func gitHandler(c *cc) verdict {
 	sub, rest, risky := c.gitSubcommand()
-	if risky {
-		return unknownV("git_global_option")
-	}
+	// 破坏性判定先于全局选项判定：git -c k=v reset --hard 不能借 -c 降级成"未知"
 	if v, ok := gitDangerous(sub, rest); ok {
 		return v
+	}
+	if risky {
+		return unknownV("git_global_option")
 	}
 	if gitReadOnly(sub, rest) {
 		return safeV()
@@ -51,20 +52,19 @@ func gitNetworkSubs() map[string]bool {
 }
 
 // gitDangerous 改写历史/丢弃改动/强推等不可逆操作。
+// 丢弃工作树未提交改动、stash、强推受保护分支不可恢复，归灾难性（ADR-0122 决策三）；其余保持危险。
 func gitDangerous(sub string, rest []string) (verdict, bool) {
+	if sub == "push" {
+		return gitPush(rest)
+	}
+	if v, ok := gitDiscard(sub, rest); ok {
+		return v, true
+	}
 	switch sub {
-	case "push":
-		if hasShort(rest, 'f') || hasLong(rest, "--force", "--force-with-lease", "--delete", "--mirror", "--prune") || hasPlusRefspec(rest) || hasShort(rest, 'd') {
-			v := dangerV("git_force_push")
-			v.network = true
-			return v, true
+	case "branch":
+		if hasShort(rest, 'D') {
+			return dangerV("git_branch_delete"), true
 		}
-	case "reset":
-		if hasLong(rest, "--hard") {
-			return dangerV("git_reset_hard"), true
-		}
-	case "clean":
-		return dangerV("git_clean"), true
 	case "filter-branch", "filter-repo", "update-ref", "gc", "prune":
 		return dangerV("git_rewrite_history"), true
 	case "reflog":
@@ -73,6 +73,106 @@ func gitDangerous(sub string, rest []string) (verdict, bool) {
 		}
 	}
 	return verdict{}, false
+}
+
+// gitDiscard 丢弃工作树/暂存区未提交改动的子命令。
+func gitDiscard(sub string, rest []string) (verdict, bool) {
+	switch sub {
+	case "reset":
+		if hasLong(rest, "--hard") {
+			return catastropheV("git_discard_worktree"), true
+		}
+	case "clean":
+		return gitClean(rest), true
+	case "checkout":
+		if gitCheckoutDiscardsAll(rest) {
+			return catastropheV("git_discard_worktree"), true
+		}
+	case "restore":
+		if !gitRestoreStagedOnly(rest) && !gitInteractive(rest) && pathspecIsWholeTree(rest) {
+			return catastropheV("git_discard_worktree"), true
+		}
+	case "stash":
+		if s, _ := firstNonFlag(rest); s == "drop" || s == "clear" {
+			return catastropheV("git_stash_discard"), true
+		}
+	}
+	return verdict{}, false
+}
+
+// gitCheckoutDiscardsAll checkout 带 "." 路径规格（整树从索引/提交覆盖）；-b/-B/--orphan 是建分支，-p 是交互挑选。
+func gitCheckoutDiscardsAll(rest []string) bool {
+	if hasShort(rest, 'b') || hasShort(rest, 'B') || hasLong(rest, "--orphan") || gitInteractive(rest) {
+		return false
+	}
+	return pathspecIsWholeTree(rest)
+}
+
+func gitInteractive(rest []string) bool { return hasShort(rest, 'p') || hasLong(rest, "--patch") }
+
+// gitRestoreStagedOnly restore 只动暂存区（--staged 且未同时要求 --worktree），不丢工作树改动。
+func gitRestoreStagedOnly(rest []string) bool {
+	return (hasLong(rest, "--staged") || hasShort(rest, 'S')) && !hasLong(rest, "--worktree") && !hasShort(rest, 'W')
+}
+
+// gitClean -n 只预览（安全）；-f 真删未跟踪文件（灾难性）；其余保持危险。
+func gitClean(rest []string) verdict {
+	switch {
+	case hasShort(rest, 'n') || hasLong(rest, "--dry-run"):
+		return safeV()
+	case hasShort(rest, 'f') || hasLong(rest, "--force"):
+		return catastropheV("git_discard_worktree")
+	}
+	return dangerV("git_clean")
+}
+
+// pathspecIsWholeTree 位置参数里出现 "."（整个工作树）。
+func pathspecIsWholeTree(rest []string) bool {
+	for _, p := range positionals(rest) {
+		if p == "." || p == "./" || p == ":/" {
+			return true
+		}
+	}
+	return false
+}
+
+// gitPush 强推判定：对 main/master/trunk/release* 或未写明分支的强推灾难性，其余强推/删除保持危险。
+func gitPush(rest []string) (verdict, bool) {
+	force := hasShort(rest, 'f') || hasLong(rest, "--force", "--force-with-lease", "--force-if-includes", "--mirror") || hasPlusRefspec(rest)
+	if !force && !hasLong(rest, "--delete", "--prune") && !hasShort(rest, 'd') {
+		return verdict{}, false
+	}
+	v := dangerV("git_force_push")
+	if force && pushTargetsProtected(rest) {
+		v = catastropheV("git_force_push_protected")
+	}
+	v.network = true
+	return v, true
+}
+
+// pushTargetsProtected 目标分支未写明（含 HEAD、--all、--mirror）或属于受保护分支。
+func pushTargetsProtected(rest []string) bool {
+	if hasLong(rest, "--all", "--mirror") {
+		return true
+	}
+	pos := positionals(rest)
+	if len(pos) < 2 {
+		return true // 只写了远端或什么都没写：靠 push.default 推当前分支，无法确认
+	}
+	for _, ref := range pos[1:] {
+		ref = strings.TrimPrefix(ref, "+")
+		if i := strings.LastIndex(ref, ":"); i >= 0 {
+			ref = ref[i+1:]
+		}
+		ref = strings.TrimPrefix(ref, "refs/heads/")
+		switch {
+		case ref == "" || ref == "HEAD":
+			return true
+		case ref == "main" || ref == "master" || ref == "trunk" || strings.HasPrefix(ref, "release"):
+			return true
+		}
+	}
+	return false
 }
 
 func hasPlusRefspec(args []string) bool {

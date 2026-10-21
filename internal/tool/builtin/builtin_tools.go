@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -63,10 +62,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-type HITLGateway interface {
-	RequestApproval(ctx context.Context, action string, req map[string]any) error
-}
-
 func RegisterBuiltinTools(
 	sbx *sandbox.InProcessSandbox,
 	toolReg *tool.InMemoryToolRegistry,
@@ -79,7 +74,6 @@ func RegisterBuiltinTools(
 	autoSvc AutomationService, // automation_* 工具依赖；nil 时不注册这四个工具
 	vfsRoot string, // WorkspaceManager 的根目录
 	asyncTaskProvider get_task_result.AsyncTaskProvider, // get_task_result 工具依赖（GD-08-001）；nil 时该工具始终降级返回 expired_or_not_found
-	hitlGateway HITLGateway,
 	todoRepo repo.TodoRepository, // todo_write/todo_read 按会话落库（ADR-0104 决策三）；nil 时两工具调用即报错
 	ttsSynth ttstool.Synthesizer, // tts 工具依赖的本地 TTS 引擎（ADR-0107）；nil 时该工具调用即报错，不回出假音频
 	webDeps web_fetch.Deps, // web_fetch 工具依赖（ADR-0114 决策三）
@@ -118,8 +112,8 @@ func RegisterBuiltinTools(
 		{"write_file", write_file.MakeWriteFileFn(allowedPaths)},
 		{"web_fetch", web_fetch.MakeWebFetchFn(webDeps)},
 		{"feed_fetch", feed_fetch.MakeFeedFetchFn(webDeps)},
-		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol, pSbx)},
-		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway, pol)},
+		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, pol, pSbx)},
+		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, pol)},
 		{"get_datetime", get_datetime.GetDatetimeFn},
 		{"csv_parse", csv_parse.CsvParseFn},
 		{"diff_text", diff_text.DiffTextFn},

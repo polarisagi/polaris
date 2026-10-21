@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/security/classifier"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/tool/builtin/guard"
 	"github.com/polarisagi/polaris/internal/tool/builtin/sandboxenv"
@@ -40,7 +40,6 @@ func MakeBashFn(
 	sandboxEnabled bool,
 	netPolicy protocol.SandboxNetworkPolicy,
 	bwrapPath string,
-	hitlGateway HITLGateway,
 	pol policy.Policy,
 	persistentSbx ...*sandbox.PersistentSandbox,
 ) sandbox.InProcessFn {
@@ -51,9 +50,6 @@ func MakeBashFn(
 	if pol.IsZero() {
 		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
-	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
-	// 返回的闭包才是热路径（每次工具调用都会执行）。
-	riskClassifier := classifier.NewDefaultClassifier()
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
 		paths := guard.ScopedPaths(ctx, allowedPaths)
@@ -65,7 +61,7 @@ func MakeBashFn(
 			return nil, apperr.New(apperr.CodeInternal, "bash: command is required")
 		}
 
-		verdict, err := evaluateBashRisk(ctx, args.Command, riskClassifier, hitlGateway)
+		verdictClass, err := guardUngrantedCommand(ctx, args.Command, paths)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +119,7 @@ func MakeBashFn(
 		slog.Info("bash: executing command",
 			"sandbox_enabled", effectiveSandbox,
 			"network", netPolicy,
-			"risk", verdict.Level.String(),
+			"risk", verdictClass.String(),
 			"cmd", args.Command,
 			"dir", workDir,
 			"profile", pol.Profile,
@@ -208,33 +204,20 @@ func ToSandboxNetPolicy(p protocol.SandboxNetworkPolicy) string {
 	return protocol.NetPolicyDeny
 }
 
-func evaluateBashRisk(ctx context.Context, cmd string, riskClassifier *classifier.CommandRiskClassifier, hitlGateway HITLGateway) (classifier.Verdict, error) {
-	verdict := riskClassifier.Classify(cmd)
-	switch verdict.Level {
-	case classifier.RiskDeny:
-		slog.Error("bash: command DENIED by risk classifier",
-			"cmd", cmd, "reason", verdict.Reason)
-		return verdict, apperr.New(apperr.CodeForbidden,
-			fmt.Sprintf("bash: command denied: %s", verdict.Reason))
-	case classifier.RiskHITL:
-		// 统一权限判定（ADR-0117）已放行或经用户确认这次调用：不再重复询问；上面的 RiskDeny 不受影响。
-		if protocol.IsPreApproved(ctx) {
-			slog.Info("bash: risky command pre-approved by permission decision", "cmd", cmd, "reason", verdict.Reason)
-			return verdict, nil
-		}
-		if hitlGateway == nil {
-			return verdict, apperr.New(apperr.CodeForbidden, "bash: HITL gateway is nil, fail-closed for RiskHITL command")
-		}
-		slog.Warn("bash: command requires human approval (HITL), requesting approval",
-			"cmd", cmd, "reason", verdict.Reason)
-		if err := hitlGateway.RequestApproval(ctx, "bash", map[string]any{"command": cmd, "reason": verdict.Reason}); err != nil {
-			return verdict, apperr.Wrap(apperr.CodeForbidden, "bash: HITL approval failed", err)
-		}
-	case classifier.RiskWarn:
-		slog.Warn("bash: elevated-risk command executing",
-			"cmd", cmd, "reason", verdict.Reason)
+// guardUngrantedCommand 无授权凭据（未经 policy.Decide 的兜底路径）时用唯一的 shell 分析器 fail-closed：
+// ≥ 危险一律拒绝，需先经权限判定/审批拿到凭据（ADR-0122 决策一）。已有凭据说明 Decide 已判定过，不再分级。
+func guardUngrantedCommand(ctx context.Context, cmd string, roots []string) (policy.CmdClass, error) {
+	if protocol.PermissionGrantFrom(ctx) != protocol.GrantNone {
+		return policy.CmdSafe, nil
 	}
-	return verdict, nil
+	home, _ := os.UserHomeDir()
+	v := policy.ClassifyCommand(cmd, policy.CmdEnv{Roots: roots, Home: home})
+	if v.Class >= policy.CmdDangerous {
+		slog.Error("bash: ungranted command rejected", "cmd", cmd, "class", v.Class.String(), "reason", v.Reason)
+		return v.Class, apperr.New(apperr.CodeForbidden,
+			fmt.Sprintf("bash: command requires permission approval (%s: %s); run it through the permission decision first", v.Class, v.Reason))
+	}
+	return v.Class, nil
 }
 
 func execBackgroundJob(ctx context.Context, cmdStr, sessionID, workDir string) ([]byte, error) {

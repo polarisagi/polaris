@@ -109,3 +109,25 @@ func TestSelfProtectedMatcher(t *testing.T) {
 		t.Fatal("workspace 不是自保护路径")
 	}
 }
+
+// ADR-0122：无凭据时持久化落点与可信根外的私钥文件名同样拒绝；可信根内的 id_rsa 样例放行。
+func TestCheckWritablePath_CatalogClasses(t *testing.T) {
+	home, _ := fakeHome(t)
+	workspace := t.TempDir()
+	base := []string{workspace}
+	bg := context.Background()
+
+	if err := CheckWritablePath(bg, filepath.Join(home, ".zshrc"), []string{workspace, home}); err == nil {
+		t.Error("无凭据写 ~/.zshrc 应拒绝")
+	}
+	hook := filepath.Join(workspace, ".git", "hooks", "pre-commit")
+	if err := CheckWritablePath(bg, hook, base); err == nil {
+		t.Error("无凭据写 .git/hooks 应拒绝")
+	}
+	if err := CheckReadablePath(bg, filepath.Join(workspace, ".git", "hooks", "pre-commit"), base); err != nil {
+		t.Errorf("读 .git/hooks 应放行: %v", err)
+	}
+	if err := CheckReadablePath(bg, filepath.Join(workspace, "fixtures", "id_rsa"), base); err != nil {
+		t.Errorf("可信根内 id_rsa 样例应放行: %v", err)
+	}
+}

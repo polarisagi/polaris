@@ -172,8 +172,32 @@ func (a *Agent) rememberRules(ctx context.Context, asks []pendingAsk) {
 	}
 }
 
+// hardReasonTexts 灾难性命令细分原因码（ADR-0122）的审批卡文案。
+func hardReasonTexts() map[string]string {
+	return map[string]string{
+		policy.ReasonRmHomeUserDir:         "要删除家目录下的用户数据目录（文档/桌面/下载/图片/资源库等），不可恢复（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonRmWorkspaceRoot:       "要删除整个项目工作目录或其全部内容，不可恢复（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonRmGitDir:              "要删除 .git 目录，会丢失全部版本历史（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonRmDynamicRoot:         "递归删除的目标以变量或命令替换开头，变量为空时会变成删除根目录（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonGitDiscardWorktree:    "git 操作会丢弃工作区里尚未提交的全部改动，不可恢复（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonGitStashDiscard:       "要丢弃 git stash 中暂存的改动，不可恢复（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonGitForcePushProtected: "要强制推送到 main/master/trunk/release 或未写明分支，会覆盖远端历史（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonDiskErase:             "要擦除、抹零或重新分区磁盘，数据不可恢复（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonDiskWriteDevice:       "要把数据直接写入块设备，会破坏磁盘内容（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonSecurityPosture:       "命令会削弱本机安全防线（关闭防火墙/系统完整性保护、提权入组、加载内核模块、开监听口等）（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonForkBomb:              "命令是 fork 炸弹，会耗尽系统进程资源（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonChmodRecursiveSystem:  "要递归修改根目录、家目录或系统目录的权限/属主（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonObfuscatedExec:        "命令把解码或下载的内容直接交给解释器执行，或执行运行期拼出的代码，无法预先审查（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonSensitiveFragment:     "命令文本涉及凭据或 Polaris 自身密钥/配置的特征路径，可能通过间接方式读取（安全硬限制，任何权限模式都会询问）",
+		policy.ReasonEmbeddedScriptDestroy: "内嵌脚本包含针对家目录或根路径的删除操作（安全硬限制，任何权限模式都会询问）",
+	}
+}
+
 // askReasonText 把判定原因码翻译成审批卡上的一句话。
 func askReasonText(code string) string {
+	if t, ok := hardReasonTexts()[code]; ok {
+		return t
+	}
 	switch code {
 	case policy.ReasonOutsideWorkspaceWrite:
 		return "要写入项目工作目录之外的位置"

@@ -377,10 +377,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Cache:   webCache,
 		Limiter: webLimiter,
 	}
-	hitlWithAudit := &hitlGatewayWithAudit{
-		inner: hitlGateway,
-		al:    auditTrailLogAdapter{at: sb.AuditTrail},
-	}
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,
 		sb.Cfg.Sandbox.Enabled,
 		sb.Cfg.Sandbox.NetworkPolicy,
@@ -389,7 +385,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		autoBr,
 		sb.Layout.Workspace,
 		&mcpAsyncTaskAdapter{inner: mcpMgr},
-		hitlWithAudit,
 		repo.NewSQLiteTodoRepository(sb.Store.DB()),
 		ttsBr.Synthesize,
 		webDeps,

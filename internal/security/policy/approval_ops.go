@@ -92,7 +92,7 @@ func shellOp(op operation, m map[string]any, ctx Context) operation {
 		return op
 	}
 	op.cmd = ClassifyCommand(cmd, env)
-	op.selfHit, op.sensHit = op.cmd.SelfProtected, op.cmd.SensitivePath
+	op.selfHit, op.sensReason = op.cmd.SelfProtected, op.cmd.SensitiveReason
 	return op
 }
 
@@ -139,9 +139,9 @@ func (o *operation) fillTargets(m map[string]any, ctx Context) {
 			continue
 		}
 		real := resolveReal(abs)
-		self, sens := pathClassFor(real, o.kind != opRead, ctx.Home)
-		o.selfHit = o.selfHit || self
-		o.sensHit = o.sensHit || sens
+		pc := w.catalog().Classify(real, o.kind != opRead, w.roots)
+		o.selfHit = o.selfHit || pc.Self
+		o.sensReason = strongerReason(o.sensReason, pc.reason())
 		o.targets = append(o.targets, real)
 		if !insideRoots(real, w.roots) {
 			o.outside = append(o.outside, real)

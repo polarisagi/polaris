@@ -173,7 +173,7 @@ func newPermFixture(t *testing.T, mode types.PermissionMode, project string, rul
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, runtime.GOOS, 0)
 	envelope := sandbox.NewExecEnvelope(gate, router, 0, "", nil)
 	reg := tool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
-	if err := builtin.RegisterBuiltinTools(sbx, reg, []string{root}, nil, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil); err != nil {
+	if err := builtin.RegisterBuiltinTools(sbx, reg, []string{root}, nil, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 

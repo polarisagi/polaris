@@ -64,6 +64,9 @@ type SandboxContext struct {
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
 	// DenyPaths 自保护与敏感路径，读写都拒绝，优先于 AllowedPaths
 	DenyPaths []string `json:"deny_paths,omitempty"`
+	// DenyWritePaths 只拒写的路径（持久化落点、系统目录、项目内 .git/hooks 与 .git/config）：
+	// 仍可读，写入被 Seatbelt deny file-write* / bwrap ro-bind 拦下（ADR-0122 决策二）
+	DenyWritePaths []string `json:"deny_write_paths,omitempty"`
 
 	// EnvPreset 环境注入预设（空字符串 = 由 CallerType 推导）
 	EnvPreset string `json:"env_preset,omitempty"`

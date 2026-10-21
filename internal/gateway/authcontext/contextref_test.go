@@ -21,6 +21,12 @@ func TestIsSensitivePath(t *testing.T) {
 		{".env", true},
 		{"/var/www/html/index.php", false},
 		{"/etc/.git/config", true},
+		// 目录文件新增类别：Chrome Login Data 与大小写变体（ADR-0122 决策二）
+		{"/home/u/.config/google-chrome/Default/Login Data", true},
+		{"/Users/u/Library/Application Support/Google/Chrome/Default/Login Data", true},
+		{"/Users/u/library/application support/google/chrome/default/LOGIN DATA", true},
+		{"/Users/u/LIBRARY/Keychains/login.keychain-db", true},
+		{"/work/proj/testdata/fixture.json", false},
 	}
 	for _, c := range cases {
 		if isSensitivePath(c.path) != c.block {

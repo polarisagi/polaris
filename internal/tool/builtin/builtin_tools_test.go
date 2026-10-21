@@ -45,7 +45,7 @@ func regBuiltin(sbx *sandbox.InProcessSandbox, reg *tool.InMemoryToolRegistry, p
 	if d == nil {
 		d = dummyDialerPtr
 	}
-	return RegisterBuiltinTools(sbx, reg, paths, d, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, deps, policy.StandardPolicy(), "", nil, nil, nil, nil)
+	return RegisterBuiltinTools(sbx, reg, paths, d, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, deps, policy.StandardPolicy(), "", nil, nil, nil, nil)
 }
 
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。

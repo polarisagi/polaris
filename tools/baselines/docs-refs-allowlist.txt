@@ -88,3 +88,4 @@ internal/xxx.go # example in wiring check
 # 可追溯性，下一个人将重新造一遍。
 internal/cli/
 internal/cli # M13 §1.1 的 2026-09-21 订正注记：点名原文写错的实现位置（该包已删除）
+internal/security/classifier # inv_lint_test.go 注释记载 2026-07-07 当时修复的历史事实；该包已随 ADR-0122 删除

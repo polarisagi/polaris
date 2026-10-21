@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/security/classifier"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 	"github.com/polarisagi/polaris/internal/tool/builtin/guard"
@@ -39,15 +39,11 @@ func MakeRunCommandFn(
 	sandboxEnabled bool,
 	netPolicy protocol.SandboxNetworkPolicy,
 	bwrapPath string,
-	hitlGateway HITLGateway,
 	pol policy.Policy,
 ) sandbox.InProcessFn {
 	if pol.IsZero() {
 		pol = policy.ProfilePolicy(policy.ProfileStandard)
 	}
-	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
-	// 返回的闭包才是热路径（每次工具调用都会执行）。
-	riskClassifier := classifier.NewDefaultClassifier()
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
 		paths := guard.ScopedPaths(ctx, allowedPaths)
@@ -60,38 +56,23 @@ func MakeRunCommandFn(
 		execCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		// ── 安全审核：CommandRiskClassifier ──────────────────────────────────
-		verdict := riskClassifier.Classify(args.Command)
-		switch verdict.Level {
-		case classifier.RiskDeny:
-			slog.Error("run_command: command DENIED by risk classifier",
-				"cmd", args.Command, "reason", verdict.Reason)
-			return nil, apperr.New(apperr.CodeForbidden,
-				fmt.Sprintf("run_command: command denied: %s", verdict.Reason))
-		case classifier.RiskHITL:
-			// 统一权限判定（ADR-0117）已放行或经用户确认这次调用：不再重复询问；RiskDeny 不受影响。
-			if protocol.IsPreApproved(ctx) {
-				slog.Info("run_command: risky command pre-approved by permission decision",
-					"cmd", args.Command, "reason", verdict.Reason)
-			} else {
-				if hitlGateway == nil {
-					return nil, apperr.New(apperr.CodeForbidden, "run_command: HITL gateway is nil, fail-closed for RiskHITL command")
-				}
-				slog.Warn("run_command: command requires human approval (HITL), requesting approval",
-					"cmd", args.Command, "reason", verdict.Reason)
-				if err := hitlGateway.RequestApproval(ctx, "run_command", map[string]any{"command": args.Command, "reason": verdict.Reason}); err != nil {
-					return nil, apperr.Wrap(apperr.CodeForbidden, "run_command: HITL approval failed", err)
-				}
+		// 无授权凭据时用唯一的 shell 分析器 fail-closed（ADR-0122 决策一）；已有凭据说明 Decide 已判定过。
+		riskClass := policy.CmdSafe
+		if protocol.PermissionGrantFrom(ctx) == protocol.GrantNone {
+			home, _ := os.UserHomeDir()
+			v := policy.ClassifyCommand(args.Command, policy.CmdEnv{Roots: paths, Home: home, Cwd: workDir})
+			if v.Class >= policy.CmdDangerous {
+				slog.Error("run_command: ungranted command rejected", "cmd", args.Command, "class", v.Class.String(), "reason", v.Reason)
+				return nil, apperr.New(apperr.CodeForbidden,
+					fmt.Sprintf("run_command: command requires permission approval (%s: %s); run it through the permission decision first", v.Class, v.Reason))
 			}
-		case classifier.RiskWarn:
-			slog.Warn("run_command: elevated-risk command executing",
-				"cmd", args.Command, "reason", verdict.Reason)
+			riskClass = v.Class
 		}
 
 		slog.Info("run_command: executing",
 			"sandbox_enabled", sandboxEnabled,
 			"network", netPolicy,
-			"risk", verdict.Level.String(),
+			"risk", riskClass.String(),
 			"cmd", args.Command,
 			"dir", workDir,
 			"profile", pol.Profile,

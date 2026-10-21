@@ -153,6 +153,8 @@ pub(super) struct SandboxContextV2 {
     pub(super) max_memory_mb: Option<u64>,
     /// 读写均拒绝的路径（自保护/敏感），优先于 allowed_paths
     pub(super) deny_paths: Option<Vec<String>>,
+    /// 只拒写的路径（持久化落点/系统目录/项目 .git/hooks），仍可读
+    pub(super) deny_write_paths: Option<Vec<String>>,
 }
 
 /// native_sandbox_wrap_argv 响应：Go 侧用此构建 exec.Cmd

@@ -43,7 +43,7 @@
 - 记住的是**最窄规则**，作用域固定为当前项目：`cmd`（命令前缀，逐词精确匹配，`git` 不放行 `gitx`；多子命令程序取"程序+子命令"，其余取首个选项前至多 3 词；危险段取整段精确）、`domain`（精确域名，不含子域）、`dir`（工作目录外的写入目录）、`app`、`tool`（含 MCP 全名）。含运行期展开的命令不可记住。表 `approval_rules(id, project_id, kind, pattern, created_at, last_used_at, hit_count)`，随项目删除级联清除。
 - SSE `approval_required` 事件新增 `reason`、`hard_limit`、`remember_label`、`items[]`；`POST /v1/approvals/{id}/resolve` 新增 `remember`。审批超时一律拒绝（`CheckpointToolApproval`，任何模式）。无审批通道时需询问的调用直接拒绝（fail-closed）。
 - 每次自动/规则放行写审计（`permission_auto_allow`，含判定名或规则 ID）；用户批准/拒绝同样留痕；设置页"已记住的授权"逐条可删，项目列表显示"已记住 N 条授权"。
-- 放行后为污点 ≥ Medium 的节点铸造按内容哈希匹配的豁免令牌，让 L1 污点闸门与出口污点检查认可这次已授权的调用；工具内部的命令风险 HITL 对"完全访问/已记住授权"的调用让位（`RiskDeny` 硬拒绝不受影响），自动放行的安全命令仍保留工具内二次防线。
+- 放行后为污点 ≥ Medium 的节点铸造按内容哈希匹配的豁免令牌，让 L1 污点闸门与出口污点检查认可这次已授权的调用；工具内部的命令风险 HITL 对"完全访问/已记住授权"的调用让位（`RiskDeny` 硬拒绝不受影响）（ADR-0122 订正：工具内 HITL 与 `security/classifier` 已删除，无凭据兜底改由 `policy.ClassifyCommand` 判定，≥ 危险即拒绝），自动放行的安全命令仍保留工具内二次防线。
 
 ### 决策六：拒绝与硬限制的话术
 

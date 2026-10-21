@@ -1,0 +1,91 @@
+# Windows 敏感路径（NTFS 默认大小写不敏感；匹配逻辑对 windows 一律忽略大小写）。
+# %VAR% 取进程环境变量，未设置的条目跳过。
+
+# ───────────── credential ─────────────
+- class: credential
+  paths:
+    - '%APPDATA%\Microsoft\Credentials'
+    - '%LOCALAPPDATA%\Microsoft\Credentials'
+    - '%APPDATA%\Microsoft\Protect'
+    - '%LOCALAPPDATA%\Microsoft\Vault'
+    - '%PROGRAMDATA%\Microsoft\Vault'
+    - 'C:\Windows\System32\config'
+    - 'C:\Windows\System32\Microsoft\Protect'
+    - '%SystemRoot%\System32\config'
+    - '%APPDATA%\gcloud'
+  fragments: ['Microsoft\Credentials', 'Microsoft\Protect', 'Microsoft\Vault', 'System32\config', 'SAM', 'NTDS.dit']
+  note: DPAPI 主密钥、凭据管理器、Windows Vault、SAM/SYSTEM hive（T1555.004 / T1003.002）
+
+- class: credential
+  paths:
+    - '%LOCALAPPDATA%\Google\Chrome\User Data'
+    - '%LOCALAPPDATA%\Google\Chrome Beta\User Data'
+    - '%LOCALAPPDATA%\Chromium\User Data'
+    - '%LOCALAPPDATA%\Microsoft\Edge\User Data'
+    - '%LOCALAPPDATA%\BraveSoftware'
+    - '%APPDATA%\Opera Software'
+    - '%LOCALAPPDATA%\Vivaldi\User Data'
+    - '%APPDATA%\Mozilla\Firefox'
+    - '%LOCALAPPDATA%\Mozilla\Firefox\Profiles'
+    - '%LOCALAPPDATA%\Packages\Microsoft.MicrosoftEdge_*'
+  fragments: ['Login Data', 'Cookies', 'Local State', 'Web Data', 'key4.db', 'logins.json', 'cookies.sqlite', 'Local Extension Settings']
+  note: 浏览器整目录；Local State 含 DPAPI 加密的主密钥（T1555.003）
+
+- class: credential
+  paths:
+    - '%LOCALAPPDATA%\1Password'
+    - '%APPDATA%\1Password'
+    - '%APPDATA%\Bitwarden'
+    - '%APPDATA%\KeePassXC'
+    - '%APPDATA%\KeePass'
+    - '%APPDATA%\Dashlane'
+    - '%LOCALAPPDATA%\Dashlane'
+    - '%LOCALAPPDATA%\Enpass'
+    - '%APPDATA%\Enpass'
+  fragments: ['1Password', 'Bitwarden', 'KeePass', 'Dashlane', 'Enpass']
+  note: 密码管理器本地库；Enpass 的 Windows 落点待核实
+
+- class: credential
+  paths:
+    - '%APPDATA%\Exodus'
+    - '%APPDATA%\atomic'
+    - '%APPDATA%\Electrum'
+    - '%APPDATA%\Bitcoin'
+    - '%APPDATA%\Ethereum\keystore'
+    - '%APPDATA%\Ledger Live'
+  fragments: ['exodus.wallet', 'wallet.dat', 'keystore']
+  note: 桌面钱包
+
+- class: credential
+  paths:
+    - '%APPDATA%\Telegram Desktop'
+    - '%APPDATA%\Signal'
+    - '%APPDATA%\discord'
+    - '%APPDATA%\Slack'
+    - '%APPDATA%\WhatsApp'
+    - '%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_*'
+    - '%APPDATA%\Microsoft\Teams'
+  fragments: ['tdata', 'Telegram Desktop']
+  note: IM 会话令牌
+
+- class: credential
+  paths: ['%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine']
+  fragments: ['ConsoleHost_history.txt', 'PSReadLine']
+  note: PowerShell 命令历史
+
+# ───────────── persistence ─────────────
+- class: persistence
+  paths:
+    - '%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup'
+    - '%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\StartUp'
+    - '~\Documents\PowerShell'
+    - '~\Documents\WindowsPowerShell'
+    - '%APPDATA%\Microsoft\Windows\PowerShell'
+    - '%APPDATA%\Microsoft\Windows\SendTo'
+  fragments: ['Start Menu\Programs\Startup', 'WindowsPowerShell']
+  note: Startup 文件夹与 PowerShell profile（T1547.001 / T1546.013）
+
+# ───────────── system ─────────────
+- class: system
+  paths: ['C:\Windows', 'C:\Program Files', 'C:\Program Files (x86)', 'C:\ProgramData', '%SystemRoot%', '%ProgramFiles%', '%ProgramFiles(x86)%', '%PROGRAMDATA%']
+  note: 系统与程序目录

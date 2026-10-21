@@ -89,7 +89,20 @@ func cdHandler(c *cc) verdict {
 }
 
 func findHandler(c *cc) verdict {
-	if hasLong(c.args, "-delete") {
+	del := hasLong(c.args, "-delete")
+	if (del || findExecsRemoval(c.args)) && !findNarrowed(c.args) {
+		// 无收窄谓词时 find 的起点就是删除范围：按 rm 目标判（ADR-0122 决策三）。
+		// 带 -name/-mtime 等收窄谓词的（find . -name '*.pyc' -delete）是日常清理，保持危险级。
+		for _, start := range findStarts(c.args) {
+			if hasDyn(start) {
+				continue
+			}
+			if r := c.catastrophicTarget(start); r != "" {
+				return catastropheV(r)
+			}
+		}
+	}
+	if del {
 		return dangerV("find_delete")
 	}
 	for _, f := range []string{"-fprint", "-fprint0", "-fprintf", "-fls"} {
@@ -103,6 +116,52 @@ func findHandler(c *cc) verdict {
 		}
 	}
 	return safeV()
+}
+
+// findStarts find 的起点路径：跳过 -H/-L/-P 全局选项，取到第一个表达式词（-xxx ( ! ）为止；缺省为 "."。
+func findStarts(args []string) []string {
+	i := 0
+	for i < len(args) && (args[i] == "-H" || args[i] == "-L" || args[i] == "-P") {
+		i++
+	}
+	var out []string
+	for ; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") || a == "(" || a == "!" || a == ")" {
+			break
+		}
+		out = append(out, a)
+	}
+	if len(out) == 0 {
+		return []string{"."}
+	}
+	return out
+}
+
+// findNarrowed 表达式里有按名称/时间/大小等收窄匹配范围的谓词。-type 不算：-type f -delete 仍删光全部文件。
+func findNarrowed(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex", "-lname", "-ilname",
+			"-newer", "-anewer", "-cnewer", "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin", "-size", "-user",
+			"-group", "-perm", "-empty", "-samefile", "-newermt":
+			return true
+		}
+	}
+	return false
+}
+
+// findExecsRemoval -exec/-execdir/-ok/-okdir 之后的程序是删除类命令。
+func findExecsRemoval(args []string) bool {
+	for i, a := range args {
+		if (a == "-exec" || a == "-execdir" || a == "-ok" || a == "-okdir") && i+1 < len(args) {
+			switch baseProg(args[i+1]) {
+			case "rm", "rmdir", "unlink", "shred", "trash":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findExec 对 -exec 之后到 ; / + 为止的内层命令递归分类。

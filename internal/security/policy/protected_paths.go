@@ -3,13 +3,12 @@ package policy
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/polarisagi/polaris/internal/config"
 )
 
-// 路径分类单一事实源（ADR-0121 决策四）：自保护路径任何模式拒绝，敏感路径任何模式硬限制。
-// Decide、文件工具 guard、沙箱 DenyPaths 都从这里取清单，禁止各自维护。
+// 自保护路径生成（ADR-0121 决策四）：vault.key、config.toml、secrets/、data/ 等由 DataLayout
+// 派生，不进目录文件（路径随数据根重定向而变）。分类与沙箱清单统一见 pathcatalog.go。
 
 // withReal 同时收录各项的真实路径：macOS 上 /etc → /private/etc，调用方传入的往往已
 // EvalSymlinks，只比字面值会漏。
@@ -46,9 +45,8 @@ func selfLayouts() []config.DataLayout {
 	return out
 }
 
-// SelfProtectedPaths Polaris 自身的密钥、配置、开关与数据目录。
-func SelfProtectedPaths() []string {
-	layouts := selfLayouts()
+// selfPathsOf Polaris 自身的密钥、配置、开关与数据目录（读写都拒绝）。
+func selfPathsOf(layouts []config.DataLayout) []string {
 	base := make([]string, 0, len(layouts)*11)
 	for _, l := range layouts {
 		base = append(base,
@@ -59,47 +57,11 @@ func SelfProtectedPaths() []string {
 	return withReal(base)
 }
 
-func sensitivePathsFor(home string, write bool) []string {
-	var base []string
-	if home != "" {
-		base = append(base,
-			filepath.Join(home, ".ssh"), filepath.Join(home, ".gnupg"), filepath.Join(home, ".aws"),
-			filepath.Join(home, ".netrc"), filepath.Join(home, "Library", "Keychains"))
-	}
-	if write {
-		base = append(base, "/etc", "/usr", "/bin", "/sbin")
+// selfExecPathsOf Polaris 自身的可执行扩展目录（hooks/extensions/skills）：可读，写入等同持久化。
+func selfExecPathsOf(layouts []config.DataLayout) []string {
+	base := make([]string, 0, len(layouts)*3)
+	for _, l := range layouts {
+		base = append(base, l.Hooks, l.Extensions, l.Skills)
 	}
 	return withReal(base)
-}
-
-// SensitivePaths 凭据类目录；write=true 时追加系统目录（只读系统目录无害，如 cat /etc/hosts）。
-func SensitivePaths(write bool) []string {
-	home, _ := os.UserHomeDir()
-	return sensitivePathsFor(home, write)
-}
-
-func underAny(p string, roots []string) bool {
-	for _, r := range roots {
-		if p == r || strings.HasPrefix(p, r+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
-// PathClass 判定绝对路径 p 属于哪一类（前缀匹配：精确或紧跟分隔符）。
-func PathClass(p string, write bool) (self, sensitive bool) {
-	home, _ := os.UserHomeDir()
-	return pathClassFor(p, write, home)
-}
-
-func pathClassFor(p string, write bool, home string) (self, sensitive bool) {
-	p = filepath.Clean(p)
-	selfList, sensList := SelfProtectedPaths(), sensitivePathsFor(home, write)
-	// 软链指向受保护目录时，原路径与真实路径任一命中即算
-	for _, c := range []string{p, resolveReal(p)} {
-		self = self || underAny(c, selfList)
-		sensitive = sensitive || underAny(c, sensList)
-	}
-	return self, sensitive
 }

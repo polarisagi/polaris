@@ -202,7 +202,7 @@ func TestAgentic_E2EContract_FullAutonomyLifecycle(t *testing.T) {
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, runtime.GOOS, 0)
 	envelope := sandbox.NewExecEnvelope(&allowPolicyGate{}, router, 0, "", nil)
 	toolReg := tool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
-	err = builtin.RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, nil, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil)
+	err = builtin.RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, nil, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}

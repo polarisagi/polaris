@@ -60,7 +60,7 @@ internal/        28 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
   # L0 基础设施层
   store/         SQLite/SurrealDB 适配、MutationBus、repo/ search/ audit/
   observability/ metrics/ probe/（硬件探针 + Tier + FeatureGate）trace/ budget/
-  security/      taint/ policy/（Cedar 三层）token/ network/（SafeDialer）guard/ credential/ classifier/
+  security/      taint/ policy/（Cedar 三层）token/ network/（SafeDialer）guard/ credential/
   llm/           adapter/ stt/ tts/ audiorun/ audioassets/ embedonnx/ modelregistry/ safecall/
   ffi/ sysinfo/ downloader/ runtimeinfo/   Rust 桥接（purego）/ 硬件采集 / 通用下载 / 运行时状态（run/，ADR-0096）
   # 通用契约（所有层可引用）

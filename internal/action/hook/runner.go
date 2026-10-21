@@ -8,7 +8,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/security/classifier"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -47,14 +46,13 @@ type Deps struct {
 // Runner 按事件分发 hook。
 type Runner struct {
 	deps Deps
-	risk *classifier.CommandRiskClassifier
 }
 
 func NewRunner(deps Deps) *Runner {
 	if deps.PII == nil {
 		deps.PII = guard.NewPIIDetector()
 	}
-	return &Runner{deps: deps, risk: classifier.NewDefaultClassifier()}
+	return &Runner{deps: deps}
 }
 
 // SetMCPToolCaller / SetPromptEvaluator 启动期注入（MCPManager 与 LLM 路由晚于执行信封构造）。

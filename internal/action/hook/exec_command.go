@@ -2,13 +2,14 @@ package hook
 
 import (
 	"context"
+	"os"
 	"regexp"
 	"runtime"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/security/classifier"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -84,8 +85,11 @@ func (r *Runner) runCommand(ctx context.Context, bh boundHandler, in Input, payl
 	} else if req.Command, err = expandHookVars(command, src, cwd, false); err != nil {
 		return handlerResult{Err: err}
 	}
-	if v := r.risk.Classify(strings.TrimSpace(req.Command + " " + req.ExecPath + " " + strings.Join(req.Args, " "))); v.Level == classifier.RiskDeny {
-		return handlerResult{Err: apperr.New(apperr.CodeForbidden, "hook: command denied by risk classifier: "+v.Reason)}
+	// 第三方 hook 命令不经 Decide：灾难性命令（等同原 RiskDeny 语义）直接拒绝（ADR-0122 决策一）
+	home, _ := os.UserHomeDir()
+	if v := policy.ClassifyCommand(strings.TrimSpace(req.Command+" "+req.ExecPath+" "+strings.Join(req.Args, " ")),
+		policy.CmdEnv{Roots: nonEmpty(src.PluginRoot, src.PluginData, cwd), Home: home, Cwd: cwd}); v.Class == policy.CmdCatastrophic {
+		return handlerResult{Err: apperr.New(apperr.CodeForbidden, "hook: command denied by shell analyzer: "+v.Reason)}
 	}
 	res, err := sandbox.RunStdio(ctx, r.deps.Wrapper, req)
 	if err != nil {

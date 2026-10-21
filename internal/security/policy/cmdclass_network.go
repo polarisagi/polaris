@@ -8,7 +8,18 @@ func (t *cmdTable) addNetwork() {
 		v := dangerV("remote_access")
 		v.network = true
 		return v
-	}, "ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat", "telnet", "ftp", "socat")
+	}, "ssh", "scp", "sftp", "rsync", "telnet", "ftp", "socat")
+	t.set(func(c *cc) verdict {
+		// 开监听口 = 后门（ADR-0122 决策三安全姿态）；主动连出仍按远程访问判危险
+		if hasShort(c.args, 'l') || hasLong(c.args, "--listen") {
+			v := catastropheV("security_posture")
+			v.network = true
+			return v
+		}
+		v := dangerV("remote_access")
+		v.network = true
+		return v
+	}, "nc", "ncat", "netcat")
 }
 
 // curl/wget：带请求体/上传/非 GET 方法属于数据外发（危险）；纯 GET 视为未知（询问，可按程序记住）。

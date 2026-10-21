@@ -104,6 +104,24 @@ pub(super) fn append_deny_rules(profile: &mut String, deny_paths: &[String]) {
     }
 }
 
+/// 追加只拒写规则（持久化落点/系统目录）：读取仍由全局 file-read* 放行。同样必须位于所有 allow 之后，
+/// 才能压过 workspace subpath 授予的 file*（如项目内 .git/hooks）。
+#[cfg(target_os = "macos")]
+pub(super) fn append_deny_write_rules(profile: &mut String, deny_write_paths: &[String]) {
+    for p in deny_write_paths {
+        if p.is_empty() {
+            continue;
+        }
+        let is_file = std::fs::metadata(p).map(|m| !m.is_dir()).unwrap_or(false);
+        let kind = if is_file { "literal" } else { "subpath" };
+        profile.push_str(&format!(
+            "(deny file-write* ({} {}))\n",
+            kind,
+            sbpl_escape(p)
+        ));
+    }
+}
+
 /// SBPL 路径字符串转义（仅处理双引号和反斜杠）
 #[cfg(target_os = "macos")]
 pub(super) fn sbpl_escape(path: &str) -> String {
@@ -162,6 +180,7 @@ pub(super) fn build_seatbelt_profile_v2(
     network_domains: &[String],
     script_path: Option<&str>,
     deny_paths: &[String],
+    deny_write_paths: &[String],
 ) -> String {
     // 语义与 build_seatbelt_profile（V1）一致：写数据仅放行非普通文件（管道/tty），
     // 普通文件写入走 subpath 白名单；读取全局放行（macOS 15+ dyld 缓存迁移使 subpath
@@ -199,6 +218,7 @@ pub(super) fn build_seatbelt_profile_v2(
     // script_path 读权限已被上方全局 file-read* 覆盖，无需单独 literal 授权。
     let _ = script_path;
     append_deny_rules(&mut p, deny_paths);
+    append_deny_write_rules(&mut p, deny_write_paths);
 
     match network_policy {
         "allow" => {
@@ -248,6 +268,7 @@ pub(super) fn exec_seatbelt_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxRe
         &network_domains,
         ctx.script_path.as_deref(),
         ctx.deny_paths.as_deref().unwrap_or(&[]),
+        ctx.deny_write_paths.as_deref().unwrap_or(&[]),
     );
     let ulimit_prefix = build_ulimit_prefix(ctx.max_memory_mb);
 
@@ -296,6 +317,7 @@ pub(super) fn build_wrap_argv_seatbelt(
         &network_domains,
         ctx.script_path.as_deref(),
         ctx.deny_paths.as_deref().unwrap_or(&[]),
+        ctx.deny_write_paths.as_deref().unwrap_or(&[]),
     );
 
     let mut argv = vec!["-p".to_string(), profile];
@@ -355,7 +377,7 @@ mod tests {
     fn test_seatbelt_write_scoped_not_global() {
         for profile in [
             build_seatbelt_profile(&[], "/tmp", true, "/usr/bin", &[]),
-            build_seatbelt_profile_v2(&[], "/tmp", "deny", &[], None, &[]),
+            build_seatbelt_profile_v2(&[], "/tmp", "deny", &[], None, &[], &[]),
         ] {
             assert!(
                 profile.contains("(allow file-write-data (require-not (vnode-type REGULAR-FILE)))"),
@@ -388,7 +410,7 @@ mod tests {
         let allowed = vec!["/work/space".to_string()];
         for profile in [
             build_seatbelt_profile(&allowed, "/work/space", true, "/usr/bin", &deny),
-            build_seatbelt_profile_v2(&allowed, "/work/space", "deny", &[], None, &deny),
+            build_seatbelt_profile_v2(&allowed, "/work/space", "deny", &[], None, &deny, &[]),
         ] {
             let read_at = profile.find("(allow file-read*)").unwrap();
             let ws_at = profile
@@ -450,6 +472,67 @@ mod tests {
             assert_ne!(r.exit_code, 0, "deny 路径读取应失败: {}", r.output);
             assert!(!r.output.contains("TOPSECRET"));
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // deny file-write* 必须位于 allow 之后；真实 sandbox-exec 下目录可读不可写，workspace 其余部分可写。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_seatbelt_deny_write_rules_and_enforcement() {
+        let profile = build_seatbelt_profile_v2(
+            &["/work/space".to_string()],
+            "/work/space",
+            "deny",
+            &[],
+            None,
+            &[],
+            &["/work/space/.git/hooks".to_string()],
+        );
+        let ws_at = profile
+            .find("(allow file* (subpath \"/work/space\"))")
+            .unwrap();
+        let deny_at = profile
+            .find("(deny file-write* (subpath \"/work/space/.git/hooks\"))")
+            .unwrap();
+        assert!(deny_at > ws_at);
+        assert!(!profile.contains("(deny file-read*"));
+
+        if which_tool("sandbox-exec").is_none() {
+            return;
+        }
+        let base = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("sbdw_{}", std::process::id()));
+        let hooks = base.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), "ORIG").unwrap();
+        let run = |cmd: String| -> NativeSandboxResponse {
+            let ctx: SandboxContextV2 = serde_json::from_value(serde_json::json!({
+                "command": cmd,
+                "workdir": base.to_string_lossy(),
+                "allowed_paths": [base.to_string_lossy()],
+                "deny_write_paths": [hooks.to_string_lossy()],
+            }))
+            .unwrap();
+            exec_seatbelt_v2(&ctx).unwrap()
+        };
+        let r = run(format!("cat '{}'", hooks.join("pre-commit").display()));
+        assert_eq!(r.exit_code, 0, "{}", r.output);
+        assert!(r.output.contains("ORIG"), "只拒写目录应仍可读");
+        let r = run(format!("echo X > '{}'", hooks.join("pre-commit").display()));
+        assert_ne!(r.exit_code, 0, "写入 deny_write 路径应失败: {}", r.output);
+        let r = run(format!("echo X > '{}'", hooks.join("new-hook").display()));
+        assert_ne!(
+            r.exit_code, 0,
+            "在 deny_write 目录新建文件应失败: {}",
+            r.output
+        );
+        let r = run(format!("echo X > '{}'", base.join("ok.txt").display()));
+        assert_eq!(r.exit_code, 0, "workspace 其余部分应可写: {}", r.output);
+        assert_eq!(
+            std::fs::read_to_string(hooks.join("pre-commit")).unwrap(),
+            "ORIG"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -10,25 +10,11 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/run_command"
 )
 
-type mockHITLGateway struct{}
-
-func (m *mockHITLGateway) RequestApproval(ctx context.Context, action string, req map[string]any) error {
-	return nil
-}
-
-type mockHITLCounter struct{ called bool }
-
-func (m *mockHITLCounter) RequestApproval(ctx context.Context, action string, req map[string]any) error {
-	m.called = true
-	return nil
-}
-
 func TestMakeRunCommandFn_ExplicitGrant_NoWhitelist(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
-	hitlMock := &mockHITLGateway{}
 
-	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
+	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", pol)
 	ctx := protocol.WithPreApproved(context.Background())
 
 	// "ls" 不在 run_command 默认的构建工具白名单中（默认只允许 go/cargo/npm 等）
@@ -45,9 +31,8 @@ func TestMakeRunCommandFn_ExplicitGrant_NoWhitelist(t *testing.T) {
 func TestMakeRunCommandFn_StandardProfile_WhitelistEnforced(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileStandard)
-	hitlMock := &mockHITLGateway{}
 
-	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", hitlMock, pol)
+	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", pol)
 	ctx := context.Background()
 
 	// standard 档下 "ls" 必须被白名单拒绝
@@ -60,19 +45,15 @@ func TestMakeRunCommandFn_StandardProfile_WhitelistEnforced(t *testing.T) {
 	}
 }
 
-// 显式授权的高风险命令不再触发工具内 HITL。
-func TestMakeRunCommandFn_ExplicitGrant_SkipsInToolHITL(t *testing.T) {
+// 无凭据的危险命令被唯一的 shell 分析器拒绝；显式授权的不在工具内再分级（ADR-0122 决策一）。
+func TestMakeRunCommandFn_UngrantedDangerousRejected(t *testing.T) {
 	tmpDir := t.TempDir()
-	pol := policy.ProfilePolicy(policy.ProfileStandard)
-	hitlMock := &mockHITLCounter{}
+	pol := policy.ProfilePolicy(policy.ProfileFull)
+	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", pol)
 
-	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
-	ctx := protocol.WithPreApproved(context.Background())
-
-	// pip install 属于 RiskHITL；即使命令因未安装或网络失败，HITL 校验发生在执行前
-	_, _ = fn(ctx, []byte(`{"command":"pip install something"}`))
-
-	if hitlMock.called {
-		t.Error("explicit grant must not invoke in-tool RequestApproval")
+	// 白名单内的前缀（go）+ 管道进 shell：分析器判灾难性，无凭据必须拒绝
+	_, err := fn(context.Background(), []byte(`{"command":"go env | sh"}`))
+	if err == nil || !strings.Contains(err.Error(), "requires permission approval") {
+		t.Fatalf("ungranted dangerous command must be rejected, got %v", err)
 	}
 }

@@ -20,6 +20,8 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -121,16 +123,43 @@ func rustSandboxContextJSON(ctx protocol.SandboxContext) ([]byte, error) {
 	return goStringToC(string(b)), nil
 }
 
-// withDefaultDenyPaths 调用方未显式给出 DenyPaths 时注入默认清单（ADR-0121 决策五）。
-// 集中在 FFI 入口注入，使所有调用方自动生效，避免逐个遗漏。
-// 用 SensitivePaths(false)：write=true 会带上 /usr /bin /etc 等系统目录，而沙箱对它们
-// 只需写保护（seatbelt 默认不授写、bwrap 只读绑定），若读写全拒会让 bash 本身无法加载。
+// withDefaultDenyPaths 调用方未显式给出 DenyPaths / DenyWritePaths 时注入默认清单
+// （ADR-0121 决策五、ADR-0122 决策二）。集中在 FFI 入口注入，使所有调用方自动生效。
+// 系统目录与持久化落点只进 DenyWritePaths：沙箱对它们只需写保护，若读写全拒会让 bash 本身
+// 无法加载。项目内 .git/hooks 与 .git/config 无论调用方是否显式给了清单都会追加——
+// 它们是仓库内最易被利用的持久化点，不是调用方可以忘掉的细节。
 func withDefaultDenyPaths(ctx protocol.SandboxContext) protocol.SandboxContext {
-	if len(ctx.DenyPaths) > 0 {
-		return ctx
+	var rw, wo []string
+	if len(ctx.DenyPaths) == 0 || len(ctx.DenyWritePaths) == 0 {
+		rw, wo = policy.SandboxDenyPaths()
 	}
-	ctx.DenyPaths = mergeDenyPaths(policy.SelfProtectedPaths(), policy.SensitivePaths(false))
+	if len(ctx.DenyPaths) == 0 {
+		ctx.DenyPaths = mergeDenyPaths(rw)
+	}
+	if len(ctx.DenyWritePaths) == 0 {
+		ctx.DenyWritePaths = mergeDenyPaths(wo)
+	}
+	ctx.DenyWritePaths = mergeDenyPaths(ctx.DenyWritePaths, projectGitDenyPaths(ctx))
 	return ctx
+}
+
+// projectGitDenyPaths 从可读写根（AllowedPaths ∪ Workdir）推导 <root>/.git/hooks 与 <root>/.git/config，
+// 仅收已存在的路径（bwrap 对不存在的挂载点会失败；Seatbelt 对将来创建的不受保护，属已知缺口）。
+func projectGitDenyPaths(ctx protocol.SandboxContext) []string {
+	roots := append(append([]string{}, ctx.AllowedPaths...), ctx.Workdir)
+	var out []string
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		for _, rel := range []string{".git/hooks", ".git/config"} {
+			p := filepath.Join(r, filepath.FromSlash(rel))
+			if _, err := os.Lstat(p); err == nil {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 // mergeDenyPaths 按首次出现顺序去重合并。

@@ -187,6 +187,31 @@ pub(super) fn append_deny_args(args: &mut Vec<String>, deny_paths: &[String]) {
     args.extend(extra);
 }
 
+/// 把只拒写路径用 --ro-bind 覆盖回只读（须在全部 bind 之后调用）。
+/// 仅处理位于已读写绑定（--bind/--bind-try）目录之下的路径：其余路径要么本就只读绑定、
+/// 要么在 tmpfs 根里不可见；宿主不存在的路径跳过（bwrap 对不存在的挂载点会失败）。
+#[cfg(any(target_os = "linux", test))]
+pub(super) fn append_deny_write_args(args: &mut Vec<String>, deny_write_paths: &[String]) {
+    let mut rw_bound: Vec<String> = Vec::new();
+    for w in args.windows(3) {
+        if matches!(w[0].as_str(), "--bind" | "--bind-try") {
+            rw_bound.push(w[2].clone());
+        }
+    }
+    let mut seen = std::collections::HashSet::<&str>::new();
+    let mut extra: Vec<String> = Vec::new();
+    for p in deny_write_paths {
+        if p.is_empty() || !seen.insert(p.as_str()) || std::fs::metadata(p).is_err() {
+            continue;
+        }
+        if !rw_bound.iter().any(|b| Path::new(p).starts_with(b)) {
+            continue;
+        }
+        extra.extend(["--ro-bind".into(), p.clone(), p.clone()]);
+    }
+    args.extend(extra);
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn build_bwrap_args_v2(
     ctx: &SandboxContextV2,
@@ -295,6 +320,7 @@ pub(super) fn build_bwrap_args_v2(
     }
     // deny 必须在所有 bind 之后，才能覆盖其下的子路径
     append_deny_args(&mut args, ctx.deny_paths.as_deref().unwrap_or(&[]));
+    append_deny_write_args(&mut args, ctx.deny_write_paths.as_deref().unwrap_or(&[]));
     if !workdir.is_empty() {
         args.extend(["--chdir".into(), workdir.to_string()]);
     }
@@ -419,6 +445,44 @@ mod tests {
                 deny[0].clone(),
                 "--ro-bind".to_string(),
                 "/dev/null".to_string(),
+                deny[1].clone()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_deny_write_args_only_under_rw_binds() {
+        let dir = std::env::temp_dir().join(format!("bwdw_{}", std::process::id()));
+        let hooks = dir.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let cfg = dir.join(".git").join("config");
+        std::fs::write(&cfg, b"[core]").unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let mut args: Vec<String> = vec![
+            "--ro-bind-try".into(),
+            "/usr".into(),
+            "/usr".into(),
+            "--bind-try".into(),
+            root.clone(),
+            root.clone(),
+        ];
+        let deny = vec![
+            hooks.to_string_lossy().to_string(),
+            cfg.to_string_lossy().to_string(),
+            dir.join("missing").to_string_lossy().to_string(),
+            "/usr".to_string(),
+            "/unbound/elsewhere".to_string(),
+        ];
+        append_deny_write_args(&mut args, &deny);
+        assert_eq!(
+            &args[6..],
+            &[
+                "--ro-bind".to_string(),
+                deny[0].clone(),
+                deny[0].clone(),
+                "--ro-bind".to_string(),
+                deny[1].clone(),
                 deny[1].clone()
             ]
         );

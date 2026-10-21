@@ -38,7 +38,7 @@ func TestR2_02_SandboxEscape_BackgroundAndPersistent(t *testing.T) {
 			jobs0, _ := jm.ListJobs("")
 			initialJobs := len(jobs0)
 
-			fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", &mockHITLGateway{}, pol)
+			fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", pol)
 			outBytes, err := fn(ctx, []byte(`{"command":"sleep 1","background":true}`))
 
 			jobs1, _ := jm.ListJobs("")
@@ -79,7 +79,7 @@ func TestR2_02_SandboxEscape_BackgroundAndPersistent(t *testing.T) {
 
 		// 2. 持久终端模式 (session_id != "")
 		t.Run(p.name+"_persistent", func(t *testing.T) {
-			fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyDeny, "", &mockHITLGateway{}, pol)
+			fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyDeny, "", pol)
 			_, err := fn(ctx, []byte(`{"command":"echo test","session_id":"test-sess"}`))
 
 			switch p.profile {

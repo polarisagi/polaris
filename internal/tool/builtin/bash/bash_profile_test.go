@@ -13,22 +13,12 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
 )
 
-type mockHITLGateway struct {
-	called bool
-}
-
-func (m *mockHITLGateway) RequestApproval(ctx context.Context, action string, req map[string]any) error {
-	m.called = true
-	return nil
-}
-
 func TestMakeBashFn_FullProfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
-	hitlMock := &mockHITLGateway{}
 
 	// 显式授权：即使 sandboxEnabled=true，实际也按宿主直接执行（ADR-0121 决策三）
-	fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", hitlMock, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", pol)
 	ctx := protocol.WithPreApproved(context.Background())
 
 	outBytes, err := fn(ctx, []byte(`{"command":"echo hello_full_profile"}`))
@@ -52,10 +42,9 @@ func TestMakeBashFn_FullProfile(t *testing.T) {
 func TestMakeBashFn_HardenedProfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileHardened)
-	hitlMock := &mockHITLGateway{}
 
 	// hardened 档：即使传入 sandboxEnabled=false，也会强制 effectiveSandbox=true
-	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", hitlMock, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", pol)
 	ctx := context.Background()
 
 	// 强制走容器沙箱：在无 bubblewrap/Seatbelt 环境或测试环境中 ExecInSandbox 尝试调用
@@ -76,7 +65,7 @@ func TestMakeBashFn_HardenedProfile(t *testing.T) {
 func TestMakeBashFn_FullProfile_NoGrantDoesNotRunOnHost(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
-	fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", &mockHITLGateway{}, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", pol)
 	outBytes, err := fn(context.Background(), []byte(`{"command":"echo x"}`))
 	if err != nil {
 		return // 测试环境无沙箱后端时 setup 失败也说明没有落到宿主
@@ -87,30 +76,34 @@ func TestMakeBashFn_FullProfile_NoGrantDoesNotRunOnHost(t *testing.T) {
 	}
 }
 
-// 显式授权的高风险命令不再触发工具内 HITL；无凭据时照常询问。
-func TestMakeBashFn_ExplicitGrantSkipsInToolHITL(t *testing.T) {
+// 显式授权的危险命令直接放行（Decide 已判定）；无凭据时由唯一的 shell 分析器 fail-closed 拒绝（ADR-0122 决策一）。
+func TestMakeBashFn_GrantDecidesDangerousCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileStandard)
-	hitlMock := &mockHITLGateway{}
-	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", pol)
 
 	testDir := filepath.Join(tmpDir, "sub")
 	_ = os.MkdirAll(testDir, 0o755)
 	_ = os.WriteFile(filepath.Join(testDir, "dummy.txt"), []byte("ok"), 0o644)
 
+	outside := t.TempDir()
+	if _, err := fn(context.Background(), []byte(`{"command":"rm -rf `+outside+`"}`)); err == nil {
+		t.Fatal("no grant: rm outside workspace (dangerous) must be rejected")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("rejected command must not have run: %v", err)
+	}
+
 	ctx := protocol.WithPreApproved(context.Background())
 	if _, err := fn(ctx, []byte(`{"command":"rm -rf `+testDir+`"}`)); err != nil {
 		t.Fatalf("explicit grant: rm should succeed: %v", err)
-	}
-	if hitlMock.called {
-		t.Error("explicit grant must not invoke in-tool RequestApproval")
 	}
 }
 
 func TestMakeBashFn_HardenedProfile_BackgroundAndPersistentRejected(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileHardened)
-	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", nil, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", pol)
 	ctx := context.Background()
 
 	// 1. 后台任务模式在 hardened 档下被明确拒绝（R3-08）
@@ -136,7 +129,7 @@ func TestMakeBashFn_HardenedProfile_BackgroundAndPersistentRejected(t *testing.T
 func TestMakeBashFn_HardenedProfile_ExplicitGrantStillContainer(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileHardened)
-	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", &mockHITLGateway{}, pol)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", pol)
 	ctx := protocol.WithPreApproved(context.Background())
 
 	outBytes, err := fn(ctx, []byte(`{"command":"echo hello"}`))

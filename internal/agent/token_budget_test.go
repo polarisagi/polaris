@@ -73,7 +73,7 @@ func budgetRegistry(t *testing.T) *tool.InMemoryToolRegistry {
 		}
 	}
 	must(builtin.RegisterBuiltinTools(sbx, reg, []string{t.TempDir()}, d, false, protocol.NetPolicyDeny, "", &config.Config{},
-		nil, "", nil, nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil))
+		nil, "", nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil))
 	must(builtin.RegisterMemoryTools(sbx, reg, nil, nil, nil, nil, nil))
 	must(builtin.RegisterSkillTools(sbx, reg, nil, nil))
 	must(builtin.RegisterDelegationTools(sbx, reg, nil, nil))

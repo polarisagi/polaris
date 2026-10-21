@@ -77,6 +77,8 @@ const (
 	ReasonAskMode               = "ask_mode"
 	ReasonSelfProtected         = "self_protected"
 	ReasonSensitivePath         = "sensitive_path"
+	ReasonPersistencePath       = "persistence_path"
+	ReasonSystemPath            = "system_path"
 )
 
 type opKind int
@@ -102,9 +104,10 @@ type operation struct {
 	app      string // UI 操控的应用或站点
 	highRisk bool
 	netCap   bool // 能力上可联网
-	// selfHit / sensHit：读写目标（或 shell 中静态可解析的路径词）落入自保护 / 敏感路径。
-	selfHit bool
-	sensHit bool
+	// selfHit / sensReason：读写目标（或 shell 中静态可解析的路径词）落入自保护 / 目录文件敏感类；
+	// sensReason 为对应的硬限制原因码（sensitive_path / persistence_path / system_path），空串表示未命中。
+	selfHit    bool
+	sensReason string
 }
 
 // Decide 对一次工具调用给出授权判定。argTaint 为参数污点（取计划内最高污点）。
@@ -141,11 +144,11 @@ func hardLimit(op operation, taint types.TaintLevel, ctx Context) (Decision, boo
 	hard := func(reason string) (Decision, bool) {
 		return Decision{Verdict: VerdictAsk, Reason: reason, HardLimit: true}, true
 	}
-	if op.sensHit {
-		return hard(ReasonSensitivePath)
+	if op.sensReason != "" {
+		return hard(op.sensReason)
 	}
 	if op.kind == opShell && op.cmd.Class == CmdCatastrophic {
-		return hard(ReasonCatastrophicCommand)
+		return hard(catastropheReason(op.cmd.Reason))
 	}
 	if ctx.SecretFlow && op.reachesNetwork() {
 		return hard(ReasonDataExfiltration)

@@ -66,7 +66,7 @@ func TestBuiltinTools_StrReplace(t *testing.T) {
 
 func TestBuiltinTools_Bash(t *testing.T) {
 	tmpDir := t.TempDir()
-	bashFn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, policy.StandardPolicy())
+	bashFn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", policy.StandardPolicy())
 	ctx := context.Background()
 
 	args := `{"command": "echo hello"}`
@@ -80,7 +80,7 @@ func TestBuiltinTools_Bash(t *testing.T) {
 
 func TestBuiltinTools_RunCommand(t *testing.T) {
 	tmpDir := t.TempDir()
-	runFn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, policy.StandardPolicy())
+	runFn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", policy.StandardPolicy())
 	ctx := context.Background()
 
 	args := `{"command": "echo hello"}`

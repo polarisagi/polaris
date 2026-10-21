@@ -12,49 +12,42 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// 路径分类清单的单一事实源是 policy 包（ADR-0121 决策四）：自保护路径任何情况拒绝，
-// 敏感路径仅在调用没有授权凭据时拒绝（有凭据的调用已由 policy.Decide 判定过，敏感目标
-// 会在那里被硬限制询问）。
+// 路径分类清单的单一事实源是 policy.PathCatalog（ADR-0121 决策四、ADR-0122 决策二）：
+// 自保护路径任何情况拒绝；其余类别（凭据/持久化/系统/文件名）仅在调用没有授权凭据时拒绝
+// （有凭据的调用已由 policy.Decide 判定过，命中目标会在那里被硬限制询问）。
 
 func forbiddenErr(path string) error {
 	return apperr.New(apperr.CodeForbidden, fmt.Sprintf("path_guard: path is in forbidden directory: %s", path))
 }
 
-func hasPrefixPath(clean string, dirs []string) bool {
-	for _, f := range dirs {
-		if clean == f || strings.HasPrefix(clean, f+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
 // CheckSelfProtected 自保护路径（vault.key、config.toml、secrets/、data/…）在任何情况下拒绝。
 func CheckSelfProtected(path string) error {
-	if hasPrefixPath(filepath.Clean(path), policy.SelfProtectedPaths()) {
+	if policy.ClassifyPath(path, false, nil).Self {
 		return forbiddenErr(path)
 	}
 	return nil
 }
 
-// SelfProtectedMatcher 返回自保护路径匹配函数（清单只算一次，供目录遍历逐项过滤）。
+// SelfProtectedMatcher 返回自保护路径匹配函数（目录只构造一次，供目录遍历逐项过滤）。
 func SelfProtectedMatcher() func(path string) bool {
-	dirs := policy.SelfProtectedPaths()
-	return func(path string) bool { return hasPrefixPath(filepath.Clean(path), dirs) }
+	c := policy.NewPathCatalog()
+	return func(path string) bool { return c.Classify(path, false, nil).Self }
 }
 
-// CheckForbiddenPath 自保护恒拒 + 敏感路径拒绝（无凭据语义，写口径；也是 CheckScopeRoot 的判据）。
+// CheckForbiddenPath 自保护恒拒 + 凭据/持久化/系统目录拒绝（无凭据语义，写口径；也是 CheckScopeRoot 的判据）。
+// 不看文件名类（basename）：它只对可信根外的文件有意义，而本函数的入参是将成为可信根的目录。
 func CheckForbiddenPath(path string) error {
-	clean := filepath.Clean(path)
-	if hasPrefixPath(clean, policy.SelfProtectedPaths()) || hasPrefixPath(clean, policy.SensitivePaths(true)) {
+	pc := policy.ClassifyPath(path, true, nil)
+	if pc.Self || pc.Credential || pc.Persistence || pc.System {
 		return forbiddenErr(path)
 	}
 	return nil
 }
 
-// forbiddenDirs 自保护 ∪ 敏感（写口径）：项目根的祖先判据用。
+// forbiddenDirs 自保护 ∪ 凭据 ∪ 持久化 ∪ 系统目录（项目根的祖先判据用）。
 func forbiddenDirs() []string {
-	return append(policy.SelfProtectedPaths(), policy.SensitivePaths(true)...)
+	rw, wo := policy.SandboxDenyPaths()
+	return append(rw, wo...)
 }
 
 // CheckScopeRoot 校验一个目录能否作为会话级文件访问根（项目工作目录，ADR-0097 决策五）。
@@ -173,7 +166,7 @@ func CheckReadablePath(ctx context.Context, path string, allowedPaths []string) 
 }
 
 // CheckWritablePath 写入类工具的统一路径门控，语义同 CheckReadablePath，敏感清单取写口径
-// （追加 /etc /usr /bin /sbin）。已存在路径（或其最近已存在祖先）按符号链接解析后的真实路径
+// （追加持久化落点与系统目录）。已存在路径（或其最近已存在祖先）按符号链接解析后的真实路径
 // 再校验一次，防止白名单内的软链指向受保护目录。
 func CheckWritablePath(ctx context.Context, path string, allowedPaths []string) error {
 	return checkPath(ctx, path, allowedPaths, true)
@@ -196,16 +189,13 @@ func checkPath(ctx context.Context, path string, allowedPaths []string, write bo
 	if err := CheckAllowedPath(path, allowedPaths); err != nil {
 		return err
 	}
-	sens := policy.SensitivePaths(write)
-	if hasPrefixPath(filepath.Clean(path), sens) {
+	// 目录内部同时按原路径与真实路径匹配；文件名类仅对白名单（可信根）之外的路径生效
+	if policy.ClassifyPath(path, write, allowedPaths).Blocked() {
 		return forbiddenErr(path)
 	}
 	if hasReal && real != filepath.Clean(path) {
 		if err := CheckAllowedPath(real, resolveAll(allowedPaths)); err != nil {
 			return apperr.Wrap(apperr.CodeForbidden, "path_guard: symlink escapes allowed paths", err)
-		}
-		if hasPrefixPath(real, sens) {
-			return forbiddenErr(real)
 		}
 	}
 	return nil
