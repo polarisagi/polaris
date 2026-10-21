@@ -71,6 +71,7 @@ type Agent struct {
 	handoffPoster      HandoffPoster            // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
 	subagentCtrl       SubagentController       // 子智能体控制器（Pool 实现），用于直接插话与中止控制（R2-14）
 	subagentIDsMu      sync.Mutex               // 保护 spawnedSubagentIDs
+	preSubs            preSubscribeTable        // 子任务事件预订阅表（先订阅后投递）
 	spawnedSubagentIDs []string                 // 当前 Agent 派生过的全部子智能体 ID，用于并发统计（R2-14）
 	personaRefiner     *agentctx.PersonaRefiner // 用户画像（M05 §2.3）；会话层首次渲染时快照稳定维度，nil 时不渲染
 	// profileTools 子 Agent 角色的工具限制（SetAgentProfile 写入；执行入口与目录视图读取）。

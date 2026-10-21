@@ -176,8 +176,8 @@
 ### 症状 28：CI/Linux 环境下 CodeAct 测试报 bwrap unavailable 或缺少 subagent_output 事件
 - **症状特征**：CI `make test-ci` 报错 `bwrap unavailable (bwrap not found...)`，或 `TestR5_01_SubagentOutputNotInParentReply` 报 `缺少含 CHILD-OUT 的 subagent_output 状态事件`（本地 macOS 正常）。
 - **归类模块**：M08 / M04 / CI
-- **根因类别**：1) CI `test` 任务缺失 `bubblewrap` 依赖包安装；2) 子任务执行过快导致流式事件产生早于父智能体 `SubscribeTaskEvents`，或终态唤醒退出前未排空 channel 缓冲。
-- **排查起点**：`.github/workflows/ci.yml` `test` 任务；`internal/execute/orchestrator/sqlite_blackboard.go`（任务事件滑动缓冲与订阅回放）；`internal/agent/agent_subagents_watcher.go`（终态唤醒前同步排空事件缓冲）。
+- **根因类别**：1) CI `test` 任务缺失 `bubblewrap` 依赖包安装；2) 子任务执行过快导致流式事件产生早于父智能体 `SubscribeTaskEvents`（须先订阅后投递：`preSubscribeChild` 在 PostTask 前预订阅），或终态唤醒前未排空 channel（每个子 channel 须单读者，转发协程排空退出后才唤醒 FSM）。
+- **排查起点**：`.github/workflows/ci.yml` `test` 任务；`internal/agent/agent_presubscribe.go`（预订阅表）、`internal/agent/agent_subagents.go`（PostTask 前预订阅）；`internal/agent/agent_subagents_watcher.go`、`internal/agent/agent_handoff.go`（转发协程独占读取 + 终态唤醒前排空）。
 
 **维护规范**：
 

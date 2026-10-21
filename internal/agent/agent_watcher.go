@@ -36,4 +36,5 @@ func (a *Agent) cancelHandoffWatcher() {
 // Close 释放 Agent 相关资源，确保所有后台 watcher 退出（R2-04）。
 func (a *Agent) Close() {
 	a.cancelHandoffWatcher()
+	a.releaseAllPreSubs()
 }

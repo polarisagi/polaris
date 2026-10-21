@@ -129,7 +129,11 @@ jobs:
           name: rust-libs
           path: rust/substrate/target/release
       - name: Install Bubblewrap
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04+ 默认限制非特权 user namespace，bwrap 需要它
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true && echo "bwrap ok"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: spec consistency (state.yaml SSoT)
@@ -221,7 +225,11 @@ jobs:
           name: rust-libs
           path: rust/substrate/target/release
       - name: Install Bubblewrap
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04+ 默认限制非特权 user namespace，bwrap 需要它
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true && echo "bwrap ok"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Copy Rust libs

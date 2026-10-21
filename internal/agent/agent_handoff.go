@@ -212,22 +212,10 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 		// 就会丢掉委派开头那批事件（恰恰是用户最需要看到"它动起来了"的时刻）。
 		// 订阅本身无 DB IO，提前注册不增加成本；即使随后 peekAndWake 命中终态
 		// 直接返回，defer 也会立刻注销，不会残留。
-		childEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(childTaskID)
+		// 优先接管 SpawnAgents 在 PostTask 之前建立的预订阅（不丢早期事件）；
+		// 恢复路径无预订阅，现场订阅。
+		childEvents, cancelSub := a.subscribeChildEvents(childTaskID)
 		defer cancelSub()
-
-		drainEvents := func() {
-			for {
-				select {
-				case ev, ok := <-childEvents:
-					if !ok {
-						return
-					}
-					a.publishStreamEvent(ev)
-				default:
-					return
-				}
-			}
-		}
 
 		events, err := a.handoffPoster.Subscribe(ctx)
 		if err != nil {
@@ -242,8 +230,7 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 
 		// 订阅就绪后立刻补一次 Peek：覆盖"投递委派任务到订阅生效之间子任务
 		// 已终态"的丢事件窗口（与 reconciler_handoff.go 同一 idiom）。
-		if a.peekAndWake(ctx, childTaskID) {
-			drainEvents()
+		if a.peekAndWake(ctx, childTaskID, childEvents) {
 			return
 		}
 
@@ -280,20 +267,38 @@ func (a *Agent) loopHandoffEvents(ctx context.Context, childTaskID string, event
 			}
 			if ev.Type == "task_completed" || ev.Type == "task_failed" {
 				metrics.RecordAgentHandoffWake(ctx, "event")
+				a.drainChildEvents(childEvents)
 				a.asyncIntent(types.TriggerAgentHandoffDone)
 				return
 			}
 		case <-safety.C:
-			if a.peekAndWake(ctx, childTaskID) {
+			if a.peekAndWake(ctx, childTaskID, childEvents) {
 				return
 			}
 		}
 	}
 }
 
+// drainChildEvents 非阻塞排空并转发 ch 中已到达的子事件。
+// 为什么：终态唤醒会让 FSM 转移并可能结束回合，唤醒前必须先转发完，否则尾部事件丢失/乱序。
+// 调用方须是该 channel 的唯一读者。
+func (a *Agent) drainChildEvents(ch <-chan types.AgentStreamEvent) {
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			a.publishStreamEvent(ev)
+		default:
+			return
+		}
+	}
+}
+
 // peekAndWake 查询子任务快照，已终态则记录 metrics.RecordAgentHandoffWake
 // "peek"、投递唤醒 Trigger 并返回 true。
-func (a *Agent) peekAndWake(ctx context.Context, childTaskID string) bool {
+func (a *Agent) peekAndWake(ctx context.Context, childTaskID string, childEvents <-chan types.AgentStreamEvent) bool {
 	snap, err := a.handoffPoster.PeekTask(ctx, childTaskID)
 	if err != nil {
 		slog.WarnContext(ctx, "agent: handoff peek failed", "task_id", childTaskID, "err", err)
@@ -304,6 +309,7 @@ func (a *Agent) peekAndWake(ctx context.Context, childTaskID string) bool {
 	}
 	if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
 		metrics.RecordAgentHandoffWake(ctx, "peek")
+		a.drainChildEvents(childEvents)
 		a.asyncIntent(types.TriggerAgentHandoffDone)
 		return true
 	}
@@ -341,6 +347,7 @@ func (a *Agent) pollHandoffCompletion(ctx context.Context, childTaskID string, i
 			}
 			if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
 				metrics.RecordAgentHandoffWake(ctx, "poll_fallback")
+				a.drainChildEvents(childEvents)
 				a.asyncIntent(types.TriggerAgentHandoffDone)
 				return
 			}

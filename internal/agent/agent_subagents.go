@@ -47,6 +47,7 @@ func (a *Agent) countRunningSubagents(ctx context.Context) int {
 }
 
 func (a *Agent) cascadeCancelSubagents(ctx context.Context, ids []string) {
+	a.cancelPreSubs(ids...)
 	for _, id := range ids {
 		if a.handoffPoster != nil {
 			if fErr := a.handoffPoster.FailTask(ctx, id, a.ID, []byte("cascade cancelled due to post failure of sibling task")); fErr != nil {
@@ -97,6 +98,9 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 		namespace = a.sCtx.SessionID
 	}
 
+	// wait 模式在投递前即可知：none 无 watcher 接管，预订阅会泄漏。
+	waitMode := strings.ToLower(strings.TrimSpace(args.Wait))
+
 	childIDs := make([]string, 0, len(args.Tasks))
 	var postedIDs []string
 	for i, task := range args.Tasks {
@@ -139,7 +143,12 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 			ParentTaskID: a.ID,
 		}
 
+		// 先订阅后投递：子任务可能被极速认领，事件早于订阅会被丢弃。
+		if waitMode != "none" {
+			a.preSubscribeChild(childID)
+		}
 		if pErr := a.handoffPoster.PostTask(ctx, entry); pErr != nil {
+			a.cancelPreSubs(childID)
 			a.cascadeCancelSubagents(ctx, postedIDs)
 			cancelMsg := fmt.Sprintf("spawn_agents: post task failed on %s", childID)
 			if len(postedIDs) > 0 {
@@ -159,7 +168,6 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 	a.subagentIDsMu.Unlock()
 
 	// 3. wait 模式处理
-	waitMode := strings.ToLower(strings.TrimSpace(args.Wait))
 	if waitMode == "none" {
 		return childIDs, nil
 	}

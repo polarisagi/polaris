@@ -155,7 +155,14 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 	// 完成时投递 TriggerAgentHandoffDone 恢复执行。
 	if a.sm.Current() == types.AgentStateAwaitAgent {
 		a.persistHandoffWaitCheckpoint(ctx)
-		a.watchHandoffCompletion(a.sCtx.HandoffTaskID)
+		// SpawnAgents 已启动覆盖全部子任务的 watcher 时不得再被单子任务 watcher 顶替
+		// （registerHandoffWatcher 会取消旧者，造成已转发/预订阅事件丢失）。
+		a.sCtx.Mu.RLock()
+		watching := a.sCtx.HandoffWatchCancel != nil
+		a.sCtx.Mu.RUnlock()
+		if !watching {
+			a.watchHandoffCompletion(a.sCtx.HandoffTaskID)
+		}
 		return "", nil, true
 	}
 

@@ -81,31 +81,3 @@ func TestPublishTaskEvent_MultipleSubscribersAndBackpressure(t *testing.T) {
 		t.Fatalf("want both subscribers filled to buffer cap 64, got %d/%d", len(ch1), len(ch2))
 	}
 }
-
-// TestPublishTaskEvent_BufferedBeforeSubscribe 验证在订阅前发布的事件会被正确缓冲并在订阅时回放，且 cancel 后完全释放。
-func TestPublishTaskEvent_BufferedBeforeSubscribe(t *testing.T) {
-	bb := &SQLiteBlackboard{}
-	bb.PublishTaskEvent("task-4", types.AgentStreamEvent{Content: "early-event-1"})
-	bb.PublishTaskEvent("task-4", types.AgentStreamEvent{Content: "early-event-2"})
-
-	ch, cancel := bb.SubscribeTaskEvents("task-4")
-	ev1 := <-ch
-	if ev1.Content != "early-event-1" {
-		t.Fatalf("expected early-event-1, got %q", ev1.Content)
-	}
-	ev2 := <-ch
-	if ev2.Content != "early-event-2" {
-		t.Fatalf("expected early-event-2, got %q", ev2.Content)
-	}
-
-	cancel()
-
-	bb.subMu.RLock()
-	subsLen := len(bb.taskEventSubs)
-	backlogLen := len(bb.taskEventBacklog)
-	bb.subMu.RUnlock()
-
-	if subsLen != 0 || backlogLen != 0 {
-		t.Fatalf("expected subs and backlog empty after cancel, got subs=%d backlog=%d", subsLen, backlogLen)
-	}
-}

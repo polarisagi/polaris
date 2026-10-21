@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -21,46 +22,30 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 	concurrent.SafeGo(watchCtx, "agent.subagents_watcher", func(ctx context.Context) {
 		defer a.cancelHandoffWatcher()
 
-		type subInfo struct {
-			ch     <-chan types.AgentStreamEvent
-			cancel func()
-		}
-		subs := make([]subInfo, 0, len(childIDs))
+		// 每个子 channel 由各自转发协程独占读取（单读者），终态时 watcher 通知其
+		// 排空后退出并等待全部结束，之后才唤醒 FSM，保证事件不丢且顺序不乱。
+		done := make(chan struct{})
+		var wg sync.WaitGroup
+		cancels := make([]func(), 0, len(childIDs))
 		defer func() {
-			for _, s := range subs {
-				s.cancel()
+			for _, c := range cancels {
+				c()
 			}
 		}()
 
-		drainEvents := func(ch <-chan types.AgentStreamEvent) {
-			for {
-				select {
-				case ev, ok := <-ch:
-					if !ok {
-						return
-					}
-					a.publishStreamEvent(ev)
-				default:
-					return
-				}
-			}
-		}
-
-		drainAll := func() {
-			for _, s := range subs {
-				drainEvents(s.ch)
-			}
-		}
-
 		for _, cid := range childIDs {
-			cID := cid
-			cEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(cID)
-			subs = append(subs, subInfo{ch: cEvents, cancel: cancelSub})
+			// 优先接管 SpawnAgents 在 PostTask 之前建立的预订阅。
+			cEvents, cancelSub := a.subscribeChildEvents(cid)
+			cancels = append(cancels, cancelSub)
+			wg.Add(1)
 			concurrent.SafeGo(ctx, "agent.subagents_event_forwarder", func(subCtx context.Context) {
+				defer wg.Done()
 				for {
 					select {
 					case <-subCtx.Done():
-						drainEvents(cEvents)
+						return
+					case <-done:
+						a.drainChildEvents(cEvents)
 						return
 					case ev, ok := <-cEvents:
 						if !ok {
@@ -72,15 +57,21 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 			})
 		}
 
+		// finish 通知转发协程排空退出，全部结束后才唤醒 FSM。
+		finish := func() {
+			close(done)
+			wg.Wait()
+			a.asyncIntent(types.TriggerAgentHandoffDone)
+		}
+
 		events, err := a.handoffPoster.Subscribe(ctx)
 		if err != nil {
-			a.pollSubagentsCompletion(ctx, childIDs, drainAll)
+			a.pollSubagentsCompletion(ctx, childIDs, finish)
 			return
 		}
 
 		if a.peekAllSubagentsDone(ctx, childIDs) {
-			drainAll()
-			a.asyncIntent(types.TriggerAgentHandoffDone)
+			finish()
 			return
 		}
 
@@ -90,18 +81,15 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 		for {
 			select {
 			case <-ctx.Done():
-				drainAll()
 				return
 			case <-events:
 				if a.peekAllSubagentsDone(ctx, childIDs) {
-					drainAll()
-					a.asyncIntent(types.TriggerAgentHandoffDone)
+					finish()
 					return
 				}
 			case <-ticker.C:
 				if a.peekAllSubagentsDone(ctx, childIDs) {
-					drainAll()
-					a.asyncIntent(types.TriggerAgentHandoffDone)
+					finish()
 					return
 				}
 			}
@@ -109,22 +97,17 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 	})
 }
 
-func (a *Agent) pollSubagentsCompletion(ctx context.Context, childIDs []string, drainAll func()) {
+// pollSubagentsCompletion Subscribe 不可用时的轮询降级；全部终态后走同一收尾逻辑 finish。
+func (a *Agent) pollSubagentsCompletion(ctx context.Context, childIDs []string, finish func()) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			if drainAll != nil {
-				drainAll()
-			}
 			return
 		case <-ticker.C:
 			if a.peekAllSubagentsDone(ctx, childIDs) {
-				if drainAll != nil {
-					drainAll()
-				}
-				a.asyncIntent(types.TriggerAgentHandoffDone)
+				finish()
 				return
 			}
 		}
