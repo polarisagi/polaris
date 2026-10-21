@@ -4,6 +4,10 @@ yanked = "warn"
 ignore = [
     "RUSTSEC-2025-0141",
     "RUSTSEC-2023-0071",
+    # webpki-roots 0.26.11 仅经 surrealdb→tokio-tungstenite 0.28 引入（0.26 线无修复版，修复在 >=1.0.10）；
+    # 本项目只用 surrealdb 嵌入式引擎（kv-mem/kv-rocksdb），不经该依赖发起公网 TLS 连接。
+    # 直接依赖链上的 rustls-webpki / webpki-roots 1.x 已升级到修复版。surrealdb 升级到不再依赖 0.26 后删除本条。
+    "RUSTSEC-2026-0381",
 ]
 
 [bans]
