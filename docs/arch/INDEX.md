@@ -173,6 +173,12 @@
 - **根因类别**：执行层以更窄边界二次否决 `policy.Decide` 的放行（旧 `trust_profile` 启动期字段与 `permission_mode` 不联动）。
 - **排查起点**：ADR-0121 决策二/三；`internal/agent/agent_permission.go`（grant 记录）、`internal/tool/builtin/guard/guard.go`、`internal/tool/builtin/bash/bash.go`。
 
+### 症状 28：CI/Linux 环境下 CodeAct 测试报 bwrap unavailable 或缺少 subagent_output 事件
+- **症状特征**：CI `make test-ci` 报错 `bwrap unavailable (bwrap not found...)`，或 `TestR5_01_SubagentOutputNotInParentReply` 报 `缺少含 CHILD-OUT 的 subagent_output 状态事件`（本地 macOS 正常）。
+- **归类模块**：M08 / M04 / CI
+- **根因类别**：1) CI `test` 任务缺失 `bubblewrap` 依赖包安装；2) 子任务执行过快导致流式事件产生早于父智能体 `SubscribeTaskEvents`，或终态唤醒退出前未排空 channel 缓冲。
+- **排查起点**：`.github/workflows/ci.yml` `test` 任务；`internal/execute/orchestrator/sqlite_blackboard.go`（任务事件滑动缓冲与订阅回放）；`internal/agent/agent_subagents_watcher.go`（终态唤醒前同步排空事件缓冲）。
+
 **维护规范**：
 
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。

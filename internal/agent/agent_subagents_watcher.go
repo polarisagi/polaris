@@ -21,14 +21,46 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 	concurrent.SafeGo(watchCtx, "agent.subagents_watcher", func(ctx context.Context) {
 		defer a.cancelHandoffWatcher()
 
+		type subInfo struct {
+			ch     <-chan types.AgentStreamEvent
+			cancel func()
+		}
+		subs := make([]subInfo, 0, len(childIDs))
+		defer func() {
+			for _, s := range subs {
+				s.cancel()
+			}
+		}()
+
+		drainEvents := func(ch <-chan types.AgentStreamEvent) {
+			for {
+				select {
+				case ev, ok := <-ch:
+					if !ok {
+						return
+					}
+					a.publishStreamEvent(ev)
+				default:
+					return
+				}
+			}
+		}
+
+		drainAll := func() {
+			for _, s := range subs {
+				drainEvents(s.ch)
+			}
+		}
+
 		for _, cid := range childIDs {
 			cID := cid
 			cEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(cID)
-			defer cancelSub()
+			subs = append(subs, subInfo{ch: cEvents, cancel: cancelSub})
 			concurrent.SafeGo(ctx, "agent.subagents_event_forwarder", func(subCtx context.Context) {
 				for {
 					select {
 					case <-subCtx.Done():
+						drainEvents(cEvents)
 						return
 					case ev, ok := <-cEvents:
 						if !ok {
@@ -42,11 +74,12 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 
 		events, err := a.handoffPoster.Subscribe(ctx)
 		if err != nil {
-			a.pollSubagentsCompletion(ctx, childIDs)
+			a.pollSubagentsCompletion(ctx, childIDs, drainAll)
 			return
 		}
 
 		if a.peekAllSubagentsDone(ctx, childIDs) {
+			drainAll()
 			a.asyncIntent(types.TriggerAgentHandoffDone)
 			return
 		}
@@ -57,14 +90,17 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 		for {
 			select {
 			case <-ctx.Done():
+				drainAll()
 				return
 			case <-events:
 				if a.peekAllSubagentsDone(ctx, childIDs) {
+					drainAll()
 					a.asyncIntent(types.TriggerAgentHandoffDone)
 					return
 				}
 			case <-ticker.C:
 				if a.peekAllSubagentsDone(ctx, childIDs) {
+					drainAll()
 					a.asyncIntent(types.TriggerAgentHandoffDone)
 					return
 				}
@@ -73,15 +109,21 @@ func (a *Agent) watchSubagentsCompletion(childIDs []string) { //nolint:gocyclo
 	})
 }
 
-func (a *Agent) pollSubagentsCompletion(ctx context.Context, childIDs []string) {
+func (a *Agent) pollSubagentsCompletion(ctx context.Context, childIDs []string, drainAll func()) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			if drainAll != nil {
+				drainAll()
+			}
 			return
 		case <-ticker.C:
 			if a.peekAllSubagentsDone(ctx, childIDs) {
+				if drainAll != nil {
+					drainAll()
+				}
 				a.asyncIntent(types.TriggerAgentHandoffDone)
 				return
 			}

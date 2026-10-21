@@ -59,6 +59,7 @@ type SQLiteBlackboard struct {
 	subMu            sync.RWMutex
 	cancels          map[string]context.CancelFunc            // 记录每个执行中任务的取消函数
 	taskEventSubs    map[string][]chan types.AgentStreamEvent // 任务级事件订阅者（GD-13-001）
+	taskEventBacklog map[string][]types.AgentStreamEvent      // 任务级未读事件缓冲（防止投递早于订阅丢事件）
 	taskCtrlSubs     map[string][]chan types.TaskControl      // 任务级独立控制通道订阅者（R3-04）
 	taskRetentionTTL time.Duration                            // 终态任务保留时长，默认 24h
 }
@@ -421,6 +422,7 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 
 // SubscribeTaskEvents 订阅指定任务（含子 Agent 委派任务）的实时事件流。
 // 返回一个只读 channel，当任务产生流式事件时推送。
+// 若该任务在此前已有事件产生（如 Worker 极速认领执行），会先将缓冲事件灌入 channel。
 // 调用方必须在不再需要时调用返回的 cancel 函数取消订阅（GD-13-001）。
 //
 // 并发契约（与 Subscribe/broadcast 同一 idiom，见 sqlite_blackboard_ops.go）：
@@ -434,6 +436,17 @@ func (bb *SQLiteBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.Age
 	bb.subMu.Lock()
 	if bb.taskEventSubs == nil {
 		bb.taskEventSubs = make(map[string][]chan types.AgentStreamEvent)
+	}
+	// 灌入此前已产生的未消费缓冲事件，避免"投递快于订阅"导致的初段事件丢失
+	if bb.taskEventBacklog != nil {
+		if backlog, ok := bb.taskEventBacklog[taskID]; ok {
+			for _, ev := range backlog {
+				select {
+				case ch <- ev:
+				default:
+				}
+			}
+		}
 	}
 	bb.taskEventSubs[taskID] = append(bb.taskEventSubs[taskID], ch)
 	bb.subMu.Unlock()
@@ -455,6 +468,9 @@ func (bb *SQLiteBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.Age
 			// 下这是真实的常驻内存泄漏，且任务终态后该 key 永远不会被复用）。
 			if len(subs) == 0 {
 				delete(bb.taskEventSubs, taskID)
+				if bb.taskEventBacklog != nil {
+					delete(bb.taskEventBacklog, taskID)
+				}
 			} else {
 				bb.taskEventSubs[taskID] = subs
 			}
@@ -466,15 +482,40 @@ func (bb *SQLiteBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.Age
 
 // PublishTaskEvent 向指定任务的所有订阅者广播事件（GD-13-001）。
 //
-// 必须**在持有 subMu 读锁期间**完成发送：若先复制订阅者切片再释放锁后发送，
+// 必须**在持有 subMu 写锁期间**完成发送与缓冲更新：若先复制订阅者切片再释放锁后发送，
 // 与 cancel() 的 close(ch) 之间存在窗口——订阅者取消（父 Agent 收到
 // task_completed 后 defer cancelSub）与子 Agent 收尾事件的投递几乎必然同时
 // 发生，命中窗口即 panic: send on closed channel。cancel 侧取写锁 + close，
-// 本侧取读锁 + 发送，二者互斥即消除该竞态（与 broadcast 完全一致的 idiom）。
+// 本侧取写锁 + 发送，二者互斥即消除该竞态（与 broadcast 完全一致的 idiom）。
 // 发送是 select/default 非阻塞的，持锁时间为 O(订阅者数)，不会长时间阻塞。
 func (bb *SQLiteBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {
-	bb.subMu.RLock()
-	defer bb.subMu.RUnlock()
+	bb.subMu.Lock()
+	defer bb.subMu.Unlock()
+
+	// 维护滑动缓冲窗口（cap 64 对齐 channel 容量），防止订阅落后或瞬时无订阅者丢事件
+	if bb.taskEventBacklog == nil {
+		bb.taskEventBacklog = make(map[string][]types.AgentStreamEvent)
+	}
+	backlog := bb.taskEventBacklog[taskID]
+	if len(backlog) < 64 {
+		bb.taskEventBacklog[taskID] = append(backlog, event)
+	} else {
+		copy(backlog, backlog[1:])
+		backlog[len(backlog)-1] = event
+		bb.taskEventBacklog[taskID] = backlog
+	}
+	// 防御性上限（至多常驻 256 个任务键）：淘汰无活跃订阅者的孤儿 key
+	if len(bb.taskEventBacklog) > 256 {
+		for k := range bb.taskEventBacklog {
+			if len(bb.taskEventSubs[k]) == 0 {
+				delete(bb.taskEventBacklog, k)
+				if len(bb.taskEventBacklog) <= 256 {
+					break
+				}
+			}
+		}
+	}
+
 	for _, ch := range bb.taskEventSubs[taskID] {
 		select {
 		case ch <- event:

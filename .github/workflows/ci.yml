@@ -128,6 +128,8 @@ jobs:
         with:
           name: rust-libs
           path: rust/substrate/target/release
+      - name: Install Bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: spec consistency (state.yaml SSoT)
@@ -218,6 +220,8 @@ jobs:
         with:
           name: rust-libs
           path: rust/substrate/target/release
+      - name: Install Bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Copy Rust libs

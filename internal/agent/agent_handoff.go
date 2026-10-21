@@ -215,6 +215,20 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 		childEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(childTaskID)
 		defer cancelSub()
 
+		drainEvents := func() {
+			for {
+				select {
+				case ev, ok := <-childEvents:
+					if !ok {
+						return
+					}
+					a.publishStreamEvent(ev)
+				default:
+					return
+				}
+			}
+		}
+
 		events, err := a.handoffPoster.Subscribe(ctx)
 		if err != nil {
 			// 订阅失败时不能静默放弃（会导致父任务永久挂在 S_AWAIT_AGENT）：
@@ -229,6 +243,7 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 		// 订阅就绪后立刻补一次 Peek：覆盖"投递委派任务到订阅生效之间子任务
 		// 已终态"的丢事件窗口（与 reconciler_handoff.go 同一 idiom）。
 		if a.peekAndWake(ctx, childTaskID) {
+			drainEvents()
 			return
 		}
 
