@@ -4,7 +4,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:8 职责 / 0-ter:20 不变量速查 / 1:35 四层映射 / 2:46 L0 Working / 3:117 L1 Episodic / 4:176 L2 Semantic / 5:206 L3 Procedural / 5-bis:216 Memory-Write-Tool(Agent主动写) / 6:258 写路径 / 7:266 HybridRetriever / 8:326 EffConn / 9:332 Consolidation / 10:356 Forgetting / 11:370 PromptBuilder / 12:418 571 Drift / 14:441 609 (SOFT)降级 / 15:465 633 依赖 / 16:481 649 实现状态+2026研究对照 / 13:497 675 MemoryAgent(Swarm集成) -->
+<!-- §跳读: 0-bis:8 职责 / 0-ter:20 不变量速查 / 1:35 四层映射 / 2:46 L0 Working / 3:119 L1 Episodic / 4:178 L2 Semantic / 5:208 L3 Procedural / 5-bis:218 Memory-Write-Tool(Agent主动写) / 6:260 写路径 / 7:268 HybridRetriever / 8:328 EffConn / 9:334 Consolidation / 10:358 Forgetting / 11:372 PromptBuilder / 12:420 571 Drift / 14:443 609 (SOFT)降级 / 15:467 633 依赖 / 16:483 649 实现状态+2026研究对照 / 13:499 675 MemoryAgent(Swarm集成) -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆读写管理器 | **不是**: 物理存储引擎（M2）
@@ -100,6 +100,8 @@ WorkingMemory/ImmutableCore/ContextWindow/ScratchPad 接口见 `internal/protoco
 | `output_format` | 输出格式 | `markdown` / `plain` / `code-first` |
 | `expertise` | 领域专业程度（影响解释深度） | `novice` / `intermediate` / `expert` |
 | `interaction_summary` | Session 结束时 LLM 生成的用户特征摘要（≤200 字） | 文字 |
+
+**会话记忆索引（ADR-0120）**：`MemoryFacadeImpl.SessionIndex` 渲染 ≤1200 字符的索引（核心记忆块键与字数、活跃实体总数与最近更新的 12 个实体名），由 `fsm.WriteSessionLayer` 以 TaintHigh 围栏写入会话层并随快照冻结；实体按 `updated_at` 近似"常用"（图谱暂无访问频次统计）。
 
 **对话检索（ADR-0120）**：`session_search{query,session_id?,since?,limit?}` / `session_read{session_id,message_id?,around?}` 两个只读延迟工具，底座为 `054_messages_trigram_fts.sql`（`messages_trigram_fts`，trigram 分词；≥3 字符走 FTS，含 1–2 字符词（常见于中文）回退为最近 5000 条的 LIKE 有界扫描；默认排除当前会话）。
 

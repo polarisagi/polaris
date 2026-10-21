@@ -46,6 +46,7 @@ func WriteSessionLayer(ctx context.Context, b *prompt.PromptBuilder, memory prot
 			b.WriteCoreMemory(blocks)
 		}
 	}
+	writeMemoryIndex(ctx, b, memory, sCtx)
 	if prefs != "" {
 		safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
 			prefs, taint.TaintSource{Module: "persona", OriginTaintLevel: types.TaintNone}, "session_preferences"))
@@ -279,4 +280,24 @@ func BuildAgenticPrompt(ctx context.Context, memory protocol.MemoryFacade, sCtx 
 	sCtx.Mu.RUnlock()
 
 	return FinishAgenticLayered(b, memory, loopInstruction(), usageText, warnPrompt), nil
+}
+
+// sessionIndexer 由记忆门面可选实现：渲染会话级记忆索引（ADR-0120 决策六）。
+type sessionIndexer interface {
+	SessionIndex(ctx context.Context, agentID, sessionID string) (string, error)
+}
+
+// writeMemoryIndex 把记忆索引写入会话层。实体名来自抽取结果，按不可信数据 TaintHigh 围栏；
+// 随会话层快照冻结，会话内不再变化。门面不支持或读取失败时静默跳过。
+func writeMemoryIndex(ctx context.Context, b *prompt.PromptBuilder, memory protocol.MemoryFacade, sCtx *StateContext) {
+	ix, ok := memory.(sessionIndexer)
+	if !ok {
+		return
+	}
+	text, err := ix.SessionIndex(ctx, sCtx.AgentID, sCtx.SessionID)
+	if err != nil || text == "" {
+		return
+	}
+	b.WriteExternalCatalog("memory_index", taint.NewTaintedString(
+		text, taint.TaintSource{Module: "memory", OriginTaintLevel: types.TaintHigh}, "memory_index"))
 }

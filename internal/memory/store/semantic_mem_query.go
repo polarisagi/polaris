@@ -337,3 +337,37 @@ func bytesToFloat32s(b []byte) []float32 {
 	}
 	return res
 }
+
+// EntityDigest 返回活跃语义实体总数与最近更新的 limit 个实体名（记忆索引用，ADR-0120 决策六）。
+// 与 SearchEntities 同口径只统计可信来源；图谱目前没有访问频次统计，故按 updated_at 近似"常用"。
+func (sm *SemanticMem) EntityDigest(ctx context.Context, limit int) (int, []string, error) {
+	db, err := sm.requireDB()
+	if err != nil {
+		return 0, nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.EntityDigest", err)
+	}
+	const filter = `status='active' AND source_type IN ('llm_extract', 'user_stated', 'agent_inferred', 'graphrag_ingest')`
+	var total int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_entities WHERE `+filter).Scan(&total); err != nil {
+		return 0, nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.EntityDigest count", err)
+	}
+	if total == 0 || limit <= 0 {
+		return total, nil, nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT name FROM semantic_entities WHERE `+filter+` ORDER BY updated_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return 0, nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.EntityDigest names", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return 0, nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.EntityDigest scan", err)
+		}
+		names = append(names, n)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.EntityDigest rows", err)
+	}
+	return total, names, nil
+}

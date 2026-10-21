@@ -185,7 +185,7 @@
 | `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M11-Policy-Safety.md` | L0 策略 | 23K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
-| `M05-Memory-System.md` | L1 记忆 | 22K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
+| `M05-Memory-System.md` | L1 记忆 | 23K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
 | `M13-bis-Extension-Registry.md` | L3 扩展 | 17K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M01-Inference-Runtime.md` | L0 推理 | 15K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 14K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |

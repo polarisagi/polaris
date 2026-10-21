@@ -88,7 +88,7 @@
   "internal/agent/fsm/loop_transitions.go": "9601fc5c506e66fb3dd1146a0986148eaa2e10c4298628f4bd2561d3d5738a53",
   "internal/agent/fsm/observations.go": "4a57200d48214482acf07a652cc7ce3990b108ad7369923618b7a80966cbfc29",
   "internal/agent/fsm/phase_results.go": "1634ef6c178fc1aa61712f199c4514644aa1bd55dbc3f552f8f942f4cfeeebbb",
-  "internal/agent/fsm/prompt_layers.go": "6187f3b1ada719ada76014aac816d1b88c9e495f3d7ab2f915827305de0eaaad",
+  "internal/agent/fsm/prompt_layers.go": "5981801bf3835e16fa0b9fedd49c64a9b25ba8432a991a8d4ee2fe3ce697a60d",
   "internal/agent/fsm/prompt_respond.go": "f6bb1a59deda4e65eca8afb17d22ec042dc48850b8b83d2db4842fae3f3d15e4",
   "internal/agent/fsm/replan_feedback.go": "c1413d03c0ac6a6c0ee661f5afd1cfc343c26b5f85f549a42e4776db039afb2e",
   "internal/agent/fsm/skill_prematch.go": "b0552aabdabca88d41f8b331fb097953d67f957ea17c806757829999b7ea5f98",
