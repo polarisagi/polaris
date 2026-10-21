@@ -29,6 +29,7 @@ func (a *Agent) SetAgentProfile(p *types.AgentProfileSpec) {
 	// 角色改变会话层内容（画像/指令），冻结的会话层快照随之作废（ADR-0120 决策二第 3 条）。
 	if a.sCtx.AgentProfile != p {
 		a.sCtx.SessionLayerSnapshot = nil
+		a.sCtx.NotePrefixBreakLocked("session_refresh")
 	}
 	a.sCtx.AgentProfile = p
 	if p != nil && p.MaxTurns > 0 && (a.sCtx.MaxStepsLimit == 0 || a.sCtx.MaxStepsLimit > p.MaxTurns) {

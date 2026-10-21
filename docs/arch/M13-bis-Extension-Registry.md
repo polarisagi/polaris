@@ -2,7 +2,7 @@
 # 模块 13-bis: Extension Registry
 
 > 扩展系统的市场、安装、路由三层模型。覆盖 Skill / MCP（UI 称「连接器」）/ Plugin / Automation / Agent 五类扩展；分类、双厂商标准、信任模型、安装实例表见 ADR-0103。[HE-Rule-3] [HE-Rule-6]
-<!-- §跳读: 0:9 职责边界 / 1:16 能力分层 / 2:30 扩展类型 / 3:67 技能执行模式 / 4:91 工具懒加载 / 5:101 安装流 / 6:191 信任门控 / 7:237 文件系统 / 8:259 调用路由 / 9:297 自动化 / 10:350 434 跨代理协作 / 11:359 460 学习技能归并 / 12:368 474 表引用 -->
+<!-- §跳读: 0:9 职责边界 / 1:16 能力分层 / 2:30 扩展类型 / 3:67 技能执行模式 / 4:91 工具懒加载 / 5:102 安装流 / 6:192 信任门控 / 7:238 文件系统 / 8:260 调用路由 / 9:298 自动化 / 10:351 434 跨代理协作 / 11:360 460 学习技能归并 / 12:369 474 表引用 -->
 
 ---
 
@@ -94,6 +94,7 @@ SKILL.md frontmatter 的 `exec_mode`（DB 同名列，DDL 仅 `'tool'|'ambient'`
 
 - **正常模式**：`buildToolSchemas()` 全量返回 builtin + mcp + skill（exec_mode=tool，runtime=script）。
 - **懒加载模式**（ADR-0119，不依赖 Embedder）：仅返回静态核心集（14 个，含 `tool_search`）；其余工具在系统提示里以"名称 用途"一行索引列出，LLM 经 `tool_search(query)`（关键词/BM25，Embedder 可用时叠加语义）按需激活，命中结果（LIMIT 10）的完整 schema 在下一轮追加到 tools 数组尾部并在会话内保留。
+- **ADR-0120 修订**：激活不再改动 tools 数组（`m7_tool.lazy_activation=in_history`，默认）。`tool_search(query, limit≤20)` 返回命中工具的描述与精简 schema（文本，精确名优先、未命中给最接近名称），模型随后用 `call_tool{name, arguments}` 调用；`call_tool` 在内核 S_VALIDATE 之前解包，权限/审批/污点判定均作用于内层工具。设为 `tools_array` 可恢复旧行为（激活后追加到 tools 数组，会断一次缓存）。系统提示里的工具索引为英文文本，行格式 `名称 用途` 并带 `call_tool` 用法一行。
 - **5 级搜索降级**（`internal/extension/native/extension_manager.go`）：① SurrealDB FTSSearch（BM25）→ ② VecKNN（语义向量，需 embedFn）→ ③ GraphSpreadingActivation（沿 "provides" 边扩散）→ ④ SQLite `extension_catalog` LIKE → ⑤ 线上 MCP 注册表。`cognitive` 或 `db` 为 nil 时自动降级。
 
 ---

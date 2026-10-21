@@ -60,6 +60,7 @@ func (a *Agent) applyLoopObservationMasking(ctx context.Context) {
 		maskSingleMessage(ctx, a.toolOffloader, taskID, &a.sCtx.LoopMessages[idx])
 	}
 
+	a.sCtx.NotePrefixBreakLocked("observation_mask")
 	metrics.RecordObservationMasked(ctx, int64(len(candidateIndices)))
 	slog.InfoContext(ctx, "agentic_loop: observation masking applied",
 		"session", a.sCtx.SessionID, "masked_count", len(candidateIndices),

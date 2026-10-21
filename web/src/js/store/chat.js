@@ -17,7 +17,7 @@ const sseClients = new Map() // run.rid -> SSEClient
 // 视图字段默认值（视图无 run 时读写 _idle）
 const idleDefaults = () => ({
   state: 'IDLE', taskID: null, currentTokens: '', thinkingText: '', errorMsg: '',
-  contextWarning: null, compacting: false, phase: '', approvals: [], subagents: [],
+  contextWarning: null, compacting: false, phase: '', goalRound: '', approvals: [], subagents: [],
   turn: null, // 步骤时间线（ADR-0118）：首个 step 事件到达时创建
 })
 const RUN_FIELDS = Object.keys(idleDefaults())
@@ -801,6 +801,11 @@ const chatStore = {
             reason: data.reason || '', hardLimit: !!data.hard_limit, rememberLabel: data.remember_label || '',
             items: Array.isArray(data.items) ? data.items : [], remember: false,
           })
+        } else if (data.type === 'goal_continue') {
+          // 目标自动续跑（ADR-0120 决策七）：只做轮次提示，停止沿用现有停止按钮
+          run.goalRound = `${data.round || 0}/${data.max_rounds || 0}`
+        } else if (data.type === 'goal_paused') {
+          run.goalRound = ''
         } else if (data.type === 'compacting') {
           run.compacting = true
         } else if (data.type === 'compacted') {
@@ -905,6 +910,7 @@ const chatStore = {
     if (!wasAborting) {
       this._finalizeMessage(run, false)
       run.phase = ''
+      run.goalRound = ''
       run.approvals = []
       run.subagents = []
       run.state = 'COMPLETE'
@@ -975,6 +981,7 @@ const chatStore = {
       this._finalizeMessage(run, isAbort)
     }
     run.phase = ''
+    run.goalRound = ''
     run.approvals = []
     if (run.turn) run.turn.running = false
     run.state = 'ERROR'

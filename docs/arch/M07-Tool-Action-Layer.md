@@ -102,7 +102,7 @@ L1 层生存套件以 Go 原生代码执行，受原生沙箱策略约束。核�
 
 **入口 3 — `builtin.RegisterSkillTools`（2 个）**：`skill_save`、`skill_generate`（Logic Collapse 蒸馏，M06 §2.2）。
 
-**入口 4 — 惰性目录（`CompositeCatalog`）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold` 时按需检索定义，避免全量 schema 撑爆 prompt）。
+**入口 4 — 惰性目录（`CompositeCatalog`；ADR-0120 修订：常驻核心集 13 + `code_act`/`finish`，`call_tool{name,arguments}` 调用未在 tools 数组中的工具，`tool_search` 以文本返回描述与精简 schema，`read_file` 支持 offset/limit 与行号）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold` 时按需检索定义，避免全量 schema 撑爆 prompt）。
 
 **入口 5 — `builtin.RegisterDelegationTools`（2 个，`internal/tool/builtin/delegation_tools.go`，ADR-0111 / ADR-0103 决策三）**：`list_agents`（本地子 Agent + `mcp:` A2A 目标 + `general-purpose`）、`transfer_to_agent`（经 S_VALIDATE/PolicyGate；执行由 Agent 内核特判，直接经 Dispatcher 调用返回错误）。装配在 `cmd/polaris/boot_delegation.go`。
 

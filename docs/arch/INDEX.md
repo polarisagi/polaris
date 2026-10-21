@@ -161,6 +161,12 @@
 - **根因类别**：重放历史里 assistant.tool_use 没有紧随的 tool_result（旧修复只补最后一条且追加到末尾）。
 - **排查起点**：`internal/agent/agent_loop_checkpoint.go` `RepairDanglingToolCalls`；M04 §8。
 
+### 症状 26：跨回合首调缓存几乎不命中 / 本机 `llm_calls` 里未命中输入占费用大头
+- **症状特征**：同一会话相邻回合的首次内核调用 `cache_hit_tokens` 接近 0，费用 ≈70% 来自未命中输入。
+- **归类模块**：M04 / M05
+- **根因类别**：稳定层或会话层字节每回合变化（逐回合画像重写、会话层重渲染、激活工具追加 tools 数组、遮蔽过早触发）。
+- **排查起点**：ADR-0120 决策一/二；`POLARIS_LLM_RAW_DUMP=full` 抓两次请求后 `go run tools/cache_diff.go <a> <b>` 看首个分歧的层；门控 `internal/agent/prefix_stability_test.go`。
+
 **维护规范**：
 
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。
@@ -174,8 +180,8 @@
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
 | `M13-Interface-Scheduler.md` | L3 接口 | 36K | 见下方 [M13 补充](#m13-补充) |
-| `M04-Agent-Kernel.md` | L1 内核 | 30K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
-| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 29K | 状态机 + 全模块阈值（唯一权威） |
+| `M04-Agent-Kernel.md` | L1 内核 | 31K | 状态机 14 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
+| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 30K | 状态机 + 全模块阈值（唯一权威） |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 24K | 见下方 [M07 补充](#m07-补充) |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M11-Policy-Safety.md` | L0 策略 | 23K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |

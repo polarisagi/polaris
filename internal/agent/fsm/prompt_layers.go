@@ -2,7 +2,6 @@ package fsm
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 
@@ -172,7 +171,7 @@ func WritePhaseContract(b *prompt.PromptBuilder, memory protocol.MemoryFacade, n
 
 // WriteAgenticUsage 写入 T7 计量行（ADR-0115 / WP2）。
 func WriteAgenticUsage(b *prompt.PromptBuilder, tokens int, cost float64, wallSeconds float64) {
-	b.WritePhaseSystem(fmt.Sprintf("[usage] tokens=%d cost≈$%.4f wall=%.1fs", tokens, cost, wallSeconds))
+	b.WritePhaseSystem(formatUsageLine(tokens, 0, 0, 0, cost, cost, wallSeconds))
 }
 
 // FinishAgenticLayered 补齐 L0 稳定核，按 L0..L4 组装前缀，并在 L4 回合消息之后追加调用级易变尾巴（R3-01）。

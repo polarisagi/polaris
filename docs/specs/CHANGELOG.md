@@ -5,6 +5,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-10-21（ADR-0120 缓存优先上下文与工具层 — 含**规范/契约变更**）
+
+- **[契约]** 新增内置工具 `call_tool`/`session_search`/`session_read`/`goal`；`tool_search` 改为返回描述+精简 schema 的文本；`read_file` 新增 `offset`/`limit` 与行号输出。
+- **[契约]** 新增迁移 `053_agent_goals.sql`、`054_messages_trigram_fts.sql`；新增阀值 `conversation_history_max_tokens`/`loop_observation_mask_trigger_tokens`/`loop_observation_mask_min_tokens`/`loop_recall_max_chars`/`m7_tool.lazy_activation`，`conversation_history_max_messages/bytes` 默认置 0（改按 token 预算）。
+- **[行为]** 会话层会话内冻结；PersonaRefiner 不再逐回合调用 LLM；T3 遮蔽成本门控；系统提示/循环指令/指令集改写为英文精简版；`[usage]` 行改为 `ctx/cache/turn/session/wall`。
+- **[可观测]** 指标 `polaris.llm.prefix_cache_hit_ratio`；span 属性 `polaris.prefix_break`；`POLARIS_LLM_RAW_DUMP=full` + `tools/cache_diff.go`。详见 ADR-0120。
+
 ## 2026-10-19（ADR-0115 Agent 自主内核重构 — 含规范/契约变更）
 
 - **[架构]** 重构为自主 Agentic 循环内核（ADR-0115），模型自主推理生成回复并驱动工具调用；经典 staged 阶段式状态机保留作为程序兜底与回退基线。

@@ -4,7 +4,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:8 职责 / 0-ter:20 不变量速查 / 1:35 四层映射 / 2:46 L0 Working / 3:115 L1 Episodic / 4:174 L2 Semantic / 5:204 L3 Procedural / 5-bis:214 Memory-Write-Tool(Agent主动写) / 6:256 写路径 / 7:264 HybridRetriever / 8:324 EffConn / 9:330 Consolidation / 10:354 Forgetting / 11:368 PromptBuilder / 12:416 571 Drift / 14:439 609 (SOFT)降级 / 15:463 633 依赖 / 16:479 649 实现状态+2026研究对照 / 13:495 675 MemoryAgent(Swarm集成) -->
+<!-- §跳读: 0-bis:8 职责 / 0-ter:20 不变量速查 / 1:35 四层映射 / 2:46 L0 Working / 3:117 L1 Episodic / 4:176 L2 Semantic / 5:206 L3 Procedural / 5-bis:216 Memory-Write-Tool(Agent主动写) / 6:258 写路径 / 7:266 HybridRetriever / 8:326 EffConn / 9:332 Consolidation / 10:356 Forgetting / 11:370 PromptBuilder / 12:418 571 Drift / 14:441 609 (SOFT)降级 / 15:465 633 依赖 / 16:481 649 实现状态+2026研究对照 / 13:497 675 MemoryAgent(Swarm集成) -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆读写管理器 | **不是**: 物理存储引擎（M2）
@@ -101,7 +101,9 @@ WorkingMemory/ImmutableCore/ContextWindow/ScratchPad 接口见 `internal/protoco
 | `expertise` | 领域专业程度（影响解释深度） | `novice` / `intermediate` / `expert` |
 | `interaction_summary` | Session 结束时 LLM 生成的用户特征摘要（≤200 字） | 文字 |
 
-**PersonaRefiner**: `Load(ctx)` 启动加载（不存在用默认值）；`Update(signals)` 显式信号即时更新（`/set style concise`）；`RefineAtSessionEnd(ctx, msgs)` 会话结束 LLM 更新 `interaction_summary`（provider 为 nil 跳过）；`Save(ctx)` 与前者配对；`ToUserPreferences()` 转 `[]protocol.UserPreference` 注入 `ImmutableCore.UserPreferences`。
+**对话检索（ADR-0120）**：`session_search{query,session_id?,since?,limit?}` / `session_read{session_id,message_id?,around?}` 两个只读延迟工具，底座为 `054_messages_trigram_fts.sql`（`messages_trigram_fts`，trigram 分词；≥3 字符走 FTS，含 1–2 字符词（常见于中文）回退为最近 5000 条的 LIKE 有界扫描；默认排除当前会话）。
+
+**PersonaRefiner**: `Load(ctx)` 启动加载（不存在用默认值）；`Update(signals)` 显式信号即时更新（`/set style concise`）；`PreferencesBlock()` 渲染会话层的偏好块（会话内首次召回时取快照并冻结，ADR-0120；**不再逐回合/会话结束用 LLM 重写 `interaction_summary`**，该字段仅保留读取兼容）；`Save(ctx)` 与前者配对；`ToUserPreferences()` 转 `[]protocol.UserPreference` 注入 `ImmutableCore.UserPreferences`。
 PersonaRefiner 更新**用户偏好画像**；ReflectionMemory 更新 **Agent 自身执行经验**。
 
 ### 2.4 核心记忆分页置换（GD-14-002）

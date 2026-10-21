@@ -548,11 +548,19 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 					}
 					callTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens
 					a.sCtx.LoopLastUsageTokens += callTokens
+					a.sCtx.LoopTurnInputTokens += resp.Usage.InputTokens
+					a.sCtx.LoopTurnCacheHitTokens += resp.Usage.CacheHitTokens
+					a.sCtx.LoopLastCallInputTokens = resp.Usage.InputTokens
+					if a.cwm != nil {
+						a.sCtx.LoopContextWindow = a.cwm.MaxTokens()
+					}
 					if a.provider != nil {
 						caps := a.provider.Capabilities()
 						callCost := pricing.CostFor(resp.Model, caps, time.Now(), resp.Usage.InputTokens, resp.Usage.CacheHitTokens, resp.Usage.OutputTokens)
 						a.sCtx.LoopLastUsageCost += callCost
+						a.sCtx.SessionCostUSD += callCost
 					}
+					a.observePrefixCacheLocked(ctx, llmPurposeOf(a.sm.Current()), resp.Usage.InputTokens, resp.Usage.CacheHitTokens)
 					if !a.sCtx.LoopTurnStartTime.IsZero() {
 						a.sCtx.LoopLastWallSeconds = time.Since(a.sCtx.LoopTurnStartTime).Seconds()
 					}

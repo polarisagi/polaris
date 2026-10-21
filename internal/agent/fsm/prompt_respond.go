@@ -43,6 +43,12 @@ func WriteConversationHistory(b *prompt.PromptBuilder, sCtx *StateContext) {
 	th := config.CurrentThresholds().M4Kernel
 	anchor, kept := WindowConversationHistoryBudget(history, th.ConversationHistoryMaxMessages, th.ConversationHistoryMaxBytes, th.ConversationHistoryMaxTokens)
 	src := taint.TaintSource{Module: "session", OriginTaintLevel: types.TaintHigh}
+	sCtx.Mu.Lock()
+	if anchor != sCtx.lastHistoryAnchor {
+		sCtx.lastHistoryAnchor = anchor
+		sCtx.NotePrefixBreakLocked("history_drop") // 历史窗口跳变：此后前缀整体改变
+	}
+	sCtx.Mu.Unlock()
 	if anchor != "" {
 		// 锚定摘要由被丢弃的不可信历史派生，同样是数据：user 角色 + TaintHigh 围栏。
 		b.WriteHistoryMessage("user", taint.NewTaintedString(

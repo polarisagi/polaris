@@ -72,3 +72,17 @@ func TestRecordLLMPromptTokens_NilInstrumentsSafe(t *testing.T) {
 	InstrLLMInputTokens, InstrLLMCacheHitTokens = nil, nil
 	RecordLLMPromptTokens(context.Background(), "plan", "x", 10, 5)
 }
+
+func TestCallIndexBucket(t *testing.T) {
+	for idx, want := range map[int]string{0: "1", 1: "1", 2: "2-5", 5: "2-5", 6: "6+", 40: "6+"} {
+		if got := CallIndexBucket(idx); got != want {
+			t.Errorf("CallIndexBucket(%d)=%q want %q", idx, got, want)
+		}
+	}
+}
+
+// instrument 为 nil（Tier-0 无 OTel）时不得 panic；输入为 0 时静默跳过。
+func TestRecordLLMPrefixCacheHitRatio_NilSafe(t *testing.T) {
+	RecordLLMPrefixCacheHitRatio(context.Background(), "agent_loop", 1, 1000, 900)
+	RecordLLMPrefixCacheHitRatio(context.Background(), "agent_loop", 1, 0, 0)
+}

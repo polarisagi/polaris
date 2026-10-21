@@ -45,6 +45,8 @@ type Deps struct {
 	WorkspaceDir  string
 	// Turns 回合步骤与元数据持久化（ADR-0118）；nil 时步骤只实时推送、不落库，消息也不带用量摘要。
 	Turns TurnStore
+	// Goals 跨回合目标存储（ADR-0120 决策七）；nil 时不做目标续跑。
+	Goals GoalStore
 }
 
 type orchestrator struct {
@@ -59,6 +61,7 @@ type orchestrator struct {
 	dataDir       string
 	workspaceDir  string
 	turns         TurnStore
+	goals         GoalStore
 }
 
 // New 构造 Orchestrator。
@@ -75,6 +78,7 @@ func New(d Deps) Orchestrator {
 		dataDir:       d.DataDir,
 		workspaceDir:  d.WorkspaceDir,
 		turns:         d.Turns,
+		goals:         d.Goals,
 	}
 }
 

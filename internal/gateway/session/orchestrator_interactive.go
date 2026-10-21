@@ -240,6 +240,11 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		// 是可接受的降级——见该函数注释）。
 		viewIDs = append(viewIDs, stopViewIDs...)
 	}
+	if !aborted && inferErr == "" && reply != "" {
+		var goalViewIDs []string
+		reply, inferErr, aborted, goalViewIDs = o.continueOnGoal(ctx, sink, sessionID, agentCtrl, history, reply, stepRec)
+		viewIDs = append(viewIDs, goalViewIDs...)
+	}
 	if aborted {
 		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。
 		if reply != "" {

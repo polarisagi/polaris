@@ -308,17 +308,29 @@ type AgenticTurn struct {
 	LoopSteerQueue                 []taint.TaintedString
 	LoopPendingToolCalls           []types.InferToolCall
 	LoopLastUsageTokens            int
-	LoopLastUsageCost              float64
-	LoopLastWallSeconds            float64
-	LoopWarningInjected            bool
-	LoopWarningPrompt              string
-	LoopSummary                    string
-	LoopEnding                     bool
-	LoopHandoffPendingResults      []types.Message
-	LoopHandoffToolCalls           []types.InferToolCall
-	LoopHandoffSpawnCallID         map[string][]string
-	LoopConsecutiveTextRounds      int
-	LoopStream                     // 已流式推送的文本（R5-02）
+	// 本回合用量明细（[usage] 行与前缀缓存观测用，回合开始清零）。
+	LoopTurnInputTokens     int
+	LoopTurnCacheHitTokens  int
+	LoopLastCallInputTokens int
+	LoopContextWindow       int
+	// SessionCostUSD 会话累计费用（跨回合累加，不随回合清零）。
+	SessionCostUSD float64
+	// PendingPrefixBreak 下一次内核调用前已发生的、会使前缀缓存失效的事件
+	// （model_switch|compaction|history_drop|observation_mask|session_refresh），ADR-0120 决策八。
+	PendingPrefixBreak string
+	// lastHistoryAnchor 上一次渲染的历史锚定摘要，用来识别"历史窗口跳变"。
+	lastHistoryAnchor         string
+	LoopLastUsageCost         float64
+	LoopLastWallSeconds       float64
+	LoopWarningInjected       bool
+	LoopWarningPrompt         string
+	LoopSummary               string
+	LoopEnding                bool
+	LoopHandoffPendingResults []types.Message
+	LoopHandoffToolCalls      []types.InferToolCall
+	LoopHandoffSpawnCallID    map[string][]string
+	LoopConsecutiveTextRounds int
+	LoopStream                // 已流式推送的文本（R5-02）
 }
 
 // CtxTurnID 本回合写入 ctx 的回合 ID：网关已注入但尚未被 ResetAgenticTurn 消费的 ExternalTurnID 优先，
@@ -343,6 +355,9 @@ func (s *StateContext) ResetAgenticTurn() {
 	s.LoopSteerQueue = nil
 	s.LoopPendingToolCalls = nil
 	s.LoopLastUsageTokens = 0
+	s.LoopTurnInputTokens = 0
+	s.LoopTurnCacheHitTokens = 0
+	s.LoopLastCallInputTokens = 0
 	s.LoopLastUsageCost = 0
 	s.LoopLastWallSeconds = 0
 	s.LoopWarningInjected = false
@@ -686,40 +701,6 @@ func (sm *StateMachine) dispatchReplanExtensionActivation(ctx context.Context, s
 		}
 		sm.intentDispatcher(types.TriggerReplanDone)
 	})
-}
-
-// skillPreMatch 是 System-1 短路所需的技能匹配结果（B-1：在 FSM 锁外算好再带进锁）。
-type skillPreMatch struct {
-	applied bool // 本轮是否真的执行了匹配（surpriseIndex 未超阈值且 matcher 已注入）
-	skillID string
-	score   float64
-	err     error
-}
-
-// preMatchSkill 在**不持 sm.mu** 的前提下完成技能语义检索（含 IO）。
-//
-// 第二个返回值表示「本次 trigger 是否需要覆写 sCtx 的 pre-match 字段」——
-// 对 TriggerIntentReceived 恒为 true（即使没匹配也要把上一轮的残值清掉），
-// 其余 trigger 为 false（不碰这组字段）。
-//
-// 为什么不能在锁内做：MatchIntent 走语义检索，耗时不可控，锁内调用会让所有并发
-// Dispatch 排队，违反 HE-5（FSM 锁内禁止 IO）。同类缺陷此前已修过一次
-// （GR-4-003 的 dispatchReplanExtensionActivation），B-1 是它在另一条路径上的复发。
-func (sm *StateMachine) preMatchSkill(sCtx *StateContext, trigger types.AgentTrigger) (skillPreMatch, bool) {
-	if trigger != types.TriggerIntentReceived {
-		return skillPreMatch{}, false
-	}
-	if sm.skillMatcher == nil {
-		return skillPreMatch{}, true
-	}
-	if metrics.GlobalSurpriseIndex().Current() >= system1BypassSurpriseCeiling {
-		// 超阈值：本轮不做 System-1 短路。仍返回 true，让调用方把上一轮的
-		// pre-match 残值清掉——否则阈值门等于形同虚设。
-		return skillPreMatch{}, true
-	}
-	pm := skillPreMatch{applied: true}
-	pm.skillID, pm.score, pm.err = sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
-	return pm, true
 }
 
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。

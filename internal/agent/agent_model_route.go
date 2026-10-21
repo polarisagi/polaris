@@ -155,6 +155,7 @@ func (a *Agent) SwitchModel(ref, pool, thinking string) (string, error) {
 	}
 
 	a.sCtx.NextRoundModelRef = target
+	a.sCtx.NotePrefixBreakLocked("model_switch")
 	a.sCtx.NextRoundThinking = thinking
 	return fmt.Sprintf("已成功请求下一轮切换模型为 %s（thinking: %s）。注意：切换模型会导致前缀缓存失效（T4 成本），请谨慎使用。", target, thinking), nil
 }

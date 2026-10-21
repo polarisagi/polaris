@@ -227,7 +227,8 @@ func (sm *StateMachine) promptLoop(sCtx *StateContext, pCtx protocol.StateContex
 
 	var usageText string
 	if sCtx.LoopLastUsageTokens > 0 || sCtx.LoopLastWallSeconds > 0 {
-		usageText = formatUsageLine(sCtx.LoopLastUsageTokens, sCtx.LoopLastUsageCost, sCtx.LoopLastWallSeconds)
+		usageText = formatUsageLine(sCtx.LoopLastCallInputTokens, sCtx.LoopContextWindow, sCtx.LoopTurnInputTokens,
+			sCtx.LoopTurnCacheHitTokens, sCtx.LoopLastUsageCost, sCtx.SessionCostUSD, sCtx.LoopLastWallSeconds)
 	}
 	sCtx.Mu.Unlock()
 

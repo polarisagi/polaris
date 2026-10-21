@@ -149,6 +149,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		ApprovalRules:         repo.NewSQLiteApprovalRuleRepository(rwDB),
 		TurnRepo:              repo.NewSQLiteChatTurnRepository(rwDB, db),
 		UsageRepo:             usageQueryRepo(db),
+		GoalRepo:              repo.NewSQLiteGoalRepository(rwDB),
 		ProviderRepo:          s.providerRepo,
 		SystemRepo:            s.systemRepo,
 		AgentPool:             agentPool,

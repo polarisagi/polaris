@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {"type": "string", "enum": ["set", "update", "get", "clear"]},
+    "objective": {"type": "string", "description": "set: what to achieve."},
+    "done_criteria": {"type": "string", "description": "set: how to tell it is done."},
+    "max_rounds": {"type": "integer", "description": "set: max automatic continuation rounds, default 20."},
+    "status": {"type": "string", "enum": ["active", "paused", "blocked", "complete"], "description": "update: new status."},
+    "note": {"type": "string", "description": "update: progress or blocker note."}
+  },
+  "required": ["action"]
+}
