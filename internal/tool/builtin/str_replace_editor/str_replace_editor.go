@@ -33,7 +33,11 @@ func MakeStrReplaceEditorFn(allowedPaths []string) sandbox.InProcessFn {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "str_replace_editor: invalid args", err)
 		}
-		if err := guard.CheckWritablePath(args.Path, paths); err != nil {
+		pathCheck := guard.CheckWritablePath
+		if args.Command == "view" {
+			pathCheck = guard.CheckReadablePath
+		}
+		if err := pathCheck(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeStrReplaceEditorFn", err)
 		}
 

@@ -4,27 +4,19 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func TestProfilePolicy_Standard(t *testing.T) {
 	p := policy.ProfilePolicy(policy.ProfileStandard)
-	if p.SandboxDisabled {
-		t.Error("standard: SandboxDisabled should be false")
-	}
 	if p.ForceContainerSandbox {
 		t.Error("standard: ForceContainerSandbox should be false")
-	}
-	if p.HITLAutoApprove {
-		t.Error("standard: HITLAutoApprove should be false")
 	}
 	if !p.TaintEgressBlockEnabled {
 		t.Error("standard: TaintEgressBlockEnabled should be true")
 	}
 	if !p.PIITokenizeEnabled {
 		t.Error("standard: PIITokenizeEnabled should be true")
-	}
-	if !p.RunCmdWhitelistEnabled {
-		t.Error("standard: RunCmdWhitelistEnabled should be true")
 	}
 	if p.CheckpointEnabled {
 		t.Error("standard: CheckpointEnabled should be false")
@@ -43,9 +35,6 @@ func TestProfilePolicy_Standard(t *testing.T) {
 	}
 	if p.DelegationChainMaxDepth != 3 {
 		t.Errorf("standard: DelegationChainMaxDepth should be 3, got %d", p.DelegationChainMaxDepth)
-	}
-	if p.CodeActAllToolsAllowed {
-		t.Error("standard: CodeActAllToolsAllowed should be false")
 	}
 	if !p.CodeActTaintBlockEnabled {
 		t.Error("standard: CodeActTaintBlockEnabled should be true")
@@ -69,27 +58,14 @@ func TestProfilePolicy_Standard(t *testing.T) {
 
 func TestProfilePolicy_Full(t *testing.T) {
 	p := policy.ProfilePolicy(policy.ProfileFull)
-	if !p.SandboxDisabled {
-		t.Error("full: SandboxDisabled should be true")
-	}
 	if p.ForceContainerSandbox {
-		// SandboxDisabled 与 ForceContainerSandbox 互斥
-		t.Error("full: ForceContainerSandbox must be false when SandboxDisabled=true")
-	}
-	if !p.AllowedPathsOpen {
-		t.Error("full: AllowedPathsOpen should be true")
-	}
-	if !p.HITLAutoApprove {
-		t.Error("full: HITLAutoApprove should be true")
+		t.Error("full: ForceContainerSandbox must be false")
 	}
 	if p.TaintEgressBlockEnabled {
 		t.Error("full: TaintEgressBlockEnabled should be false (audit-only)")
 	}
 	if p.PIITokenizeEnabled {
 		t.Error("full: PIITokenizeEnabled should be false")
-	}
-	if p.RunCmdWhitelistEnabled {
-		t.Error("full: RunCmdWhitelistEnabled should be false")
 	}
 	if !p.CheckpointEnabled {
 		t.Error("full: CheckpointEnabled should be true")
@@ -108,9 +84,6 @@ func TestProfilePolicy_Full(t *testing.T) {
 	}
 	if p.DelegationChainMaxDepth != 8 {
 		t.Errorf("full: DelegationChainMaxDepth should be 8, got %d", p.DelegationChainMaxDepth)
-	}
-	if !p.CodeActAllToolsAllowed {
-		t.Error("full: CodeActAllToolsAllowed should be true")
 	}
 	if p.CodeActTaintBlockEnabled {
 		t.Error("full: CodeActTaintBlockEnabled should be false")
@@ -134,23 +107,14 @@ func TestProfilePolicy_Full(t *testing.T) {
 
 func TestProfilePolicy_Hardened(t *testing.T) {
 	p := policy.ProfilePolicy(policy.ProfileHardened)
-	if p.SandboxDisabled {
-		t.Error("hardened: SandboxDisabled should be false")
-	}
 	if !p.ForceContainerSandbox {
 		t.Error("hardened: ForceContainerSandbox should be true")
-	}
-	if p.HITLAutoApprove {
-		t.Error("hardened: HITLAutoApprove should be false")
 	}
 	if !p.TaintEgressBlockEnabled {
 		t.Error("hardened: TaintEgressBlockEnabled should be true")
 	}
 	if !p.PIITokenizeEnabled {
 		t.Error("hardened: PIITokenizeEnabled should be true")
-	}
-	if !p.RunCmdWhitelistEnabled {
-		t.Error("hardened: RunCmdWhitelistEnabled should be true")
 	}
 	if p.CheckpointEnabled {
 		t.Error("hardened: CheckpointEnabled should be false")
@@ -169,9 +133,6 @@ func TestProfilePolicy_Hardened(t *testing.T) {
 	}
 	if p.DelegationChainMaxDepth != 2 {
 		t.Errorf("hardened: DelegationChainMaxDepth should be 2, got %d", p.DelegationChainMaxDepth)
-	}
-	if p.CodeActAllToolsAllowed {
-		t.Error("hardened: CodeActAllToolsAllowed should be false")
 	}
 	if !p.CodeActTaintBlockEnabled {
 		t.Error("hardened: CodeActTaintBlockEnabled should be true")
@@ -211,14 +172,31 @@ func TestProfilePolicy_UnknownNormalizesToStandard(t *testing.T) {
 	}
 }
 
-// 确认 full 档的互斥约束：SandboxDisabled 和 ForceContainerSandbox 不同时 true。
-func TestProfilePolicy_MutualExclusion(t *testing.T) {
-	for _, prof := range []policy.TrustProfile{
-		policy.ProfileStandard, policy.ProfileFull, policy.ProfileHardened,
-	} {
-		p := policy.ProfilePolicy(prof)
-		if p.SandboxDisabled && p.ForceContainerSandbox {
-			t.Errorf("profile %q: SandboxDisabled and ForceContainerSandbox cannot both be true", prof)
+// MaxPermissionMode 与 CapMode：hardened 把偏好压到 auto_review，其余不设限（ADR-0121 决策一）。
+func TestProfilePolicy_CapMode(t *testing.T) {
+	hard := policy.ProfilePolicy(policy.ProfileHardened)
+	std := policy.ProfilePolicy(policy.ProfileStandard)
+	full := policy.ProfilePolicy(policy.ProfileFull)
+	if hard.MaxPermissionMode != types.ModeAutoReview {
+		t.Errorf("hardened max = %q", hard.MaxPermissionMode)
+	}
+	if std.MaxPermissionMode != types.ModeFullAccess || full.MaxPermissionMode != types.ModeFullAccess {
+		t.Error("standard/full max should be full_access")
+	}
+	cases := []struct {
+		p       policy.Policy
+		in, out types.PermissionMode
+	}{
+		{hard, types.ModeFullAccess, types.ModeAutoReview},
+		{hard, types.ModeAutoReview, types.ModeAutoReview},
+		{hard, types.ModeDefault, types.ModeDefault},
+		{std, types.ModeFullAccess, types.ModeFullAccess},
+		{full, types.ModeDefault, types.ModeDefault},
+		{policy.Policy{}, types.ModeFullAccess, types.ModeFullAccess},
+	}
+	for _, c := range cases {
+		if got := c.p.CapMode(c.in); got != c.out {
+			t.Errorf("%s CapMode(%s) = %s, want %s", c.p.Profile, c.in, got, c.out)
 		}
 	}
 }

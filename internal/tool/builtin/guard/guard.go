@@ -7,56 +7,54 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// forbiddenDirs 敏感目录清单：写入类工具的黑名单，也是项目根（CheckScopeRoot）的判据。
-// 同时收录各项的真实路径：macOS 上 /etc → /private/etc，调用方传入的往往是已
-// EvalSymlinks 的规范路径（项目根、CheckWritablePath 的 real 分支），只比字面值会漏。
-func forbiddenDirs() []string {
-	base := forbiddenDirsLiteral()
-	out := make([]string, 0, len(base)*2)
-	for _, f := range base {
-		out = append(out, f)
-		if real, err := filepath.EvalSymlinks(f); err == nil && real != f {
-			out = append(out, real)
-		}
-	}
-	return out
+// 路径分类清单的单一事实源是 policy 包（ADR-0121 决策四）：自保护路径任何情况拒绝，
+// 敏感路径仅在调用没有授权凭据时拒绝（有凭据的调用已由 policy.Decide 判定过，敏感目标
+// 会在那里被硬限制询问）。
+
+func forbiddenErr(path string) error {
+	return apperr.New(apperr.CodeForbidden, fmt.Sprintf("path_guard: path is in forbidden directory: %s", path))
 }
 
-func forbiddenDirsLiteral() []string {
-	layout, err := config.DefaultDataLayout()
-	if err != nil {
-		return []string{"/etc", "/usr", "/bin", "/sbin", "/root/" + config.DefaultDataDirRel}
+func hasPrefixPath(clean string, dirs []string) bool {
+	for _, f := range dirs {
+		if clean == f || strings.HasPrefix(clean, f+string(filepath.Separator)) {
+			return true
+		}
 	}
-	home, _ := os.UserHomeDir()
-	return []string{
-		layout.Config,
-		layout.Data,
-		layout.Secrets,
-		layout.Audit,
-		layout.Eval,
-		filepath.Join(layout.HarnessOverlay, "prompt_addenda"),
-		filepath.Join(home, ".ssh"),
-		filepath.Join(home, ".gnupg"),
-		"/etc",
-		"/usr",
-		"/bin",
-		"/sbin",
-	}
+	return false
 }
 
-func CheckForbiddenPath(path string) error {
-	cleanPath := filepath.Clean(path)
-	for _, f := range forbiddenDirs() {
-		if cleanPath == f || strings.HasPrefix(cleanPath, f+string(filepath.Separator)) {
-			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("path_guard: path is in forbidden directory: %s", path))
-		}
+// CheckSelfProtected 自保护路径（vault.key、config.toml、secrets/、data/…）在任何情况下拒绝。
+func CheckSelfProtected(path string) error {
+	if hasPrefixPath(filepath.Clean(path), policy.SelfProtectedPaths()) {
+		return forbiddenErr(path)
 	}
 	return nil
+}
+
+// SelfProtectedMatcher 返回自保护路径匹配函数（清单只算一次，供目录遍历逐项过滤）。
+func SelfProtectedMatcher() func(path string) bool {
+	dirs := policy.SelfProtectedPaths()
+	return func(path string) bool { return hasPrefixPath(filepath.Clean(path), dirs) }
+}
+
+// CheckForbiddenPath 自保护恒拒 + 敏感路径拒绝（无凭据语义，写口径；也是 CheckScopeRoot 的判据）。
+func CheckForbiddenPath(path string) error {
+	clean := filepath.Clean(path)
+	if hasPrefixPath(clean, policy.SelfProtectedPaths()) || hasPrefixPath(clean, policy.SensitivePaths(true)) {
+		return forbiddenErr(path)
+	}
+	return nil
+}
+
+// forbiddenDirs 自保护 ∪ 敏感（写口径）：项目根的祖先判据用。
+func forbiddenDirs() []string {
+	return append(policy.SelfProtectedPaths(), policy.SensitivePaths(true)...)
 }
 
 // CheckScopeRoot 校验一个目录能否作为会话级文件访问根（项目工作目录，ADR-0097 决策五）。
@@ -166,24 +164,48 @@ func CheckAllowedPath(path string, allowedPaths []string) error {
 
 }
 
-// CheckWritablePath 写入类工具的统一路径门控：白名单归属 + 敏感目录黑名单，二者缺一不可
-// （GR-5.2-003：此前仅 write_file 同时校验，str_replace_editor/multi_edit/notebook_edit
-// 只查白名单，allowedPaths 覆盖 $HOME 时可直接改写 ~/.ssh/authorized_keys 等）。
-// 已存在路径（或其最近已存在祖先）按符号链接解析后的真实路径再校验一次，
-// 防止白名单内的软链指向敏感目录。
-func CheckWritablePath(path string, allowedPaths []string) error {
+// CheckReadablePath 读取类工具的统一路径门控（ADR-0121 决策三）：
+//   - 自保护路径（原路径与软链真实路径）恒拒；
+//   - 有授权凭据（Decide 已判定该调用）→ 放行，不再套更窄的白名单；
+//   - 无凭据 → 可信根白名单 + 敏感路径拒绝 + 软链真实路径复核。
+func CheckReadablePath(ctx context.Context, path string, allowedPaths []string) error {
+	return checkPath(ctx, path, allowedPaths, false)
+}
+
+// CheckWritablePath 写入类工具的统一路径门控，语义同 CheckReadablePath，敏感清单取写口径
+// （追加 /etc /usr /bin /sbin）。已存在路径（或其最近已存在祖先）按符号链接解析后的真实路径
+// 再校验一次，防止白名单内的软链指向受保护目录。
+func CheckWritablePath(ctx context.Context, path string, allowedPaths []string) error {
+	return checkPath(ctx, path, allowedPaths, true)
+}
+
+func checkPath(ctx context.Context, path string, allowedPaths []string, write bool) error {
+	if err := CheckSelfProtected(path); err != nil {
+		return err
+	}
+	real, hasReal := resolveExistingPrefix(path)
+	if hasReal {
+		if err := CheckSelfProtected(real); err != nil {
+			return err
+		}
+	}
+	// 受限文件根（对端委派任务）替换而非追加白名单，授权凭据不得放宽它
+	if _, confined := protocol.ConfinedRootFrom(ctx); !confined && protocol.PermissionGrantFrom(ctx) != protocol.GrantNone {
+		return nil
+	}
 	if err := CheckAllowedPath(path, allowedPaths); err != nil {
 		return err
 	}
-	if err := CheckForbiddenPath(path); err != nil {
-		return err
+	sens := policy.SensitivePaths(write)
+	if hasPrefixPath(filepath.Clean(path), sens) {
+		return forbiddenErr(path)
 	}
-	if real, ok := resolveExistingPrefix(path); ok && real != filepath.Clean(path) {
+	if hasReal && real != filepath.Clean(path) {
 		if err := CheckAllowedPath(real, resolveAll(allowedPaths)); err != nil {
 			return apperr.Wrap(apperr.CodeForbidden, "path_guard: symlink escapes allowed paths", err)
 		}
-		if err := CheckForbiddenPath(real); err != nil {
-			return err
+		if hasPrefixPath(real, sens) {
+			return forbiddenErr(real)
 		}
 	}
 	return nil

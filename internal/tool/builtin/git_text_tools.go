@@ -40,7 +40,7 @@ func MakeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string)
 		if args.Path == "" {
 			return nil, apperr.New(apperr.CodeInternal, "git_diff: path is required")
 		}
-		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
+		if err := guard.CheckReadablePath(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "MakeGitDiffFn", err)
 		}
 		workDir := filepath.Clean(args.Path)
@@ -146,7 +146,7 @@ func MakeGitCommitFn(allowedPaths []string, sandboxEnabled bool, bwrapPath strin
 		if args.Message == "" {
 			return nil, apperr.New(apperr.CodeInternal, "git_commit: message is required")
 		}
-		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
+		if err := guard.CheckWritablePath(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "MakeGitCommitFn", err)
 		}
 		workDir := filepath.Clean(args.Path)

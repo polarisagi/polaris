@@ -215,6 +215,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		StreamIdleTimeout:    time.Duration(config.DefaultThresholds().M1Router.SafecallStreamIdleTimeoutSec) * time.Second,
 		RotateVaultMasterKey: newVaultMasterKeyRotator(rwDB, vault, dataDir),
 		MCPOAuthCipher:       vault,
+		MaxPermissionMode:    deploymentMaxPermissionMode(),
 	})
 	s.pluginHandler = plugin.NewPluginHandler(plugin.Dependencies{
 		ExtRepo:              s.extRepo,

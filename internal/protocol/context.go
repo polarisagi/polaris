@@ -3,6 +3,8 @@ package protocol
 import (
 	"context"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // detachedContext 实现了 context.Context，只继承 Values，不继承 Deadline/Cancel
@@ -70,19 +72,62 @@ type CtxAnomalyFilterKey struct{}
 // CtxCapabilityTokenKey 用于在 context 中传递能力令牌 *token.Token (A-7/inv_M7_01)
 type CtxCapabilityTokenKey struct{}
 
-// CtxPreApprovedKey 标记当前工具调用已由统一权限判定（policy.Decide）放行或经用户确认，
-// 工具内部的命令风险 HITL（bash/run_command）据此不再重复询问；灾难性命令的硬拒绝不受影响。
-type CtxPreApprovedKey struct{}
+// PermissionGrant 本次工具调用的授权凭据（ADR-0121 决策二）：执行层的路径边界、宿主/沙箱
+// 与工具内 HITL 是否让位，都只由它派生，不得另设更窄的授权。
+type PermissionGrant int
 
-// WithPreApproved 标记本次调用已获授权。
-func WithPreApproved(ctx context.Context) context.Context {
-	return context.WithValue(ctx, CtxPreApprovedKey{}, true)
+const (
+	GrantNone     PermissionGrant = iota // 未经 policy.Decide 的执行路径（fail-closed 兜底）
+	GrantAuto                            // 自动放行（读取类、workspace_write、safe_command…）
+	GrantExplicit                        // 完全访问、已记住的授权、用户在审批卡上允许
+)
+
+// CtxPermissionGrantKey 授权凭据在 ctx 中的键。
+type CtxPermissionGrantKey struct{}
+
+// WithPermissionGrant 写入授权凭据；GrantNone 也写入，用于覆盖外层 ctx 继承来的凭据。
+func WithPermissionGrant(ctx context.Context, g PermissionGrant) context.Context {
+	return context.WithValue(ctx, CtxPermissionGrantKey{}, g)
 }
 
-// IsPreApproved 报告本次调用是否已获统一权限判定授权。
+// PermissionGrantFrom 读取授权凭据；未写入为 GrantNone。
+func PermissionGrantFrom(ctx context.Context) PermissionGrant {
+	if ctx == nil {
+		return GrantNone
+	}
+	g, _ := ctx.Value(CtxPermissionGrantKey{}).(PermissionGrant)
+	return g
+}
+
+// WithPreApproved 标记本次调用已获显式授权（= GrantExplicit）。
+func WithPreApproved(ctx context.Context) context.Context {
+	return WithPermissionGrant(ctx, GrantExplicit)
+}
+
+// IsPreApproved 报告本次调用是否已获显式授权：工具内命令风险 HITL 据此让位，
+// 灾难性命令的硬拒绝不受影响。
 func IsPreApproved(ctx context.Context) bool {
-	v, _ := ctx.Value(CtxPreApprovedKey{}).(bool)
-	return v
+	return PermissionGrantFrom(ctx) == GrantExplicit
+}
+
+// CtxPermissionModeKey 本次调用实际生效的权限模式（已按 Policy 上限压制），hooks 据此取 permission_mode。
+type CtxPermissionModeKey struct{}
+
+// WithPermissionMode 写入实际权限模式；mode 为空时原样返回。
+func WithPermissionMode(ctx context.Context, mode types.PermissionMode) context.Context {
+	if mode == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxPermissionModeKey{}, mode)
+}
+
+// PermissionModeFrom 读取实际权限模式；未写入返回空串（调用方按 default 处理）。
+func PermissionModeFrom(ctx context.Context) types.PermissionMode {
+	if ctx == nil {
+		return ""
+	}
+	m, _ := ctx.Value(CtxPermissionModeKey{}).(types.PermissionMode)
+	return m
 }
 
 // CtxBackgroundWorkKey 标记当前调用链属于可降级的后台工作。InferenceRouter 据此以

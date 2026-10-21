@@ -22,7 +22,7 @@ type checkpointRestoreArgs struct {
 //  1. 先对当前工作树创建快照（保留恢复前状态）
 //  2. git checkout <hash> -- . 把文件覆盖回目标快照状态
 //
-// full 档下 HITL 已由 Policy.HITLAutoApprove=true 自动放行（tool.yaml risk_level=high 会触发 HITL 检查）。
+// tool.yaml risk_level=high 会触发 HITL 检查；显式授权（ADR-0121）下工具内异常 HITL 让位。
 func MakeCheckpointRestoreFn(dataDir, projectDir string, retentionCount int) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		ctx, span := otel.Tracer("polaris/tool/checkpoint_restore").Start(ctx, "checkpoint_restore")

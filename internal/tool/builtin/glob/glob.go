@@ -29,6 +29,7 @@ func MakeGlobFn(allowedPaths []string) sandbox.InProcessFn {
 
 		// 遍历所有允许路径，而非仅第一个
 		var fullPaths []string
+		protected := guard.SelfProtectedMatcher()
 		for _, workDir := range guard.SearchRoots(ctx, allowedPaths) {
 			fsys := os.DirFS(workDir)
 			// os.DirFS 限定了根目录，doublestar.Glob 不会跨越边界
@@ -37,7 +38,11 @@ func MakeGlobFn(allowedPaths []string) sandbox.InProcessFn {
 				return nil, apperr.Wrap(apperr.CodeInternal, "glob: error matching", err)
 			}
 			for _, m := range matches {
-				fullPaths = append(fullPaths, filepath.Join(workDir, m))
+				full := filepath.Join(workDir, m)
+				if protected(full) {
+					continue // 搜索根若是自保护目录的上层，匹配结果不得暴露其内部路径
+				}
+				fullPaths = append(fullPaths, full)
 			}
 		}
 		return json.Marshal(map[string]any{"matches": fullPaths})

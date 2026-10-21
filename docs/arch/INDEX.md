@@ -167,6 +167,12 @@
 - **根因类别**：稳定层或会话层字节每回合变化（逐回合画像重写、会话层重渲染、激活工具追加 tools 数组、遮蔽过早触发）。
 - **排查起点**：ADR-0120 决策一/二；`POLARIS_LLM_RAW_DUMP=full` 抓两次请求后 `go run tools/cache_diff.go <a> <b>` 看首个分歧的层；门控 `internal/agent/prefix_stability_test.go`。
 
+### 症状 27：完全访问下 read_file 报 path_guard 拒绝 / bash 仍在沙箱内执行
+- **症状特征**：`permission_mode=full_access` 但文件工具被白名单拒绝，或 bash 报沙箱路径/权限错误；"批准后仍被拒"。
+- **归类模块**：M11 / M07 / M04
+- **根因类别**：执行层以更窄边界二次否决 `policy.Decide` 的放行（旧 `trust_profile` 启动期字段与 `permission_mode` 不联动）。
+- **排查起点**：ADR-0121 决策二/三；`internal/agent/agent_permission.go`（grant 记录）、`internal/tool/builtin/guard/guard.go`、`internal/tool/builtin/bash/bash.go`。
+
 **维护规范**：
 
 - 每项只留高命中率的路由信息，排查过程留给排查起点指向的文件/章节。

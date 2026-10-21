@@ -16,38 +16,26 @@ func (m *mockHITLGateway) RequestApproval(ctx context.Context, action string, re
 	return nil
 }
 
-type mockHITLWithAuditor struct {
-	called bool
-	logged bool
-	action string
-	meta   map[string]any
-}
+type mockHITLCounter struct{ called bool }
 
-func (m *mockHITLWithAuditor) RequestApproval(ctx context.Context, action string, req map[string]any) error {
+func (m *mockHITLCounter) RequestApproval(ctx context.Context, action string, req map[string]any) error {
 	m.called = true
 	return nil
 }
 
-func (m *mockHITLWithAuditor) Log(ctx context.Context, action string, meta map[string]any) error {
-	m.logged = true
-	m.action = action
-	m.meta = meta
-	return nil
-}
-
-func TestMakeRunCommandFn_FullProfile_NoWhitelist(t *testing.T) {
+func TestMakeRunCommandFn_ExplicitGrant_NoWhitelist(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
 	hitlMock := &mockHITLGateway{}
 
 	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
-	ctx := context.Background()
+	ctx := protocol.WithPreApproved(context.Background())
 
 	// "ls" 不在 run_command 默认的构建工具白名单中（默认只允许 go/cargo/npm 等）
-	// full 档下白名单关闭，应正常执行
+	// 有授权凭据时白名单不生效（ADR-0121 决策三），应正常执行
 	out, err := fn(ctx, []byte(`{"command":"ls -la"}`))
 	if err != nil {
-		t.Fatalf("full profile should allow non-whitelisted commands: %v", err)
+		t.Fatalf("granted call should allow non-whitelisted commands: %v", err)
 	}
 	if len(out) == 0 {
 		t.Fatal("expected non-empty output")
@@ -72,34 +60,19 @@ func TestMakeRunCommandFn_StandardProfile_WhitelistEnforced(t *testing.T) {
 	}
 }
 
-func TestMakeRunCommandFn_FullProfile_HITLAutoApprove(t *testing.T) {
+// 显式授权的高风险命令不再触发工具内 HITL。
+func TestMakeRunCommandFn_ExplicitGrant_SkipsInToolHITL(t *testing.T) {
 	tmpDir := t.TempDir()
-	pol := policy.ProfilePolicy(policy.ProfileFull)
-	hitlMock := &mockHITLWithAuditor{}
+	pol := policy.ProfilePolicy(policy.ProfileStandard)
+	hitlMock := &mockHITLCounter{}
 
 	fn := run_command.MakeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
-	ctx := context.WithValue(context.Background(), protocol.CtxAgentIDKey{}, "agent-rc-1")
+	ctx := protocol.WithPreApproved(context.Background())
 
-	// 高风险命令（pip install 属于 RiskHITL）：full 档下自动放行，写入审计并记录指标
-	// 即使命令因未安装或网络失败，HITL 校验发生在执行前
+	// pip install 属于 RiskHITL；即使命令因未安装或网络失败，HITL 校验发生在执行前
 	_, _ = fn(ctx, []byte(`{"command":"pip install something"}`))
 
 	if hitlMock.called {
-		t.Error("full profile should auto-approve without invoking RequestApproval")
-	}
-	if !hitlMock.logged {
-		t.Fatal("full profile HITL auto-approve must write audit record (V9 / HE-1)")
-	}
-	if hitlMock.action != "hitl_auto_approved" {
-		t.Errorf("expected action 'hitl_auto_approved', got %q", hitlMock.action)
-	}
-	if hitlMock.meta["checkpoint_type"] != "command_risk" {
-		t.Errorf("expected checkpoint_type 'command_risk', got %v", hitlMock.meta["checkpoint_type"])
-	}
-	if hitlMock.meta["tool"] != "run_command" {
-		t.Errorf("expected tool 'run_command', got %v", hitlMock.meta["tool"])
-	}
-	if hitlMock.meta["agent_id"] != "agent-rc-1" {
-		t.Errorf("expected agent_id 'agent-rc-1', got %v", hitlMock.meta["agent_id"])
+		t.Error("explicit grant must not invoke in-tool RequestApproval")
 	}
 }

@@ -235,7 +235,7 @@ func TestBridge_ProfileRestrictions(t *testing.T) {
 		t.Errorf("standard profile should reject write_file, but succeeded: %v", writeResp)
 	}
 
-	// 2. Full 档：放行写类工具 write_file
+	// 2. Full 档但未装配授权器：同样 fail-closed（不再因档位放行全部工具，ADR-0121）
 	fullPol := policy.ProfilePolicy(policy.ProfileFull)
 	fullSrv, err := codeact.StartBridgeServer(context.Background(), reg, fullPol, types.TaintLow)
 	if err != nil {
@@ -251,8 +251,8 @@ func TestBridge_ProfileRestrictions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("full write_file request failed: %v", err)
 	}
-	if ok, _ := fullWriteResp["ok"].(bool); !ok {
-		t.Errorf("full profile should allow write_file, but failed: %v", fullWriteResp["error"])
+	if ok, _ := fullWriteResp["ok"].(bool); ok {
+		t.Errorf("no authorizer: write_file must be rejected even in full profile: %v", fullWriteResp)
 	}
 }
 

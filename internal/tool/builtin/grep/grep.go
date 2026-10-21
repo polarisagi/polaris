@@ -47,14 +47,28 @@ type grepRunner struct {
 	total     int
 	truncated bool
 	seenFiles map[string]struct{}
+	// protected 自保护路径匹配器：显式搜索根可能是 ~ 之类的上层目录，遍历时不得吐出 secrets 等内容。
+	protected func(string) bool
 }
 
 func (g *grepRunner) walk(path string, d os.DirEntry, walkErr error) error {
 	if walkErr != nil {
 		return nil //nolint:nilerr // 目录项读取失败时静默跳过，不中断整体 walk
 	}
+	if g.protected != nil && g.protected(path) {
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
 	if d.IsDir() {
 		return nil
+	}
+	if d.Type()&os.ModeSymlink != 0 && g.protected != nil {
+		// 软链指向自保护路径时 ReadFile 会跟随读取，需按真实路径复核
+		if real, err := filepath.EvalSymlinks(path); err == nil && g.protected(real) {
+			return nil
+		}
 	}
 	if g.truncated {
 		return filepath.SkipAll
@@ -187,7 +201,7 @@ func MakeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 
 		searchRoots := guard.SearchRoots(ctx, allowedPaths)
 		if args.Path != "" {
-			if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
+			if err := guard.CheckReadablePath(ctx, args.Path, paths); err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "makeGrepFn", err)
 			}
 			searchRoots = []string{filepath.Clean(args.Path)}
@@ -195,6 +209,7 @@ func MakeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 
 		grepClampArgs(&args)
 		runner := newGrepRunner(re, args)
+		runner.protected = guard.SelfProtectedMatcher()
 
 		for _, root := range searchRoots {
 			if walkErr := filepath.WalkDir(filepath.Clean(root), runner.walk); walkErr != nil {

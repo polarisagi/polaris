@@ -28,6 +28,7 @@ import (
 
 	sffi "github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -120,6 +121,37 @@ func rustSandboxContextJSON(ctx protocol.SandboxContext) ([]byte, error) {
 	return goStringToC(string(b)), nil
 }
 
+// withDefaultDenyPaths 调用方未显式给出 DenyPaths 时注入默认清单（ADR-0121 决策五）。
+// 集中在 FFI 入口注入，使所有调用方自动生效，避免逐个遗漏。
+// 用 SensitivePaths(false)：write=true 会带上 /usr /bin /etc 等系统目录，而沙箱对它们
+// 只需写保护（seatbelt 默认不授写、bwrap 只读绑定），若读写全拒会让 bash 本身无法加载。
+func withDefaultDenyPaths(ctx protocol.SandboxContext) protocol.SandboxContext {
+	if len(ctx.DenyPaths) > 0 {
+		return ctx
+	}
+	ctx.DenyPaths = mergeDenyPaths(policy.SelfProtectedPaths(), policy.SensitivePaths(false))
+	return ctx
+}
+
+// mergeDenyPaths 按首次出现顺序去重合并。
+func mergeDenyPaths(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, g := range groups {
+		for _, p := range g {
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // RustSandboxExecV2 通过 Rust FFI V2 执行沙箱命令（run-to-completion）。
 // 用于 codeact/skill/hook/builtin 等短生命周期执行。
 func RustSandboxExecV2(ctx protocol.SandboxContext, timeoutMs uint64) (*RustSandboxResponse, error) {
@@ -132,6 +164,7 @@ func RustSandboxExecV2(ctx protocol.SandboxContext, timeoutMs uint64) (*RustSand
 	if timeoutMs > 0 {
 		ctx.TimeoutMs = timeoutMs
 	}
+	ctx = withDefaultDenyPaths(ctx)
 	inputCStr, err := rustSandboxContextJSON(ctx)
 	if err != nil {
 		return nil, err
@@ -165,6 +198,7 @@ func RustSandboxWrapArgv(ctx protocol.SandboxContext) (*protocol.WrapArgvResult,
 	if nativeSandboxWrapArgv == nil {
 		return nil, apperr.New(apperr.CodeInternal, "rust_native_sandbox_v2: native_sandbox_wrap_argv symbol not found (rebuild dylib)")
 	}
+	ctx = withDefaultDenyPaths(ctx)
 	inputCStr, err := rustSandboxContextJSON(ctx)
 	if err != nil {
 		return nil, err

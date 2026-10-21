@@ -1,5 +1,18 @@
 package codeact
 
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// CallAuthorizer 桥内每次工具调用的统一权限判定（ADR-0121 决策六；调用方定义，HE-3）。
+// ok=true 时 grant 是该次调用的授权凭据，桥会覆盖写入 ctx；ok=false 时 reason 回给脚本。
+type CallAuthorizer interface {
+	AuthorizeCall(ctx context.Context, tool types.Tool, args []byte, taint types.TaintLevel) (grant protocol.PermissionGrant, reason string, ok bool)
+}
+
 // ProfileChecker 校验当前 Agent profile 是否允许调用指定工具（R2-15）。
 type ProfileChecker interface {
 	CheckProfileTool(toolName, delegateTarget string) error
@@ -12,6 +25,12 @@ type bridgeConfig struct {
 	dataDir        string
 	token          string
 	profileChecker ProfileChecker
+	authorizer     CallAuthorizer
+}
+
+// WithBridgeCallAuthorizer 注入桥内调用授权器；未注入时桥 fail-closed 退回只读幂等规则。
+func WithBridgeCallAuthorizer(a CallAuthorizer) BridgeOption {
+	return func(cfg *bridgeConfig) { cfg.authorizer = a }
 }
 
 // WithBridgeDataDir 指定 Bridge Unix Socket 根数据目录（socket 写入 <dataDir>/run/）。

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/classifier"
@@ -28,14 +27,12 @@ type bashArgs struct {
 
 // MakeBashFn 创建 bash 工具执行函数。
 //
-// pol 携带信任档位的所有行为开关（ADR-0115 WP1 决策二）：
-//   - pol.SandboxDisabled=true → 宿主直接执行（full 档）
-//   - pol.ForceContainerSandbox=true → 覆盖 sandboxEnabled=false，强制容器（hardened 档）
-//   - pol.HITLAutoApprove=true → 高风险命令自动放行+审计（full 档）
-//   - pol.AllowedPathsOpen=true → bash 不受路径白名单限制（full 档）
+// 执行环境由本次调用的授权凭据派生（ADR-0121 决策三）：显式授权（GrantExplicit，即完全访问、
+// 已记住的授权或用户审批）且 pol 未强制容器时在宿主执行、不限路径、允许后台作业与持久终端、
+// 工具内命令风险 HITL 让位；其余在沙箱内受 allowedPaths 约束。pol.ForceContainerSandbox
+// （hardened 档）覆盖一切，强制容器沙箱。
 //
-// allowedPaths/sandboxEnabled/netPolicy/bwrapPath 来自 SandboxConfig，
-// standard 档下行为与改造前逐字节等价（R1 向后兼容约束）。
+// allowedPaths/sandboxEnabled/netPolicy/bwrapPath 来自 SandboxConfig。
 //
 //nolint:gocyclo
 func MakeBashFn(
@@ -68,43 +65,46 @@ func MakeBashFn(
 			return nil, apperr.New(apperr.CodeInternal, "bash: command is required")
 		}
 
-		verdict, err := evaluateBashRisk(ctx, args.Command, pol, riskClassifier, hitlGateway)
+		verdict, err := evaluateBashRisk(ctx, args.Command, riskClassifier, hitlGateway)
 		if err != nil {
 			return nil, err
 		}
 
+		// 显式授权且未被 hardened 强制容器 → 宿主执行（ADR-0121 决策三）
+		host := protocol.PermissionGrantFrom(ctx) == protocol.GrantExplicit && !pol.ForceContainerSandbox
+
 		workDir := ""
-		// full 档 AllowedPathsOpen：不限路径，workDir 仍取第一个可用路径（通常是项目目录）
+		// 宿主执行不限路径，workDir 仍取第一个可用路径（通常是项目目录）
 		if len(paths) > 0 {
 			workDir = paths[0]
 		}
 
 		// 1. 后台进程模式（WP5 ADR-0115 / R2-02 / R3-08）：
-		// - full 档（pol.SandboxDisabled == true）：直接在宿主机运行；
-		// - standard 档：后台命令必须走沙箱执行器，若无沙箱支持则明确拒绝，不得回落到宿主；
+		// - 宿主执行（显式授权）：直接在宿主机运行；
+		// - 其余：后台命令必须走沙箱执行器，若无沙箱支持则明确拒绝，不得回落到宿主；
 		// - hardened 档（!pol.BackgroundJobsAllowed）：拒绝后台模式。
 		if args.Background {
 			if !pol.BackgroundJobsAllowed {
 				return nil, apperr.New(apperr.CodeForbidden, "bash: background jobs are disabled in hardened trust profile")
 			}
-			if !pol.SandboxDisabled {
-				return nil, apperr.New(apperr.CodeForbidden, "background jobs require full trust profile or a sandbox backend that supports detached execution")
+			if !host {
+				return nil, apperr.New(apperr.CodeForbidden, "background jobs require explicit authorization (full-access mode, a remembered approval or user approval) or a sandbox backend that supports detached execution")
 			}
 			return execBackgroundJob(ctx, args.Command, args.SessionID, workDir)
 		}
 
 		// 2. 持久终端模式（WP5 ADR-0115 / R2-02 / R3-08）：
 		// - hardened 档（!pol.PersistentTerminalAllowed）：拒绝持久终端模式；
-		// - standard 档：若无持久沙箱可用，明确拒绝，不得在宿主直接执行；
-		// - full 档：允许宿主持久沙箱执行。
+		// - 非宿主执行：若无持久沙箱可用，明确拒绝，不得在宿主直接执行；
+		// - 宿主执行（显式授权）：允许宿主持久会话。
 		if args.SessionID != "" {
 			if !pol.PersistentTerminalAllowed {
 				return nil, apperr.New(apperr.CodeForbidden, "bash: persistent terminal is disabled in hardened trust profile")
 			}
-			if !pol.SandboxDisabled && (pSbx == nil || !pSbx.Available()) {
-				return nil, apperr.New(apperr.CodeForbidden, "persistent terminal requires full trust profile or a sandbox backend that supports persistent sessions")
+			if !host && (pSbx == nil || !pSbx.Available()) {
+				return nil, apperr.New(apperr.CodeForbidden, "persistent terminal requires explicit authorization (full-access mode, a remembered approval or user approval) or a sandbox backend that supports persistent sessions")
 			}
-			return execPersistentTerminal(ctx, pSbx, args, paths, workDir, pol)
+			return execPersistentTerminal(ctx, pSbx, args, paths, workDir, host)
 		}
 
 		execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -112,8 +112,8 @@ func MakeBashFn(
 
 		// 按 Policy 决定实际沙箱行为
 		effectiveSandbox := sandboxEnabled
-		if pol.SandboxDisabled {
-			// full 档：宿主直接执行，忽略配置的 sandboxEnabled
+		if host {
+			// 显式授权：宿主直接执行，忽略配置的 sandboxEnabled
 			effectiveSandbox = false
 		} else if pol.ForceContainerSandbox {
 			// hardened 档：强制容器，覆盖 sandboxEnabled=false
@@ -126,7 +126,8 @@ func MakeBashFn(
 			"risk", verdict.Level.String(),
 			"cmd", args.Command,
 			"dir", workDir,
-			"profile", pol.Profile)
+			"profile", pol.Profile,
+			"grant", protocol.PermissionGrantFrom(ctx))
 
 		var outBytes []byte
 		var execErr error
@@ -135,16 +136,11 @@ func MakeBashFn(
 		if effectiveSandbox {
 			// V2 统一沙箱接口：env preset 在 Rust 侧由 CallerType=builtin 推导，
 			// 凭据过滤由 Rust 侧 CREDENTIAL_STRIP 规则保证（无需 Go 侧 sandboxenv.BaseEnv() 过滤）。
-			sandboxPaths := paths
-			if pol.AllowedPathsOpen {
-				// full 档不传路径白名单限制，宿主侧自由访问
-				sandboxPaths = nil
-			}
 			sandboxCtx := protocol.SandboxContext{
 				CallerType:    protocol.CallerBuiltin,
 				Command:       args.Command,
 				Workdir:       workDir,
-				AllowedPaths:  sandboxPaths,
+				AllowedPaths:  paths,
 				NetworkPolicy: ToSandboxNetPolicy(netPolicy),
 				BwrapPath:     bwrapPath, // Linux 用户自定义 bwrap 路径（空=自动查找）
 				TimeoutMs:     30_000,
@@ -212,7 +208,7 @@ func ToSandboxNetPolicy(p protocol.SandboxNetworkPolicy) string {
 	return protocol.NetPolicyDeny
 }
 
-func evaluateBashRisk(ctx context.Context, cmd string, pol policy.Policy, riskClassifier *classifier.CommandRiskClassifier, hitlGateway HITLGateway) (classifier.Verdict, error) {
+func evaluateBashRisk(ctx context.Context, cmd string, riskClassifier *classifier.CommandRiskClassifier, hitlGateway HITLGateway) (classifier.Verdict, error) {
 	verdict := riskClassifier.Classify(cmd)
 	switch verdict.Level {
 	case classifier.RiskDeny:
@@ -224,15 +220,6 @@ func evaluateBashRisk(ctx context.Context, cmd string, pol policy.Policy, riskCl
 		// 统一权限判定（ADR-0117）已放行或经用户确认这次调用：不再重复询问；上面的 RiskDeny 不受影响。
 		if protocol.IsPreApproved(ctx) {
 			slog.Info("bash: risky command pre-approved by permission decision", "cmd", cmd, "reason", verdict.Reason)
-			return verdict, nil
-		}
-		// full 档：自动放行 + 记录审计日志（ADR-0115 WP1 行为矩阵 / V9 HE-1）
-		if pol.HITLAutoApprove {
-			slog.Warn("bash: HITL auto-approved (full profile)",
-				"cmd", cmd, "reason", verdict.Reason,
-				"profile", pol.Profile)
-			metrics.RecordHITLAutoApproved(ctx, "bash", "command_risk")
-			logBashHITLAutoApproved(ctx, hitlGateway, cmd, verdict.Reason, pol.Profile)
 			return verdict, nil
 		}
 		if hitlGateway == nil {
@@ -286,7 +273,7 @@ func execPersistentTerminal(
 	args bashArgs,
 	paths []string,
 	workDir string,
-	pol policy.Policy,
+	host bool,
 ) ([]byte, error) {
 	if pSbx == nil {
 		return nil, apperr.New(apperr.CodeUnimplemented, "bash: persistent terminal backend not configured")
@@ -295,7 +282,7 @@ func execPersistentTerminal(
 		ToolName:      "bash",
 		Language:      "bash",
 		SessionID:     args.SessionID,
-		HostExecution: pol.SandboxDisabled,
+		HostExecution: host,
 		AllowedPaths:  paths,
 		WorkDir:       workDir,
 		ScriptBytes:   []byte(args.Command),
@@ -323,27 +310,4 @@ func execPersistentTerminal(
 		return nil, apperr.Wrap(apperr.CodeInternal, "bash: marshal persistent result", err)
 	}
 	return out, nil
-}
-
-func logBashHITLAutoApproved(ctx context.Context, gw HITLGateway, cmd, reason string, profile policy.TrustProfile) {
-	al, ok := gw.(Auditor)
-	if !ok || al == nil {
-		return
-	}
-	meta := map[string]any{
-		"tool":            "bash",
-		"checkpoint_type": "command_risk",
-		"command":         cmd,
-		"reason":          reason,
-		"profile":         string(profile),
-	}
-	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
-		meta["agent_id"] = aid
-	}
-	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
-		meta["session_id"] = sid
-	}
-	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
-		slog.ErrorContext(ctx, "bash: failed to log hitl auto approved audit", "err", err)
-	}
 }

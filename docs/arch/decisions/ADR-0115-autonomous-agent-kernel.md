@@ -42,6 +42,7 @@ Polaris 拥有完备的五防线、Taint 追踪、State-in-DB 与指标门控，
 引入系统全局配置 `[security] trust_profile`（`full | standard | hardened`，默认 `standard` 严格保持现状行为），所有闸门通过纯函数 `security.ProfilePolicy(profile)` 统一判定。在 `full` 档下，bash/run_command 允许宿主直接执行，出站与 HITL 采用「记录+审计+高风险写前影子 git 快照」而非阻断；新增内置只读工具 `checkpoint_list` 与恢复工具 `checkpoint_restore`。
 - *反例*: 禁止在非 `ProfilePolicy` 处散落 profile 条件分支；禁止在无快照保护的 full 档执行高危写。
 - *重新评估*: 若用户在 full 档下的误删发生率高于预期，考虑增设不可豁免的系统级关键目录黑名单保护。
+- *复核 2026-10-21（ADR-0121）*: 授权相关字段（`SandboxDisabled`/`AllowedPathsOpen`/`HITLAutoApprove`/`RunCmdWhitelistEnabled`/`CodeActAllToolsAllowed`）移出档位，改由每次调用的授权凭据派生；档位只保留权限上限（hardened ≤ auto_review）与非授权功能开关。理由：启动期档位与运行期 `permission_mode` 不联动，导致"完全访问"下仍被沙箱/白名单拒绝。原"关键目录黑名单"重新评估项已由 ADR-0121 决策四自保护路径落地。
 
 #### 决策二（WP2 智能体循环内核）
 新增 `loop_mode = "agentic"` 作为默认内核模式（原五段式标记为 `staged` 冻结），模型在单一工具循环（S_LOOP / S_LOOP_EXEC）内自主完成感知、调用、观察与收尾。无工具调用且 completion=auto 即为最终回复，显式模式下通过 `finish` 工具完成。每个工具调用严格通过 S_VALIDATE 四层校验链与 `ExecuteTool` 物理把关。支持通过网关消息入队实现回合内插话（steer）。

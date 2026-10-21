@@ -62,6 +62,8 @@ type SandboxContext struct {
 	Workdir string `json:"workdir,omitempty"`
 	// AllowedPaths 可读写路径白名单（workspace / 项目目录）
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
+	// DenyPaths 自保护与敏感路径，读写都拒绝，优先于 AllowedPaths
+	DenyPaths []string `json:"deny_paths,omitempty"`
 
 	// EnvPreset 环境注入预设（空字符串 = 由 CallerType 推导）
 	EnvPreset string `json:"env_preset,omitempty"`

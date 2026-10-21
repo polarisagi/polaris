@@ -50,7 +50,11 @@ func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintL
 
 	targetSessionID, stateful := a.resolveCodeActSessionID(codeArgs.SessionID, codeArgs.StatefulSession)
 
-	caResult, err := a.codeAct.Execute(protocol.WithProfileChecker(ctx, a), CodeActRequest{
+	execCtx := protocol.WithProfileChecker(ctx, a)
+	if a.perm.modes != nil { // 未装配权限判定时不挂授权器，桥退回只读幂等规则（fail-closed）
+		execCtx = protocol.WithToolCallAuthorizer(execCtx, a)
+	}
+	caResult, err := a.codeAct.Execute(execCtx, CodeActRequest{
 		Language:        lang,
 		Code:            codeArgs.Code,
 		CapabilityID:    jitTok.Claims.TokenID,
@@ -115,7 +119,7 @@ func (a *Agent) recordCodeActTaintBypass(ctx context.Context, profile policy.Tru
 func codeActToolSchema() types.ToolSchema {
 	return types.ToolSchema{
 		Name:        "code_act",
-		Description: "Run a Python or Bash script in the sandbox. In Python, polaris.call(name, **args) calls a registered tool (loaded or not; outside the full trust profile only read-only tools) and returns its result; polaris.call_many([...]) runs calls concurrently; polaris.tools(query) lists callable tools. Only what the script prints is returned to you. Use it for multi-step data work so intermediate results stay out of your context.",
+		Description: "Run a Python or Bash script in the sandbox. In Python, polaris.call(name, **args) calls a registered tool (loaded or not; each call is authorized like a direct call, and calls that would need user approval are refused — make those outside code_act) and returns its result; polaris.call_many([...]) runs calls concurrently; polaris.tools(query) lists callable tools. Only what the script prints is returned to you. Use it for multi-step data work so intermediate results stay out of your context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

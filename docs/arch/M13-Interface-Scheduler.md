@@ -782,7 +782,7 @@ automations 的**有序链式/DAG 扩展**：将多个任务编排为流水线�
 | `computer_any_app_enabled` | `"true"`/`"false"` | 是否允许任意应用 |
 | `computer_chrome_enabled` | `"true"`/`"false"` | 是否启用 Chrome 深度交互 |
 
-- **模式语义**：`full_access` 除硬限制外不再询问；`auto_review` 读取、工作区内常规操作、安全命令自动，其余询问；`default` 仅读取自动。每次工具调用实时读取。详见 ADR-0117、M11 §2.3.1。
+- **模式语义**：`full_access` 除硬限制外不再询问；`auto_review` 读取、工作区内常规操作、安全命令自动，其余询问；`default` 仅读取自动。每次工具调用实时读取。详见 ADR-0117、M11 §2.3.1。（ADR-0121 订正：`full_access` 下命令直接在本机执行、不经沙箱，Polaris 自身密钥与配置在任何模式都不可访问；hardened 档上限为 `auto_review`，`PUT permission_mode=full_access` 返回 400，前端 `setMode` 回滚并提示。）
 - **模式切换**：`PUT /v1/preferences/permission_mode`，下一次工具调用即生效。"已记住的授权"存 `approval_rules` 表（项目级，设置页「权限」Tab 可逐条删除）。
 - **Chrome 深度交互**：启用后 `browser_use` / `computer_use` 经 `interceptComputerUse()` 放行，通过 MCP puppeteer 或 CDP 执行 `click(x,y)` / `type(text)` / `read_dom()`；所有 DOM 读取内容进入 `TaintLevel=High`（外部 Web 内容，inv_M7_02）。
 

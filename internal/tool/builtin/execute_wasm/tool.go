@@ -29,8 +29,13 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 		}
 
 		cleanWorkspace := filepath.Clean(args.Workspace)
+		// Wasm 挂载目录不随授权凭据放宽（ADR-0121 决策六：模型生成的模块代码按白名单隔离），
+		// 但仍须避开自保护路径（可信根外的软链也在此被拦）。
 		if !guard.IsPathAllowed(cleanWorkspace, paths) {
 			return nil, apperr.New(apperr.CodeInternal, "workspace path not allowed")
+		}
+		if err := guard.CheckSelfProtected(cleanWorkspace); err != nil {
+			return nil, apperr.Wrap(apperr.CodeForbidden, "execute_wasm", err)
 		}
 
 		quota := toolsb.CalculateWasmQuota(spec.SystemTier, spec.TaintLevel)

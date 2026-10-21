@@ -59,6 +59,9 @@ type CmdVerdict struct {
 	Reason   string // 最严一段的原因代码
 	Network  bool   // 含联网命令（数据外泄硬限制用）
 	Segments []CmdSegment
+	// SelfProtected / SensitivePath：静态可解析的路径词落入自保护 / 敏感路径（ADR-0121 决策四）。
+	SelfProtected bool
+	SensitivePath bool
 }
 
 // ClassifyCommand 对 cmd 分级。
@@ -69,7 +72,8 @@ func ClassifyCommand(cmd string, env CmdEnv) CmdVerdict {
 		return CmdVerdict{Class: CmdUnknown, Reason: "unparsable_command"}
 	}
 	w.stmts(file.Stmts)
-	return CmdVerdict{Class: w.worst, Reason: w.reason, Network: w.network, Segments: w.segs}
+	return CmdVerdict{Class: w.worst, Reason: w.reason, Network: w.network, Segments: w.segs,
+		SelfProtected: w.selfHit, SensitivePath: w.sensHit}
 }
 
 type walker struct {
@@ -82,6 +86,8 @@ type walker struct {
 	segs    []CmdSegment
 	depth   int
 	tab     cmdTable
+	selfHit bool
+	sensHit bool
 }
 
 func newWalker(env CmdEnv) *walker {
@@ -238,7 +244,27 @@ func (w *walker) redirect(r *syntax.Redirect) {
 	default:
 		return
 	}
+	if s, dyn := wordString(r.Word, w.env.Home); !dyn {
+		w.classifyPathWord(s, true)
+	}
 	w.writeTarget(r.Word)
+}
+
+// classifyPathWord 静态可解析的路径词落入自保护/敏感路径时记标志；含运行期展开的词无法判定，调用方不传入。
+func (w *walker) classifyPathWord(word string, write bool) {
+	if i := strings.Index(word, "="); i >= 0 && strings.HasPrefix(word, "-") {
+		word = word[i+1:] // --opt=/path 形态
+	}
+	if word == "" || (!strings.ContainsAny(word, "/~") && !strings.HasPrefix(word, ".")) {
+		return
+	}
+	abs, ok := absPath(word, w.cwd, w.env.Home)
+	if !ok {
+		return
+	}
+	self, sens := pathClassFor(abs, write, w.env.Home)
+	w.selfHit = w.selfHit || self
+	w.sensHit = w.sensHit || sens
 }
 
 // writeTarget 判定重定向写入目标：/dev/null 等放行，工作区外危险，无法确认未知。

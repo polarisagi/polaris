@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/classifier"
@@ -29,13 +28,10 @@ type runCommandArgs struct {
 
 // MakeRunCommandFn 创建 run_command 工具执行函数。
 //
-// pol 携带信任档位的所有行为开关（ADR-0115 WP1 决策二）：
-//   - pol.RunCmdWhitelistEnabled=false → full 档关闭命令前缀白名单
-//   - pol.SandboxDisabled=true → 宿主直接执行（full 档）
-//   - pol.ForceContainerSandbox=true → 强制容器（hardened 档）
-//   - pol.HITLAutoApprove=true → 高风险命令自动放行（full 档）
-//
-// standard 档行为与改造前逐字节等价（R1 向后兼容约束）。
+// 执行环境由本次调用的授权凭据派生（ADR-0121 决策三）：显式授权（GrantExplicit）且
+// pol 未强制容器时在宿主执行、不限工作目录；有任一凭据则命令前缀白名单不生效，
+// 无凭据（未经 policy.Decide 的兜底路径）才套白名单；pol.ForceContainerSandbox
+// （hardened 档）强制容器沙箱。
 //
 //nolint:gocyclo
 func MakeRunCommandFn(
@@ -55,7 +51,8 @@ func MakeRunCommandFn(
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
 		paths := guard.ScopedPaths(ctx, allowedPaths)
-		args, workDir, timeout, err := parseRunCommandArgs(input, paths, pol)
+		host := protocol.PermissionGrantFrom(ctx) == protocol.GrantExplicit && !pol.ForceContainerSandbox
+		args, workDir, timeout, err := parseRunCommandArgs(ctx, input, paths, host)
 		if err != nil {
 			return nil, err
 		}
@@ -76,13 +73,6 @@ func MakeRunCommandFn(
 			if protocol.IsPreApproved(ctx) {
 				slog.Info("run_command: risky command pre-approved by permission decision",
 					"cmd", args.Command, "reason", verdict.Reason)
-			} else if pol.HITLAutoApprove {
-				// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
-				slog.Warn("run_command: HITL auto-approved (full profile)",
-					"cmd", args.Command, "reason", verdict.Reason,
-					"profile", pol.Profile)
-				metrics.RecordHITLAutoApproved(ctx, "run_command", "command_risk")
-				logRunCmdHITLAutoApproved(ctx, hitlGateway, args.Command, verdict.Reason, pol.Profile)
 			} else {
 				if hitlGateway == nil {
 					return nil, apperr.New(apperr.CodeForbidden, "run_command: HITL gateway is nil, fail-closed for RiskHITL command")
@@ -104,7 +94,8 @@ func MakeRunCommandFn(
 			"risk", verdict.Level.String(),
 			"cmd", args.Command,
 			"dir", workDir,
-			"profile", pol.Profile)
+			"profile", pol.Profile,
+			"grant", protocol.PermissionGrantFrom(ctx))
 
 		env := append(sandboxenv.BaseEnv(), "GOCACHE=/tmp/gocache", "CARGO_HOME=/tmp/cargo", "npm_config_cache=/tmp/npm")
 
@@ -114,7 +105,7 @@ func MakeRunCommandFn(
 
 		// 按 Policy 决定实际沙箱行为（与 bash.go 保持一致逻辑）
 		effectiveSandbox := sandboxEnabled
-		if pol.SandboxDisabled {
+		if host {
 			effectiveSandbox = false
 		} else if pol.ForceContainerSandbox {
 			effectiveSandbox = true
@@ -123,15 +114,11 @@ func MakeRunCommandFn(
 		if effectiveSandbox {
 			// V2 统一沙箱接口：构建工具额外需要 GOCACHE/CARGO_HOME/npm_config_cache，
 			// 通过 EnvExtra 显式注入（Rust 侧 credential 过滤后追加）。
-			sandboxPaths := paths
-			if pol.AllowedPathsOpen {
-				sandboxPaths = nil
-			}
 			sandboxCtx := protocol.SandboxContext{
 				CallerType:    protocol.CallerBuiltin,
 				Command:       args.Command,
 				Workdir:       workDir,
-				AllowedPaths:  sandboxPaths,
+				AllowedPaths:  paths,
 				NetworkPolicy: bash.ToSandboxNetPolicy(netPolicy), // 构建工具通常需要网络（下载依赖），由上层配置控制
 				EnvExtra:      []string{"GOCACHE=/tmp/gocache", "CARGO_HOME=/tmp/cargo", "npm_config_cache=/tmp/npm"},
 				BwrapPath:     bwrapPath, // Linux 用户自定义 bwrap 路径（空=自动查找）
@@ -166,7 +153,7 @@ func MakeRunCommandFn(
 	}
 }
 
-func parseRunCommandArgs(input []byte, allowedPaths []string, pol policy.Policy) (*runCommandArgs, string, time.Duration, error) {
+func parseRunCommandArgs(ctx context.Context, input []byte, allowedPaths []string, host bool) (*runCommandArgs, string, time.Duration, error) {
 	var args runCommandArgs
 	if err := json.Unmarshal(input, &args); err != nil {
 		return nil, "", 0, apperr.Wrap(apperr.CodeInternal, "run_command: invalid args", err)
@@ -176,8 +163,8 @@ func parseRunCommandArgs(input []byte, allowedPaths []string, pol policy.Policy)
 	}
 
 	// 命令前缀白名单（构建工具，不含 bash/sh 等 shell 解释器）
-	// full 档 RunCmdWhitelistEnabled=false：关闭白名单，宿主直接执行任意命令。
-	if pol.RunCmdWhitelistEnabled {
+	// 已有授权凭据的调用由 policy.Decide 判定过，白名单只作无凭据兜底。
+	if protocol.PermissionGrantFrom(ctx) == protocol.GrantNone {
 		cmdPrefix := strings.SplitN(strings.TrimSpace(args.Command), " ", 2)[0]
 		allowedCmds := map[string]bool{
 			"go": true, "cargo": true, "npm": true, "yarn": true, "pnpm": true,
@@ -193,7 +180,7 @@ func parseRunCommandArgs(input []byte, allowedPaths []string, pol policy.Policy)
 	if workDir == "" && len(allowedPaths) > 0 {
 		workDir = allowedPaths[0]
 	}
-	if workDir != "" && !pol.AllowedPathsOpen {
+	if workDir != "" && !host {
 		if err := guard.CheckAllowedPath(workDir, allowedPaths); err != nil {
 			return nil, "", 0, apperr.Wrap(apperr.CodeInternal, "makeRunCommandFn", err)
 		}
@@ -205,27 +192,4 @@ func parseRunCommandArgs(input []byte, allowedPaths []string, pol policy.Policy)
 	}
 
 	return &args, workDir, timeout, nil
-}
-
-func logRunCmdHITLAutoApproved(ctx context.Context, gw HITLGateway, cmd, reason string, profile policy.TrustProfile) {
-	al, ok := gw.(Auditor)
-	if !ok || al == nil {
-		return
-	}
-	meta := map[string]any{
-		"tool":            "run_command",
-		"checkpoint_type": "command_risk",
-		"command":         cmd,
-		"reason":          reason,
-		"profile":         string(profile),
-	}
-	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
-		meta["agent_id"] = aid
-	}
-	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok && sid != "" {
-		meta["session_id"] = sid
-	}
-	if err := al.Log(ctx, "hitl_auto_approved", meta); err != nil {
-		slog.ErrorContext(ctx, "run_command: failed to log hitl auto approved audit", "err", err)
-	}
 }

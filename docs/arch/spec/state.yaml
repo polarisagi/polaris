@@ -1041,7 +1041,7 @@ thresholds:
     recall_rerank_min_prob: 0.5 # toml:"recall.rerank_min_prob"，重排相关概率下限；0.5=交叉编码器 yes/no 二分类的自然判定边界，非经验比例
     recall_rag_min_surprise: 0.3 # toml:"recall.rag_min_surprise"，SurpriseIndex 低于此值本回合不查 RAG；高于 surprise_hint_threshold 时 RAG 深度加倍（自原 Assembler 迁入回合内召回）
     # ADR-0115 自主内核配置 (WP1~WP6)
-    trust_profile: standard # toml:"security.trust_profile"，可选 full | standard | hardened，默认 standard (WP1, ADR-0115)
+    trust_profile: standard # toml:"security.trust_profile"，可选 full | standard | hardened，默认 standard (WP1, ADR-0115)；ADR-0121：档位只设权限上限（hardened ≤ auto_review 且强制容器沙箱，standard/full 上限 full_access），不再携带授权字段
     checkpoint_throttle_max_per_turn: 20 # toml:"security.checkpoint_throttle_max_per_turn"，单回合快照次数上限 (WP1, ADR-0115)
     loop_mode: agentic # toml:"loop_mode"，可选 agentic | staged，默认 agentic (WP2, ADR-0115)
     loop_runaway_guard_rounds: 200 # toml:"loop.runaway_guard_rounds"，full 0 (不限), standard 200, hardened 50 (WP2, ADR-0115)

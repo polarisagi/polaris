@@ -26,6 +26,11 @@ type PromptEvaluator interface {
 	EvaluateHookPrompt(ctx context.Context, prompt, model string, agent bool) (string, error)
 }
 
+// Approver PreToolUse hook 返回 ask 时的人工审批通道（consumer-side；签名对齐 bash 的 HITLGateway）。
+type Approver interface {
+	RequestApproval(ctx context.Context, action string, req map[string]any) error
+}
+
 // Deps Runner 依赖。Policy 与 Wrapper 为安全门：缺失时相应处理器 fail-closed 不执行。
 type Deps struct {
 	Registry   *Registry
@@ -36,6 +41,7 @@ type Deps struct {
 	Prompt     PromptEvaluator
 	PII        *guard.PIIDetector
 	PIIDesens  *guard.PIIDesensitizer
+	Approver   Approver // 可选；nil 时 ask 一律拒绝
 }
 
 // Runner 按事件分发 hook。
@@ -54,6 +60,9 @@ func NewRunner(deps Deps) *Runner {
 // SetMCPToolCaller / SetPromptEvaluator 启动期注入（MCPManager 与 LLM 路由晚于执行信封构造）。
 func (r *Runner) SetMCPToolCaller(c MCPToolCaller)     { r.deps.MCP = c }
 func (r *Runner) SetPromptEvaluator(p PromptEvaluator) { r.deps.Prompt = p }
+
+// SetApprover 启动期注入审批通道（HITL 网关晚于 Runner 构造）。
+func (r *Runner) SetApprover(a Approver) { r.deps.Approver = a }
 
 // hookActiveKey 标记 hook 处理器自身发起的调用（mcp_tool / prompt），这些调用不再触发 hook，
 // 否则 matcher 覆盖到被调用工具时会无限递归。

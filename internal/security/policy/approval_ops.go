@@ -54,6 +54,7 @@ func classifyOp(tool types.Tool, args []byte, ctx Context) operation {
 	switch {
 	case tool.Name == "str_replace_editor" && argString(m, "command") == "view":
 		op.kind = opRead
+		op.fillTargets(m, ctx)
 	case fileWriteTools()[tool.Name]:
 		op.kind = opFileWrite
 		op.fillTargets(m, ctx)
@@ -67,6 +68,7 @@ func classifyOp(tool types.Tool, args []byte, ctx Context) operation {
 		op.fillTargets(m, ctx)
 	default:
 		op.kind = opRead
+		op.fillTargets(m, ctx)
 	}
 	return op
 }
@@ -90,6 +92,7 @@ func shellOp(op operation, m map[string]any, ctx Context) operation {
 		return op
 	}
 	op.cmd = ClassifyCommand(cmd, env)
+	op.selfHit, op.sensHit = op.cmd.SelfProtected, op.cmd.SensitivePath
 	return op
 }
 
@@ -120,7 +123,8 @@ func hostOf(m map[string]any) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// fillTargets 从参数里取写入目标路径并按可信根分流；取不到路径的写类工具保持无目标（视为不涉及路径）。
+// fillTargets 从参数里取目标路径并按可信根分流，同时做自保护/敏感分类（读取类也要，ADR-0121）；
+// 取不到路径的写类工具保持无目标（视为不涉及路径），读取类无路径不按根外处理。
 func (o *operation) fillTargets(m map[string]any, ctx Context) {
 	w := newWalker(CmdEnv{Roots: ctx.Roots, Home: ctx.Home})
 	for _, k := range []string{"path", "file_path", "notebook_path", "dir", "directory", "target"} {
@@ -135,6 +139,9 @@ func (o *operation) fillTargets(m map[string]any, ctx Context) {
 			continue
 		}
 		real := resolveReal(abs)
+		self, sens := pathClassFor(real, o.kind != opRead, ctx.Home)
+		o.selfHit = o.selfHit || self
+		o.sensHit = o.sensHit || sens
 		o.targets = append(o.targets, real)
 		if !insideRoots(real, w.roots) {
 			o.outside = append(o.outside, real)

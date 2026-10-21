@@ -28,7 +28,7 @@ const maxRemoteVideoBytes = 200 << 20
 // MakeExecuteVideoAnalysisFn 执行视频分析。
 //
 // 安全边界（GR-5.2-001）：
-//   - 本地路径必须通过宿主 allowedPaths 白名单与 CheckForbiddenPath 黑名单，此前直接放行
+//   - 本地路径必须通过 guard.CheckReadablePath（自保护恒拒；无授权凭据时再套白名单与敏感路径黑名单），此前直接放行
 //     入参所在目录，任意主机路径均可喂给 ffmpeg；
 //   - 远程 URL 经 SafeDialer（SSRF/DNS rebinding 防护）下载到临时目录，ffmpeg 永不联网，
 //     此前由 ffmpeg 直连，完全绕过出站防护；
@@ -113,10 +113,7 @@ func resolveVideoInput(ctx context.Context, uri, tmpDir string, allowedPaths []s
 	if err != nil {
 		return "", "", apperr.Wrap(apperr.CodeInvalidInput, "video_analysis: invalid path", err)
 	}
-	if err := guard.CheckAllowedPath(abs, allowedPaths); err != nil {
-		return "", "", apperr.Wrap(apperr.CodeForbidden, "video_analysis", err)
-	}
-	if err := guard.CheckForbiddenPath(abs); err != nil {
+	if err := guard.CheckReadablePath(ctx, abs, allowedPaths); err != nil {
 		return "", "", apperr.Wrap(apperr.CodeForbidden, "video_analysis", err)
 	}
 	return abs, filepath.Dir(abs), nil

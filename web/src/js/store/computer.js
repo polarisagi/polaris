@@ -28,19 +28,27 @@ document.addEventListener('alpine:init', () => {
 
         async savePreference(key, value) {
             try {
-                await fetch(`/v1/preferences/${key}`, {
+                const res = await fetch(`/v1/preferences/${key}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ value: value.toString() })
                 });
+                return res.ok;
             } catch (e) {
                 console.error("Failed to save preference", e);
+                return false;
             }
         },
 
-        setMode(newMode) {
+        async setMode(newMode) {
+            const prev = this.mode;
             this.mode = newMode;
-            this.savePreference('permission_mode', newMode);
+            // 服务端可能拒绝（如 hardened 档不允许 full_access）：回滚并提示，不能静默。
+            if (!(await this.savePreference('permission_mode', newMode))) {
+                this.mode = prev;
+                const msg = Alpine.store('i18n')?.t('computer_mode_set_failed') || 'Failed to save permission mode';
+                Alpine.store('toast').show('error', msg);
+            }
         },
 
         async loadRules() {

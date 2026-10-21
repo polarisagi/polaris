@@ -24,7 +24,7 @@ func MakeNotebookEditFn(allowedPaths []string) sandbox.InProcessFn {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "notebook_edit: invalid args", err)
 		}
-		if err := guard.CheckWritablePath(args.Path, paths); err != nil {
+		if err := guard.CheckWritablePath(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeNotebookEditFn", err)
 		}
 		cleanPath := filepath.Clean(args.Path)

@@ -27,9 +27,9 @@ func TestMakeBashFn_FullProfile(t *testing.T) {
 	pol := policy.ProfilePolicy(policy.ProfileFull)
 	hitlMock := &mockHITLGateway{}
 
-	// full 档：即使 sandboxEnabled=true，实际也按宿主直接执行
+	// 显式授权：即使 sandboxEnabled=true，实际也按宿主直接执行（ADR-0121 决策三）
 	fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", hitlMock, pol)
-	ctx := context.Background()
+	ctx := protocol.WithPreApproved(context.Background())
 
 	outBytes, err := fn(ctx, []byte(`{"command":"echo hello_full_profile"}`))
 	if err != nil {
@@ -42,10 +42,10 @@ func TestMakeBashFn_FullProfile(t *testing.T) {
 	}
 
 	if res["sandbox_method"] != "disabled" {
-		t.Errorf("full profile should disable sandbox, got method: %v", res["sandbox_method"])
+		t.Errorf("explicit grant should run on host, got method: %v", res["sandbox_method"])
 	}
 	if res["sandbox_enabled"] != false {
-		t.Errorf("full profile should have effective sandbox_enabled=false, got: %v", res["sandbox_enabled"])
+		t.Errorf("explicit grant should have effective sandbox_enabled=false, got: %v", res["sandbox_enabled"])
 	}
 }
 
@@ -72,58 +72,38 @@ func TestMakeBashFn_HardenedProfile(t *testing.T) {
 	}
 }
 
-type mockHITLWithAuditor struct {
-	called bool
-	logged bool
-	action string
-	meta   map[string]any
-}
-
-func (m *mockHITLWithAuditor) RequestApproval(ctx context.Context, action string, req map[string]any) error {
-	m.called = true
-	return nil
-}
-
-func (m *mockHITLWithAuditor) Log(ctx context.Context, action string, meta map[string]any) error {
-	m.logged = true
-	m.action = action
-	m.meta = meta
-	return nil
-}
-
-func TestMakeBashFn_FullProfile_HITLAutoApprove(t *testing.T) {
+// 无凭据时 full 档也不再宿主执行：trust_profile 不带来授权（ADR-0121 决策一）。
+func TestMakeBashFn_FullProfile_NoGrantDoesNotRunOnHost(t *testing.T) {
 	tmpDir := t.TempDir()
 	pol := policy.ProfilePolicy(policy.ProfileFull)
-	hitlMock := &mockHITLWithAuditor{}
+	fn := bash.MakeBashFn([]string{tmpDir}, true, protocol.NetPolicyAllow, "", &mockHITLGateway{}, pol)
+	outBytes, err := fn(context.Background(), []byte(`{"command":"echo x"}`))
+	if err != nil {
+		return // 测试环境无沙箱后端时 setup 失败也说明没有落到宿主
+	}
+	var res map[string]any
+	if err := json.Unmarshal(outBytes, &res); err == nil && res["sandbox_method"] == "disabled" {
+		t.Errorf("no grant must not run on host, got %v", res)
+	}
+}
 
+// 显式授权的高风险命令不再触发工具内 HITL；无凭据时照常询问。
+func TestMakeBashFn_ExplicitGrantSkipsInToolHITL(t *testing.T) {
+	tmpDir := t.TempDir()
+	pol := policy.ProfilePolicy(policy.ProfileStandard)
+	hitlMock := &mockHITLGateway{}
 	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", hitlMock, pol)
-	ctx := context.WithValue(context.Background(), protocol.CtxAgentIDKey{}, "agent-123")
 
-	// 创建测试目录与文件
 	testDir := filepath.Join(tmpDir, "sub")
 	_ = os.MkdirAll(testDir, 0o755)
-	testFile := filepath.Join(testDir, "dummy.txt")
-	_ = os.WriteFile(testFile, []byte("ok"), 0o644)
+	_ = os.WriteFile(filepath.Join(testDir, "dummy.txt"), []byte("ok"), 0o644)
 
-	// 高风险命令（rm -rf 命令属于 HITL 范围）：full 档下自动放行，写入审计并记录指标
-	_, err := fn(ctx, []byte(`{"command":"rm -rf `+testDir+`"}`))
-	if err != nil {
-		t.Fatalf("rm command should succeed under full profile auto-approval: %v", err)
+	ctx := protocol.WithPreApproved(context.Background())
+	if _, err := fn(ctx, []byte(`{"command":"rm -rf `+testDir+`"}`)); err != nil {
+		t.Fatalf("explicit grant: rm should succeed: %v", err)
 	}
 	if hitlMock.called {
-		t.Error("full profile should auto-approve without invoking RequestApproval")
-	}
-	if !hitlMock.logged {
-		t.Fatal("full profile HITL auto-approve must write audit record (V9 / HE-1)")
-	}
-	if hitlMock.action != "hitl_auto_approved" {
-		t.Errorf("expected action 'hitl_auto_approved', got %q", hitlMock.action)
-	}
-	if hitlMock.meta["checkpoint_type"] != "command_risk" {
-		t.Errorf("expected checkpoint_type 'command_risk', got %v", hitlMock.meta["checkpoint_type"])
-	}
-	if hitlMock.meta["agent_id"] != "agent-123" {
-		t.Errorf("expected agent_id 'agent-123', got %v", hitlMock.meta["agent_id"])
+		t.Error("explicit grant must not invoke in-tool RequestApproval")
 	}
 }
 
@@ -149,5 +129,22 @@ func TestMakeBashFn_HardenedProfile_BackgroundAndPersistentRejected(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "persistent terminal is disabled in hardened trust profile") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// hardened 档即使显式授权也不在宿主执行（ADR-0121 决策一）。
+func TestMakeBashFn_HardenedProfile_ExplicitGrantStillContainer(t *testing.T) {
+	tmpDir := t.TempDir()
+	pol := policy.ProfilePolicy(policy.ProfileHardened)
+	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyDeny, "", &mockHITLGateway{}, pol)
+	ctx := protocol.WithPreApproved(context.Background())
+
+	outBytes, err := fn(ctx, []byte(`{"command":"echo hello"}`))
+	if err != nil {
+		return // 无沙箱动态库的环境里 setup 失败也说明没有落到宿主
+	}
+	var res map[string]any
+	if err := json.Unmarshal(outBytes, &res); err == nil && res["sandbox_enabled"] != true {
+		t.Errorf("hardened must stay in container under explicit grant, got %v", res["sandbox_enabled"])
 	}
 }

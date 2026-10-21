@@ -230,11 +230,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	slog.Info("polaris: hooks.json engine wired into ExecEnvelope")
 
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
-	// allowedPaths：DataDir 始终包含（Agent 工作区 + DB + 日志）。
+	// allowedPaths：可信根 = Layout.Workspace（Agent 工作区）+ sandbox.allowed_paths（ADR-0121 决策四）。
+	// DataDir 根不再进入白名单：其下 secrets/、data/、vault.key 等是自保护路径。
 	// sandbox.allowed_paths 追加用户自定义目录（项目路径等）。
 	// 去重防止同一目录被 OS 沙箱重复绑定（bwrap --bind-try 重复无害但浪费）。
 	allowedPaths := deduplicatePaths(append(
-		[]string{sb.DataDir},
+		[]string{sb.Layout.Workspace},
 		sb.Cfg.Sandbox.AllowedPaths...,
 	))
 	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
@@ -515,6 +516,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}))
 	hookRunner.SetMCPToolCaller(&mcpHookCaller{mgr: mcpMgr})
 	hitlGateway.SetPermissionHooks(hookRunner)
+	hookRunner.SetApprover(hitlGateway) // PreToolUse ask 走同一审批通道（ADR-0121 决策六）
 	hitlGateway.SetPromptRelay(pluginChannels)
 	pluginChannels.BindApprovals(hitlGateway)
 	hookEval := &hookPromptEvaluator{infer: llmInfer}

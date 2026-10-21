@@ -38,10 +38,12 @@ type ChatDispatcher interface {
 	SampleAndScoreReply(sessionID, query, response string)
 }
 type SysAdminHandler struct {
-	Chat       ChatDispatcher
-	DB         protocol.SQLQuerier
-	SystemRepo repo.SystemRepository
-	BudgetRepo repo.BudgetRepository
+	// MaxPermissionMode 见 Dependencies.MaxPermissionMode。
+	MaxPermissionMode types.PermissionMode
+	Chat              ChatDispatcher
+	DB                protocol.SQLQuerier
+	SystemRepo        repo.SystemRepository
+	BudgetRepo        repo.BudgetRepository
 	// UsageRepo 只读 llm_calls 聚合（GET /v1/usage，ADR-0105 决策八）；nil 时该路由返回 503。
 	UsageRepo      repo.LLMUsageQueryRepository
 	nowFn          func() time.Time // 测试注入时钟；nil = time.Now
@@ -161,6 +163,9 @@ type Dependencies struct {
 	// internal/extension/mcp.MCPManager 持有的 Vault 实例分开构造但共享同一份磁盘
 	// 主密钥，密文可互相解密（server_lifecycle.go NewServer 内的 vault 变量）。
 	MCPOAuthCipher mcpadmin.CredentialCipher
+	// MaxPermissionMode 部署档位的权限上限（policy.Policy.MaxPermissionMode，ADR-0121 决策一）；
+	// 空 = 不设限。偏好接口据此拒绝写入超出上限的 permission_mode。
+	MaxPermissionMode types.PermissionMode
 }
 
 // NewSysAdminHandler 故意不做构造函数级 fail-closed nil 强制校验——本包已有
@@ -203,6 +208,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		KillSwitch:           deps.KillSwitch,
 		RotateVaultMasterKey: deps.RotateVaultMasterKey,
 		StreamIdleTimeout:    deps.StreamIdleTimeout,
+		MaxPermissionMode:    deps.MaxPermissionMode,
 		Insights:             insightsadmin.NewInsightsAdmin(deps.DB),
 		// Store/Sentinel 均先 nil 构造（此时 AgentBundle 尚未构建），Server.SetEvalAdmin
 		// 后置回填时对本对象的字段做原地赋值而非替换整个指针——server_routes.go 注册路由

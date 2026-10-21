@@ -42,7 +42,7 @@ func MakeReadFileFn(allowedPaths []string) sandbox.InProcessFn {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInvalidInput, "read_file: invalid args", err)
 		}
-		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
+		if err := guard.CheckReadablePath(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeReadFileFn", err)
 		}
 		f, err := os.Open(filepath.Clean(args.Path))

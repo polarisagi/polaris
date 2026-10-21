@@ -97,12 +97,21 @@ type permExecutor struct {
 	inner protocol.AgentToolExecutor
 	mu    sync.Mutex
 	ran   []string
+	// grants 记录每次执行时 ctx 里的授权凭据与模式（ADR-0121 决策二）。
+	grants []grantSeen
+}
+
+type grantSeen struct {
+	tool  string
+	grant protocol.PermissionGrant
+	mode  types.PermissionMode
 }
 
 func (e *permExecutor) Lookup(name string) (types.Tool, error) { return e.inner.Lookup(name) }
-func (e *permExecutor) ExecuteWithTaint(_ context.Context, name string, input []byte, _ types.TaintLevel) (*types.ToolResult, error) {
+func (e *permExecutor) ExecuteWithTaint(ctx context.Context, name string, input []byte, _ types.TaintLevel) (*types.ToolResult, error) {
 	e.mu.Lock()
 	e.ran = append(e.ran, name+" "+string(input))
+	e.grants = append(e.grants, grantSeen{tool: name, grant: protocol.PermissionGrantFrom(ctx), mode: protocol.PermissionModeFrom(ctx)})
 	e.mu.Unlock()
 	lvl := types.TaintNone
 	out := "ok"
@@ -373,5 +382,97 @@ func TestPermissionE2E_ModeSwitchTakesEffectNextCall(t *testing.T) {
 	}
 	if f.exec.ranContaining("frobnicate --b") != 1 || f.exec.ranContaining("frobnicate --a") != 0 {
 		t.Fatalf("first denied, second runs under full_access: %v", f.exec.ran)
+	}
+}
+
+func (e *permExecutor) grantOf(tool string) (grantSeen, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, g := range e.grants {
+		if g.tool == tool {
+			return g, true
+		}
+	}
+	return grantSeen{}, false
+}
+
+// 现场复现（ADR-0121）：full_access 下读工作区外的仓库文件，不审批、执行时带显式凭据，不会被工具层二次拒绝。
+func TestPermissionE2E_FullAccessReadOutsideRootsCarriesGrant(t *testing.T) {
+	outside := t.TempDir()
+	f := newPermFixture(t, types.ModeFullAccess, "p1", &memRules{}, []*types.ProviderResponse{
+		{ToolCalls: []types.InferToolCall{call("c1", "read_file", `{"path":"`+outside+`/go.mod"}`)}},
+		{Content: "done"},
+	}, denyAll)
+	runAgenticTurnWait(t, f.ag)
+	if f.hitl.count() != 0 || f.exec.ranCount("read_file") != 1 {
+		t.Fatalf("outside read must run without approval: prompts=%d ran=%v", f.hitl.count(), f.exec.ran)
+	}
+	// 读取类先于 full_access 求值（ADR-0117），凭据为 Auto；对 guard 而言 Auto 已足以放行工作区外读取。
+	g, _ := f.exec.grantOf("read_file")
+	if g.grant != protocol.GrantAuto || g.mode != types.ModeFullAccess {
+		t.Fatalf("read under full_access must carry GrantAuto + effective mode, got %+v", g)
+	}
+}
+
+// full_access 下的写入（含工作区外）带显式凭据。
+func TestPermissionE2E_FullAccessWriteCarriesExplicitGrant(t *testing.T) {
+	outside := t.TempDir()
+	f := newPermFixture(t, types.ModeFullAccess, "p1", &memRules{}, []*types.ProviderResponse{
+		{ToolCalls: []types.InferToolCall{call("c1", "write_file", `{"path":"`+outside+`/a.txt","content":"x"}`)}},
+		{Content: "done"},
+	}, denyAll)
+	runAgenticTurnWait(t, f.ag)
+	if g, ok := f.exec.grantOf("write_file"); !ok || g.grant != protocol.GrantExplicit {
+		t.Fatalf("full_access write must carry explicit grant, got %+v (ran=%v)", g, f.exec.ran)
+	}
+}
+
+// 读取类在自动档下是 GrantAuto，不是显式授权。
+func TestPermissionE2E_AutoReadCarriesAutoGrant(t *testing.T) {
+	outside := t.TempDir()
+	f := newPermFixture(t, types.ModeAutoReview, "p1", &memRules{}, []*types.ProviderResponse{
+		{ToolCalls: []types.InferToolCall{call("c1", "read_file", `{"path":"`+outside+`/go.mod"}`)}},
+		{Content: "done"},
+	}, denyAll)
+	runAgenticTurnWait(t, f.ag)
+	if g, _ := f.exec.grantOf("read_file"); g.grant != protocol.GrantAuto || g.mode != types.ModeAutoReview {
+		t.Fatalf("auto read must carry GrantAuto, got %+v", g)
+	}
+}
+
+// 自保护路径在 full_access 下也是 Deny：不弹卡、不执行，原因回给模型。
+func TestPermissionE2E_SelfProtectedDeniedWithoutCard(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	vault := home + "/.polaris/vault.key"
+	f := newPermFixture(t, types.ModeFullAccess, "p1", &memRules{}, []*types.ProviderResponse{
+		{ToolCalls: []types.InferToolCall{call("c1", "read_file", `{"path":"`+vault+`"}`)}},
+		{ToolCalls: []types.InferToolCall{call("c2", "bash", `{"command":"cat `+vault+`"}`)}},
+		{Content: "done"},
+	}, allowAll)
+	runAgenticTurnWait(t, f.ag)
+	if f.hitl.count() != 0 {
+		t.Fatalf("self-protected deny must not raise an approval card, got %d", f.hitl.count())
+	}
+	if f.exec.ranCount("read_file") != 0 || f.exec.ranCount("bash") != 0 {
+		t.Fatalf("self-protected calls must not execute: %v", f.exec.ran)
+	}
+	if res := toolResultFor(f, "c1"); !strings.Contains(res, "protected") {
+		t.Fatalf("model should be told why, got %q", res)
+	}
+}
+
+// hardened 档把偏好 full_access 压到 auto_review：未知命令仍要询问（ADR-0121 决策一）。
+func TestPermissionE2E_HardenedCapsFullAccess(t *testing.T) {
+	f := newPermFixture(t, types.ModeFullAccess, "p1", &memRules{}, []*types.ProviderResponse{
+		{ToolCalls: []types.InferToolCall{call("c1", "bash", `{"command":"frobnicate --a"}`)}},
+		{Content: "done"},
+	}, denyAll)
+	cfg := *config.Get()
+	cfg.Security.TrustProfile = string(policy.ProfileHardened)
+	config.Update(&cfg)
+	runAgenticTurnWait(t, f.ag)
+	if f.hitl.count() != 1 || f.exec.ranCount("bash") != 0 {
+		t.Fatalf("hardened must cap full_access to auto_review: prompts=%d ran=%v", f.hitl.count(), f.exec.ran)
 	}
 }

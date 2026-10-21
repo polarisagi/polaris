@@ -79,7 +79,7 @@ func TestScopedPaths_ReadGateEndToEnd(t *testing.T) {
 	if err := CheckAllowedPath(target, ScopedPaths(ctx, base)); err != nil {
 		t.Fatalf("项目会话应可访问项目目录: %v", err)
 	}
-	if err := CheckWritablePath(target, ScopedPaths(ctx, base)); err != nil {
+	if err := CheckWritablePath(ctx, target, ScopedPaths(ctx, base)); err != nil {
 		t.Fatalf("项目会话应可写项目目录: %v", err)
 	}
 }

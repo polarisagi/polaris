@@ -181,7 +181,7 @@ func RegisterBuiltinTools(
 			return apperr.Wrap(apperr.CodeInternal,
 				fmt.Sprintf("builtin_tools: load meta for %q", d.name), err)
 		}
-		applyDescriptionOverride(&meta, pol)
+		applyDescriptionOverride(&meta)
 		sbx.Register(meta.Name, d.fn)
 		if err := toolReg.Register(meta); err != nil {
 			return apperr.Wrap(apperr.CodeInternal,
@@ -259,22 +259,18 @@ func fullProfileToolDefs(
 	return out
 }
 
-// applyDescriptionOverride 对随运行配置变化的工具描述做启动期覆盖。
-func applyDescriptionOverride(meta *types.Tool, pol policy.Policy) {
+// applyDescriptionOverride 覆盖随运行配置变化的工具描述。
+func applyDescriptionOverride(meta *types.Tool) {
 	if meta.Name == "bash" {
-		meta.Description = bashDescription(pol)
+		meta.Description = bashDescription()
 	}
 }
 
-// bashDescription 按信任档位给出 bash 的真实执行环境（ADR-0120 决策三第 7 条）。描述在启动时确定、
-// 整个进程不变（tools 数组字节稳定）；此前一律写"sandboxed、限定工作目录"，full 档下与事实不符，
-// 模型会因此回避本可以直接做的事。
-func bashDescription(pol policy.Policy) string {
+// bashDescription 给出 bash 的执行环境说明（ADR-0120 决策三第 7 条）。执行环境由每次调用的授权凭据
+// 决定（ADR-0121），不再随信任档位启动期固定，因此描述是不依赖配置的固定文本，保证 tools 数组字节稳定。
+func bashDescription() string {
 	const tail = " background=true runs it as a job (see job_status/job_output); session_id keeps a persistent shell across calls."
-	if pol.SandboxDisabled && pol.AllowedPathsOpen {
-		return "Run a shell command directly on the host." + tail
-	}
-	return "Run a shell command in the sandbox, restricted to the allowed working directories." + tail
+	return "Run a shell command. Explicitly authorized calls (full-access mode, a remembered approval, or user approval) run directly on the host; others run in the sandbox restricted to the working directories." + tail
 }
 
 // RegisterGoalTool 注册跨回合目标工具（ADR-0120 决策七）。单独成函数以免继续膨胀

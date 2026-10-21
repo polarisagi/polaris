@@ -7,15 +7,29 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // NewInput 以 context 中的会话信息构造事件输入基底。
 func NewInput(ctx context.Context, ev Event) Input {
-	in := Input{HookEventName: ev, PermissionMode: "default"}
+	in := Input{HookEventName: ev, PermissionMode: hookPermissionMode(protocol.PermissionModeFrom(ctx))}
 	if sid, ok := ctx.Value(protocol.CtxSessionIDKey{}).(string); ok {
 		in.SessionID = sid
 	}
 	return in
+}
+
+// hookPermissionMode 把 Polaris 权限模式映射为 Claude Code 兼容名（ADR-0121 决策六），
+// 让按 permission_mode 分支的第三方 hook 脚本看到真实模式；取不到时按最严格的 default。
+func hookPermissionMode(m types.PermissionMode) string {
+	switch m {
+	case types.ModeAutoReview:
+		return "acceptEdits"
+	case types.ModeFullAccess:
+		return "bypassPermissions"
+	default:
+		return "default"
+	}
 }
 
 // FirePreToolUse 实现 sandbox.HookFirer。
@@ -26,9 +40,15 @@ func (r *Runner) FirePreToolUse(ctx context.Context, toolName string, toolInput 
 	if out.Block || out.Decision == DecisionDeny {
 		return sandbox.PreToolUseResult{Blocked: true, Reason: firstNonBlank(out.Reason, "denied by PreToolUse hook")}
 	}
-	// "ask"：Polaris 无逐次交互式权限提示通道时按拒绝处理（fail-closed），原因提示用户审批。
+	// "ask"：有审批通道则走同一审批（ADR-0121 决策六）；无通道时按拒绝处理（fail-closed）。
 	if out.Decision == DecisionAsk {
-		return sandbox.PreToolUseResult{Blocked: true, Reason: "PreToolUse hook requires user confirmation: " + out.Reason}
+		if r.deps.Approver == nil {
+			return sandbox.PreToolUseResult{Blocked: true, Reason: "PreToolUse hook requires user confirmation: " + out.Reason}
+		}
+		err := r.deps.Approver.RequestApproval(ctx, "hook_ask", map[string]any{"tool_name": toolName, "reason": out.Reason})
+		if err != nil {
+			return sandbox.PreToolUseResult{Blocked: true, Reason: "PreToolUse hook confirmation not granted: " + err.Error()}
+		}
 	}
 	return sandbox.PreToolUseResult{UpdatedInput: out.UpdatedInput}
 }

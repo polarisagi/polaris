@@ -29,7 +29,7 @@ func TestMakeBashFn_BackgroundJob(t *testing.T) {
 	pol := policy.ProfilePolicy(policy.ProfileFull)
 	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, pol)
 
-	ctx := context.Background()
+	ctx := protocol.WithPreApproved(context.Background())
 	input := `{"command":"echo 'job_bg_done'","background":true,"session_id":"s_bg_1"}`
 	res, err := fn(ctx, []byte(input))
 	if err != nil {
@@ -89,7 +89,7 @@ func TestMakeBashFn_PersistentSession_StatePersists(t *testing.T) {
 	defer pSbx.Shutdown()
 
 	fn := bash.MakeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "", nil, pol, pSbx)
-	ctx := context.Background()
+	ctx := protocol.WithPreApproved(context.Background())
 
 	// 1. 设置环境变量与函数
 	in1 := `{"command":"export TEST_AUTONOMY_VAR='polaris_42'\nmy_fn() { echo \"fn_$1\"; }","session_id":"sess_term_1"}`

@@ -71,14 +71,14 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 	hitlGw := r.hitl
 	al := r.auditLogger
 	r.mu.RUnlock()
-	pol := r.EffectivePolicy()
 
-	// full 档：自动放行 + 审计（ADR-0115 WP1 行为矩阵 / V9 HE-1）
-	if pol.HITLAutoApprove {
-		slog.Warn("tool_registry: anomaly filter HITL auto-approved (full profile)",
-			"tool", name, "profile", pol.Profile)
+	// 显式授权（完全访问 / 已记住的授权 / 用户审批）：异常 HITL 让位，仅审计（ADR-0121 决策三 / V9 HE-1）
+	if protocol.IsPreApproved(ctx) {
+		mode := protocol.PermissionModeFrom(ctx)
+		slog.Warn("tool_registry: anomaly filter HITL skipped (explicit grant)",
+			"tool", name, "mode", mode)
 		metrics.RecordHITLAutoApproved(ctx, name, "anomaly_escalation")
-		logAnomalyHITLAutoApproved(ctx, al, name, pol.Profile)
+		logAnomalyHITLAutoApproved(ctx, al, name, mode)
 		f.Record(name, features)
 		return nil
 	}
@@ -122,15 +122,16 @@ func (r *InMemoryToolRegistry) triggerPreExecutionCheckpoint(ctx context.Context
 	}
 }
 
-func logAnomalyHITLAutoApproved(ctx context.Context, al protocol.AuditLogger, name string, profile policy.TrustProfile) {
+func logAnomalyHITLAutoApproved(ctx context.Context, al protocol.AuditLogger, name string, mode types.PermissionMode) {
 	if al == nil {
 		return
 	}
 	meta := map[string]any{
 		"tool":            name,
 		"checkpoint_type": "anomaly_escalation",
-		"profile":         string(profile),
-		"reason":          "anomaly filter bypass in full profile",
+		"grant":           "explicit",
+		"mode":            string(mode),
+		"reason":          "anomaly filter bypass under explicit grant",
 	}
 	if aid, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && aid != "" {
 		meta["agent_id"] = aid

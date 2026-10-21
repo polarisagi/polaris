@@ -27,6 +27,7 @@ pub(super) fn build_seatbelt_profile(
     workdir: &str,
     network_block: bool,
     sandbox_path: &str,
+    deny_paths: &[String],
 ) -> String {
     let mut profile = String::from(
         r#"(version 1)
@@ -69,6 +70,8 @@ pub(super) fn build_seatbelt_profile(
         ));
     }
 
+    append_deny_rules(&mut profile, deny_paths);
+
     // 网络策略
     if network_block {
         profile.push_str(
@@ -80,6 +83,25 @@ pub(super) fn build_seatbelt_profile(
 
     let _ = sandbox_path; // V1 PATH 由 env_prefix 注入，不内嵌于 profile
     profile
+}
+
+/// 追加 deny 规则。必须位于所有 allow 之后：SBPL 后者优先，deny 才能压过
+/// `(allow file-read*)` 与 workspace subpath 授权。目录用 subpath，已存在的普通文件用
+/// literal；不存在的路径按 subpath 处理（目录将来被创建时同样受保护）。
+#[cfg(target_os = "macos")]
+pub(super) fn append_deny_rules(profile: &mut String, deny_paths: &[String]) {
+    for p in deny_paths {
+        if p.is_empty() {
+            continue;
+        }
+        let is_file = std::fs::metadata(p).map(|m| !m.is_dir()).unwrap_or(false);
+        let kind = if is_file { "literal" } else { "subpath" };
+        profile.push_str(&format!(
+            "(deny file-read* file-write* ({} {}))\n",
+            kind,
+            sbpl_escape(p)
+        ));
+    }
 }
 
 /// SBPL 路径字符串转义（仅处理双引号和反斜杠）
@@ -102,7 +124,13 @@ pub(super) fn exec_seatbelt(req: &NativeSandboxRequest) -> Result<NativeSandboxR
     let sandbox_path = build_sandbox_path();
     let env_vars = build_safe_env(req.env_extra.as_deref().unwrap_or(&[]), &sandbox_path);
 
-    let profile = build_seatbelt_profile(&allowed, workdir, network_block, &sandbox_path);
+    let profile = build_seatbelt_profile(
+        &allowed,
+        workdir,
+        network_block,
+        &sandbox_path,
+        req.deny_paths.as_deref().unwrap_or(&[]),
+    );
 
     let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
     let env_prefix: String = env_vars
@@ -133,6 +161,7 @@ pub(super) fn build_seatbelt_profile_v2(
     network_policy: &str,
     network_domains: &[String],
     script_path: Option<&str>,
+    deny_paths: &[String],
 ) -> String {
     // 语义与 build_seatbelt_profile（V1）一致：写数据仅放行非普通文件（管道/tty），
     // 普通文件写入走 subpath 白名单；读取全局放行（macOS 15+ dyld 缓存迁移使 subpath
@@ -169,6 +198,7 @@ pub(super) fn build_seatbelt_profile_v2(
     }
     // script_path 读权限已被上方全局 file-read* 覆盖，无需单独 literal 授权。
     let _ = script_path;
+    append_deny_rules(&mut p, deny_paths);
 
     match network_policy {
         "allow" => {
@@ -217,6 +247,7 @@ pub(super) fn exec_seatbelt_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxRe
         network_policy,
         &network_domains,
         ctx.script_path.as_deref(),
+        ctx.deny_paths.as_deref().unwrap_or(&[]),
     );
     let ulimit_prefix = build_ulimit_prefix(ctx.max_memory_mb);
 
@@ -264,6 +295,7 @@ pub(super) fn build_wrap_argv_seatbelt(
         network_policy,
         &network_domains,
         ctx.script_path.as_deref(),
+        ctx.deny_paths.as_deref().unwrap_or(&[]),
     );
 
     let mut argv = vec!["-p".to_string(), profile];
@@ -299,7 +331,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_seatbelt_profile_contains_network_deny() {
-        let profile = build_seatbelt_profile(&[], "/tmp", true, "/usr/bin");
+        let profile = build_seatbelt_profile(&[], "/tmp", true, "/usr/bin", &[]);
         assert!(
             profile.contains("deny network*"),
             "should deny network when block=true"
@@ -309,7 +341,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_seatbelt_profile_network_allow() {
-        let profile = build_seatbelt_profile(&[], "/tmp", false, "/usr/bin");
+        let profile = build_seatbelt_profile(&[], "/tmp", false, "/usr/bin", &[]);
         assert!(
             profile.contains("allow network*"),
             "should allow network when block=false"
@@ -322,8 +354,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn test_seatbelt_write_scoped_not_global() {
         for profile in [
-            build_seatbelt_profile(&[], "/tmp", true, "/usr/bin"),
-            build_seatbelt_profile_v2(&[], "/tmp", "deny", &[], None),
+            build_seatbelt_profile(&[], "/tmp", true, "/usr/bin", &[]),
+            build_seatbelt_profile_v2(&[], "/tmp", "deny", &[], None, &[]),
         ] {
             assert!(
                 profile.contains("(allow file-write-data (require-not (vnode-type REGULAR-FILE)))"),
@@ -338,5 +370,86 @@ mod tests {
                 "read is globally allowed (dyld cache on Cryptexes volume)"
             );
         }
+    }
+
+    // deny 必须出现在 allow file-read* 与 workspace 授权之后，且目录/文件形态正确、路径被转义。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_seatbelt_deny_rules_after_allows() {
+        let dir = std::env::temp_dir().join(format!("sbdeny_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("secret\"x.key");
+        std::fs::write(&file, b"k").unwrap();
+        let deny = vec![
+            dir.to_string_lossy().to_string(),
+            file.to_string_lossy().to_string(),
+            "/nonexistent/denied_dir".to_string(),
+        ];
+        let allowed = vec!["/work/space".to_string()];
+        for profile in [
+            build_seatbelt_profile(&allowed, "/work/space", true, "/usr/bin", &deny),
+            build_seatbelt_profile_v2(&allowed, "/work/space", "deny", &[], None, &deny),
+        ] {
+            let read_at = profile.find("(allow file-read*)").unwrap();
+            let ws_at = profile
+                .find("(allow file* (subpath \"/work/space\"))")
+                .unwrap();
+            let first_deny = profile.find("(deny file-read* file-write*").unwrap();
+            assert!(first_deny > read_at && first_deny > ws_at);
+            assert!(profile.contains(&format!(
+                "(deny file-read* file-write* (subpath {}))",
+                sbpl_escape(&deny[0])
+            )));
+            assert!(profile.contains(&format!(
+                "(deny file-read* file-write* (literal {}))",
+                sbpl_escape(&deny[1])
+            )));
+            assert!(profile.contains("secret\\\"x.key"));
+            assert!(profile.contains("(subpath \"/nonexistent/denied_dir\")"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 真实 sandbox-exec 集成验证：被 deny 的文件读取失败，普通文件读取成功（临时目录模拟，
+    // 不触碰真实密钥）。sandbox-exec 不可用（嵌套沙箱等）时跳过。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_seatbelt_deny_enforced_by_sandbox_exec() {
+        if which_tool("sandbox-exec").is_none() {
+            return;
+        }
+        let base = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("sbint_{}", std::process::id()));
+        let secret_dir = base.join("secret");
+        std::fs::create_dir_all(&secret_dir).unwrap();
+        let denied = secret_dir.join("vault.key");
+        let denied_file = base.join("single.key");
+        let ok = base.join("ok.txt");
+        std::fs::write(&denied, "TOPSECRET").unwrap();
+        std::fs::write(&denied_file, "TOPSECRET").unwrap();
+        std::fs::write(&ok, "PUBLIC").unwrap();
+        let run = |target: &std::path::Path| -> NativeSandboxResponse {
+            let ctx: SandboxContextV2 = serde_json::from_value(serde_json::json!({
+                "command": format!("cat '{}'", target.display()),
+                "workdir": base.to_string_lossy(),
+                "allowed_paths": [base.to_string_lossy()],
+                "deny_paths": [
+                    secret_dir.to_string_lossy(),
+                    denied_file.to_string_lossy()
+                ],
+            }))
+            .unwrap();
+            exec_seatbelt_v2(&ctx).unwrap()
+        };
+        let r_ok = run(&ok);
+        assert_eq!(r_ok.exit_code, 0, "{}", r_ok.output);
+        assert!(r_ok.output.contains("PUBLIC"));
+        for t in [&denied, &denied_file] {
+            let r = run(t);
+            assert_ne!(r.exit_code, 0, "deny 路径读取应失败: {}", r.output);
+            assert!(!r.output.contains("TOPSECRET"));
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

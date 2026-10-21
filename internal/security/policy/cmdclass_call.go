@@ -47,6 +47,11 @@ func (w *walker) call(c *syntax.CallExpr) {
 		return
 	}
 	words, dyn := literalWords(c.Args, w.env.Home)
+	for i, word := range words {
+		if !dyn[i] {
+			w.classifyPathWord(word, false)
+		}
+	}
 	if dyn[0] {
 		w.record(words, verdict{cls: CmdUnknown, reason: "dynamic_command"})
 		return

@@ -38,6 +38,11 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 			httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "permission_mode must be default|auto_review|full_access"), http.StatusBadRequest)
 			return
 		}
+		// 部署档位只设上限（ADR-0121 决策一）：hardened 档不得写入高于 auto_review 的模式。
+		if want, _ := types.ParsePermissionMode(req.Value); want == types.ModeFullAccess && h.MaxPermissionMode != "" && h.MaxPermissionMode != types.ModeFullAccess {
+			httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "permission_mode full_access is not allowed under the hardened trust profile (max: "+string(h.MaxPermissionMode)+")"), http.StatusBadRequest)
+			return
+		}
 	}
 
 	err := h.SystemRepo.UpsertPreference(r.Context(), key, req.Value)

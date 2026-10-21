@@ -23,7 +23,7 @@ func MakeListDirFn(allowedPaths []string) sandbox.InProcessFn {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "list_dir: invalid args", err)
 		}
-		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
+		if err := guard.CheckReadablePath(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeListDirFn", err)
 		}
 

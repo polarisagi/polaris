@@ -38,7 +38,7 @@ func MakeDataQueryFn(allowedPaths []string) sandbox.InProcessFn {
 		}
 
 		// 路径白名单校验（与 read_file 共用机制）
-		if err := guard.CheckAllowedPath(args.Database, paths); err != nil {
+		if err := guard.CheckReadablePath(ctx, args.Database, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeForbidden, "data_query: database path not allowed", err)
 		}
 

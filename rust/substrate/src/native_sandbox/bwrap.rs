@@ -128,6 +128,7 @@ pub(super) fn exec_bwrap(req: &NativeSandboxRequest) -> Result<NativeSandboxResp
             workdir.to_string(),
         ]);
     }
+    append_deny_args(&mut args, req.deny_paths.as_deref().unwrap_or(&[]));
     if !workdir.is_empty() {
         args.extend(["--chdir".into(), workdir.to_string()]);
     }
@@ -149,6 +150,42 @@ pub(super) fn exec_bwrap(req: &NativeSandboxRequest) -> Result<NativeSandboxResp
 }
 
 // ─── Linux bubblewrap V2 ─────────────────────────────────────────────────────
+
+/// 把 deny 路径遮蔽追加到 args（须在全部 bind 之后调用）。
+/// 仅处理位于已绑定目录之下的路径：未绑定的路径在 tmpfs 根里本就不可见，无需遮蔽；
+/// 目录用 --tmpfs 清空，普通文件用 --ro-bind /dev/null 置空；宿主不存在的路径跳过
+/// （bwrap 对不存在的挂载点会失败）。
+#[cfg(any(target_os = "linux", test))]
+pub(super) fn append_deny_args(args: &mut Vec<String>, deny_paths: &[String]) {
+    let mut bound: Vec<String> = Vec::new();
+    for w in args.windows(3) {
+        if matches!(
+            w[0].as_str(),
+            "--bind" | "--bind-try" | "--ro-bind" | "--ro-bind-try"
+        ) {
+            bound.push(w[2].clone());
+        }
+    }
+    let mut seen = std::collections::HashSet::<&str>::new();
+    let mut extra: Vec<String> = Vec::new();
+    for p in deny_paths {
+        if p.is_empty() || !seen.insert(p.as_str()) {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(p) else {
+            continue;
+        };
+        if !bound.iter().any(|b| Path::new(p).starts_with(b)) {
+            continue;
+        }
+        if meta.is_dir() {
+            extra.extend(["--tmpfs".into(), p.clone()]);
+        } else {
+            extra.extend(["--ro-bind".into(), "/dev/null".into(), p.clone()]);
+        }
+    }
+    args.extend(extra);
+}
 
 #[cfg(target_os = "linux")]
 pub(super) fn build_bwrap_args_v2(
@@ -256,6 +293,8 @@ pub(super) fn build_bwrap_args_v2(
             workdir.to_string(),
         ]);
     }
+    // deny 必须在所有 bind 之后，才能覆盖其下的子路径
+    append_deny_args(&mut args, ctx.deny_paths.as_deref().unwrap_or(&[]));
     if !workdir.is_empty() {
         args.extend(["--chdir".into(), workdir.to_string()]);
     }
@@ -351,4 +390,38 @@ pub(super) fn build_wrap_argv_bwrap(ctx: &SandboxContextV2) -> Result<WrapArgvRe
         sandbox_method: "bwrap".to_string(),
         net_isolated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deny_args_after_binds_dir_and_file() {
+        let dir = std::env::temp_dir().join(format!("bwdeny_{}", std::process::id()));
+        let sub = dir.join("vault");
+        std::fs::create_dir_all(&sub).unwrap();
+        let file = dir.join("vault.key");
+        std::fs::write(&file, b"k").unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let mut args: Vec<String> = vec!["--bind-try".into(), root.clone(), root.clone()];
+        let deny = vec![
+            sub.to_string_lossy().to_string(),
+            file.to_string_lossy().to_string(),
+            dir.join("missing").to_string_lossy().to_string(),
+            "/unbound/elsewhere".to_string(),
+        ];
+        append_deny_args(&mut args, &deny);
+        assert_eq!(
+            &args[3..],
+            &[
+                "--tmpfs".to_string(),
+                deny[0].clone(),
+                "--ro-bind".to_string(),
+                "/dev/null".to_string(),
+                deny[1].clone()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

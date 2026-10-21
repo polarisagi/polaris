@@ -46,9 +46,9 @@ func (a *Agent) withJITCapability(ctx context.Context, toolName string, args []b
 	if _, ok := (*calls)[toolCallKey(toolName, args)]; !ok {
 		return ctx, func() {}, apperr.New(apperr.CodeForbidden, "agent: tool call not in validated plan, refusing to mint capability token for "+toolName)
 	}
-	if a.preApprovedCall(toolName, args) {
-		ctx = protocol.WithPreApproved(ctx)
-	}
+	// 凭据与模式每次覆盖写入（含 GrantNone）：不继承外层 ctx（如 code_act 外层调用）的凭据。
+	grant, mode := a.grantFor(toolName, args)
+	ctx = protocol.WithPermissionMode(protocol.WithPermissionGrant(ctx, grant), mode)
 	// sandboxTier 传 0：实际隔离等级由执行闸门 AssignSandboxTier 按信任与工具属性决定。
 	tok, err := action.NewJITToken(a.ID, []action.TokenOperation{{ToolName: toolName, MaxCalls: 1}}, 0)
 	if err != nil {

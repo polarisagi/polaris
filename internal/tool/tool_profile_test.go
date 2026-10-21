@@ -172,8 +172,8 @@ func TestV1_NilPolicy_FallsBackToStandard(t *testing.T) {
 	if !pol.PIITokenizeEnabled {
 		t.Fatal("未注入策略时 PIITokenizeEnabled 必须为 true")
 	}
-	if !pol.RunCmdWhitelistEnabled {
-		t.Fatal("未注入策略时 RunCmdWhitelistEnabled 必须为 true")
+	if pol.MaxPermissionMode != types.ModeFullAccess {
+		t.Fatalf("未注入策略时回落 standard 档的权限上限，got=%q", pol.MaxPermissionMode)
 	}
 
 	// 验证未注入策略时 checkTaintEgress 绝不旁路放行
@@ -275,10 +275,11 @@ func TestV9_FullProfile_Anomaly_AuditedAndMetric(t *testing.T) {
 	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
 	ctx = context.WithValue(ctx, protocol.CtxAnomalyFilterKey{}, filter)
 	ctx = context.WithValue(ctx, protocol.CtxAgentIDKey{}, "agent-anom-1")
+	ctx = protocol.WithPreApproved(ctx) // 显式授权下异常 HITL 让位（ADR-0121 决策三）
 
 	res, err := reg.ExecuteTool(ctx, "echo_tool", hugeInput, types.TaintLow)
 	if err != nil {
-		t.Fatalf("full profile should auto-approve anomalous input: %v", err)
+		t.Fatalf("explicit grant should skip anomalous input: %v", err)
 	}
 	if !res.Success {
 		t.Fatalf("expected tool success, got: %s", res.Error)

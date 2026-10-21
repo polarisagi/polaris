@@ -17,7 +17,9 @@ type Verdict int
 const (
 	VerdictAllow Verdict = iota
 	VerdictAsk
-	VerdictDeny // 调用方在同一调用已被用户拒绝过时使用，Decide 本身不产生
+	// VerdictDeny 自保护路径（ADR-0121 决策四）：任何模式、记住的授权、审批都不能放开，
+	// 调用方不弹卡，直接把原因与替代方案回给模型。
+	VerdictDeny
 )
 
 // RuleKind 已记住授权的规则种类。
@@ -73,6 +75,8 @@ const (
 	ReasonTaintedArgs           = "tainted_args"
 	ReasonDataExfiltration      = "data_exfiltration"
 	ReasonAskMode               = "ask_mode"
+	ReasonSelfProtected         = "self_protected"
+	ReasonSensitivePath         = "sensitive_path"
 )
 
 type opKind int
@@ -98,6 +102,9 @@ type operation struct {
 	app      string // UI 操控的应用或站点
 	highRisk bool
 	netCap   bool // 能力上可联网
+	// selfHit / sensHit：读写目标（或 shell 中静态可解析的路径词）落入自保护 / 敏感路径。
+	selfHit bool
+	sensHit bool
 }
 
 // Decide 对一次工具调用给出授权判定。argTaint 为参数污点（取计划内最高污点）。
@@ -106,6 +113,9 @@ func Decide(mode types.PermissionMode, tool types.Tool, args []byte, argTaint ty
 		mode = types.ModeDefault // 未知模式取最严档
 	}
 	op := classifyOp(tool, args, ctx)
+	if op.selfHit {
+		return Decision{Verdict: VerdictDeny, Reason: ReasonSelfProtected}
+	}
 	if d, hard := hardLimit(op, argTaint, ctx); hard {
 		return d
 	}
@@ -130,6 +140,9 @@ func Decide(mode types.PermissionMode, tool types.Tool, args []byte, argTaint ty
 func hardLimit(op operation, taint types.TaintLevel, ctx Context) (Decision, bool) {
 	hard := func(reason string) (Decision, bool) {
 		return Decision{Verdict: VerdictAsk, Reason: reason, HardLimit: true}, true
+	}
+	if op.sensHit {
+		return hard(ReasonSensitivePath)
 	}
 	if op.kind == opShell && op.cmd.Class == CmdCatastrophic {
 		return hard(ReasonCatastrophicCommand)

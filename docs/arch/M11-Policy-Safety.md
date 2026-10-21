@@ -127,7 +127,7 @@ TaintLevel/TaintedString/SafeString/TaintSource/PropagateTaint 类型定义见 `
 
 ### 2.3.1 权限模式与硬限制 [Permission-Decide]
 
-ADR-0117：S_VALIDATE 对每个计划节点调用确定性的 `policy.Decide`（`internal/security/policy/approval*.go`，不调用 LLM），顺序为 硬限制 → 读取类 → full_access → 已记住授权 → auto_review 自动放行 → 询问。**硬限制在三档模式（含 full_access）下都询问，且不可被已记住的授权覆盖**：① 灾难性命令（`sudo`/`su`/`doas`/`pkexec`、`mkfs*`、删根/家目录、`dd` 写块设备）；② 凭据外流（本回合读取过凭据后的任何联网操作）；③ 参数污点 ≥ High 且操作敏感（写网络、特权、危险 shell、工作区外写入、高风险写入、键鼠 UI 输入）。shell 命令由 `cmdclass` 基于语法树逐段分类。
+ADR-0117：S_VALIDATE 对每个计划节点调用确定性的 `policy.Decide`（`internal/security/policy/approval*.go`，不调用 LLM），顺序为 硬限制 → 读取类 → full_access → 已记住授权 → auto_review 自动放行 → 询问。**硬限制在三档模式（含 full_access）下都询问，且不可被已记住的授权覆盖**：① 灾难性命令（`sudo`/`su`/`doas`/`pkexec`、`mkfs*`、删根/家目录、`dd` 写块设备）；② 凭据外流（本回合读取过凭据后的任何联网操作）；③ 参数污点 ≥ High 且操作敏感（写网络、特权、危险 shell、工作区外写入、高风险写入、键鼠 UI 输入）。shell 命令由 `cmdclass` 基于语法树逐段分类。（ADR-0121 订正：新增 `VerdictDeny`——自保护路径在任何模式下直接拒绝；有效模式 = `min(偏好 permission_mode, Policy.MaxPermissionMode)`，standard/full 上限 `full_access`，hardened 上限 `auto_review`；`trust_profile` 退为部署期预设，不再携带授权字段。）
 
 ### 2.4 传播规则 [Taint-Prop]
 

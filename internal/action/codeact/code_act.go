@@ -323,6 +323,9 @@ func (ca *CodeAct) startBridgeIfEligible(ctx context.Context, req protocol.CodeA
 	if checker := protocol.ProfileCheckerFromContext(ctx); checker != nil {
 		opts = append(opts, WithBridgeProfileChecker(checker))
 	}
+	if az := protocol.ToolCallAuthorizerFromContext(ctx); az != nil {
+		opts = append(opts, WithBridgeCallAuthorizer(az))
+	}
 	bs, berr := StartBridgeServer(ctx, ca.toolExec, ca.policy, types.TaintLow, opts...)
 	if berr != nil {
 		slog.WarnContext(ctx, "codeact: start tool bridge failed, proceeding without bridge", "err", berr)

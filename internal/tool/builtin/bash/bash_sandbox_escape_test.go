@@ -30,6 +30,10 @@ func TestR2_02_SandboxEscape_BackgroundAndPersistent(t *testing.T) {
 
 		// 1. 后台模式 (Background: true)
 		t.Run(p.name+"_background", func(t *testing.T) {
+			ctx := ctx
+			if p.profile == policy.ProfileFull {
+				ctx = protocol.WithPreApproved(ctx) // 宿主执行只由显式授权凭据派生（ADR-0121）
+			}
 			jm := bash.GetDefaultJobManager()
 			jobs0, _ := jm.ListJobs("")
 			initialJobs := len(jobs0)
@@ -44,7 +48,7 @@ func TestR2_02_SandboxEscape_BackgroundAndPersistent(t *testing.T) {
 			switch p.profile {
 			case policy.ProfileFull:
 				if err != nil {
-					t.Fatalf("full 档后台模式期望成功执行，实际错误: %v", err)
+					t.Fatalf("显式授权后台模式期望成功执行，实际错误: %v", err)
 				}
 				if hostJobsStarted != 1 {
 					t.Fatalf("full 档期望在宿主机启动 1 个后台任务，实际新增: %d", hostJobsStarted)
@@ -57,7 +61,7 @@ func TestR2_02_SandboxEscape_BackgroundAndPersistent(t *testing.T) {
 				if hostJobsStarted != 0 {
 					t.Fatalf("standard 档宿主机后台执行次数必须为 0，实际新增: %d", hostJobsStarted)
 				}
-				if !strings.Contains(err.Error(), "background jobs require full trust profile") {
+				if !strings.Contains(err.Error(), "background jobs require explicit authorization") {
 					t.Fatalf("standard 档错误信息不符合规约: %v", err)
 				}
 			case policy.ProfileHardened:

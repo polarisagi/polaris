@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -45,6 +46,7 @@ type BridgeServer struct {
 	toolExec       ToolBridgeExecutor
 	pol            policy.Policy
 	profileChecker ProfileChecker
+	authorizer     CallAuthorizer
 	currentTaint   types.TaintLevel
 	maxTaint       types.TaintLevel
 	mu             sync.Mutex
@@ -135,6 +137,7 @@ func StartBridgeServer(ctx context.Context, toolExec ToolBridgeExecutor, pol pol
 		toolExec:       toolExec,
 		pol:            pol,
 		profileChecker: cfg.profileChecker,
+		authorizer:     cfg.authorizer,
 		currentTaint:   initialTaint,
 		maxTaint:       initialTaint,
 		closed:         make(chan struct{}),
@@ -244,25 +247,7 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 		return bridgeResponse{OK: false, Error: fmt.Sprintf("tool %q not found: %v", toolName, err)}
 	}
 
-	// 档位规则判定（R2-15 复用 policy.WritesState 对 MCP/Skill fail-closed）
-	if !s.pol.CodeActAllToolsAllowed {
-		if policy.WritesState(toolName, t, true) {
-			return bridgeResponse{
-				OK:    false,
-				Error: fmt.Sprintf("tool %q writes state (capability %d, source %s), blocked in %s profile", toolName, t.Capability, t.Source, s.pol.Profile),
-			}
-		}
-		for _, se := range t.SideEffects {
-			if se != types.SideNone && se != "" {
-				return bridgeResponse{
-					OK:    false,
-					Error: fmt.Sprintf("tool %q has side effect %q (not idempotent), blocked in %s profile", toolName, se, s.pol.Profile),
-				}
-			}
-		}
-	}
-
-	// 角色权限判定：桥接执行前调用注入的 ProfileChecker（R2-15）
+	// 角色权限判定：桥接执行前调用注入的 ProfileChecker（R2-15）；先于授权，角色不允许的工具无需再判定。
 	if s.profileChecker != nil {
 		if err := s.profileChecker.CheckProfileTool(toolName, ""); err != nil {
 			return bridgeResponse{
@@ -276,6 +261,20 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 	if err != nil {
 		return bridgeResponse{OK: false, Error: "marshal args failed: " + err.Error()}
 	}
+
+	// 内层调用必须重新判定并覆盖外层 ctx 的凭据（Explicit/Auto/None 都显式写），不得继承。
+	grant := protocol.GrantNone
+	if s.authorizer != nil {
+		g, reason, ok := s.authorizer.AuthorizeCall(ctx, t, inputBytes, s.currentTaint)
+		if !ok {
+			return bridgeResponse{OK: false, Error: reason + "；需要审批的操作请在 code_act 之外单独调用"}
+		}
+		grant = g
+	} else if msg := readOnlyViolation(toolName, t, s.pol.Profile); msg != "" {
+		// 未装配授权器：fail-closed，只允许只读且幂等的工具。
+		return bridgeResponse{OK: false, Error: msg}
+	}
+	ctx = protocol.WithPermissionGrant(ctx, grant)
 
 	res, execErr := s.toolExec.ExecuteTool(ctx, toolName, inputBytes, s.currentTaint)
 	if execErr != nil {
@@ -292,6 +291,19 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 		parsed = string(res.Output)
 	}
 	return bridgeResponse{OK: true, Result: parsed}
+}
+
+// readOnlyViolation 无授权器时的兜底规则（R2-15 复用 policy.WritesState，对 MCP/Skill fail-closed）。
+func readOnlyViolation(toolName string, t types.Tool, profile policy.TrustProfile) string {
+	if policy.WritesState(toolName, t, true) {
+		return fmt.Sprintf("tool %q writes state (capability %d, source %s), blocked in %s profile", toolName, t.Capability, t.Source, profile)
+	}
+	for _, se := range t.SideEffects {
+		if se != types.SideNone && se != "" {
+			return fmt.Sprintf("tool %q has side effect %q (not idempotent), blocked in %s profile", toolName, se, profile)
+		}
+	}
+	return ""
 }
 
 func (s *BridgeServer) handleCallMany(ctx context.Context, calls []bridgeCallParam) bridgeResponse {
@@ -322,20 +334,9 @@ func (s *BridgeServer) handleTools() bridgeResponse {
 	tools := s.toolExec.List()
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
-		if !s.pol.CodeActAllToolsAllowed {
-			if policy.WritesState(t.Name, t, true) {
-				continue
-			}
-			nonIdempotent := false
-			for _, se := range t.SideEffects {
-				if se != types.SideNone && se != "" {
-					nonIdempotent = true
-					break
-				}
-			}
-			if nonIdempotent {
-				continue
-			}
+		// 有授权器时列全部（可否调用由调用时判定）；否则保持只读过滤。
+		if s.authorizer == nil && readOnlyViolation(t.Name, t, s.pol.Profile) != "" {
+			continue
 		}
 		if s.profileChecker != nil {
 			if err := s.profileChecker.CheckProfileTool(t.Name, ""); err != nil {
