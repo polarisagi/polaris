@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # 全局系统参数与路径配置（与 internal/config/system_params.go 保持单一事实源一致）
-REPO="polarisagi/polaris-agent"
+REPO="polarisagi/polaris"
 BIN_NAME="polaris"
 INSTALL_DIR="$HOME/.polaris/bin"
 DATA_DIR="$HOME/.polaris"
