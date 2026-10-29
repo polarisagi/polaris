@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "The task ID."
+    },
+    "id": {
+      "type": "string",
+      "description": "The ID of the offloaded tool output."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Byte offset to start reading from (default 0). Use the 'next offset' from the previous window."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Max bytes to return (default 6000)."
+    }
+  },
+  "required": ["task_id", "id"]
+}

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <title>DuckDuckGo Search</title>
+</head>
+<body>
+  <div id="links" class="results">
+    <!-- 广告块：应被跳过 -->
+    <div class="result results_links results_links_deep web-result result--ad">
+      <div class="result__body">
+        <h2 class="result__title">
+          <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fad-sponsor.com%2Fpromo&rut=1">Sponsored Ad Title</a>
+        </h2>
+        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fad-sponsor.com%2Fpromo&rut=1">This is an ad snippet that should be ignored.</a>
+      </div>
+    </div>
+
+    <!-- 正常结果块 1：含 uddg 链接 -->
+    <div class="result results_links results_links_deep web-result">
+      <div class="result__body">
+        <h2 class="result__title">
+          <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgo.dev%2Fblog%2Fgo1.23&amp;rut=2">Go 1.23 is released!</a>
+        </h2>
+        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgo.dev%2Fblog%2Fgo1.23&amp;rut=2">The Go team is <b>thrilled</b> to announce the release of Go 1.23. &amp; more details.</a>
+      </div>
+    </div>
+
+    <!-- 正常结果块 2：直连链接 -->
+    <div class="result results_links results_links_deep web-result">
+      <div class="result__body">
+        <h2 class="result__title">
+          <a class="result__a" href="https://golang.org/doc/">Documentation - The Go Programming Language</a>
+        </h2>
+        <a class="result__snippet" href="https://golang.org/doc/">Official documentation, tutorials, and guides for Go.</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

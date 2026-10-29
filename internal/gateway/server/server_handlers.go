@@ -1,0 +1,326 @@
+package server
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/gateway/server/chat"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/version"
+
+	"github.com/google/uuid"
+
+	"github.com/polarisagi/polaris/configs"
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// handleHealthz 提供基础的健康检查。
+// [阶段02-错误吞没整改 §2.2] degraded_metrics 暴露 OTel instrument 注册是否部分失败
+// （metrics.InstrumentsDegraded()）——注册失败不阻断启动（Tier-0 可用性优先），
+// 但必须可见，不能静默；始终返回 200，degraded 仅作观测信号，不代表服务不健康。
+// [阶段02-错误吞没整改 §2.8] degraded_system_prompt 暴露 system_prompt_template
+// 落库失败标记（server_core.go SetPromptManager），同样不阻断启动，仅作可见性。
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	body := map[string]any{
+		"status":                 "ok",
+		"degraded_metrics":       metrics.InstrumentsDegraded(),
+		"degraded_system_prompt": s.systemPromptDegraded.Load(),
+		// 版本随探活返回：桌面外壳与守护进程分开安装、各自更新（ADR-0096 决策四），
+		// 外壳必须能在附着前看出版本是否匹配——否则新外壳连上旧守护进程后，
+		// 表现是某些界面功能"莫名其妙不工作"，而两端各自看起来都正常。
+		"version": version.Version,
+	}
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		slog.Warn("server: healthz encode failed", "err", err)
+	}
+}
+
+// handleReadyz Kubernetes readiness probe 端点。
+// 就绪（isReady=true）返回 200，未就绪返回 503。
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if !s.isReady.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready"}`))
+} //nolint:errcheck
+
+// handleGetConfig 返回当前运行时配置的原始内容（只读视图）。
+//
+// 读取优先级：
+//  1. POLARIS_CONFIG 环境变量指向的文件（Operator 运行时覆盖）
+//  2. 实际加载的用户 config.toml（SetConfigPath 注入且文件存在）
+//  3. 二进制内嵌的 configs/defaults.toml（embedded FS，始终可用）
+//
+// 使用 embedded FS 而非相对路径 os.ReadFile，确保二进制在任意工作目录下均可运行。
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	var (
+		raw    []byte
+		source string
+		err    error
+	)
+
+	cfgPath := os.Getenv(config.EnvPolarisConfig)
+	if cfgPath == "" && s.configPath != "" {
+		// 实际生效的用户 config.toml（设置页改写的也是它）；此前未设 POLARIS_CONFIG 时恒显示内嵌
+		// defaults.toml，与实际运行配置不符。
+		if _, statErr := os.Stat(s.configPath); statErr == nil {
+			cfgPath = s.configPath
+		}
+	}
+	if cfgPath != "" {
+		// Operator 显式指定配置文件：从文件系统读取，路径可为绝对路径或相对路径。
+		raw, err = os.ReadFile(cfgPath)
+		if err != nil {
+			http.Error(w, config.EnvPolarisConfig+" file not readable: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		source = cfgPath
+	} else {
+		// 默认：从 binary 内嵌 FS 读取（configs/embed.go //go:embed *.toml ...）。
+		// 此路径不依赖工作目录，任意部署环境均可用。
+		raw, err = configs.FS.ReadFile("defaults.toml")
+		if err != nil {
+			// embedded FS 读取失败属于编译期资产问题，用 500 而非 404。
+			http.Error(w, "embedded config not readable: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		source = "embedded:configs/defaults.toml"
+	}
+
+	httputil.WriteJSON(w, map[string]any{
+		"path":   source,
+		"format": "toml",
+		"raw":    string(raw),
+	})
+}
+
+// handleEvalRun 触发 M12 评测套件执行并返回报告。
+// POST /v1/eval/run  body: {"suite":"training"|"validation"}
+// 2026-07-14（ADR-0062 关联接线）：路由注册见 server_routes.go。
+func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
+	if s.evalRunner == nil {
+		http.Error(w, "eval runner not available", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Suite       string `json:"suite"`
+		CandidateID string `json:"candidate_id,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
+		return
+	}
+	if req.Suite == "" {
+		req.Suite = "training"
+	}
+	report, err := s.evalRunner.RunSuite(r.Context(), req.Suite, req.CandidateID)
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+	httputil.WriteJSON(w, report)
+}
+
+// handleAgentQuery 将用户查询发布为异步 Blackboard Task，立即返回 task_id。
+// 调用方通过 GET /v1/agent/tasks/{taskID} 轮询结果（HE-Rule-5 FSM 控制流）。
+func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Input     string `json:"input"`
+		SessionID string `json:"session_id,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Input) == "" {
+		http.Error(w, "input must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	if s.blackboard == nil {
+		// Blackboard 未注入时退化：直接注入 Agent Intent，返回兼容响应。
+		// 污点说明（GR-09-003 复核）：SetTaskIntent 内部固定以 TaintHigh 包装 intent
+		// （agent_wiring.go RawIntentTS），本降级路径不存在污点丢失/降级——反而比正规
+		// 路径按 clientType 计算的 Medium/High 更保守，故无需在此再传污点级别。
+		if s.agentPool != nil {
+			agent, release, err := s.agentPool.Acquire(r.Context(), "default")
+			if err == nil {
+				agent.SetTaskIntent(taint.NewTaintedString(req.Input, taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
+				release()
+			}
+		}
+		httputil.WriteJSON(w, map[string]any{
+			"task_id": "",
+			"status":  "pending",
+			"note":    "blackboard not available; intent injected directly",
+		})
+		return
+	}
+
+	// IntentTaint 2026-07-21 deadcode 审查发现的 HE-2 缺口修复：middleware_auth.go
+	// 已按 clientType 算出 TaintMedium(本地)/TaintHigh(外部 api 调用) 并写入
+	// ctx（types.TaintLevel.InjectToContext），但 types.TaintLevelFromContext 全仓库
+	// 零调用——此处此前硬编码 TaintMedium，等于让 gateway 已算出的按客户端类型区分
+	// 的污点级别静默丢失（外部 api 调用本该按 TaintHigh 处理）。取 ctx 中的值与
+	// TaintMedium 的较大者，兜底 ctx 未经过该中间件时不降级到 TaintNone。
+	taintLevel := types.PropagateTaint(types.TaintLevelFromContext(r.Context()), types.TaintMedium)
+
+	now := time.Now().UnixMilli()
+	task := &types.TaskEntry{
+		ID:          "task-" + uuid.NewString(),
+		Type:        "agent_query",
+		Priority:    0,
+		Status:      types.TaskPending,
+		Intent:      []byte(req.Input),
+		IntentTaint: taintLevel,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if err := s.blackboard.PostTask(r.Context(), task); err != nil {
+		slog.Error("handleAgentQuery: PostTask failed", "error", err)
+		http.Error(w, "failed to submit task", http.StatusInternalServerError)
+		return
+	}
+
+	httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]any{
+		"task_id": task.ID,
+		"status":  "pending",
+	}) // 202 Accepted
+}
+
+// handleGetAgentTask 查询 Blackboard 中指定 task 的当前状态快照。
+// GET /v1/agent/tasks/{taskID}
+func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	if taskID == "" {
+		http.Error(w, "taskID is required", http.StatusBadRequest)
+		return
+	}
+
+	if s.blackboard == nil {
+		http.Error(w, "blackboard not available", http.StatusNotImplemented)
+		return
+	}
+
+	snap, err := s.blackboard.PeekTask(r.Context(), taskID)
+	if err != nil {
+		slog.Error("handleGetAgentTask: PeekTask system error", "task_id", taskID, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if snap == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	httputil.WriteJSON(w, snap)
+}
+
+// handleGetCapabilities 返回系统硬件与音频处理能力（供前端自适应调节预取与录音模式）。
+// GET /v1/system/capabilities
+func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {
+	sttStatus := chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+	ttsStatus := chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		sttStatus = s.chatHandler.AudioService.STTStatus.Get()
+		ttsStatus = s.chatHandler.AudioService.TTSStatus.Get()
+	}
+	// 引擎改为懒加载后 box 恒非空，"可用"只能看资产状态：ready = 已安装可用（首次请求时加载）。
+	sttAvail := sttStatus.State == chat.AudioStateReady
+
+	prefetchCount := s.tierParams.TTSPrefetchCount
+	if prefetchCount <= 0 {
+		prefetchCount = 1
+	}
+
+	ttsProvider := "none"
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		tBox := s.chatHandler.AudioService.TTSEngine.Load()
+		if tBox != nil && tBox.P != nil {
+			if tBox.Name != "" {
+				ttsProvider = tBox.Name
+			} else {
+				ttsProvider = "active"
+			}
+		}
+	}
+
+	ttsEngine := "auto"
+	if p := s.ttsEnginePref.Load(); p != nil && *p != "" {
+		ttsEngine = *p
+	}
+
+	httputil.WriteJSON(w, map[string]any{
+		"tts_prefetch_count": prefetchCount,
+		"tts_engine":         ttsEngine, // auto|server|system：前端朗读引擎偏好（inference.tts.engine）
+		"stt_available":      sttAvail,  // 兼容旧前端；新前端读 stt_status
+		"stt_status":         sttStatus,
+		"tts_status":         ttsStatus,
+		"tts_provider":       ttsProvider,
+		"hardware_tier":      int(s.tier),
+		"embedding":          s.GetEmbeddingStatus(),
+	})
+}
+
+// handleGetAudioStatus 返回 GET /v1/audio/status 的轻量状态快照（ADR-0108）。
+func (s *Server) handleGetAudioStatus(w http.ResponseWriter, r *http.Request) {
+	sttStatus := s.GetSTTStatus()
+	ttsStatus := s.GetTTSStatus()
+	ttsEngine := "auto"
+	if p := s.ttsEnginePref.Load(); p != nil && *p != "" {
+		ttsEngine = *p
+	}
+	httputil.WriteJSON(w, map[string]any{
+		"stt_status":   sttStatus,
+		"tts_status":   ttsStatus,
+		"tts_engine":   ttsEngine,
+		"auto_install": s.autoInstallAudio.Load(),
+	})
+}
+
+// handleEmbeddingRebench 触发重新基准测定与档位评估（POST /v1/embedding/rebench，ADR-0109）。
+func (s *Server) handleEmbeddingRebench(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.rebenchFn == nil {
+		httputil.WriteJSON(w, map[string]string{"status": "no_rebencher"})
+		return
+	}
+	if err := s.rebenchFn(r.Context()); err != nil {
+		// 非 ONNX 后端 / 引擎未初始化属调用方前置条件不满足（400），重测进行中为冲突（409），
+		// 不应报 500 让前端误判为服务故障。
+		status := http.StatusInternalServerError
+		switch {
+		case apperr.IsCode(err, apperr.CodeInvalidInput):
+			status = http.StatusBadRequest
+		case apperr.IsCode(err, apperr.CodeConflict):
+			status = http.StatusConflict
+		}
+		httputil.RespondError(w, "rebench failed", err, status)
+		return
+	}
+	httputil.WriteJSON(w, map[string]string{"status": "rebench_started"})
+}
+
+// handleGetPendingApprovals/parseInterruptAction/handleAgentInterrupt/
+// handleResolveApproval（HITL 审批 + 中断处理）、agentStateString/
+// handleStatus（WebUI 状态快照）见 server_handlers_hitl.go（R7 拆分）。

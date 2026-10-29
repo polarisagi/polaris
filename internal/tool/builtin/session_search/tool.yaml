@@ -1,0 +1,11 @@
+name: session_search
+description: "Search past conversations (all sessions, current one excluded unless session_id is given). Returns session_id, message_id, role, time and a snippet; use session_read to see the surrounding messages."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - memory
+  - history

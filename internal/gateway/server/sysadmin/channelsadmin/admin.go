@@ -1,0 +1,92 @@
+// Package channelsadmin 承载聊天平台集成（channels CRUD + webhook 接收/验签 +
+// 消息分发）的 HTTP handler，从 sysadmin 包摊平的 channels.go（原 579 行，R7
+// 超标）拆出为组合式子包（2026-07-07），沿用 cronadmin/insightsadmin/
+// workflowadmin 已验证过的模式：独立结构体 + 消费方定义的最小接口集 + 独立
+// 构造函数，父 SysAdminHandler 只持有子结构体指针并做单行转发。
+package channelsadmin
+
+import (
+	"context"
+	"net/http"
+	"sync"
+
+	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// ChatDispatcher channelsadmin 消费方视角的最小会话接口。
+type ChatDispatcher interface {
+	EnsureSession(ctx context.Context, sessionID string) error
+	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, toolCount int64) error
+	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
+	TouchSession(ctx context.Context, sessionID string) error
+	ListMessages(ctx context.Context, sessionID string) ([]types.Message, error)
+	// SampleAndScoreReply 见 chat.ChatHandler 同名方法（M12 §9 连续采样监控
+	// 写侧，2026-07-14 补齐）。
+	SampleAndScoreReply(sessionID, query, response string)
+}
+
+// ChannelMgr channelsadmin 消费方视角的最小平台管理接口。
+type ChannelMgr interface {
+	protocol.ChannelFacade
+	Start(channelType, channelID string, cfg map[string]any)
+	Stop(channelID string)
+	ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage
+}
+
+// WebhookAutomationTrigger 桥接到 cronadmin 的 webhook 触发型 automation
+// （channels 收到消息后顺带检查是否有绑定该频道的 automation）。
+type WebhookAutomationTrigger interface {
+	TriggerWebhookAutomations(ctx context.Context, channelID, text string)
+}
+
+// ChannelsAdmin 承载 channels CRUD + webhook 接收/验签 + 消息分发。
+type ChannelsAdmin struct {
+	DB               protocol.SQLQuerier
+	ChannelRepo      repo.ChannelRepository
+	ChannelMgr       ChannelMgr
+	Registry         protocol.LLMRegistry
+	Chat             ChatDispatcher
+	AgentPool        protocol.AgentPool
+	Cron             WebhookAutomationTrigger
+	TemplateCacheMap *sync.Map
+	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008），
+	// dispatchChannelMessage 经此驱动 Headless 轮次，收敛此前与
+	// workflowadmin/cronadmin 三处几乎相同又不完全一致的编排实现（本分支此前
+	// 是三者中唯一同时接了 UserPromptSubmit（原 message.before）hook 与 TouchSession 的"参照实现"，
+	// 见 webhook_receive.go dispatchChannelMessage 注释）。
+	SessionOrch session.Orchestrator
+
+	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
+	BuildToolSchemas func() []types.ToolSchema
+}
+
+// NewChannelsAdmin 构造 ChannelsAdmin。
+func NewChannelsAdmin(
+	db protocol.SQLQuerier,
+	channelRepo repo.ChannelRepository,
+	channelMgr ChannelMgr,
+	registry protocol.LLMRegistry,
+	chat ChatDispatcher,
+	cron WebhookAutomationTrigger,
+	agentPool protocol.AgentPool,
+	sessionOrch session.Orchestrator,
+	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
+	buildToolSchemas func() []types.ToolSchema,
+) *ChannelsAdmin {
+	return &ChannelsAdmin{
+		DB:               db,
+		ChannelRepo:      channelRepo,
+		ChannelMgr:       channelMgr,
+		Registry:         registry,
+		Chat:             chat,
+		AgentPool:        agentPool,
+		Cron:             cron,
+		TemplateCacheMap: &sync.Map{},
+		SessionOrch:      sessionOrch,
+		ToolExec:         toolExec,
+		BuildToolSchemas: buildToolSchemas,
+	}
+}

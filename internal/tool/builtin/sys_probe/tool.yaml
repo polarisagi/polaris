@@ -1,0 +1,11 @@
+name: sys_probe
+description: "Probe current system environment, such as OS, architecture, memory usage, disk space, and user context."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - system
+  - context

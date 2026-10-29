@@ -1,0 +1,4 @@
+name: tool_search
+description: "Find tools that are not loaded. Returns each match's purpose and parameters so you can call it right away with call_tool. Matches names, descriptions and Chinese/English keywords."
+capability: read-only
+risk_level: low

@@ -1,0 +1,229 @@
+package adapter
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	llmparent "github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+// OllamaEmbeddingAdapter 对接 Ollama /api/embed，实现 substrate.Embedder。
+// FeatureLocalEmbedding 门控；Tier 0 可用（BGE-small 仅需 ~256MB）。
+type OllamaEmbeddingAdapter struct {
+	model   string
+	baseURL string
+	client  *http.Client
+	// numThread >0 时经 options.num_thread 限制 runner 推理线程（ADR-0109 D4）；0 = Ollama 默认（占满核）。
+	numThread int
+}
+
+// WithNumThread 设置每次嵌入请求的推理线程上限，返回自身便于链式构造。
+func (e *OllamaEmbeddingAdapter) WithNumThread(n int) *OllamaEmbeddingAdapter {
+	if n > 0 {
+		e.numThread = n
+	}
+	return e
+}
+
+// NewOllamaEmbeddingAdapter 构造本地嵌入适配器。
+func NewOllamaEmbeddingAdapter(model string, httpClient *http.Client) *OllamaEmbeddingAdapter {
+	if httpClient == nil {
+		httpClient = defaultHTTPClient()
+	}
+	if model == "" {
+		model = "default"
+	}
+	return &OllamaEmbeddingAdapter{
+		model:   model,
+		baseURL: "http://localhost:11434",
+		client:  httpClient,
+	}
+}
+
+// Embed 将文本转换为 float32 向量（实现 substrate.Embedder 接口）。
+func (e *OllamaEmbeddingAdapter) Embed(ctx context.Context, text string) []float32 {
+	vecs, err := e.EmbedBatch(ctx, []string{text})
+	if err != nil || len(vecs) == 0 {
+		return nil
+	}
+	return vecs[0]
+}
+
+// EmbedBatch 批量嵌入（减少 HTTP 往返）。
+type ollamaEmbedReq struct {
+	Model   string              `json:"model"`
+	Input   []string            `json:"input"`
+	Options *ollamaEmbedOptions `json:"options,omitempty"`
+}
+
+type ollamaEmbedOptions struct {
+	NumThread int `json:"num_thread,omitempty"`
+}
+
+type ollamaEmbedResp struct {
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
+func (e *OllamaEmbeddingAdapter) EmbedBatch(ctx context.Context, texts []string) (result [][]float32, err error) {
+	start := time.Now()
+	defer func() {
+		metrics.RecordEmbeddingCall(ctx, "ollama", e.model, float64(time.Since(start).Milliseconds()), err)
+	}()
+
+	reqBody := ollamaEmbedReq{Model: e.model, Input: texts}
+	if e.numThread > 0 {
+		reqBody.Options = &ollamaEmbedOptions{NumThread: e.numThread}
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "marshal embed req", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/api/embed", bytes.NewReader(body))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "build embed req", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "ollama embed http", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("ollama embed status %d: %s", resp.StatusCode, raw))
+	}
+
+	var out ollamaEmbedResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "decode embed resp", err)
+	}
+	return out.Embeddings, nil
+}
+
+// ─── OpenAICompatibleEmbeddingAdapter ────────────────────────────────────────
+// 对接任何支持 POST /v1/embeddings 的 Provider（OpenAI 协议）。
+// 实现 search.Embedder 接口（Embed 单条）和 EmbedBatch（批量，减少 HTTP 往返）。
+// 相比 OllamaEmbeddingAdapter：不绑定本地 Ollama 进程，可用 DeepSeek / OpenAI 等云端 API。
+//
+// 凭证走 CredentialPool（GR-2.2-003，inv_M1_06 / XR-09）：与推理适配器同一取用模型——
+// 每次请求 Pick → CredFn 取局部拷贝 → 用后 ClearBytes，失败分类驱动冷却轮换；
+// 不再在适配器结构体上常驻一份明文切片。
+type OpenAICompatibleEmbeddingAdapter struct {
+	model    string
+	credPool *llmparent.CredentialPool // Len()==0 表示端点无需鉴权
+	baseURL  string
+	client   *http.Client
+}
+
+// NewOpenAICompatibleEmbeddingAdapter 构造 OpenAI 兼容 Embedding 适配器。
+// credPool 可为 nil 或空池（本地/内网无鉴权端点）。
+func NewOpenAICompatibleEmbeddingAdapter(baseURL, model string, credPool *llmparent.CredentialPool, hc *http.Client) *OpenAICompatibleEmbeddingAdapter {
+	if hc == nil {
+		hc = defaultHTTPClient()
+	}
+	if credPool == nil {
+		credPool = llmparent.NewCredentialPool(nil, llmparent.StrategyFillFirst)
+	}
+	return &OpenAICompatibleEmbeddingAdapter{
+		model:    model,
+		credPool: credPool,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		client:   hc,
+	}
+}
+
+// Embed 实现 search.Embedder 接口（单条文本）。
+func (e *OpenAICompatibleEmbeddingAdapter) Embed(ctx context.Context, text string) []float32 {
+	vecs, err := e.EmbedBatch(ctx, []string{text})
+	if err != nil || len(vecs) == 0 {
+		return nil
+	}
+	return vecs[0]
+}
+
+// openAIEmbedReq OpenAI /v1/embeddings 请求体。
+type openAIEmbedReq struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+// openAIEmbedResp OpenAI /v1/embeddings 响应体（只解析需要的字段）。
+type openAIEmbedResp struct {
+	Data []struct {
+		Embedding []float32 `json:"embedding"`
+		Index     int       `json:"index"`
+	} `json:"data"`
+}
+
+// EmbedBatch 批量向量化（一次 HTTP 往返，优先使用此方法）。
+func (e *OpenAICompatibleEmbeddingAdapter) EmbedBatch(ctx context.Context, texts []string) (result [][]float32, err error) {
+	start := time.Now()
+	defer func() {
+		metrics.RecordEmbeddingCall(ctx, "openai_compatible", e.model, float64(time.Since(start).Milliseconds()), err)
+	}()
+
+	body, err := json.Marshal(openAIEmbedReq{Model: e.model, Input: texts})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "marshal embed req", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "build embed req", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var cred *llmparent.PooledCredential
+	if e.credPool.Len() > 0 {
+		if cred = e.credPool.Pick(); cred == nil {
+			return nil, apperr.New(apperr.CodeResourceExhausted, "embed: no available credential (all keys cooling down)")
+		}
+		apiKey := cred.CredFn()()
+		defer llmparent.ClearBytes(apiKey)
+		cleanup := setAuthHeader(req, apiKey)
+		defer cleanup()
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		if cred != nil {
+			cred.RecordResult(err)
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "embed http", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		statusErr := apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("embed status %d: %s", resp.StatusCode, raw))
+		if cred != nil {
+			cred.RecordResult(statusErr)
+		}
+		return nil, statusErr
+	}
+
+	var out openAIEmbedResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "decode embed resp", err)
+	}
+
+	// 按 index 排列（Provider 不保证顺序）
+	result = make([][]float32, len(texts))
+	for _, d := range out.Data {
+		if d.Index >= 0 && d.Index < len(result) {
+			result[d.Index] = d.Embedding
+		}
+	}
+	return result, nil
+}

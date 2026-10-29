@@ -1,0 +1,1421 @@
+// boot_agent.go — §8~§10.5 启动阶段：
+// Eval Harness → Blackboard → Agent Kernel → M9 Self-Improvement → Supervisor。
+// AgentBundle 持有所有 Agent 层产物，向 run() 和 bootServer 传递。
+//
+// 注意：Supervisor.Start() 由 run() 在注册完 defer 后调用，确保 defer Supervisor.Stop()
+// 在 Start() 之前已注册（避免提前清理）。
+package main
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/knowledge/connector"
+
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+
+	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/action/lam"
+	"github.com/polarisagi/polaris/internal/learning/curriculum"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
+	"github.com/polarisagi/polaris/internal/learning/reflexion"
+	"github.com/polarisagi/polaris/internal/learning/sleeptime"
+	"github.com/polarisagi/polaris/internal/learning/surprise"
+	"github.com/polarisagi/polaris/internal/learning/synthetic"
+	"github.com/polarisagi/polaris/internal/memory"
+	"github.com/polarisagi/polaris/internal/prompt"
+	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/security/token"
+
+	sysagent "github.com/polarisagi/polaris/internal/agent"
+	agentctx "github.com/polarisagi/polaris/internal/agent/context"
+	"github.com/polarisagi/polaris/internal/automation"
+	"github.com/polarisagi/polaris/internal/automation/notify"
+	"github.com/polarisagi/polaris/internal/eval"
+	"github.com/polarisagi/polaris/internal/eval/analysis"
+	"github.com/polarisagi/polaris/internal/eval/control"
+	"github.com/polarisagi/polaris/internal/eval/harness"
+	"github.com/polarisagi/polaris/internal/eval/regression"
+	agentdag "github.com/polarisagi/polaris/internal/execute/dag"
+	"github.com/polarisagi/polaris/internal/extension/skill"
+	"github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/credential"
+
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/mesh"
+	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/internal/swarm/agents"
+	"github.com/polarisagi/polaris/internal/swarm/planner"
+	"github.com/polarisagi/polaris/internal/swarm/supervisor"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// AgentBundle 持有 §8~§10.5 所有 Agent 层产物。
+type AgentBundle struct {
+	// Eval Harness
+	EvalRunner *harness.RunnerImpl // 具体类型：InjectAgent/RunSuite 定义在 *RunnerImpl 上
+	// EvalStore/MetaEvalSentinel 供 boot_server.go 的 httpServer.SetEvalAdmin 使用
+	// （V8-S2 meta_holdout 运维接口，见 internal/gateway/server/sysadmin/evaladmin）。
+	EvalStore        *harness.SQLiteEvalStore
+	MetaEvalSentinel *analysis.MetaEvalSentinel
+
+	// Blackboard & Scheduler
+	Blackboard *orchestrator.SQLiteBlackboard
+	// Mesh 跨节点委派服务（ADR-0111）；a2a.enabled=false 时为 nil。
+	Mesh           *mesh.Service
+	Sched          *automation.SQLiteScheduler
+	AgentRegistry  *orchestrator.AgentRegistry
+	PipelineOrch   *orchestrator.PipelineOrchestrator
+	PatternDAGExec *orchestrator.PatternDAGExecutor
+	MapReduceExec  *orchestrator.MapReduceExecutor
+	ParallelExec   *orchestrator.ParallelExecutor
+	SequentialExec *orchestrator.SequentialExecutor
+	SwarmCoord     *orchestrator.SwarmCoordinator
+	DebateExec     *orchestrator.DebateExecutor // GD-6：Debate/Critic 对抗协同模式
+
+	// Agent Kernel & DAG Executor
+	Agent   *sysagent.Agent
+	DAGExec *agentdag.DAGExecutor
+
+	// M9 Self-Improvement
+	M9Engine     *learning.Engine
+	RolloutStore *optimizer.SQLiteRolloutStore // 与 M9Engine 共用；nil 时 M9 Staging/Shadow 门禁禁用
+
+	// AgentPool for per-session web agents
+	AgentPool *sysagent.Pool
+	// Subagents 子 Agent 执行器（fork 技能与 agent 类型 hook 经此运行）
+	Subagents *orchestrator.SubagentRunner
+
+	// SamplingMonitor 连续采样退化监控（M12 §9），boot_server.go 通过
+	// Server.SetSamplingMonitor 注入 ChatHandler，供生产回复流量 1% 抽样
+	// + LLM Judge 打分回灌 RecordSample（见 sampling_scorer.go）。
+	SamplingMonitor *analysis.ContinuousSamplingMonitor
+
+	// Supervisor Tree（Workers 已注册；由 run() 调用 Start()）
+	Supervisor *supervisor.Supervisor
+
+	// ReaperStop：run() 在 shutdown 时显式调用（defer 也会再次调用，幂等）
+	ReaperStop context.CancelFunc
+
+	// SurpriseCalc 全进程单例；run() 在 shutdown 时 Close 停掉 worker goroutine（幂等）。
+	SurpriseCalc *surprise.SurpriseCalculator
+
+	// SleepTimeCoordinator ADR-0115 WP6：空闲整理与自改进闭环协调器。
+	SleepTimeCoordinator *sleeptime.Coordinator
+}
+
+// buildAgent 构造并完全装配一个 Agent 实例。
+// 提取此函数消除 bootAgent 中主 Agent 与 AgentPool 工厂的重复装配代码。
+// sessionID 决定 AgentID；其余参数来自 boot 阶段已就绪的 Bundle。
+func buildAgent(
+	sessionID string,
+	sb *SubstrateBundle,
+	mb *MemoryBundle,
+	tb *ToolBundle,
+	kb *KnowledgeBundle,
+	taskRepo *repo.SQLiteTaskReadRepository,
+	lamEngine *lam.ComputerUseEngine,
+	reflectionWorker *reflexion.ReflectionWorker,
+	prefs map[string]string,
+	bgCtx context.Context,
+	personaRefiner *agentctx.PersonaRefiner,
+	bb *orchestrator.SQLiteBlackboard,
+	workspaceCtxLoader *agentctx.WorkspaceContextLoader,
+	workspaceRoot string,
+	projectResolver func(ctx context.Context, sessionID string) *agentctx.ProjectContext,
+	surpriseCalc *surprise.SurpriseCalculator,
+) *sysagent.Agent {
+	a := sysagent.NewAgent(sessionID, taskRepo, sb.Router)
+	a.SetExtQuerier(sb.Store.DB())
+	// D5（GD-14-004）：transfer_to_agent 工具依赖的 Blackboard 任务投递能力。
+	// 显式 nil 判断后才注入——若直接把可能为 nil 的 *orchestrator.SQLiteBlackboard
+	// 赋给 HandoffPoster 接口字段，即使指针本身为 nil，接口值也会变为非 nil
+	// （经典 Go "typed nil interface" 陷阱），导致 agent_handoff.go 里
+	// `a.handoffPoster == nil` 的 fail-closed 判断失效。理论上 buildAgent 调用点
+	// 均在 blackboard 构造后（bb 恒非 nil），此判断仅作防御。
+	if bb != nil {
+		a.InjectHandoffPoster(bb)
+	}
+	a.Config.MaxReplan = sb.Cfg.Thresholds.M4Kernel.MaxReplanAttempts
+	a.Config.DefaultBudget = sb.Cfg.Thresholds.M4Kernel.DefaultBudget
+	a.Config.MaxSteps = sb.Cfg.Thresholds.M4Kernel.MaxSteps
+	a.Config.IdleTimeoutSec = sb.Cfg.Thresholds.M4Kernel.SuspendIdleThresholdMin * 60
+	a.InjectHITL(tb.HITLGateway)
+	a.InjectToolExecutor(tb.Dispatcher)
+	// S_VALIDATE L1 PolicyGate：与 Dispatcher 执行链路同一个 Cedar 门（deny-by-default）。
+	// 此前全仓零调用点，DAGValidator 恒拿到 nil 按 fail-closed 拒绝——FSM 规划出的
+	// 任何工具 DAG 都过不了校验（2026-09-25 实测 `PolicyGate is nil (fail-closed)`；
+	// 此前 Plan 阶段本身恒解析失败，从未走到这里，缺陷被掩盖）。
+	a.InjectPolicyGate(sb.Gate)
+	// 预算以 llm_calls 为唯一账本（ADR-0104 决策四）：agent-0 与池化会话 Agent 各绑定自身
+	// sessionID；月度上限由 BudgetManager 按 TTL 从 BudgetRepository 读取，不再经 Set* 推送。
+	// 走读连接：预算查询是只读聚合，不占单写连接。
+	a.SetBudget(sysagent.NewBudgetManager().WithLedger(sessionID,
+		repo.NewSQLiteLLMSpendLedger(sb.Store.ReadDB()),
+		repo.NewSQLiteBudgetRepository(sb.Store.ReadDB())))
+	// 2026-08-02 补齐接线：InjectCatalog 此前全仓零调用点，导致
+	// a.catalog/fsm 上下文构建器的 cata 恒为 nil——BuildToolListSection
+	// （agent/context/tool_list_section.go）与 S_PLAN 原生 function-calling
+	// 分支（agent_execute_effect.go）均以 cata==nil 为前提直接跳过，
+	// refreshInstalledExtensions（agent_lifecycle.go）同样早退——三者叠加
+	// 导致生产环境 LLM 在 S_PLAN 阶段完全看不到工具列表/Schema/已装扩展信息，
+	// 而不仅仅是 transfer_to_agent 单个工具（见 99-new-findings.md 阶段05
+	// P-03 续 target_agent_role 可见性排查的扩大发现）。tb.Catalog 即
+	// boot_tools.go 构造的 compCatalog，与 httpServer.SetCatalog 注入的是
+	// 同一个实例，buildAgent 同时服务 agent-0 与 AgentPool 派生 Agent，
+	// 此处注入覆盖全部实例。
+	a.InjectCatalog(tb.Catalog)
+	// context: fork 技能 → 委派子 Agent（ADR-0103 决策五）。
+	if tb.SkillRegistry != nil && tb.SkillExecutor != nil {
+		a.InjectSkillForker(skillForker{reg: tb.SkillRegistry, exec: tb.SkillExecutor})
+	}
+
+	if tb.SkillRegistry != nil && tb.EmbedFn != nil {
+		matcher := skill.NewSkillIntentMatcher(tb.SkillRegistry, skill.EmbedFn(tb.EmbedFn))
+		a.InjectSkillMatcher(matcher)
+	}
+	// BlindZoneDetector（V8-S4）：2026-07-21 deadcode 审查发现构造+注入点均从未被调用，
+	// 见 boot_memory.go 的 BlindZoneDetector 字段注释。
+	a.InjectBlindZoneDetector(mb.BlindZoneDetector)
+	// S_VALIDATE TaintGate 人工复核豁免（M11 §2.5 SanitizeByUserReview，2026-07-14）：
+	// 与 tb.ToolReg 的出口污点检查共享同一个 ExemptionVault 实例。
+	a.InjectTaintReviewChecker(tb.ExemptionVault)
+	// 统一权限判定（ADR-0117）：权限模式每次工具调用实时读偏好表，项目级“以后不再询问”规则读 approval_rules。
+	a.InjectPermission(tb.SysRepo, repo.NewSQLiteApprovalRuleRepository(sb.Store.DB()))
+	// Taint 受控降级审计（M11 §2.5「每次降级写 audit_log」，2026-08-10）：
+	// 复用 auditTrailLogAdapter 把 sb.AuditTrail 的 RecordAudit 桥接为
+	// protocol.AuditLogger 形状，与 BackgroundTaskScheduler 共用同一后端。
+	if sb.AuditTrail != nil {
+		a.InjectTaintAuditor(auditTrailLogAdapter{at: sb.AuditTrail})
+	}
+	a.InjectOutboxWriter(sb.Outbox)
+	// execute/dag.Runner/Validator 均无状态，buildAgent 同时服务 agent-0 与
+	// AgentPool 每次动态创建的 per-session Agent，此处注入而非仅在 agent-0
+	// 构造后追加，确保所有 Agent 实例（含 Pool 派生）都能跑通 S_EXECUTE/
+	// S_VALIDATE（2026-07-12 随 internal/execute 模块化新增，见 provider.go）。
+	a.InjectDAGRunner(agentdag.NewRunner())
+	a.InjectDAGValidator(agentdag.NewValidator())
+	a.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
+		whisperChan := a.GetWhisperChan()
+		if whisperChan == nil {
+			return
+		}
+		// tb.Dispatcher 同时满足 planner.ToolLookup（Lookup(name) (types.Tool, error)），
+		// 使 TaskDecomposer 能对 LLM 生成的 tool_name 做白名单校验（GR-7-002）。
+		pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan, tb.Dispatcher)
+		// workerEngineA 落盘候选补丁到 tb.VFSWorkspace 管辖的 rootDir 下执行编译/
+		// 测试评分（WP-9：不再用裸 os.MkdirTemp/os.WriteFile 触碰宿主机系统级
+		// /tmp，见 planner.WorkspaceStager 注释）。
+		pool.SetWorkspace(tb.VFSWorkspace)
+		// 031_planner_sessions：规划审计落库；task_id 由 agent_execute_dag 显式带入 ctx，可能为空。
+		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+		pool.SetRecorder(repo.NewSQLitePlannerSessionRepository(sb.Store.DB()), taskID)
+		pool.Run(ctx)
+	})
+	a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
+	if tb.PolicyEvolver != nil {
+		a.InjectToolHintProvider(tb.PolicyEvolver)
+	}
+	// PRM（S_PLAN 候选 DAG 选优，docs/arch/M04-Agent-Kernel.md §4.6）：默认关闭，
+	// 需 Operator 在 configs 显式打开 m4_kernel.prm.enabled（2026-07-13 deadcode
+	// 复核发现完整实现但从未接线：agent.NewDefaultPRM/InjectPRM 此前零调用点）。
+	if sb.Cfg.Thresholds.M4Kernel.PRMEnabled {
+		a.InjectPRM(sysagent.NewDefaultPRM(sysagent.PRMConfig{
+			Enabled:        true,
+			ScorerModel:    sb.Cfg.Thresholds.M4Kernel.PRMScorerModel,
+			MinThreshold:   sb.Cfg.Thresholds.M4Kernel.PRMMinThreshold,
+			MaxCandidates:  sb.Cfg.Thresholds.M4Kernel.PRMMaxCandidates,
+			ComplexityGate: sb.Cfg.Thresholds.M4Kernel.PRMComplexityGate,
+		}, sb.Router))
+	}
+	a.InjectReplanExtensionActivationTimeout(
+		time.Duration(sb.Cfg.Thresholds.M4Kernel.ReplanExtensionActivationSecs) * time.Second,
+	)
+	a.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
+
+	a.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
+	// 进程单例（bootAgent 构造一次、进程关停时 Close）：此前每个会话 Agent 各建一个实例，
+	// 泄漏 4 个 worker goroutine 且 Markov 矩阵随 Agent 丢弃（ADR-0104 决策七）。
+	a.SetSurpriseCalc(surpriseCalc)
+	if kb != nil && kb.KnowledgeBase != nil {
+		a.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
+	}
+	// L2 语义实体召回（ADR-0105 决策十 WP8）：此前 SetCognitiveSearcher 全仓零调用点，回合内召回的
+	// L2 来源恒为空。仅 SurrealDB 可用（Tier1+/≥8GB）时有 FTS 索引；Tier0 无此来源，按无 L2 降级。
+	// 适配器只放行语义实体命中并回取正文，见 adapters_recall.go。
+	wireL2Recall(a, sb, mb)
+	if prefs != nil {
+		a.SetPreferences(prefs)
+	}
+
+	// Inject trajectory store event writer for state trans and LLM call recording (Task 1)
+	a.GetStateMachine().SetSessionEventWriter(newStoreEventWriter(repo.NewSQLiteTrajectoryRepository(sb.Store.DB())))
+	// M04 §8 崩溃恢复：注入 KV Store 供 Run() 写入/清除 in-flight 崩溃检测标记
+	// （见 internal/agent/agent.go markInFlight/clearInFlight + boot_crash_recovery.go）。
+	a.InjectEventStore(sb.Store)
+	// M04 §7 热路径上下文窗口压缩 Stage 1（ADR-0033）：与网关 Compressor
+	// （boot_server.go SetToolRefOffloader）共用同一个 ToolRefOffloader 实例，
+	// 两条压缩路径落盘到同一份 workspace_vfs 索引，read_tool_ref 均可回读。
+	a.InjectToolRefOffloader(tb.ToolRefOffloader)
+
+	a.InjectTerminalCallback(func(_ context.Context, taskID, taskType string, replanCount int, success bool) {
+		concurrent.SafeGo(bgCtx, "reflection-worker-"+sessionID, func(gctx context.Context) {
+			if err := reflectionWorker.ConsolidateReflections(gctx, taskID, taskType, replanCount, success); err != nil {
+				slog.Debug("polaris: reflection consolidation skipped", "task", taskID, "err", err)
+			}
+		})
+	})
+	// PersonaRefiner（M05 §2.3）：agent-0 与 AgentPool 派生 Agent 共享同一进程级单例；
+	// 内核在会话层首次渲染时快照其稳定维度（ADR-0120 决策二）。
+	a.InjectPersonaRefiner(personaRefiner)
+
+	// GD-14-005 工作区上下文协议：装载器为进程级共享（无状态，只读配置）。
+	// 信任列表默认为空 → 所有工作区上下文按 TaintHigh 走 ZoneExternalCatalog；
+	// 用户在 [agent] trusted_workspace_roots 中显式声明的路径才进 ZoneImmutable。
+	// ADR-0097：项目提供用户自己的工作目录 / 指令，workspaceRoot 为空（无 VFS 根）
+	// 时也要注入 loader，否则项目上下文永远不会被装载。
+	if workspaceCtxLoader != nil {
+		a.InjectWorkspaceContextLoader(workspaceCtxLoader, workspaceRoot)
+	}
+	// 项目解析与上下文装载解耦：即便未启用工作区上下文，项目工作目录仍驱动工具访问根
+	// （ADR-0097 决策五）。
+	a.InjectProjectContextResolver(projectResolver)
+	return a
+}
+
+// bootAgent 执行 §8~§10.5 初始化，返回 Agent 层 bundle。
+// Supervisor.Start() 故意留在 run() 中调用，以确保 defer Supervisor.Stop() 先行注册。
+type piiScrubberAdapter struct {
+	detector *guard.PIIDetector
+}
+
+func (p *piiScrubberAdapter) Scrub(text string) string {
+	if p.detector == nil {
+		return text
+	}
+	res, _, _ := p.detector.Redact(context.Background(), text)
+	return res
+}
+
+// loadFoundingAnchorSigningKey 从 POLARIS_FOUNDING_ANCHOR_PRIVKEY（base64
+// Ed25519 私钥，见 internal/eval/founding_anchor.go FoundingAnchor.Signature
+// 文档注释）加载签名私钥；公钥由私钥派生（Ed25519 无需独立存储公钥）。
+// 未配置或格式无效时返回 (nil, nil)——对齐 VerifySignature 文档注释的
+// "pubKey 为 nil 时开发模式放行"：未部署签名密钥的场景（本地开发/单机部署）
+// 不强制要求锚点签名，与 LoadOrCreate/VerifySignature 现有的 nil 语义一致。
+func loadFoundingAnchorSigningKey() (ed25519.PrivateKey, ed25519.PublicKey) {
+	raw := os.Getenv("POLARIS_FOUNDING_ANCHOR_PRIVKEY")
+	if raw == "" {
+		return nil, nil
+	}
+	priv, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(priv) != ed25519.PrivateKeySize {
+		slog.Warn("polaris: POLARIS_FOUNDING_ANCHOR_PRIVKEY set but invalid (expected base64 Ed25519 private key), founding_anchor signing disabled")
+		return nil, nil
+	}
+	privKey := ed25519.PrivateKey(priv)
+	pubKey, ok := privKey.Public().(ed25519.PublicKey)
+	if !ok {
+		slog.Warn("polaris: failed to derive public key from POLARIS_FOUNDING_ANCHOR_PRIVKEY, founding_anchor signing disabled")
+		return nil, nil
+	}
+	return privKey, pubKey
+}
+
+func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, kb *KnowledgeBundle) (*AgentBundle, error) { //nolint:gocyclo
+	// ─── §8 Eval Harness (L3 M12) ────────────────────────────────────────────
+	// [复核修复] evalAccessEngine 此前一直用 control.NewEngine(nil) 构造——
+	// RoleM9Optimizer 没有任何注册公钥，control.Engine.VerifyRequest 对
+	// training/validation 分区的请求 fail-closed 拒绝，M9 自我改进闭环
+	// （RunnerImpl.RunSuite 内部请求评测用例）与 `polaris eval --ci-gate`
+	// 从未真正跑通过（自 first commit 起如此，与本次升级任务无关）。
+	// RoleM9Optimizer 访问 training/validation 分区是同一进程内部的一致性
+	// 检查（不同于 V8-S2 meta_holdout 要求私钥必须常驻服务器进程之外的
+	// 外部信任边界），故在此按进程生命周期生成一对临时密钥：公钥注册进
+	// Engine，私钥注入 RunnerImpl（InjectEvalPrivKey，签名细节见
+	// runner.go 该方法注释），无需跨重启持久化。
+	m9OptimizerPub, m9OptimizerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "bootAgent: generate m9_optimizer eval keypair", err)
+	}
+	evalAccessEngine := control.NewEngine(map[string]ed25519.PublicKey{
+		control.RoleM9Optimizer: m9OptimizerPub,
+	})
+	evalStore := harness.NewSQLiteEvalStore(sb.Store, evalAccessEngine)
+	evalRunner := harness.NewRunner(sb.Store, evalStore, sb.Cfg.Thresholds, sb.Cfg.Eval)
+	evalRunner.InjectEvalPrivKey(m9OptimizerPriv)
+	evalRunner.InjectTrajectoryReader(repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()))
+	// V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区审计，见 00-Global-Dictionary.md
+	// §V8-Principle + internal/eval/analysis/meta_eval.go）。仅构造，不在此处调用——
+	// 调用入口是 evaladmin 的 HTTP handler（httpServer.SetEvalAdmin，boot_server.go），
+	// 需要 meta_auditor 签名才能真正读取 meta_holdout/触发审计。
+	metaEvalSentinel := analysis.NewMetaEvalSentinel(evalStore)
+
+	// ContinuousSamplingMonitor：读侧（GetL3Threshold）与后台检测循环
+	// （Start）在此处联动；写侧（RecordSample）2026-07-14 补齐——通过
+	// AgentBundle.SamplingMonitor 传给 boot_server.go 的
+	// Server.SetSamplingMonitor 注入 ChatHandler，由生产回复路径按 1%
+	// 概率触发 LLM Judge 打分回灌（sampling_scorer.go）。onDegradation
+	// 回调仍为 nil：M9 autoRollback 触发链需要一个真实的免疫网关实现
+	// （原 dummyImmuneGateway 占位符已不存在，仓内无任何 ImmuneGateway 符号），属独立待设计项（见 polaris-m9-immune-system-dormant
+	// memory），此处不强行接入伪回调。
+	samplingMonitor := analysis.NewContinuousSamplingMonitor(nil)
+	// 7 天基线快照数据源（2026-08-10 接线）：不注入时 sevenDayAvg 恒为 0，
+	// attributeLocked 回落到内存滚动基线，持续性退化会被系统性低估为外部抖动。
+	samplingMonitor.InjectSnapshotStore(evalStore)
+	samplingMonitor.Start(ctx)
+	evalRunner.InjectL3ThresholdProvider(samplingMonitor)
+
+	// [Task 21] Setup LightweightRegressionDetector and inject into HITLGateway
+	if tb.HITLGateway != nil {
+		l3Detector := regression.NewLightweightRegressionDetector(sb.Store.DB())
+		cooldown := time.Duration(sb.Cfg.Thresholds.M11Policy.L3ImprovementCooldownSeconds) * time.Second
+		tb.HITLGateway.SetL3RegressionDeps(evalRunner, &regressionDetectorAdapter{inner: l3Detector}, cooldown)
+	}
+
+	// Task 4: SyntheticEvalGen Pipeline
+	evalGen := synthetic.NewEvalGenerator(true, sb.Router)
+	concurrent.SafeGo(ctx, "synthetic-eval-gen", func(ctx context.Context) {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// 合成评测生成是可延迟批处理：错峰窗口外跳过本轮，窗口内的下一个 tick 恢复（ADR-0105 决策七）。
+				if !sb.OffPeak.Allow() {
+					continue
+				}
+				chunks, err := kb.Ingester.GetRecentChunks(ctx, 100)
+				if err != nil || len(chunks) == 0 {
+					continue
+				}
+				cases, err := evalGen.GenerateCases(ctx, chunks)
+				if err != nil {
+					slog.Warn("synthetic eval gen failed", "err", err)
+					continue
+				}
+				for _, c := range cases {
+					// [W-5-H] SyntheticCaseToEvalCase 接入。分区用 training（M09 §合成用例：
+					// SourceSynthetic 路由至 Training Set）；原先写 "synthetic" 不是合法分区，
+					// PutCase 恒返回错误，合成用例从未落库。
+					evalCase := eval.SyntheticCaseToEvalCase(c)
+					if err := evalStore.PutCase(ctx, control.PartitionTraining, "auto_gen", evalCase); err != nil {
+						slog.Warn("failed to put synthetic eval case", "id", c.ID, "err", err)
+					}
+				}
+			}
+		}
+	})
+
+	// ─── §9 Blackboard & Scheduler (L2 M8 + L3 M13) ─────────────────────────
+	blackboard := orchestrator.NewSQLiteBlackboard(sb.Store.DB())
+	if ttlSec := sb.Cfg.Orchestrator.TaskRetentionTTLSec; ttlSec > 0 {
+		// SetTaskRetentionTTL 自身拒绝 < 5 分钟的取值（保底不让 Reaper 把刚完成
+		// 的任务立刻回收），这里只负责单位换算，不重复校验。
+		blackboard.SetTaskRetentionTTL(time.Duration(ttlSec) * time.Second)
+	}
+
+	// KillSwitch recovery 回调：恢复 oom_evicted 挂起任务
+	sb.KS.OnRecovery(func(ctx context.Context) {
+		slog.Info("polaris: KillSwitch recovery triggered, resuming suspended tasks")
+		// 2026-08-08：本段四处静默（查询失败整段跳过、Scan 走 err==nil 丢行、
+		// 无 rows.Err()、ResumeFromSuspended 走 `_ =`）。KillSwitch 恢复是
+		// oom_evicted 任务重新跑起来的唯一路径，任一条失败都表现为"任务永远
+		// 停在 suspended"且无任何日志。恢复动作是 best-effort（单个任务恢复
+		// 失败不该阻断其余任务），但必须逐条留痕。
+		rows, err := sb.Store.DB().QueryContext(ctx, "SELECT id FROM tasks WHERE status = ?", int(types.TaskSuspended))
+		if err != nil {
+			slog.Error("polaris: 查询挂起任务失败，本次 KillSwitch 恢复未恢复任何任务", "err", err)
+		} else {
+			var taskIDs []string
+			for rows.Next() {
+				var id string
+				if scanErr := rows.Scan(&id); scanErr != nil {
+					slog.Warn("polaris: 挂起任务 ID 扫描失败，该任务本轮不恢复", "err", scanErr)
+					continue
+				}
+				taskIDs = append(taskIDs, id)
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				slog.Error("polaris: 挂起任务列表迭代中断，部分任务未纳入本轮恢复", "err", rowsErr)
+			}
+			rows.Close()
+			for _, id := range taskIDs {
+				if resumeErr := blackboard.ResumeFromSuspended(ctx, id); resumeErr != nil {
+					slog.Error("polaris: 任务恢复失败，将继续停留在 suspended",
+						"task_id", id, "err", resumeErr)
+				}
+			}
+		}
+		// 幂等键必须真正唯一（2026-07-22 一致性审查修复）：outbox.idempotency_key
+		// 是 UNIQUE 约束列，空字符串在同一部署生命周期内只有第一次
+		// killswitch_recovery 能成功写入，之后每次真实恢复事件都会因约束冲突
+		// 静默丢弃（Write 错误被 `_ =` 丢弃）——不是"缺少幂等保护"这么轻的问题，
+		// 是"真实事件被悄悄吞掉"。此处无重试语义（同步调用一次），用纳秒时间戳
+		// 保证每次真实恢复都能独立落盘，不臆测"版本/序号"等这里并不存在的业务概念。
+		//
+		// 2026-08-08 补完：上面这段注释准确描述了"Write 错误被 `_ =` 丢弃 =
+		// 真实事件被悄悄吞掉"，但当时只换了幂等键，`_ =` 原样留在了下一行——
+		// 注释描述的缺陷仍然成立。构造失败同理（NewOutboxEvent 的 err 走
+		// `ev, _ :=` 丢弃，零值 ev 写出去只会污染 outbox）。
+		ev, evErr := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery",
+			map[string]string{"status": "recovered"},
+			string(types.BuildIdempotencyKey(protocol.TopicProviderRecovered, "killswitch", "global", "recovery",
+				int(time.Now().UnixNano()))))
+		if evErr != nil {
+			slog.Error("polaris: KillSwitch 恢复事件构造失败，下游订阅方不会收到恢复通知", "err", evErr)
+		} else if writeErr := sb.Outbox.Write(ctx, ev); writeErr != nil {
+			slog.Error("polaris: KillSwitch 恢复事件投递失败，下游订阅方不会收到恢复通知", "err", writeErr)
+		}
+	})
+
+	// 热注入 blackboard 到 ProviderRecoveryHandler（bootTools 时尚未装配）
+	tb.RecoveryHandler.SetBlackboard(blackboard)
+	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey))
+	tb.RecoveryHandler.SetPIIVault(piiVault)
+
+	// Reaper（挂起任务超时唤醒）
+	reaperCtx, reaperStop := context.WithCancel(ctx)
+	reaper := orchestrator.NewReaper(blackboard)
+	concurrent.SafeGo(reaperCtx, "boot_agent.reaper", func(ctx context.Context) {
+		reaper.Run(ctx)
+	})
+
+	sched := automation.NewSQLiteScheduler(sb.Store)
+	var memGuard *probe.OSMemoryGuard
+	var featGate *probe.FeatureGate
+	if sb.AutoConf != nil {
+		memGuard = sb.AutoConf.Guard
+		featGate = sb.AutoConf.Gate
+	}
+	sched.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
+	// GD-13-001：后台/自动化任务终态通知投递——写入端（消费端见下方 TopicNotification handler）。
+	sched.WithOutboxWriter(sb.Outbox)
+	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
+
+	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
+	// 2026-07-14：中心化 Orchestrator（RegisterWorker/dispatchPendingTasks）已删除
+	// ——生产环境从未调用 RegisterWorker，任务派发实际由下方 default-task-worker
+	// 承接的"自订阅 Blackboard + CAS 认领"模式完成（见 ADR-0062）。AgentRegistry
+	// 仍需保留并注入 SQLiteBlackboard，用于 PostTask 时的 SpawnDepth 校验。
+	agentRegistry := orchestrator.NewAgentRegistry()
+	blackboard.SetRegistry(agentRegistry)
+
+	pipelineOrch := orchestrator.NewPipelineOrchestrator(blackboard, tb.HITLGateway, sb.DecisionLog, 100*time.Millisecond, 3, 1800)
+	patternDAGExec := orchestrator.NewPatternDAGExecutor(blackboard, pipelineOrch)
+	mapReduceExec := orchestrator.NewMapReduceExecutor(blackboard, 10*time.Minute)
+	parallelExec := orchestrator.NewParallelExecutor(blackboard)
+	sequentialExec := orchestrator.NewSequentialExecutor(blackboard, 5*time.Minute)
+	swarmCoord := orchestrator.NewSwarmCoordinator(blackboard)
+	debateExec := orchestrator.NewDebateExecutor(blackboard) // GD-6：Debate/Critic 对抗协同模式
+
+	// GD-14-001：并发编排模式（Parallel/MapReduce/Sequential 均以
+	// StateGraphExecutor 为底座）共享同一个 PipelineOrchestrator，
+	// 使跨 Agent 补偿的"补偿任务自身超时/失败 → ESCALATE"处置与
+	// PatternDAG/Pipeline 完全一致，而不是各自实现一份。
+	parallelExec.SetPipelineOrchestrator(pipelineOrch)
+	mapReduceExec.SetPipelineOrchestrator(pipelineOrch)
+	sequentialExec.SetPipelineOrchestrator(pipelineOrch)
+
+	// ─── §10 Agent Kernel (L1 M4) ────────────────────────────────────────────
+	taskRepo := repo.NewSQLiteTaskReadRepository(sb.Store.DB())
+
+	// NewReflectionWorkerWithConfig 2026-07-21 deadcode 审查补齐：此前该构造函数
+	// 有完整实现+测试（白名单覆盖/MinReplanCount 触发行为），但生产侧从未有配置
+	// 来源，只能走 NewReflectionWorker 的硬编码默认值。M5Memory.Reflection* 字段
+	// 新增，零值时 NewReflectionWorkerWithConfig 内部回退到与旧默认值相同的值，
+	// 行为不变，只是获得了可覆盖能力。
+	reflectionWorker := reflexion.NewReflectionWorkerWithConfig(mb.Mem.Episodic(), sb.Router, mb.Mem.Reflection(),
+		reflexion.ReflectionConfig{
+			TaskTypeWhitelist: sb.Cfg.Thresholds.M5Memory.ReflectionTaskTypeWhitelist,
+			MinReplanCount:    sb.Cfg.Thresholds.M5Memory.ReflectionMinReplanCount,
+		})
+
+	var ds lam.DisplayServer
+	switch {
+	case probe.GlobalFeatureGate() == nil || !probe.GlobalFeatureGate().IsEnabled(probe.FeatureVisionDisplayServer):
+		slog.Info("polaris: FeatureVisionDisplayServer not enabled (or not Linux/insufficient tier), LAM StreamBus will use no-op fallback")
+	case !lam.XvfbAvailable():
+		slog.Info("polaris: FeatureVisionDisplayServer enabled but xdotool/xwd/convert not found in PATH, LAM StreamBus will use no-op fallback (install these binaries to enable GUI automation)")
+	default:
+		slog.Info("polaris: FeatureVisionDisplayServer enabled, injecting XvfbDisplayServer for LAM StreamBus")
+		ds = lam.NewXvfbDisplayServer(":99") // 默认 display ID，可通过配置扩展
+	}
+	streamBus := lam.NewStreamingActionBus(ds, 1000, 100.0) // 默认 1000 步，100 actions/sec
+
+	// ResolverModel 留空：由 Router 按图像 Part 选 Vision Provider（原 "default-vlm" 不是任何厂商的模型 ID）。
+	lamEngine := lam.NewComputerUseEngine(
+		lam.LAMConfig{Enabled: true},
+		sb.Router, // VLM provider（动作解析）
+		nil,       // executor: 当前无 GUI 执行器，dry-run 模式
+		sb.Gate,   // Cedar PolicyGate（deny-by-default）
+		streamBus,
+	)
+
+	// 旧键 computer_use_mode 在此一次性迁移到 permission_mode（读取即回写），
+	// 之后的 ListPreferences 快照只含新键。
+	if _, mErr := tb.SysRepo.GetPermissionMode(ctx); mErr != nil {
+		slog.Warn("polaris: permission_mode migration/read failed, strictest mode applies", "err", mErr)
+	}
+	prefs, err := tb.SysRepo.ListPreferences(ctx)
+	if err != nil {
+		slog.Warn("polaris: failed to load preferences on startup", "err", err)
+	}
+
+	// PersonaRefiner（M05 §2.3）：单进程单例，Load() 一次性从 preferences 表加载
+	// 冷启动画像；provider 用 sb.Router 供 RefineAtSessionEnd 生成 InteractionSummary。
+	personaRefiner := agentctx.NewPersonaRefiner(sb.Store.DB())
+	if err := personaRefiner.Load(ctx); err != nil {
+		slog.Warn("polaris: persona refiner load failed, using defaults", "err", err)
+	}
+
+	// GD-14-005 工作区上下文装载器：无状态、只读配置，进程级共享一个实例。
+	// trusted_workspace_roots 默认为空 → 所有 AGENTS.md/CLAUDE.md 按 TaintHigh
+	// 走 ZoneExternalCatalog 围栏，只有用户显式声明的路径才进 ZoneImmutable。
+	workspaceCtxLoader := agentctx.NewWorkspaceContextLoader(sb.Cfg.Agent.TrustedWorkspaceRoots)
+	workspaceRoot := ""
+	if tb.VFSWorkspace != nil {
+		workspaceRoot = tb.VFSWorkspace.GetRootDir()
+	}
+
+	// ADR-0097：会话 → 项目的上下文解析。每轮现取（改项目指令/信任下一轮生效）；
+	// 查询失败只降级为"无项目上下文"，不阻断对话。
+	projectRepo := repo.NewSQLiteProjectRepository(sb.Store.DB())
+	projectResolver := func(rctx context.Context, sessionID string) *agentctx.ProjectContext {
+		p, perr := projectRepo.GetProjectBySession(rctx, sessionID)
+		if perr != nil {
+			slog.Warn("polaris: resolve project context failed", "session", sessionID, "err", perr)
+			return nil
+		}
+		if p == nil {
+			return nil
+		}
+		return &agentctx.ProjectContext{ID: p.ID, Root: p.RootPath, Trusted: p.Trusted, Instructions: p.Instructions}
+	}
+
+	// SurpriseCalculator 进程单例：先从轨迹工具序列预热 Markov 矩阵，再注入全部 Agent。
+	surpriseCalc := surprise.NewSurpriseCalculator(mb.FallacyPool)
+	warmStartSurprise(ctx, repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()), surpriseCalc)
+
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
+
+	maxConcurrent := sb.Cfg.System.MaxAgents
+	if maxConcurrent <= 0 {
+		maxConcurrent = 4
+	}
+
+	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver, surpriseCalc)
+	}, maxConcurrent).WithInteractiveReserve(sb.Cfg.Thresholds.M8Orchestrator.AgentsInteractiveReserved).WithSessionCloseCallback(func(sessionID string) {
+		if tb.Catalog != nil {
+			if cc, ok := tb.Catalog.(interface{ CleanupSession(string) }); ok {
+				cc.CleanupSession(sessionID)
+			}
+		}
+	})
+	// KillSwitch 三阶段熔断（ADR-0009）接入：Pause/FullStop 阶段拒绝新 Agent 执行，
+	// Agent 内核异常退出上报错误计数（Acquire/AcquireHeadless 是全部触发路径的唯一收敛点）。
+	if sb.KS != nil {
+		agentPool.WithKillSwitchGate(sb.KS)
+	}
+
+	// 通用兜底 Blackboard 任务消费者（2026-07-12 unwired-code-audit 复查补齐）：
+	// M8 Orchestrator 的中心化按类型下推机制在生产环境从未被激活（RegisterWorker
+	// 零调用），导致 handleAgentQuery/ProviderRecoveryHandler 兜底分支/
+	// AutoCurriculumGenerator 发布的任务发布后无人认领，静默进入黑洞直至饥饿
+	// reaper 强制失败。此处接入 DefaultTaskWorker，复用同日已验证的
+	// workflowadmin.RunStepWorkerLoop"自订阅+CAS"模式，排除已有专用 Worker
+	// 处理的 "workflow_step" 类型，其余任务一律走 AgentPool.AcquireHeadless。
+	// "debate" 类型由专用 DebateWorker 认领（见 debate_worker.go），排除后防止
+	// DefaultTaskWorker 把结构化 DebateJobIntent JSON 当纯文本传给 LLM（HE-3）。
+	// "agent_handoff:mcp:" 前缀由专用 MCPA2AWorker 认领（ADR-0084），排除后
+	// 防止 target_agent_role 的 mcp: 委派语义被当作纯文本 headless 查询丢弃。
+	// 子 Agent 执行唯一实现（委派任务 / 用户 fork 技能 / agent 类型 hook 共用，ADR-0103）。
+	subagentRunner := newSubagentRunner(agentPool, tb, repo.NewSQLiteSubagentRunRepository(sb.Store.DB()))
+	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool,
+		"workflow_step", orchestrator.DebateTaskType, orchestrator.MCPA2AHandoffPrefix)
+	// ADR-0103 决策三：agent_handoff:<name> 按插件/项目/用户子 Agent 定义以角色执行，
+	// 并触发 SubagentStart/SubagentStop hook（决策六）。
+	defaultTaskWorker.WithSubagents(subagentRunner)
+	// ADR-0111：对端委派任务（peer_delegation）按 mesh 角色执行（默认只读、不可再委派）；
+	// meshSvc 为 nil（a2a 关闭）时不注入，DefaultTaskWorker 对此类任务 fail-closed。
+	meshSvc := bootMesh(sb, blackboard)
+	if meshSvc != nil {
+		defaultTaskWorker.WithPeerProfile(meshSvc.PeerProfile)
+	}
+
+	// ADR-0084：MCP A2A 出站委派专用 Worker，认领 "agent_handoff:mcp:<server>/<agent>"
+	// 任务，转译为对目标 MCP Server 的 a2a_delegate 工具调用。*mcp.MCPManager 已天然
+	// 满足 orchestrator.MCPToolCaller（结构子类型，无需适配器）。
+	// 契约工具（a2a_delegate 等）由 Worker 代为调用，没有 Agent 的 JIT 令牌；为其补发一次性令牌，
+	// 否则 trust_tier≤2 的委派目标会被执行闸门拒绝（见 MCPManager.SetDelegationTokenMinter）。
+	tb.MCPMgr.SetDelegationTokenMinter(func(llmTool string) (*token.Token, func(), error) {
+		tok, err := action.NewJITToken("mcp_a2a_worker", []action.TokenOperation{{ToolName: llmTool, MaxCalls: 1}}, 0)
+		if err != nil {
+			return nil, func() {}, apperr.Wrap(apperr.CodeForbidden, "boot: mint a2a contract tool token", err)
+		}
+		return tok, func() { action.GetTokenManager().Revoke(tok.Claims.TokenID) }, nil
+	})
+	mcpA2AWorker := orchestrator.NewMCPA2AWorker(blackboard, tb.MCPMgr,
+		time.Duration(sb.Cfg.Thresholds.M8Orchestrator.A2AHandoffTimeoutSeconds)*time.Second)
+	if meshSvc != nil {
+		// ADR-0111 决策四：出站委派携带 spawn_depth 与 chain（上游链 + 本节点）。
+		mcpA2AWorker.WithDelegation(meshSvc)
+	}
+
+	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
+		Name:   "agent-0",
+		Skills: []string{"general"},
+	}, agent)
+
+	// 委托 tb.Dispatcher.ExecuteWithTaint（未注册工具由其内部 Lookup 显式拒绝，不静默放行），
+	// 与 Dispatcher / Agent 直接 tool_call 共用同一条 PolicyGate→沙箱→执行 链路，不重复构造 ExecRequest。
+	dagExec := agentdag.NewDAGExecutor(func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+		return tb.Dispatcher.ExecuteWithTaint(ctx, toolName, args, taintLevel)
+	}, nil)
+
+	// 注入 ScriptSkillCache + SkillExecutor，激活 System 1 FastPath 技能命中路径。
+	// 仅在 FeatureLogicCollapse 开启（即 FeatureL3Sandbox 可用）时注入，
+	// 否则技能蒸馏流水线本身未运行，缓存永远为空，注入无意义。
+	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled {
+		if tb.SkillRegistry != nil && tb.SkillExecutor != nil {
+			// spawnFn：验证技能在注册表中存在后，返回轻量 ProcessHandle 作为"已确认可用"令牌。
+			// ProcessHandle 不持有实际进程；真正的执行由 SkillExecutor.ExecuteSkill 完成。
+			spawnFn := func(ctx context.Context, skillID string) (*skill.ProcessHandle, error) {
+				if _, err := tb.SkillRegistry.Get(ctx, skillID, ""); err != nil {
+					return nil, apperr.Wrap(apperr.CodeInternal, "boot_agent: SkillRegistry.Get 失败", err)
+				}
+				return &skill.ProcessHandle{SkillID: skillID, ReadyAt: time.Now()}, nil
+			}
+			skillCache := skill.NewScriptSkillCache(spawnFn, 5, 10, 30)
+			// 通过 adapter 注入：agent 包依赖 ScriptSkillCache 接口，不直接持有 *skill.ScriptSkillCache
+			agent.WithSkillCache(&skillCacheAdapter{inner: skillCache})
+			agent.WithSkillExecutor(tb.SkillExecutor)
+			slog.Info("polaris: ScriptSkillCache + SkillExecutor injected into Agent FastPath")
+		}
+	}
+
+	// ─── [C2.3] Boot 压力 Updater (Cognitive Pressure) ────────────────────────
+	concurrent.SafeGo(ctx, "cognitive-pressure-updater", func(ctx context.Context) {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				active := blackboard.CountByStatus(types.TaskClaimed, types.TaskExecuting)
+				surprise := metrics.GlobalSurpriseIndex().Current()
+				maxPrio := blackboard.MaxActivePriority()
+				p := metrics.ComputeCognitivePressure(active, surprise, maxPrio)
+				metrics.GlobalCognitivePressure().Set(p)
+			}
+		}
+	})
+
+	slog.Info("polaris: agent kernel & DAG executor initialized")
+
+	evalRunner.InjectAgent(&evalAgentAdapter{agent: agent})
+	sched.SetAgentInvoker(&agentInvokerAdapter{agent: agent})
+
+	// ─── §10.3 M9 Self-Improvement Engine ────────────────────────────────────
+	taskEventCh := make(chan learning.TaskCompleteEvent, 64)
+	versionEventCh := make(chan learning.VersionChangeEvent, 8)
+
+	// 桥接 Blackboard 事件 → M9 TaskCompleteEvent（XR-14：所有后台 goroutine 必须走 SafeGo）
+	// taskEventSeq：函数局部（非包级）单调递增计数器，供 learning_cursors 幂等去重
+	// 使用（2026-07-04 审计补齐——此前所有生产构造点均未赋值 Seq，导致游标持久化
+	// 机制的幂等跳过判断 ev.Seq>0 恒假、完全不生效）。局部变量不违反 CLAUDE.md
+	// "internal/ 禁全局可变变量" 规则（该规则约束包级变量，闭包捕获的函数局部
+	// 变量不在此列），且天然按 boot 生命周期隔离，无需额外并发保护（仅本 goroutine 写）。
+	var taskEventSeq int64
+	concurrent.SafeGo(ctx, "m9-bb-bridge", func(ctx context.Context) {
+		bbEvents, subErr := blackboard.Subscribe(ctx)
+		if subErr != nil {
+			slog.Warn("polaris: m9 blackboard subscribe failed", "err", subErr)
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-bbEvents:
+				if !ok {
+					return
+				}
+				switch ev.Type {
+				case "task_completed":
+					taskEventSeq++
+					select {
+					case taskEventCh <- learning.TaskCompleteEvent{
+						Seq:     taskEventSeq,
+						TaskID:  ev.TaskID,
+						Success: true,
+					}:
+					default:
+					}
+				case "task_failed":
+					taskEventSeq++
+					select {
+					case taskEventCh <- learning.TaskCompleteEvent{
+						Seq:     taskEventSeq,
+						TaskID:  ev.TaskID,
+						Success: false,
+						Failure: learning.FailureLogic,
+					}:
+					default:
+					}
+				}
+			}
+		}
+	})
+
+	// ReflexionEngine：注入真实 LLM 推理（nil 时恒走规则 fallback，反思质量退化）
+	// 与 AgentHER 依赖（db + SurrealDB 写入，replaySuccess 成功纠偏轨迹回写技能库）。
+	reflexionEngine := reflexion.NewReflexionEngine(mb.FallacyPool, mb.Heuristics, tb.LLMInfer)
+	if sb.SurrealStore != nil {
+		reflexionEngine.InjectDependencies(sb.Store.DB(), &surrealCognAdapter{s: sb.SurrealStore})
+	} else {
+		reflexionEngine.InjectDependencies(sb.Store.DB(), nil)
+	}
+	// 启发式闭环通道：ReflexionEngine 产出 → learning.Engine 内环消费（M9 §2.1 闭环关键路径）。
+	heuristicCh := make(chan types.HeuristicGeneratedPayload, 32)
+	reflexionEngine.SetHeuristicChannel(heuristicCh)
+	reflexionBridge := reflexion.NewReflexionBridge(reflexionEngine)
+	idleDetector := curriculum.NewIdleDetector()
+	curriculumGen := curriculum.NewAutoCurriculumGenerator(idleDetector, mb.FallacyPool, mb.Heuristics)
+	curriculumGen.WithFitnessEval(curriculum.NewSQLFitnessEvaluator(sb.Store.DB()))
+	// 课程生成受 self_improve.auto_curriculum 门控（默认关闭）。此前该配置项无人读取：
+	// 空闲时每 2 分钟（M9 中环与 bgTaskScheduler 两个入口各一次）向黑板投递最多 10 个
+	// 模板任务，DefaultTaskWorker 逐个认领并跑完整无头 Agent 回合（2026-09-25 实测
+	// 重启 4 分钟内投递 12 个），是后台 token 消耗大头（ADR-0101 决策一）。
+	var curriculumForEngine learning.CurriculumGenerator
+	if sb.Cfg.SelfImprove.AutoCurriculum {
+		curriculumForEngine = reflexion.NewCurriculumBridge(curriculumGen, blackboard)
+	}
+	// 2026-07-10 审计补齐：此前 rollout 是纯内存 optimizer.NewProgressiveRollout()（无 DB
+	// 持久化），promptOptimizer 以 (nil, nil, 0) 构造（无 provider/无 versionStore），
+	// Engine.stagingPipeline/versionStore 也从未被 Set 过——M9 GEPA 候选评分、激活、
+	// Shadow/Canary 门禁在生产环境实际上从未真正运转。现改为：versionStore/rolloutStore
+	// 均为真实 DB 支撑实例，rolloutStore 同时服务 M9Engine 和下方 LogicCollapseMonitor
+	// （原各自独立构造两份，互不相干），ConfirmShadow 通过后经 promptActivator 回调激活
+	// Prompt 候选（见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0025 §K）。
+	versionStore := optimizer.NewPromptVersionStore(sb.Store.DB())
+	var (
+		rolloutStore  *optimizer.SQLiteRolloutStore
+		rolloutBridge learning.RolloutAdvancer
+	)
+	if rs, rsErr := optimizer.NewSQLiteRolloutStore(sb.Store.DB()); rsErr != nil {
+		slog.Warn("polaris: failed to init SQLiteRolloutStore, M9 staging/shadow gating disabled", "err", rsErr)
+	} else {
+		rs.WithPromptActivator(versionStore)
+		// V8-S2 前置检查：默认关闭（M12EvalThresholds.MetaAuditGateEnabled），需运维
+		// 显式开启——避免既有部署因从未生成过 meta_audit 记录而被永久卡在 Gate2。
+		// evalStore 结构性满足 optimizer.MetaAuditReader（LatestMetaAudit 方法），无需适配器。
+		maCfg := sb.Cfg.Thresholds.M12Eval
+		rs.WithMetaAudit(evalStore, time.Duration(maCfg.MetaAuditMaxAgeHours)*time.Hour, maCfg.MetaAuditGateEnabled)
+		rolloutStore = rs
+		rolloutBridge = reflexion.NewRolloutBridge(rs)
+	}
+
+	promptOptimizer := optimizer.NewPromptOptimizerWithDB(sb.Router, versionStore, sb.Store.DB(), 0)
+	if pm, ok := sb.PromptMgr.(*prompt.Manager); ok {
+		pm.SetOptimizer(promptOptimizer)
+	}
+	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumForEngine, rolloutBridge, taskEventCh, versionEventCh)
+	// 2026-07-04 审计补齐（任务5）：SetDB 此前从未在生产启动代码中被调用，
+	// 导致 learning_cursors 持久化/幂等去重整套机制在 e.db==nil 短路下形同虚设
+	// （loadCursors 直接返回空 map，saveCursorAsync 第一行判空直接 return）。
+	m9Engine.SetDB(sb.Store.DB())
+	m9Engine.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
+	m9Engine.SetOptimizer(promptOptimizer)
+	m9Engine.WithOffPeak(sb.OffPeak)
+	promptOptimizer.WithOffPeak(ctx, sb.OffPeak)
+	m9Engine.SetVersionStore(versionStore)
+	if rolloutStore != nil {
+		m9Engine.SetStagingPipeline(rolloutStore)
+	}
+	// M9 闭环接线（P1-2）：内环消费 Reflexion 启发式事件；SurpriseIndex 读 M3 权威值；
+	// L3/L4 演化审批走 HITL 网关。
+	m9Engine.SetHeuristicEvents(heuristicCh)
+	// [W-1-A] 接入 EvalEvents
+	evalEventCh := make(chan types.EvalCompletedPayload, 16)
+	evalRunner.SetEvalChannel(evalEventCh)
+	m9Engine.SetEvalEvents((<-chan types.EvalCompletedPayload)(evalEventCh))
+
+	// [W-5-I] 接入 SetL4TriggerChannel
+	l4Ch := make(chan learning.Change, 4)
+	m9Engine.SetL4TriggerChannel(l4Ch)
+	// 在 Admin 路由中若需触发，可通过全局/其他方式引用 l4Ch。暂不接 admin 路由。
+
+	m9Engine.SetSurpriseIndexProvider(func() float64 { return metrics.GlobalSurpriseIndex().Current() })
+	m9Engine.SetHITLGateway(tb.HITLGateway)
+
+	converter := analysis.NewIncidentToEvalConverter(evalStore, &piiScrubberAdapter{detector: tb.PIIDetector})
+	m9Engine.SetIncidentConverter(func(ctx context.Context, payload []byte) (string, error) {
+		caseData, err := converter.Convert(ctx, payload)
+		if err != nil || caseData == nil {
+			return "", apperr.Wrap(apperr.CodeInternal, "failed to convert incident", err)
+		}
+		return caseData.ID, nil
+	})
+
+	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
+
+	// [W-5-B] 接入 FoundingAnchor 周期漂移检测（2026-07-14 补齐真实轨迹来源）：
+	// 此前 recentTrajectories 恒为空 slice（TODO 占位），根因是 sCtx.SessionID
+	// 从未被赋值（见 internal/agent/agent.go NewAgent 同批修复），
+	// session_trajectory 按真实 sessionID 查询永远为空。现改为经
+	// ChatRepository.ListSessions 取最近活跃会话 ID，逐个调用
+	// harness.TrajectoryRecorder.Record 聚合出真实 TrajectoryTrace。
+	concurrent.SafeGo(ctx, "founding-anchor-drift-detector", func(ctx context.Context) {
+		const (
+			anchorCreationSessionLimit = 200 // 创建锚点需 eval.MinTasksForAnchor=100 条轨迹，留冗余
+			driftCheckSessionLimit     = 50  // 周期漂移检查取近期窗口，不需要全量历史
+		)
+		chatRepo := repo.NewSQLiteChatRepository(sb.Store.DB())
+		recorder := harness.NewTrajectoryRecorder(repo.NewSQLiteTrajectoryRepository(sb.Store.ReadDB()))
+		gatherRecentTrajectories := func(ctx context.Context, limit int) []harness.TrajectoryTrace {
+			sessions, err := chatRepo.ListSessions(ctx, limit)
+			if err != nil {
+				slog.Warn("founding_anchor: list recent chat sessions failed", "err", err)
+				return nil
+			}
+			traces := make([]harness.TrajectoryTrace, 0, len(sessions))
+			for _, s := range sessions {
+				trace, recErr := recorder.Record(ctx, s.ID)
+				if recErr != nil || trace == nil {
+					continue
+				}
+				traces = append(traces, *trace)
+			}
+			return traces
+		}
+
+		// 2026-07-14 补齐：VerifySignature 此前全仓零调用点——LoadOrCreate 恒传
+		// nil privKey，锚点从未签名，也就没有加载时校验篡改的意义。现按
+		// founding_anchor.go 既有文档注释（"环境变量: POLARIS_FOUNDING_ANCHOR_
+		// PRIVKEY（base64 Ed25519 私钥）"）接入：私钥仅用于运行时自动签名新建的
+		// 锚点，未配置时保持 §L215 注释所述"开发模式放行"（不签名/不校验）。
+		privKey, pubKey := loadFoundingAnchorSigningKey()
+		verifyOrDiscard := func(anchor *eval.FoundingAnchor) *eval.FoundingAnchor {
+			if anchor == nil || pubKey == nil {
+				return anchor
+			}
+			if !eval.VerifySignature(anchor, pubKey) {
+				// 签名校验失败 = 锚点文件已被篡改（磁盘直改跳过了签名重算）。
+				// 不信任、不覆盖、不冒用——按"锚点尚未创建"降级处理，下个 tick
+				// 重新加载会读到同一份文件再次失败，持续告警而非静默接受。
+				slog.Error("CRITICAL: founding_anchor signature verification failed, discarding as tampered", "path", sb.DataDir)
+				return nil
+			}
+			return anchor
+		}
+
+		anchor, _, err := eval.LoadOrCreate(sb.DataDir, privKey, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+		anchor = verifyOrDiscard(anchor)
+		if err != nil || anchor == nil {
+			slog.Info("polaris: founding_anchor not yet created (insufficient trajectory history), will retry each drift-check tick", "err", err)
+		}
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if anchor == nil {
+					// 锚点尚未创建（或此前被判定为篡改）：每 24h 重试一次。
+					anchor, _, err = eval.LoadOrCreate(sb.DataDir, privKey, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+					anchor = verifyOrDiscard(anchor)
+					if err != nil || anchor == nil {
+						continue
+					}
+				}
+				recentTrajectories := gatherRecentTrajectories(ctx, driftCheckSessionLimit)
+				if len(recentTrajectories) == 0 {
+					continue
+				}
+				fp := eval.ComputeFingerprint(recentTrajectories)
+				report := eval.CompareWithAnchor(anchor, fp)
+				if sb.DriftMonitor != nil {
+					sb.DriftMonitor.SetScore(report.OverallDriftScore)
+				}
+				if report.ShouldFreeze && m9Engine != nil {
+					// 漂移触发冻结后自动加课是自进化环路的收敛动作，
+					// 静默失败等于漂移被检出却没有任何响应。
+					if err := m9Engine.TriggerCurriculum(ctx); err != nil {
+						slog.Error("polaris: 漂移冻结后触发课程失败，本次漂移无对应响应",
+							"drift_score", report.OverallDriftScore, "err", err)
+					}
+				}
+			}
+		}
+	})
+
+	// ─── M12 §8 ShadowExecutor：Gate 2(Shadow) 周期回放触发器 ──────────────────
+	// 2026-07-10 恢复接线：此前实现完整、测试完整但从未被实例化（详见
+	// local_playground 会话记录），Gate 2 对 GEPA 候选完全不构成门禁。现周期性
+	// 发现 rollout_states 中停留在 Gate 2 的候选，回放历史流量并对比评分，
+	// 通过则调用 ConfirmShadow 推进到 Gate 3，不通过则 Rollback。
+	//nolint:nestif
+	if rolloutStore != nil {
+		shadowExec, err := analysis.NewShadowExecutor(
+			sb.Store.DB(),
+			sb.Router,
+			repo.NewSQLiteMockResponseCache(sb.Store.DB()),
+			evalStore,
+			rolloutStore,
+		)
+		if err != nil {
+			slog.Error("boot: init ShadowExecutor failed, shadow replay skipped", "err", err)
+		} else {
+			concurrent.SafeGo(ctx, "shadow-executor-replay", func(ctx context.Context) {
+				// 5 分钟周期，与 boot_knowledge.go corpus-stats-flush 同量级；ADR-0025 §K
+				// 认定"分钟级延迟"对离线质量回归验证可接受，非实时链路无需更短周期。
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						versions, err := rolloutStore.ListPendingShadow(ctx)
+						if err != nil {
+							slog.Warn("shadow_executor: list pending shadow failed", "err", err)
+							continue
+						}
+						for _, v := range versions {
+							systemPromptOverride, opts := resolveShadowCandidateOpts(ctx, versionStore, v)
+							if err := shadowExec.RunReplayBatch(ctx, v, systemPromptOverride, opts); err != nil {
+								slog.Warn("shadow_executor: replay batch failed", "version", v, "err", err)
+							}
+						}
+					}
+				}
+			})
+			slog.Info("polaris: ShadowExecutor periodic replay trigger started (5min interval)")
+		}
+	}
+
+	if sb.ResourceGov != nil && sb.AutoConf != nil && tb.ConsolidationPipeline != nil && tb.ForgettingManager != nil {
+		// 不再注入 WithConsolidate：此前以伪会话 ID "idle-evolution" 调 Run，episodic 查询按
+		// TaskID==SessionID 过滤，永远 0 事件即返回 nil，是空转。巩固由 S_REFLECT 后的
+		// TopicMemoryConsolidate outbox 事件按会话驱动（boot_tools.go §6.6）。
+		idleScheduler := automation.NewIdleEvolutionScheduler(sb.ResourceGov, sb.AutoConf.Probe).
+			WithForgetting(func(_ context.Context) error {
+				return tb.ForgettingManager.PeriodicCleanup()
+			}).
+			WithForgettingProbe(tb.ForgettingManager.HasCandidates).
+			WithGraphPrune(func(ctx context.Context) error {
+				fac := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
+				return fac.PruneMemoryGraph(ctx)
+			}).
+			WithGraphPruneProbe(func(ctx context.Context) (bool, error) {
+				fac := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
+				return fac.HasPrunableGraphEdges(ctx)
+			}).
+			// 041_background_job_state：任务"上次跑完"落库，重启后不重复评估（HE-6）。
+			WithStateRepo(repo.NewSQLiteBackgroundJobStateRepository(sb.Store.DB()))
+		// [复核修复] IdleEvolutionScheduler 的空闲判定依赖 ResourceGovernor.Admit/AdmitLLM
+		// 每次被调用时回传"有前台活动"信号——ResourceGovernor 已预留 OnActivity(cb) 挂载点
+		// 但此前从未接线，导致 lastActivityAt 永远停留在构造时刻，isIdle() 恒真，调度器会
+		// 在系统持续繁忙时也误判为空闲并抢占前台算力。此处补齐这一行完成接线。
+		sb.ResourceGov.OnActivity(idleScheduler.MarkActivity)
+		concurrent.SafeGo(ctx, "idle-evolution-scheduler", func(ctx context.Context) {
+			idleScheduler.Run(ctx)
+		})
+		slog.Info("polaris: IdleEvolutionScheduler started (Tier0 background tasks)")
+	}
+
+	var bgCurriculumGen *curriculum.AutoCurriculumGenerator // nil：调度器只跑红队探测
+	if sb.Cfg.SelfImprove.AutoCurriculum {
+		bgCurriculumGen = curriculumGen
+	}
+	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(bgCurriculumGen, blackboard)
+	// InjectAuditLogger：sb.AuditTrail 实现的是 dispatch.AuditLogger
+	// （RecordAudit(ctx, toolName, payload)），不满足 protocol.AuditLogger
+	// （Log(ctx, action, meta)）；用 auditTrailLogAdapter 桥接（boot_agent.go 同文件
+	// 内定义），把调度器的 action/meta 形式审计事件转换为 AuditTrail.RecordAudit
+	// 所需的 toolName/payload 形式，两者语义等价（都是"记录一条带元数据的审计事件"）。
+	bgTaskScheduler.InjectAuditLogger(auditTrailLogAdapter{at: sb.AuditTrail})
+	bgTaskScheduler.InjectOffPeak(sb.OffPeak)
+
+	// [W-1-B] 接入 SurpriseReader
+	bgTaskScheduler.InjectSurpriseReader(&simpleSurpriseReader{})
+
+	// Task 3: Wire up RedTeamProtocol
+	rtp := eval.NewRedTeamProtocol(evalStore)
+	rtp.SetAgentPool(agentPool)
+	bgTaskScheduler.InjectRedTeamProtocol(rtp)
+
+	bgTaskScheduler.Start(ctx)
+	slog.Info("polaris: background task scheduler started", "auto_curriculum", sb.Cfg.SelfImprove.AutoCurriculum)
+
+	// ─── Sleep-Time & Self-Improvement 闭环 (ADR-0115 WP6) ───────────────────
+	trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
+	var harnessAudit *harnessAuditAdapter
+	if sb.AuditTrail != nil {
+		harnessAudit = &harnessAuditAdapter{at: sb.AuditTrail}
+	}
+	var sleepCaller sleeptime.RouterInferCaller
+	if sb.Router != nil {
+		sleepCaller = &routerInferCallerAdapter{
+			router: sb.Router,
+			vault:  tb.PIITokenVault,
+			policy: trustPol,
+		}
+	}
+	sleepProposer := sleeptime.NewDefaultProposer(sleepCaller, tb.HarnessOverlayMgr)
+	evalAdapter := &harnessEvaluatorAdapter{runner: evalRunner}
+
+	var consolidateFn sleeptime.ConsolidationRunner
+	if tb.ConsolidationPipeline != nil {
+		consolidateFn = func(ctx context.Context, sessionID string) error {
+			return tb.ConsolidationPipeline.Run(ctx, sessionID)
+		}
+	}
+	coordinator := sleeptime.NewCoordinator(sleeptime.CoordinatorConfig{
+		OverlayMgr:      tb.HarnessOverlayMgr,
+		Evaluator:       evalAdapter,
+		Proposer:        sleepProposer,
+		DB:              sb.Store.DB(),
+		AuditTrail:      harnessAudit,
+		OffPeak:         sb.OffPeak,
+		Consolidate:     consolidateFn,
+		Enabled:         trustPol.SleepTimeEnabled,
+		IdleMinutes:     trustPol.SleepTimeIdleMinutes,
+		MaxFailuresScan: 100,
+	})
+
+	if trustPol.SleepTimeEnabled {
+		idleMin := trustPol.SleepTimeIdleMinutes
+		if idleMin <= 0 {
+			idleMin = 10
+		}
+		concurrent.SafeGo(ctx, "sleeptime-coordinator", func(ctx context.Context) {
+			ticker := time.NewTicker(time.Duration(idleMin) * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := coordinator.RunSleepTime(ctx); err != nil {
+						slog.WarnContext(ctx, "sleeptime: cycle failed", "err", err)
+					}
+				}
+			}
+		})
+		slog.Info("polaris: sleeptime coordinator background worker started",
+			"idle_minutes", idleMin)
+	}
+
+	// ─── M09 §4 条件梯度训练：样本采集 + 批次触发（2026-07-21 deadcode 审查
+	// 补齐）。sb.QLoRA/sb.PRM 为 nil 时（对应 FeatureGate 未启用）跳过构造，
+	// 避免"nil 具体类型包进非 nil interface"经典陷阱——TrainingSampleCollector.Add
+	// 的 nil-safe 检查判断的是 interface 本身是否为 nil，若此处无条件传入
+	// (*llmadapter.QLoRAAdapter)(nil) 会得到非 nil 的 TrainingAdapter interface，
+	// 判空会误判为"已注入"进而在 Train() 处 panic。
+	//   - QLoRA 样本来自 reflexion.ReflexionEngine.replaySuccess（"经 replan 后
+	//     成功"的纠偏轨迹）。
+	//   - PRM 样本来自 sampling_scorer.go 的 M12 §9 生产流量抽样 LLM Judge 打分
+	//     （[0,1] 质量分作为 Reward）。
+	if sb.QLoRA != nil {
+		qloraCollector := llmadapter.NewTrainingSampleCollector("qlora", sb.QLoRA, sb.Cfg.Thresholds.M9SelfImprove.QLoRATrainBatchSize)
+		reflexionEngine.InjectQLoRACollector(qloraCollector)
+		slog.Info("polaris: QLoRA training sample collector wired", "batch_size", sb.Cfg.Thresholds.M9SelfImprove.QLoRATrainBatchSize)
+	}
+	if sb.PRM != nil {
+		prmCollector := llmadapter.NewTrainingSampleCollector("prm", sb.PRM, sb.Cfg.Thresholds.M9SelfImprove.PRMTrainBatchSize)
+		samplingMonitor.InjectPRMCollector(prmCollector)
+		slog.Info("polaris: PRM training sample collector wired", "batch_size", sb.Cfg.Thresholds.M9SelfImprove.PRMTrainBatchSize)
+	}
+
+	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 docs/specs/04-Module-Boundary.md §B2）
+	memoryFacadeForAgent := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
+	memoryAgent := agents.NewMemoryAgent(memoryFacadeForAgent, agent.GetWhisperChan(), nil)
+	memoryAgent.SetCursorStore(repo.NewSQLiteConsumerCursorRepository(sb.Store.DB()))
+
+	// 注入 PII OpaqueToken 检测器与令牌库（M11 §5.1 语义闭环）
+	agent.InjectPIITokenizer(tb.PIIDetector, tb.PIITokenVault)
+	// 注入格式保留假数据脱敏器，供会话终态 ReleasePartition 精确回收分区映射
+	// （阶段03 R-02，见 agent_lifecycle.go handleTerminalState）。
+	agent.InjectPIIDesensitizer(tb.PIIDesensitizer)
+
+	// TopicAgentInterrupt handler：gateway 写入的中断请求路由到 Agent Kernel。
+	// 当前进程内单 kernel（agent-0）+ Pool 共存，Pool 内会话由 gateway 直连路径覆盖，
+	// 此 handler 保证 outbox 异步路径不落死信（P0-1：禁止无 handler 的生产者）。
+	sb.Outbox.RegisterHandler(protocol.TopicAgentInterrupt, func(_ context.Context, rec *store.OutboxRecord) error {
+		var payload struct {
+			TaskID  string                 `json:"task_id"`
+			Request types.InterruptRequest `json:"request"`
+		}
+		if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+			return nil //nolint:nilerr // malformed payload 跳过，避免 OutboxWorker 无限重试
+		}
+		agent.Interrupt(payload.Request)
+		return nil
+	})
+
+	// GD-13-001：后台/自动化任务终态通知投递——消费端。Webhook URL/开关读取
+	// preferences 表（notification_webhook_url/notification_enabled），
+	// 复用现有 SystemRepository，不新增 schema。
+	sb.Outbox.RegisterHandler(protocol.TopicNotification, notify.NewDispatcher(tb.SysRepo).Handle)
+
+	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
+	sv := supervisor.NewSupervisor(ctx, 5, 5*time.Minute)
+
+	// [W-3] 接入 SyncScheduler
+	// 2026-08-08：原先在此另建一条 knowledge.NewPipeline（PipelineImpl）驱动连接器
+	// 同步，与 kb.Ingester（DefaultIngestionPipeline）构成同接口双实现，且两者对
+	// rag_docs 的列集互不兼容——PipelineImpl 的 INSERT 带 title/source_type/
+	// updated_at 三个 SSoT 里不存在的列，实测报 "table rag_docs has no column
+	// named title"，即每个连接器的每次同步都在落盘那一步失败。此处收敛为唯一
+	// 摄取实现，PipelineImpl 已删除。
+	for _, conn := range tb.KnowledgeConnRegistry.GetAll() {
+		c := conn
+		syncScheduler := connector.NewSyncScheduler(c, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
+		sv.AddWorker(fmt.Sprintf("sync-scheduler-%s", c.Name()), func(ctx context.Context) error {
+			return syncScheduler.Start(ctx)
+		})
+	}
+
+	sv.AddWorker("agent-0", func(ctx context.Context) error {
+		return agent.Run(ctx)
+	})
+	// 中心化 Orchestrator.ListenLoop 已删除（2026-07-14，ADR-0062）：其
+	// dispatchPendingTasks 在生产环境下 100% 无法成功派发任务（RegisterWorker
+	// 从未调用、agent-0 的 Skills=["general"] 与真实任务类型永远不匹配），
+	// 任务派发完全由下方 default-task-worker 的"自订阅 Blackboard + CAS 认领"
+	// 承接（见上方 DefaultTaskWorker 注入注释）。agentRegistry 仍保留，供
+	// SQLiteBlackboard SpawnDepth 校验使用（见上方 SetRegistry 调用）。
+	sv.AddWorker("default-task-worker", func(ctx context.Context) error {
+		return defaultTaskWorker.RunLoop(ctx)
+	})
+	sv.AddWorker("m9-engine", func(ctx context.Context) error {
+		return m9Engine.Start(ctx)
+	})
+	// GD-6 Debate/Critic 对抗协同模式驱动（ADR-0062 白名单行18-19 接线）：
+	// DebateWorker 订阅 Blackboard 事件，认领 type=="debate" 的任务并驱动
+	// DebateExecutor.Execute 状态机断点续跑，补齐此前缺失的调度循环驱动。
+	debateWorker := orchestrator.NewDebateWorker(blackboard, debateExec)
+	sv.AddWorker("debate-worker", func(ctx context.Context) error {
+		return debateWorker.RunLoop(ctx)
+	})
+	// ADR-0084：MCP A2A 出站委派 Worker（见上方 mcpA2AWorker 构造注释）。
+	sv.AddWorker("mcp-a2a-worker", func(ctx context.Context) error {
+		return mcpA2AWorker.RunLoop(ctx)
+	})
+	sv.AddWorker("memory-agent", func(ctx context.Context) error {
+		memoryAgent.Run(ctx)
+		return nil
+	})
+
+	// kb 当前用于确认 RAG 已就绪，未来可向 agent 注入知识检索能力
+	_ = kb
+
+	// 注册知识库连接器和 SyncScheduler 到 MemoryAgent
+	if kb.Ingester != nil { //nolint:nestif // 原因：启动期依次装配 Obsidian/Notion/MCP 三类知识源连接器，各自独立 if/err 分支，属一次性初始化清单而非热路径业务逻辑，参考 internal/automation/hitl/gateway.go Prompt() 的既有豁免先例。
+		// Obsidian Connector
+		obsidianConn, err := connector.NewObsidianConnector(sb.Layout.Workspace)
+		if err != nil {
+			slog.Error("polaris: failed to init ObsidianConnector", "err", err)
+		} else {
+			obsidianSched := connector.NewSyncScheduler(obsidianConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
+			memoryAgent.RegisterSyncScheduler(obsidianSched)
+			slog.Info("polaris: ObsidianConnector registered to MemoryAgent")
+		}
+
+		// 资料库目录（ADR-0114 决策八）：每个目录独立连接器，ID 与 URI 按路径区分。
+		for _, vaultDir := range resolveVaultDirs(sb.Cfg.Knowledge.VaultDirs, sb.Layout.Workspace) {
+			vaultConn, vErr := connector.NewObsidianVaultConnector(vaultDir)
+			if vErr != nil {
+				slog.Error("polaris: failed to init vault connector", "dir", vaultDir, "err", vErr)
+				continue
+			}
+			vaultSched := connector.NewSyncScheduler(vaultConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
+			memoryAgent.RegisterSyncScheduler(vaultSched)
+			slog.Info("polaris: vault connector registered to MemoryAgent", "dir", vaultDir, "id", vaultConn.ID())
+		}
+
+		// Notion Connector — token 优先从 vault 加密存储（复用 preferences 表，
+		// 与 Provider API Key 同一套 credential.Vault AES-256-GCM 方案）读取；
+		// 首次运行时回退 NOTION_TOKEN 环境变量并将其加密落盘（seed-once，
+		// 模式对齐 provider.SeedProvidersFromEnv），此后不再依赖明文 env
+		// （env 对同 UID 进程经 /proc/<pid>/environ 可见，不适合长期持有密钥）。
+		notionVault, err := credential.NewVaultInDir(sb.DataDir)
+		if err != nil {
+			slog.Error("polaris: failed to init credential vault for NotionConnector, skipping", "err", err)
+		} else {
+			sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
+			// S-04：注入 sb.SafeHTTP（EgressGateway/SafeDialer 包裹的受保护 client），
+			// 禁止让 NotionConnector 自建裸 client 绕过 SSRF 防护。
+			notionConn, err := connector.NewNotionConnector(func(ctx context.Context) (string, error) {
+				return resolveNotionToken(ctx, sysRepo, notionVault)
+			}, sb.SafeHTTP)
+			if err != nil {
+				slog.Error("polaris: failed to init NotionConnector, skipping", "err", err)
+			} else {
+				notionSched := connector.NewSyncScheduler(notionConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
+				memoryAgent.RegisterSyncScheduler(notionSched)
+				slog.Info("polaris: NotionConnector registered to MemoryAgent")
+			}
+		}
+
+		// MCP 知识源连接器（2026-07-04 审计补齐，任务17）：此前 mcp_installer.go
+		// 只把声明了 capability=knowledge-source 的 MCP 服务器注册进
+		// KnowledgeConnRegistry，但从未有代码读取该注册表去创建 SyncScheduler，
+		// 是"注册了但从未被调度"的死数据。此处补齐，与 Obsidian/Notion 走同一
+		// 条 SyncScheduler + RegisterSyncScheduler 接入方式。
+		if tb.KnowledgeConnRegistry != nil {
+			for _, mcpConn := range tb.KnowledgeConnRegistry.GetAll() {
+				mcpSched := connector.NewSyncScheduler(mcpConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
+				memoryAgent.RegisterSyncScheduler(mcpSched)
+				slog.Info("polaris: MCP knowledge source connector registered to MemoryAgent", "id", mcpConn.ID())
+			}
+		}
+	}
+
+	return &AgentBundle{
+		Mesh:                 meshSvc,
+		SurpriseCalc:         surpriseCalc,
+		EvalRunner:           evalRunner,
+		EvalStore:            evalStore,
+		MetaEvalSentinel:     metaEvalSentinel,
+		Blackboard:           blackboard,
+		Sched:                sched,
+		AgentRegistry:        agentRegistry,
+		PipelineOrch:         pipelineOrch,
+		PatternDAGExec:       patternDAGExec,
+		MapReduceExec:        mapReduceExec,
+		ParallelExec:         parallelExec,
+		SequentialExec:       sequentialExec,
+		SwarmCoord:           swarmCoord,
+		DebateExec:           debateExec,
+		Agent:                agent,
+		DAGExec:              dagExec,
+		M9Engine:             m9Engine,
+		RolloutStore:         rolloutStore,
+		AgentPool:            agentPool,
+		Subagents:            subagentRunner,
+		Supervisor:           sv,
+		ReaperStop:           reaperStop,
+		SamplingMonitor:      samplingMonitor,
+		SleepTimeCoordinator: coordinator,
+	}, nil
+}
+
+// resolveShadowCandidateOpts 为 ShadowExecutor 回放解析候选版本的覆盖参数。
+// 候选来自 M9 GEPA/PromptOptimizer（handleEvalCompleted 提交，version == prompt_versions.id）
+// 时能查到真实 prompt_text，作为 system 消息覆盖返回；候选来自 L3/L4 HITL 审批路径时
+// prompt_versions 无对应行（那两条路径提交的 AgentVersionSnapshot 目前只携带描述性文字，
+// 没有可结构化的覆盖参数），返回空覆盖——诚实地不构造，避免影子对比在无意义覆盖下
+// 产生"必过"的假阳性（详见本次会话对 candidateOpts 来源的讨论）。
+func resolveShadowCandidateOpts(ctx context.Context, versionStore *optimizer.PromptVersionStore, version string) (string, []types.InferOption) {
+	if versionStore == nil {
+		return "", nil
+	}
+	pv, err := versionStore.GetByID(ctx, version)
+	if err != nil || pv == nil || pv.Prompt == "" {
+		return "", nil
+	}
+	return pv.Prompt, nil
+}
+
+// notionTokenPrefKey preferences 表中存放 NotionConnector token 密文的 key。
+// 复用 016_preferences.sql 的通用 KV 表而非新建专用密钥表——preferences 已经是
+// 系统级 KV 存储，值本身在写入前经 credential.Vault 加密，语义上与直接落盘
+// 明文 token 完全不同，不需要为单个第三方连接器新增一张表。
+const notionTokenPrefKey = "connector_secret:notion_token"
+
+// resolveNotionToken 解析 NotionConnector 所需 token：
+//  1. 优先读取 preferences 表中的密文并用 vault 解密；
+//  2. 未配置时回退 NOTION_TOKEN 环境变量，读取成功后立即加密写回 preferences
+//     （seed-once，此后不再依赖明文 env，模式对齐 provider.SeedProvidersFromEnv）；
+//  3. 两者皆无则报错，NotionConnector 的 Watch/List/Fetch 调用会因此失败并被
+//     SyncScheduler 的重试/日志路径捕获，不会导致进程崩溃。
+func resolveNotionToken(ctx context.Context, sysRepo *repo.SQLiteSystemRepository, vault *credential.Vault) (string, error) {
+	encrypted, err := sysRepo.GetPreference(ctx, notionTokenPrefKey)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "read notion token from preferences", err)
+	}
+	if encrypted != "" {
+		token, decErr := vault.Decrypt(encrypted)
+		if decErr != nil {
+			return "", apperr.Wrap(apperr.CodeInternal, "decrypt notion token", decErr)
+		}
+		if token != "" {
+			return token, nil
+		}
+	}
+
+	token := os.Getenv("NOTION_TOKEN")
+	if token == "" {
+		return "", apperr.New(apperr.CodeNotFound, "NOTION_TOKEN not set and no vault-stored token found")
+	}
+
+	encToken, encErr := vault.Encrypt(token)
+	if encErr != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "encrypt notion token", encErr)
+	}
+	if err := sysRepo.UpsertPreference(ctx, notionTokenPrefKey, encToken); err != nil {
+		// 落盘失败不阻断本次调用——下次调用会再次读取 env 兜底，仅退化为
+		// "每次都读明文 env"，不影响功能正确性，只是没有实现"落盘后免依赖 env"的优化。
+		slog.Warn("polaris: failed to persist encrypted notion token, will re-read env next time", "err", err)
+	}
+	return token, nil
+}
+
+// simpleSurpriseReader 实现 curriculum.SurpriseReader 接口，读取全局意外度
+type simpleSurpriseReader struct{}
+
+func (r *simpleSurpriseReader) CurrentSurprise() float64 {
+	return metrics.GlobalSurpriseIndex().Current()
+}
+
+// auditTrailLogAdapter 把 dispatch.AuditLogger 形状的
+// RecordAudit(ctx, toolName, payload []byte) 桥接为 protocol.AuditLogger 形状的
+// Log(ctx, action string, meta map[string]any)，供
+// curriculum.BackgroundTaskScheduler.InjectAuditLogger 使用。
+//
+// 2026-07-14（ADR-0062 关联接线）：*security.AuditTrail 只实现了前者（其文档注释
+// "实现 protocol.AuditLogger 接口" 是过时表述，已一并订正），全仓库不存在
+// protocol.AuditLogger 的直接实现，导致该接口的唯一消费方
+// BackgroundTaskScheduler 此前无法注入任何真实审计后端。两个接口语义等价
+// （都是"记录一条带元数据的审计事件"），仅参数形状不同，故用适配器桥接而非
+// 改动 AuditTrail 本身的公开签名（AuditTrail.RecordAudit 同时也是
+// dispatch.AuditInterceptor 的既有依赖，不能破坏性变更）。
+type auditTrailLogAdapter struct {
+	at interface {
+		RecordAudit(ctx context.Context, toolName string, payload []byte) error
+	}
+}
+
+func (a auditTrailLogAdapter) Log(ctx context.Context, action string, meta map[string]any) error {
+	payload, err := json.Marshal(meta)
+	if err != nil {
+		payload = []byte("{}")
+	}
+	if err := a.at.RecordAudit(ctx, action, payload); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "auditTrailLogAdapter.Log", err)
+	}
+	return nil
+}

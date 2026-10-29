@@ -1,0 +1,110 @@
+-- ============================================================================
+-- 021_plugins: 已安装插件的运行时状态表
+-- ============================================================================
+-- 架构角色: 对应 Codex config.toml 的 [plugins."xxx"] 配置段。
+--   每条记录 = 一个已安装插件的运行时状态。
+--
+-- 三层统一架构（agentskills.io 标准，对齐 OpenAI Codex / Claude Code）：
+--   插件安装时，其所有子组件写入各自的全局运行时表，通过 plugin_id FK 关联：
+--     - 子 MCP  → mcp_servers（plugin_id=plugins.id, work_dir=install_path）
+--     - 子 Skill → skills（plugin_id=plugins.id）
+--   插件禁用时：级联 mcp_servers.enabled=0 + skills.deprecated=1
+--   插件启用时：级联 mcp_servers.enabled=1 + skills.deprecated=0
+--   插件卸载时：DELETE FROM mcp_servers WHERE plugin_id + DELETE FROM skills WHERE plugin_id
+--
+-- mcp_policy 仅保留每个子 MCP 的额外策略（approval_mode、enabled_tools），
+-- 子 MCP 的 enabled 状态以 mcp_servers.enabled 为权威（mcp_policy 中的 enabled 废弃）。
+--
+-- 消费方:
+--   MCPManager    - RestoreServersFromDB() 统一加载（含 plugin_id 非空的子 MCP）
+--   SSE handler   - SELECT * FROM skills WHERE exec_mode='ambient' AND deprecated=0
+--   UI/API 层     - GET /v1/plugins 展示已安装插件列表
+-- 关联: extension_instances.runtime_id → plugins.id (ext_type='plugin')
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS plugins (
+    id           TEXT    PRIMARY KEY,           -- "pl_{8hex}"
+    name         TEXT    NOT NULL UNIQUE,        -- kebab-case，Codex plugin namespace
+    version      TEXT    NOT NULL DEFAULT '1.0.0',
+    display_name TEXT    NOT NULL DEFAULT '',    -- interface.displayName
+    description  TEXT    NOT NULL DEFAULT '',
+    publisher    TEXT    NOT NULL DEFAULT '',    -- author.name / plugin.json author.name
+    homepage     TEXT    NOT NULL DEFAULT '',    -- plugin.json homepage
+    install_path TEXT    NOT NULL DEFAULT '',    -- 插件根目录绝对路径，运行时加载唯一来源
+    enabled      INTEGER NOT NULL DEFAULT 1,     -- 全局开关；0 时 MCPManager/SSE 跳过此插件
+    trust_tier   INTEGER NOT NULL DEFAULT 1,     -- 0-4，继承自 extension_instances
+    catalog_id   TEXT    NOT NULL DEFAULT '',    -- extension_catalog.id；用户手动安装时为空
+    -- 子 MCP 运行时策略（对应 Codex [plugins.xxx.mcp_servers.yyy]）
+    -- JSON map: { "server-name": { "enabled": true, "approval_mode": "prompt", "enabled_tools": ["x"] } }
+    mcp_policy   TEXT    NOT NULL DEFAULT '{}',
+    -- plugin.json 完整快照（运行时缓存；权威来源始终是 install_path/.polaris-plugin/plugin.json）
+    manifest     TEXT    NOT NULL DEFAULT '{}',
+    created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_plugins_enabled ON plugins(enabled);
+CREATE INDEX IF NOT EXISTS idx_plugins_catalog ON plugins(catalog_id) WHERE catalog_id != '';
+CREATE INDEX IF NOT EXISTS idx_plugins_trust   ON plugins(trust_tier);
+
+-- ============================================================================
+-- plugin_user_config: 插件 userConfig 取值（Claude plugin.json userConfig / channels[].userConfig，
+-- 以及 .mcpb 包 user_config；ADR-0103 决策三）
+-- ============================================================================
+-- scope: '' = 插件级选项；非空 = 所属 channel 绑定的 MCP 服务器名（channel 级选项只作用于该服务器）。
+-- sensitive=1 的 value 为 credential.Vault 密文，禁止明文落盘；明文只在启动 MCP / 执行 hook 时解密。
+-- 选项定义（类型/必填/默认值）的权威源是 plugins.manifest 快照，本表只存用户填写的值。
+-- 插件卸载时随 plugins 行一并删除（UninstallCleanup）。
+CREATE TABLE IF NOT EXISTS plugin_user_config (
+    plugin_id   TEXT    NOT NULL,
+    scope       TEXT    NOT NULL DEFAULT '',
+    key         TEXT    NOT NULL,
+    value       TEXT    NOT NULL DEFAULT '',   -- JSON 编码的值（字符串/数字/布尔/字符串数组）；sensitive 时为密文
+    sensitive   INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (plugin_id, scope, key)
+);
+
+-- ============================================================================
+-- hook_trust: hooks.json 来源的审阅信任（ADR-0103 决策六：安装 ≠ 信任）
+-- ============================================================================
+-- source_key: plugin:<plugin_id>:<来源文件> | project:<hooks.json 绝对路径>。用户级 hooks.json
+-- 由本机管理员维护，视为已信任，不入本表。信任绑定到定义内容哈希：定义变更后哈希不匹配，
+-- 来源回到待审状态，不执行。插件卸载时随 plugin_id 前缀删除。
+CREATE TABLE IF NOT EXISTS hook_trust (
+    source_key  TEXT    PRIMARY KEY,
+    digest      TEXT    NOT NULL,
+    trusted_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+-- ============================================================================
+-- plugin_channels: Claude 插件 channels 的用户启用状态（ADR-0103 决策三：安装 ≠ 启用）
+-- ============================================================================
+-- channel 定义（绑定的插件 MCP 服务器、显示名）的权威源是 plugins.manifest 快照，本表只存用户
+-- 显式开启的状态：channel 事件会把外部消息注入 Agent 会话（Claude 同样要求逐会话 --channels 显式
+-- 开启）。permission_relay=1 且服务器声明 claude/channel/permission 时，审批请求转发到该通道。
+-- 升级重装保留；插件卸载时删除（UninstallCleanup）。
+CREATE TABLE IF NOT EXISTS plugin_channels (
+    plugin_id         TEXT    NOT NULL,
+    server            TEXT    NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 0,
+    permission_relay  INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (plugin_id, server)
+);
+
+-- ============================================================================
+-- plugin_app_bindings: Codex .app.json 应用绑定（ADR-0103 决策四：app 是对连接器的引用，不是 MCP 定义）
+-- ============================================================================
+-- connector_ref: .app.json apps.<alias>.id 原文（ChatGPT 平台连接器 ID 或本地连接器标识）。
+-- bound_server_id: 解析/用户绑定到的本地 mcp_servers.id；空 = 未绑定（status='unbound'）。
+-- 安装时按 id / 名称 / catalog_id 自动解析；用户手动绑定在 connector_ref 不变且服务器仍存在时跨升级保留。
+CREATE TABLE IF NOT EXISTS plugin_app_bindings (
+    plugin_id        TEXT    NOT NULL,
+    alias            TEXT    NOT NULL,
+    connector_ref    TEXT    NOT NULL,
+    bound_server_id  TEXT    NOT NULL DEFAULT '',
+    status           TEXT    NOT NULL DEFAULT 'unbound' CHECK (status IN ('bound','unbound')),
+    updated_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (plugin_id, alias)
+);

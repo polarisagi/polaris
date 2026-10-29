@@ -1,0 +1,84 @@
+# macOS 敏感路径。APFS 默认大小写不敏感，匹配逻辑对 darwin 一律忽略大小写。
+
+# ───────────── credential ─────────────
+- class: credential
+  paths: ['~/Library/Keychains', '/Library/Keychains']
+  fragments: ['Keychains', 'login.keychain']
+  note: macOS 钥匙串（T1555.001）
+
+- class: credential
+  paths:
+    - '~/Library/Application Support/Google/Chrome'
+    - '~/Library/Application Support/Google/Chrome Beta'
+    - '~/Library/Application Support/Google/Chrome Canary'
+    - '~/Library/Application Support/Chromium'
+    - '~/Library/Application Support/Microsoft Edge'
+    - '~/Library/Application Support/BraveSoftware'
+    - '~/Library/Application Support/com.operasoftware.Opera'
+    - '~/Library/Application Support/com.operasoftware.OperaGX'
+    - '~/Library/Application Support/Vivaldi'
+    - '~/Library/Application Support/Arc'
+    - '~/Library/Application Support/Firefox'
+    - '~/Library/Application Support/zen'
+    - '~/Library/Safari'
+    - '~/Library/Cookies'
+    - '~/Library/Containers/com.apple.Safari'
+    - '~/Library/Group Containers/group.com.apple.Safari'
+  fragments: ['Login Data', 'Cookies', 'Local State', 'Web Data', 'key4.db', 'logins.json', 'cookies.sqlite', 'Cookies.binarycookies', 'Local Storage/leveldb', 'Local Extension Settings']
+  note: 浏览器整目录（Cookie/密码/Local Storage 令牌/钱包扩展）；Firefox profiles 在 Firefox/Profiles 下（T1555.003）
+
+- class: credential
+  paths:
+    - '~/Library/Group Containers/2BUA8C4S2C.com.1password'
+    - '~/Library/Application Support/1Password'
+    - '~/Library/Containers/com.1password.1password'
+    - '~/Library/Application Support/Bitwarden'
+    - '~/Library/Containers/com.bitwarden.desktop'
+    - '~/Library/Application Support/KeePassXC'
+    - '~/Library/Application Support/Dashlane'
+    - '~/Library/Containers/com.dashlane.Dashlane'
+    - '~/Library/Application Support/Enpass'
+    - '~/Library/Containers/in.sinew.Enpass-Desktop'
+  fragments: ['1password', 'Bitwarden', 'Dashlane', 'Enpass']
+  note: 密码管理器本地库；LastPass 数据位于浏览器扩展存储，已被浏览器目录覆盖（T1555.005）
+
+- class: credential
+  paths:
+    - '~/Library/Application Support/Exodus'
+    - '~/Library/Application Support/atomic'
+    - '~/Library/Application Support/Electrum'
+    - '~/Library/Application Support/Bitcoin'
+    - '~/Library/Ethereum/keystore'
+    - '~/Library/Application Support/Ledger Live'
+  fragments: ['exodus.wallet', 'wallet.dat', 'keystore']
+  note: 桌面钱包
+
+- class: credential
+  paths:
+    - '~/Library/Application Support/Telegram Desktop'
+    - '~/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram'
+    - '~/Library/Application Support/Signal'
+    - '~/Library/Application Support/discord'
+    - '~/Library/Application Support/Slack'
+    - '~/Library/Application Support/WhatsApp'
+    - '~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared'
+    - '~/Library/Messages'
+    - '~/Library/Mail'
+    - '~/Library/Application Support/Microsoft Teams'
+  fragments: ['tdata', 'Telegram Desktop', 'chat.db', 'Signal/sql']
+  note: IM 会话令牌与消息库（Telegram tdata 可直接接管会话）
+
+# ───────────── persistence ─────────────
+- class: persistence
+  paths: ['~/Library/LaunchAgents', '/Library/LaunchAgents', '/Library/LaunchDaemons', '/Library/StartupItems', '~/Library/Application Support/com.apple.TCC', '~/Library/Preferences/com.apple.loginitems.plist', '~/Library/Application Support/com.apple.backgroundtaskmanagementagent', '~/Library/LaunchDaemons']
+  fragments: ['LaunchAgents', 'LaunchDaemons']
+  note: launchd 自启动与 TCC 授权（T1543.001/.004）；后三项落点待核实
+
+- class: persistence
+  paths: ['~/Library/Services', '~/Library/Scripts', '~/Library/Application Support/iTerm2/Scripts/AutoLaunch']
+  note: Automator 服务/脚本菜单/iTerm2 自动启动脚本（登录或交互时执行）；待核实
+
+# ───────────── system ─────────────
+- class: system
+  paths: ['/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private/etc']
+  note: 系统目录；注意 /Library 不含 ~/Library（逐段匹配保证）

@@ -1,0 +1,22 @@
+{
+  "title": "web_search",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "The search query."
+    },
+    "max_results": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 8,
+      "description": "Maximum number of search results to return (1-20, default 8)."
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false
+}

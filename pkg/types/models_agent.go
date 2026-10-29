@@ -1,0 +1,384 @@
+package types
+
+import "encoding/json"
+
+type
+
+// StepContext 单步执行上下文（供 StepScorer 打分，Best-of-N 剪枝）。
+StepContext struct {
+	ToolName     string
+	Input        []byte
+	Output       []byte
+	LatencyMs    int64
+	TokensUsed   int
+	SchemaPassed bool
+}
+
+// TaskSnapshot Task 状态只读快照（避免拷贝含原子字段的 TaskEntry）。
+type TaskSnapshot struct {
+	ID     string
+	Status TaskStatus
+	Result []byte
+	// Namespace 协同任务共享记忆命名空间（GD-14-001），透传自 TaskEntry.Namespace，
+	// 供 Worker 在派发前注入 AgentKernel.SetMemoryNamespace。空值 = 不共享。
+	Namespace string
+	// Intent 透传自 TaskEntry.Intent（2026-07-12 补齐持久化，见 007_tasks.sql intent
+	// 列注释）。Worker 认领任务后通过 PeekTask 读回本字段还原任务实际意图内容
+	// （如 StateGraphExecutor tryPostNode 编码的 state_graph_node_id/template）。
+	Intent []byte
+	// Type 透传自 TaskEntry.Type（持久化于 tasks.session_id 列，既有实现约定，
+	// 见 sqlite_blackboard.go PostTask 注释）。自订阅式 Worker（不依赖 Orchestrator
+	// 中心化按类型下推）需要在 ClaimTask 之前先用本字段判断任务是否属于自己的
+	// 能力类型，避免误认领其他能力类型的任务（2026-07-12 workflow 集成补齐）。
+	Type string
+
+	// TraceID / SpanID 用于跨 goroutine trace 延续 (A16)
+	TraceID string
+	SpanID  string
+
+	// SpawnDepth 透传自 TaskEntry.SpawnDepth（ADR-0084 补齐持久化，见
+	// 007_tasks.sql spawn_depth 列注释）。自订阅式 Worker 认领任务后若需要
+	// 再派生子任务（如 transfer_to_agent 委派链），据此设置子任务的
+	// SpawnDepth+1，使 resolveMaxDepth 深度上限校验对多级委派链生效。
+	SpawnDepth int
+	// ParentTaskID 委派父任务 ID（ADR-0115 WP4 并行子智能体）。
+	ParentTaskID string
+}
+
+// TaskControlKind 控制指令类型（R3-04）。
+type TaskControlKind string
+
+const (
+	TaskControlSteer  TaskControlKind = "steer"
+	TaskControlCancel TaskControlKind = "cancel"
+)
+
+// TaskControl 承载父 Agent 发给子 Agent 的控制指令（插话 / 中止，R3-04）。
+type TaskControl struct {
+	Kind TaskControlKind `json:"kind"`
+	Text string          `json:"text,omitempty"`
+}
+
+type
+
+// TaskHint 技能选择启发（供 SkillSelector 使用）。
+TaskHint struct {
+	TaskType           string
+	CapabilitiesNeeded []string
+	ComplexityScore    float64
+}
+
+type
+
+// Trajectory 记录单次状态转移的详情（供 TrajectoryStoreReader 读取）。
+Trajectory struct {
+	State       AgentState
+	Action      string
+	Observation string
+}
+
+type
+
+// TaskModel represents the structured output of the perception phase.
+// LLM fills this slot during the S_PERCEIVE→S_PLAN transition.
+TaskModel struct {
+	Goal        string   `json:"goal"`
+	Context     string   `json:"context"`
+	Constraints []string `json:"constraints,omitempty"`
+	Priority    int      `json:"priority"`
+}
+
+type
+
+// DAGModel represents the compiled execution plan.
+// LLM fills this slot during the S_PLAN→S_VALIDATE transition.
+DAGModel struct {
+	Nodes []DAGNode `json:"nodes"`
+	Edges []DAGEdge `json:"edges"`
+}
+type DAGNode struct {
+	ID      string         `json:"id"`
+	Action  string         `json:"action"`
+	Params  map[string]any `json:"params"`
+	Retry   int            `json:"retry"`
+	Timeout string         `json:"timeout"`
+}
+type DAGEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// TaskCheckpointRow 用于 StateGraphExecutor 节点级别的容错恢复，
+// 以及 Agent Kernel 委派挂起（S_AWAIT_AGENT）的执行期上下文恢复（GD-13-009）。
+type TaskCheckpointRow struct {
+	TaskID         string
+	NodeID         string
+	Attempt        int
+	Status         string
+	OutputJSON     string // NodeResult 序列化（StateGraph 语义，勿与 ResumeCtxJSON 混用）
+	IdempotencyKey string
+	TaintLevel     TaintLevel
+	StartedAt      int64
+	CompletedAt    int64
+	Error          string
+	Reason         string
+	// ResumeCtxJSON Agent 执行期上下文快照（GD-13-009）。仅 Reason="handoff_wait"
+	// 的行填充。载荷为 agent.HandoffResumeContext 的 JSON，含 schema_version
+	// 用于向后兼容。与 OutputJSON 严格分离：后者是 StateGraph 的 NodeResult，
+	// 语义不同，禁止复用。反序列化后必须重跑 S_VALIDATE 四层校验（防 DB 直改
+	// DAG 提权，见 XR/HE-2）。
+	ResumeCtxJSON string
+}
+type TaskEntry struct {
+	ID           string
+	Type         string
+	Priority     int
+	Status       TaskStatus
+	ClaimedBy    string
+	ClaimedAt    int64
+	ExpiresAt    int64
+	Toxicity     int
+	Intent       []byte
+	IntentTaint  TaintLevel // Taint 污点随 Intent 传播，禁止跨 Agent 边界降级
+	Result       []byte
+	ResultTaint  TaintLevel // Taint 污点随 Result 传播，禁止跨 Agent 边界降级
+	DependsOn    []string
+	SubTasks     []string
+	Deadline     int64
+	SpawnDepth   int // 防止 Custom Agent 递归超限
+	ParentTaskID string
+	CreatedAt    int64
+	UpdatedAt    int64
+
+	// ── 流水线阶段 handoff 字段 ──────────────────────────────────────────────
+	// PipelineID 标识本 Task 所属流水线实例；空表示非流水线任务。
+	PipelineID string
+	// PipelineStage 标识本 Task 在流水线中的阶段名（如 "research"/"plan"/"execute"/"verify"）。
+	PipelineStage string
+	// ContextPayload 携带前序阶段的结构化产出（JSON），由 PipelineOrchestrator 填充。
+	// 下游 Agent 在 S_PERCEIVE 时优先读取此字段，而非全局记忆检索。
+	ContextPayload []byte
+
+	// 隔离沙箱相关字段
+	Namespace     string   `json:"namespace,omitempty"`
+	ToolWhitelist []string `json:"tool_whitelist,omitempty"`
+
+	// ── Token 记账字段（Gap-A, HE-Rule-1）────────────────────────────────────
+	// Worker.tryClaimAndExecute 完成后调用 Blackboard.UpdateTaskTokens 写入。
+	TraceID         string
+	SpanID          string
+	TokensInput     int
+	TokensOutput    int
+	TokensCacheRead int
+	CostUSD         float64
+}
+
+type
+
+// PipelineStageSpec 定义流水线中的一个阶段。
+PipelineStageSpec struct {
+	// Name 阶段名称（唯一标识符），如 "research"、"plan"、"execute"。
+	Name string
+	// Capability 需要的 Agent 能力标签；Orchestrator 据此选择最优 Worker。
+	Capability string
+	// TaskType 投递到 Blackboard 的任务类型（影响 FindBestAgent 能力匹配）。
+	TaskType string
+	// Priority 阶段任务的优先级（越小越优先）。
+	Priority int
+	// BudgetTokens 本阶段允许的最大 token 用量（0 = 继承全局预算）。
+	BudgetTokens int
+	// TimeoutSec 阶段超时（秒），0 表示不限制。
+	TimeoutSec int
+}
+
+type
+
+// VerificationPolicy 控制流水线中对抗性验证阶段的行为。
+// 当 PipelineDescriptor.VerificationPolicy != nil 时，
+// PipelineOrchestrator 在最后执行阶段完成后自动追加验证阶段。
+VerificationPolicy struct {
+	// Capability 验证 Agent 的能力标签（默认 "verify"）。
+	Capability string
+	// Adversarial 为 true 时，向 Verifier 注入对抗性初始假设：
+	// "目标未达成，直到代码证据证明"。
+	Adversarial bool
+	// BlockOnFail 为 true 时，BLOCKER 级别结果阻止流水线推进到 Done。
+	BlockOnFail bool
+}
+
+type
+
+// PipelineDescriptor 定义一条多阶段专家 Agent 流水线。
+// PipelineOrchestrator 按 Stages 顺序依次执行，每阶段的 Result 作为
+// 下一阶段的 ContextPayload 传递，实现精确上下文隔离。
+PipelineDescriptor struct {
+	// ID 流水线实例唯一标识（空时由 PipelineOrchestrator 自动生成）。
+	ID string
+	// Goal 原始任务目标，贯穿所有阶段，供 Verifier 做目标反向验证。
+	Goal string
+	// Stages 有序阶段列表，按索引顺序执行。
+	Stages []PipelineStageSpec
+	// VerificationPolicy 非 nil 时，在最后阶段之后追加对抗验证。
+	VerificationPolicy *VerificationPolicy
+	// MaxRetries 单阶段失败后的最大重试次数。
+	MaxRetries int
+	// CompensateStage 可选补偿函数，stage 名 → 补偿任务 type（若该 stage 失败需要回滚）
+	CompensateStage map[string]string `json:"compensate_stage,omitempty"`
+}
+type State string
+type StateEvent struct {
+	Type    string
+	Payload any
+}
+
+// SagaStep 已删除（ADR-0088 决策一）：它承载的是 ToolDefinition.UndoFn 那套
+// 补偿机制，而 UndoFn 在全仓从未被赋值，且工具定义层拿不到本次调用实参、
+// 无法表达"撤销刚才那次具体操作"。Saga 补偿的唯一声明来源是
+// protocol.ExecNode.Compensation，唯一执行者是 execute/dag.runCompensation。
+
+type Task struct {
+	ID             string
+	Type           string
+	Pool           string // intent_handler / ingest / background / eval / cron
+	Payload        []byte
+	Priority       int // 0=最高(用户交互)
+	MaxAttempts    int
+	IdempotencyKey IdempotencyKey
+}
+
+type
+
+// InterruptRequest 用户中断请求。
+InterruptRequest struct {
+	Reason   string // 中断原因（供 Audit 记录）
+	Action   InterruptAction
+	Redirect string // Action=InterruptRedirect 时的新意图文本
+	// OwnerTrusted 由 HTTP 边界依据已认证的本地可信客户端设置（不是请求体自报）；
+	// 为真时 Redirect 文本按 owner 本人输入（TaintLow）处理，否则 TaintHigh（ADR-0007 修订）。
+	OwnerTrusted bool
+}
+
+type AgentStreamEventType string
+
+const (
+	AgentStreamEventToken      AgentStreamEventType = "token"
+	AgentStreamEventThinking   AgentStreamEventType = "thinking"
+	AgentStreamEventToolCall   AgentStreamEventType = "tool_call"
+	AgentStreamEventToolResult AgentStreamEventType = "tool_result"
+	AgentStreamEventError      AgentStreamEventType = "error"
+	AgentStreamEventStatus     AgentStreamEventType = "status"
+	// AgentStreamEventNotice 系统级旁路提示（非模型输出、非错误）。
+	// 目前唯一来源是 LLM 跨 Model Pool 降级通知（GD-13-005）。
+	// 前端应作为提示条渲染；**不得**并入助手回复正文或写进消息历史。
+	AgentStreamEventNotice AgentStreamEventType = "notice"
+	// AgentStreamEventPhase 回合阶段进度（ADR-0098）。Content 为阶段键
+	// perceive/plan/execute/reflect/respond，客户端自行本地化；内部阶段不再推 token，
+	// 用户在首 token 前靠它感知进度。
+	AgentStreamEventPhase AgentStreamEventType = "phase"
+	// AgentStreamEventApproval 回合内发起了阻塞式人工审批（HITL）。Content 为
+	// checkpoint ID，ToolName/ToolInput 为待审操作，DeadlineNs 为审批截止时间。
+	// 客户端就地渲染审批卡片，经 POST /v1/approvals/{id}/resolve 回复——审批的
+	// 唯一裁决通道仍是 HITL 网关，事件只负责让对话里的用户看见它。
+	AgentStreamEventApproval AgentStreamEventType = "approval"
+	// AgentStreamEventSteerAccepted 用户在回合中途发送的插话已被状态机接纳，将于下一轮次边界生效。
+	AgentStreamEventSteerAccepted AgentStreamEventType = "steer_accepted"
+	// AgentStreamEventLLM 一次 LLM 调用结束（ADR-0118 步骤时间线）：ToolName 携带用途，
+	// Tokens/DurationMs 为该次调用的用量与耗时，Retry 标记这是空输出恢复链追加的额外调用。
+	// 纯进度信息，session 层转成 llm 步骤；不进回复正文。
+	AgentStreamEventLLM AgentStreamEventType = "llm"
+)
+
+// TurnPhase AgentStreamEventPhase 的 Content 取值（ADR-0098）。内核 → session → 客户端
+// 三方共享的结构化契约，客户端据此本地化展示，禁止改为自然语言状态串。
+type TurnPhase string
+
+const (
+	TurnPhasePerceive TurnPhase = "perceive"
+	TurnPhasePlan     TurnPhase = "plan"
+	TurnPhaseExecute  TurnPhase = "execute"
+	TurnPhaseReflect  TurnPhase = "reflect"
+	TurnPhaseRespond  TurnPhase = "respond"
+)
+
+// AgentStreamEvent defines a token-level or block-level structured event published during FSM reasoning.
+type AgentStreamEvent struct {
+	Type           AgentStreamEventType `json:"type"`
+	Content        string               `json:"content"`
+	TaintLevel     TaintLevel           `json:"taint_level,omitempty"`
+	ToolName       string               `json:"tool_name,omitempty"`
+	ToolInput      []byte               `json:"tool_input,omitempty"`
+	ChildAgentRole string               `json:"child_agent_role,omitempty"` // 子 Agent 角色（委派场景嵌套事件，GD-13-001）
+	ParentTaskID   string               `json:"parent_task_id,omitempty"`   // 父任务 ID（委派场景嵌套事件）
+	AgentID        string               `json:"agent_id,omitempty"`         // 当前事件所属 Agent ID（ADR-0115 WP4 树状展示）
+	ParentID       string               `json:"parent_id,omitempty"`        // 父 Agent ID（ADR-0115 WP4 树状展示）
+	IsNested       bool                 `json:"is_nested,omitempty"`        // 是否为子 Agent 嵌套事件
+	DeadlineNs     int64                `json:"deadline_ns,omitempty"`      // 仅 AgentStreamEventApproval：审批截止（绝对 Unix 纳秒）
+	// 以下仅 AgentStreamEventApproval：询问理由、是否硬限制、勾选框单行说明、本轮全部待审项。
+	Reason        string         `json:"reason,omitempty"`
+	HardLimit     bool           `json:"hard_limit,omitempty"`
+	RememberLabel string         `json:"remember_label,omitempty"`
+	Items         []ApprovalItem `json:"items,omitempty"`
+	// UI 仅 Type==AgentStreamEventToolResult 且该工具关联 MCP Apps UI 视图时非空
+	// （M8f-1）。session 编排层据此额外发一条 KindStatus "tool_ui" 事件并落库
+	// chat_app_views，不影响本事件本身承载的模型可见文本（Content 字段不变）。
+	UI *ToolUIRef `json:"ui,omitempty"`
+
+	// 以下为步骤时间线（ADR-0118）所需的结构化信息，仅进程内消费（session 层），不随事件外发。
+	// CallID 工具调用 ID：ToolCall 与 ToolResult 据此配对（并行工具调用下按工具名配对会错位）。
+	CallID string `json:"-"`
+	// ResultRaw 工具原始结果（已按 streamResultRawMaxBytes 截断），供按工具类型生成可读摘要；
+	// Content 仍是给用户看的 500 字截断文本。
+	ResultRaw string `json:"-"`
+	// IsError 工具以失败告终（Go 错误或 Success=false）。
+	IsError bool `json:"-"`
+	// DurationMs 工具执行耗时 / LLM 调用耗时。
+	DurationMs int64 `json:"-"`
+	// Tokens 仅 AgentStreamEventLLM：该次调用的 token 用量。
+	InTokens, OutTokens, CacheHitTokens int `json:"-"`
+	// Retry 仅 AgentStreamEventLLM：空输出恢复链追加的额外调用。
+	Retry bool `json:"-"`
+}
+
+// ApprovalItem 是批量审批卡中的一项待审工具调用。
+type ApprovalItem struct {
+	Tool          string `json:"tool"`
+	Input         string `json:"input"`
+	Reason        string `json:"reason"`
+	HardLimit     bool   `json:"hard_limit,omitempty"`
+	RememberLabel string `json:"remember_label,omitempty"`
+}
+
+// ToolUIRef 描述一次 MCP 工具调用关联的 MCP Apps UI 视图（io.modelcontextprotocol/ui，
+// apps_spec.mdx）。ToolResult 是 MCP 原始 CallToolResult JSON（content/structuredContent/
+// _meta/isError），供前端宿主重放工具结果通知使用——与模型看到的
+// 精简文本（AgentStreamEvent.Content）是两条独立数据，互不影响。
+type ToolUIRef struct {
+	ViewID      string          `json:"view_id"`
+	ServerID    string          `json:"server_id"`
+	ResourceURI string          `json:"resource_uri"`
+	ToolName    string          `json:"tool_name"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult  json.RawMessage `json:"tool_result,omitempty"`
+	Cancelled   bool            `json:"cancelled,omitempty"`
+}
+
+// BuildToolUIRef 判定一次 MCP 工具调用是否产出 UI 视图引用：仅"调用成功 + 有 MCP 原始结果 +
+// 声明了 UI 资源"三者同时成立才返回非 nil。聊天回合（Agent）与无 LLM 的直接触发
+// （插件设置向导）共用本函数，避免两处各写一份提取条件后逐步漂移。
+// viewID 为空时新生成；调用方需要在执行前就知道 viewID（用于审计关联）时自行生成后传入。
+func BuildToolUIRef(viewID, resourceURI, serverID, toolName string, args []byte, res *ToolResult) *ToolUIRef {
+	if res == nil || !res.Success || len(res.MCPRaw) == 0 || resourceURI == "" {
+		return nil
+	}
+	if viewID == "" {
+		viewID = NewToolUIViewID()
+	}
+	return &ToolUIRef{
+		ViewID:      viewID,
+		ServerID:    serverID,
+		ResourceURI: resourceURI,
+		ToolName:    toolName,
+		ToolInput:   args,
+		ToolResult:  res.MCPRaw,
+	}
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "待触发的自动化任务 ID"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "预运行占位（目前未启用）"
+    }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

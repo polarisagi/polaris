@@ -1,0 +1,4 @@
+name: glob
+description: Recursively search for files using glob patterns (e.g. **/*.go)
+capability: read-only
+risk_level: low

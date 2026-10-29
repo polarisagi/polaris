@@ -1,0 +1,358 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/agent/fsm"
+
+	agentctx "github.com/polarisagi/polaris/internal/agent/context"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/trace"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// stateToTriggerMap 将下层 Effect 产生的文本 State 映射回 FSM 驱动所需的 AgentTrigger。
+// READ-ONLY: 返回的 map 在调用方不得修改。
+func stateToTriggerMap() map[types.State]types.AgentTrigger {
+	return map[types.State]types.AgentTrigger{
+		"S_PERCEIVE_DONE":   types.TriggerPerceiveDone,
+		"S_PERCEIVE_FAILED": types.TriggerReplanExhausted, // 早期失败直接熔断
+		"S_PLAN_DONE":       types.TriggerPlanDone,
+		"S_PLAN_FAILED":     types.TriggerReplanExhausted,
+		"S_VALIDATE_OK":     types.TriggerValidateOk,
+		"S_VALIDATE_FAIL":   types.TriggerValidateFail,
+		"S_EXECUTE_OK":      types.TriggerExecuteDone,
+		"S_EXECUTE_FAIL":    types.TriggerExecuteFail,
+		"S_REPLAN_DONE":     types.TriggerReplanDone,
+		"S_REPLAN_FAILED":   types.TriggerReplanExhausted,
+		"S_REFLECT_DONE":    types.TriggerReflectDone,
+		"S_REFLECT_FAILED":  types.TriggerReplanExhausted,
+		"S_ROLLBACK_OK":     types.TriggerRollbackDone,
+		// ADR-0098：直答路由与回复合成态
+		"S_PERCEIVE_DIRECT":  types.TriggerRespondReady,
+		"S_PLAN_EMPTY":       types.TriggerRespondReady,
+		"S_RESPOND_RETRY":    types.TriggerFillRetry,
+		"S_PLAN_RETRY":       types.TriggerFillRetry,
+		"S_REFLECT_CONTINUE": types.TriggerReflectContinue,
+		"S_RESPOND_DONE":     types.TriggerRespondDone,
+		"S_RESPOND_FAILED":   types.TriggerReplanExhausted,
+		// WP2 / ADR-0115: Agentic loop states
+		"S_LOOP_STEP_DONE": types.TriggerLoopStepDone,
+		"S_LOOP_EXEC_DONE": types.TriggerLoopExecDone,
+		"S_LOOP_DONE":      types.TriggerLoopDone,
+		"S_LOOP_STEER":     types.TriggerLoopSteer,
+		"S_LOOP_FAILED":    types.TriggerReplanExhausted,
+	}
+}
+
+// toProtocolCtx 内部助手：映射内部状态至协议状态，并在此时提权计算最大污点，防止 Taint Washing。
+// 供 Effect 执行使用：LLMFillEffect 调 LLM 后走 OnSuccess/OnFailure 推进状态；DeterministicEffect 调用纯函数。
+func (a *Agent) toProtocolCtx() protocol.StateContext {
+	maxTaint := types.TaintNone
+	var sessionID string
+	var preferences map[string]string
+	var initialMaxStepsLimit int
+
+	if a.sCtx != nil {
+		a.sCtx.Mu.RLock()
+		maxTaint = a.sCtx.GlobalTaintLevel
+		if lv := a.sCtx.RawIntentTS.Level(); lv > maxTaint {
+			maxTaint = lv
+		}
+		sessionID = a.sCtx.SessionID
+		preferences = a.sCtx.Preferences
+		initialMaxStepsLimit = a.sCtx.InitialMaxStepsLimit
+		a.sCtx.Mu.RUnlock()
+	}
+
+	// End of RLock section
+	return protocol.StateContext{
+		AgentID:              a.ID,
+		SessionID:            sessionID,
+		ProjectID:            a.currentProjectID(),
+		MaxTaintLevel:        maxTaint,
+		Mem:                  a.memory,
+		Tools:                a.toolRegistry,
+		Provider:             a.provider,
+		Policy:               a.Security.PolicyGate,
+		Preferences:          preferences,
+		InitialMaxStepsLimit: initialMaxStepsLimit,
+		// 与 runExecuteDAG 注入给 DAGExecutor 的是同一个实例（a.sagaRecorder）：
+		// DAG 层执行补偿并写入结果，FSM 的 S_ROLLBACK 读取它决定 OK/PARTIAL。
+		SagaRecorder: a.sagaRecorder,
+	}
+}
+
+// Interrupt 向 Agent 发送中断请求（非阻塞，inv_global_08 <200ms SLO）。
+// Resume → 恢复原状态；Redirect → 更新意图后恢复（重新规划）；Abort → S_FAILED。
+//
+// GR-4-004 修复：本方法由外部 goroutine 调用，与 Agent.Run() 主循环并发运行。
+// 原实现直接写 a.sCtx.InterruptReq 和 a.sCtx.RawIntentTS，存在数据竞争：
+//   - InterruptReq 是死字段（全仓库仅此一处写，从未被任何代码读取），直接删除。
+//   - RawIntentTS 改为通过 pendingRedirectCh（容量 1）传递给主循环在单线程内安全写入。
+//
+// channel 发送用 select/default：如果主循环还未消费上一条 redirect，则新值覆盖
+// （丢弃旧值后重新放入），保证最后一次 Redirect 意图生效。
+func (a *Agent) Interrupt(req types.InterruptRequest) {
+	switch req.Action {
+	case types.InterruptRedirect:
+		// 将重定向意图字符串投递到 channel，由主循环在单线程内安全写入 sCtx.RawIntentTS。
+		if req.Redirect != "" {
+			a.pendingRedirectOwner.Store(req.OwnerTrusted)
+			select {
+			case a.pendingRedirectCh <- req.Redirect:
+			default:
+				// channel 已满（上一条 redirect 未消费），弹出旧值放入新值
+				select {
+				case <-a.pendingRedirectCh:
+				default:
+				}
+				a.pendingRedirectCh <- req.Redirect
+			}
+		}
+		a.sendInterruptReceived("redirect")
+		// 注入到 S_INTERRUPT 后立即 Resume（Redirect = 新意图的 Resume）
+		a.asyncIntent(types.TriggerInterruptResume)
+	case types.InterruptAbort:
+		a.sendInterruptReceived("abort")
+		a.asyncIntent(types.TriggerInterruptAbort)
+	default: // types.InterruptResume
+		a.sendInterruptReceived("resume")
+		a.asyncIntent(types.TriggerInterruptResume)
+	}
+}
+
+// sendInterruptReceived 投递 TriggerInterruptReceived，失败时告警。
+//
+// 不向上传播错误：Interrupt 是 inv_global_08 <200ms SLO 的非阻塞入口，
+// 签名无 error 返回且调用方（HTTP handler）已经返回 202。但失败必须留痕
+// ——投递不成功意味着 Agent 根本没进入 S_INTERRUPT，用户点的"中止/重定向"
+// 完全没生效，而界面上看起来是成功的。此前三处均为 `_ = a.SendIntent(...)`，
+// 这种"用户操作静默失效"正是最难排查的一类问题。
+func (a *Agent) sendInterruptReceived(action string) {
+	if err := a.SendIntent(types.TriggerInterruptReceived); err != nil {
+		slog.Error("agent: failed to deliver interrupt trigger, user request silently ineffective",
+			"agent_id", a.ID, "action", action, "err", err)
+	}
+}
+
+// refreshInstalledExtensions 从 extension_instances 表动态查询已安装扩展并存入 fsm.StateContext。
+func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
+	cata := a.visibleCatalog()
+	if cata == nil {
+		a.sCtx.InstalledExtensionsInfo = ""
+		return
+	}
+
+	entries := cata.List(ctx, types.TrustUntrusted)
+	var exts []string
+	for _, e := range entries {
+		switch e.Source {
+		case types.ToolMCP:
+			exts = append(exts, fmt.Sprintf("- [MCP] %s: %s", e.MCPServerID, e.Name))
+		case types.ToolSkill:
+			exts = append(exts, fmt.Sprintf("- [Skill] %s", e.Name))
+		}
+	}
+
+	a.sCtx.Mu.Lock()
+	if len(exts) > 0 {
+		a.sCtx.InstalledExtensionsInfo = "Installed Extensions:\n" + strings.Join(exts, "\n")
+	} else {
+		a.sCtx.InstalledExtensionsInfo = ""
+	}
+	a.sCtx.Mu.Unlock()
+}
+
+// InjectExtensionActivator 注入按需扩展激活器。
+func (a *Agent) InjectExtensionActivator(activator fsm.ExtensionActivatorIface) {
+	a.sm.WithExtensionActivator(activator)
+}
+
+// InjectReplanExtensionActivationTimeout 注入 S_REPLAN 扩展激活 Effect 的超时上限
+// （state.yaml §thresholds replan_extension_activation_s）。
+func (a *Agent) InjectReplanExtensionActivationTimeout(d time.Duration) {
+	a.sm.WithReplanExtensionActivationTimeout(d)
+}
+
+// InjectToolHintProvider 注入工具自进化闭环提示提供方（可选，见
+// fsm.ToolHintProvider；2026-07-12 unwired-code-audit 补齐 PolicyEvolver 接线）。
+func (a *Agent) InjectToolHintProvider(p fsm.ToolHintProvider) {
+	a.sm.WithToolHintProvider(p)
+}
+
+// agentContextBuilder cata 每次取当前可见目录：子 Agent 角色在 Pool 复用实例时逐次变化。
+type agentContextBuilder struct {
+	cata func() catalog.Catalog
+}
+
+func (b *agentContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	msgs, err := agentctx.BuildPerceiveContext(ctx, memory, sCtx, cognitive)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "agentContextBuilder.BuildPerceiveContext", err)
+	}
+	return msgs, nil
+}
+
+func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	useCata := cata
+	if useCata == nil && b.cata != nil {
+		useCata = b.cata()
+	}
+	msgs, err := agentctx.BuildPlanContext(ctx, memory, sCtx, useCata, cognitive)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "agentContextBuilder.BuildPlanContext", err)
+	}
+	return msgs, nil
+}
+
+func (b *agentContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
+	msgs, err := agentctx.BuildReflectContext(ctx, memory, sCtx)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "agentContextBuilder.BuildReflectContext", err)
+	}
+	return msgs, nil
+}
+
+func (b *agentContextBuilder) BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
+	msgs, err := agentctx.BuildRespondContext(ctx, memory, sCtx)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "agentContextBuilder.BuildRespondContext", err)
+	}
+	return msgs, nil
+}
+
+func (b *agentContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel) {
+	useCata := cata
+	if useCata == nil && b.cata != nil {
+		useCata = b.cata()
+	}
+	return agentctx.BuildToolListSection(ctx, useCata)
+}
+
+func (a *Agent) InjectTerminalCallback(cb func(ctx context.Context, taskID, taskType string, replanCount int, success bool)) {
+	a.terminalCallback = cb
+}
+
+// InjectPersonaRefiner 注入用户画像（M05 §2.3）。跨 Agent 实例共享同一进程级单例，
+// 由 boot 阶段 Load() 一次后传入；内核在会话层首次渲染时快照其稳定维度（ADR-0120 决策二）。
+func (a *Agent) InjectPersonaRefiner(pr *agentctx.PersonaRefiner) {
+	a.personaRefiner = pr
+}
+
+// emitConsolidateOnce 回合终态触发一次 Episodic → Semantic 记忆蒸馏（ConsolidationPipeline，
+// M5 §4）。此前在每次 S_REFLECT 完成时触发：观察—再规划回合里每轮反思都让管线把整场
+// 会话（最多 200 条事件）重新抽取、摘要、合成画像一遍；回合内的中间反思不产生新的
+// 可蒸馏结论，终态一次即可覆盖本回合全部事件（ADR-0101 决策二）。
+func (a *Agent) emitConsolidateOnce(ctx context.Context) {
+	if a.sCtx == nil || a.sCtx.SessionID == "" || protocol.IsReplaying() {
+		return
+	}
+	a.emitOutbox(ctx, protocol.TopicMemoryConsolidate, "memory_consolidate",
+		map[string]string{"session_id": a.sCtx.SessionID},
+		a.outboxIdemKey(protocol.TopicMemoryConsolidate, "agent_session", a.sCtx.SessionID, "consolidate"),
+		"memory_consolidate")
+}
+
+// archiveEpisodicAsync 是 ConsolidationPipeline 文档顶部注释描述的
+// "sessionClosed → 强制触发" 会话关闭钩子：把该会话截至当前时刻的全部 Episodic 事件标记为冷数据。
+func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
+	if a.memory == nil {
+		return
+	}
+	sessionID := a.sCtx.SessionID
+	if sessionID == "" {
+		sessionID = a.sCtx.TaskID
+	}
+	if sessionID == "" {
+		return
+	}
+	mem := a.memory
+	concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.archive_episodic", func(gctx context.Context) {
+		if err := mem.ArchiveEpisodic(gctx, sessionID); err != nil {
+			slog.Warn("agent: archive episodic on session close failed", "err", err)
+		}
+	})
+}
+
+//nolint:gocyclo
+func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
+	a.cancelHandoffWatcher()
+	if current == types.AgentStateComplete {
+		a.publishPreparedReply()
+	}
+	a.publishStreamEvent(types.AgentStreamEvent{
+		Type:    types.AgentStreamEventStatus,
+		Content: "task_done",
+	})
+	if a.sCtx != nil && a.sCtx.TurnID != "" {
+		st := "aborted"
+		if current == types.AgentStateComplete {
+			st = "done"
+		}
+		a.markLoopTurnStatus(ctx, st)
+	}
+	succeeded := current == types.AgentStateComplete && !a.sCtx.TurnDegraded
+	trace.RecordTaskOutcome(ctx, succeeded)
+
+	// 接入运行时质量漂移检测（M03 §10.1）
+	score := 1.0
+	if !succeeded {
+		score = 0.0
+	}
+	metrics.GlobalPerformanceDrift().Record(score)
+
+	// M4 §8：终态 PII 清零——SecureZero 删除 DB 快照，防止 PII 留存（M11 HE-Rule-2）
+	if a.piiVault != nil && a.sCtx.TaskID != "" {
+		if zeroErr := a.piiVault.SecureZero(ctx, a.sCtx.TaskID); zeroErr != nil {
+			slog.Warn("agent: failed to secure zero PII vault", "err", zeroErr)
+		}
+	}
+	// 释放键必须与 executeEffect 里 tokenizeMessagesForLLM 写入令牌时用的
+	// ctx.Value(protocol.CtxTaskIDKey{}) 同一命名空间（a.sCtx.SessionID，
+	// 不是 a.sCtx.TaskID——二者是不同字段，此处曾误用 TaskID 导致清理打不中
+	// 实际写入的桶，见上方 SessionID 的既有说明）。
+	// 只"释放"不"清空"：同一会话的下一回合须复用同一令牌，否则每回合历史里的 PII 令牌全部换新，
+	// L0..L2 前缀缓存在首个 PII 处断开（见 PIITokenVault.ReleaseTask；闲置 TTL/数量上限防内存泄漏）。
+	if a.Security.TokenVault != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
+		a.Security.TokenVault.ReleaseTask(a.sCtx.SessionID)
+	}
+	// 阶段03 R-02：会话终态确定性回收 PIIDesensitizer 的分区映射，而不是
+	// 依赖其内部 LRU 兜底——LRU 只防 OOM，不代表"这个会话已经结束、映射
+	// 不再需要"；不精确回收会导致长期运行的进程里，早已结束的会话映射
+	// 仍占着分区 LRU 名额，挤占仍在进行的会话（见 pii_desensitizer.go 顶部
+	// 设计说明）。
+	if a.Security.PIIDesensitizer != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
+		a.Security.PIIDesensitizer.ReleasePartition(a.sCtx.SessionID)
+	}
+
+	// 清理多模态图片缓存，防止无界累积泄漏内存（V10）
+	if a.sCtx != nil {
+		a.sCtx.Mu.Lock()
+		a.sCtx.ExecuteImageParts = nil
+		a.sCtx.Mu.Unlock()
+	}
+
+	a.archiveEpisodicAsync(ctx)
+	a.emitConsolidateOnce(ctx)
+
+	// 触发 Terminal Callback (P1-2 Learning 闭环)。
+	// 传 SessionID 而非 TaskID：ReflectionWorker 以此为键检索 episodic 事件
+	// （事件写入时 TaskID 字段填的是 SessionID，见 executeEffect）。
+	// ReplanCount 取状态机真实计数，供 MinReplanCount 门控。
+	if a.terminalCallback != nil {
+		sessionID := a.sCtx.SessionID
+		if sessionID == "" {
+			sessionID = a.sCtx.TaskID
+		}
+		a.terminalCallback(ctx, sessionID, "general", a.sm.ReplanCount(), succeeded)
+	}
+}

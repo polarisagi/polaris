@@ -1,0 +1,159 @@
+package metrics
+
+// 2026-08-02 拆分（Test_inv_FileLineLimit R7 400 行上限存量债务，见
+// local_playground/upgrade/99-new-findings.md 阶段03 R-07 发现）：
+// TokenBurnRate 迁至 metrics_tokenburn.go，SurpriseIndex 迁至
+// metrics_surprise.go，纯搬运无行为变更。本文件保留包级全局指标变量与
+// 创始锚点漂移评分委托。
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+)
+
+var (
+	// GlobalSurpriseIndex 全局 SurpriseIndex 单例，sync.OnceValue 惰性初始化。
+	// 调用方用 GlobalSurpriseIndex() 而非 GlobalSurpriseIndex 直接访问实例。
+	GlobalSurpriseIndex = sync.OnceValue(func() *SurpriseIndex { return NewSurpriseIndex() })
+
+	// GlobalKillswitchStage 全局 KillSwitch 阶段原子量（0=Normal…3=FullStop）。
+	// killswitch.go 的 StateChangeCallback 写入；M13 handleStatus 读取。
+	GlobalKillswitchStage atomic.Int32
+
+	// GlobalCedarDegradedTotal tracks the number of times Cedar FFI evaluation failed.
+	GlobalCedarDegradedTotal atomic.Int64
+
+	// GlobalCedarFFILeaksTotal 累计 Cedar FFI goroutine 泄漏数（只增不减）。
+	// 阶段03 R-01：policy.Gate 的 KillSwitch 判定改用滑动窗口计数，本变量仅
+	// 用于长期趋势观测（polaris_cedar_ffi_leaks_total），不参与 KillSwitch 判定。
+	GlobalCedarFFILeaksTotal atomic.Int64
+
+	// GlobalOutboxDeadLetterTotal tracks the number of outbox records marked as dead.
+	GlobalOutboxDeadLetterTotal atomic.Int64
+
+	// GlobalFactualityJudgeUnavailableTotal 记录 L3 SemanticJudge 因超时/故障静默降级的累计次数。
+	// factuality_guard.go semanticJudge() 在 llm_judge_unavailable 时写入。
+	// OTel gauge 在 RegisterMetrics() 的 RegisterCallback 中注册。
+	GlobalFactualityJudgeUnavailableTotal atomic.Int64
+
+	// GlobalLLMResponseCacheHitTotal / GlobalLLMResponseCacheMissTotal 确定性后台调用精确响应缓存
+	// （ADR-0105 决策六，internal/llm 记录包装）的命中/未命中（仅统计满足缓存条件的调用）。
+	// 命中率持续 <5% 达 30 天即触发该 ADR 的重新评估条件 4（删除缓存与表）。
+	GlobalLLMResponseCacheHitTotal  atomic.Int64
+	GlobalLLMResponseCacheMissTotal atomic.Int64
+
+	// GlobalAudioTTSProxyBenchTotal / ...TooSlowTotal / ...SkippedTotal / GlobalAudioTTSReclaimTotal
+	// 记录服务端 TTS 下载前代理测速（ADR-0110 修订三）：执行次数、判定过慢（省下 167MB 下载）次数、
+	// 因 STT 资产缺失/加载失败/CPU 争用而无结论的次数，以及真实基准定论过慢后回收 models/tts/melo 的次数。
+	GlobalAudioTTSProxyBenchTotal   atomic.Int64
+	GlobalAudioTTSProxyTooSlowTotal atomic.Int64
+	GlobalAudioTTSProxySkippedTotal atomic.Int64
+	GlobalAudioTTSReclaimTotal      atomic.Int64
+
+	// GlobalBlindZoneRoutingTotal 因 BlindZone 检测强制升级为 System2 的累计次数（V8-S4）。
+	GlobalBlindZoneRoutingTotal atomic.Int64
+
+	// GlobalReplanExtActivationDegradedTotal S_REPLAN 阶段扩展激活重试耗尽后降级的累计次数（A-3）。
+	GlobalReplanExtActivationDegradedTotal atomic.Int64
+
+	// ── 自动更新供应链可观测（ADR-0095）──────────────────────────────────────
+	// 四个计数共同刻画"本次更新的信任强度"，写入点均在
+	// internal/sysmgr/updater.anchorChecksumTrust。
+
+	// GlobalUpdaterWeakTrustVerifyTotal 在"弱信任模式"下完成校验的累计次数：
+	// 签名未开通 **且** 校验值降级到镜像取得。此时归档与校验值可能来自同一镜像，
+	// SHA-256 只能防传输损坏、不能防供应链替换。签名开通后该计数恒不再增长。
+	GlobalUpdaterWeakTrustVerifyTotal atomic.Int64
+
+	// GlobalUpdaterSigningNotProvisionedTotal 因内嵌信任根为空（releasekeys/ 无公钥）
+	// 而跳过验签的累计次数。非零 = 该二进制构建时发布签名尚未开通，属"功能未开通"
+	// 而非降级；开通流程见 internal/sysmgr/updater/releasekeys/README.md。
+	GlobalUpdaterSigningNotProvisionedTotal atomic.Int64
+
+	// GlobalUpdaterSignatureVerifiedTotal 校验值签名验证通过的累计次数。
+	// 此状态下校验值取自镜像亦安全——镜像伪造不出内嵌公钥的签名。
+	GlobalUpdaterSignatureVerifiedTotal atomic.Int64
+
+	// GlobalUpdaterSignatureRejectedTotal 因签名缺失或验签失败而拒绝安装的累计次数。
+	// **非零必须当安全事件排查**：可能是发布流水线未产出签名，也可能是中间人剥离
+	// .sig 试图把客户端降级回纯 checksum 模式（signature stripping）。
+	GlobalUpdaterSignatureRejectedTotal atomic.Int64
+
+	// GlobalTraceExporterErrorsTotal SpanExporter.ExportSpan 失败的累计次数（ADR-0069）。
+	// trace.Tracer.EndSpan 异步导出失败时写入；导出是尽力而为语义，失败不影响主链路，
+	// 仅通过该指标供运维观测导出健康度。
+	GlobalTraceExporterErrorsTotal atomic.Int64
+
+	// ── [阶段02-错误吞没整改] 无 label 计数器，语义单一无需按维度拆分 ──────────────
+	// GlobalMemorySupersedeFailuresTotal 语义超越（MarkEntitySuperseded）失败累计次数，
+	// 失败意味着旧信念与新信念并存（事实层数据损坏）。
+	GlobalMemorySupersedeFailuresTotal atomic.Int64
+	// GlobalMemoryPersistenceFailuresTotal Agent 情景记忆写入遇存储层不可用而触发 FSM 熔断的累计次数。
+	GlobalMemoryPersistenceFailuresTotal atomic.Int64
+	// GlobalMemoryEvictEventLostTotal 工作记忆驱逐事件归档失败累计次数（影响审计链重建）。
+	GlobalMemoryEvictEventLostTotal atomic.Int64
+	// GlobalMemoryFTSIndexFailuresTotal 情景记忆 FTS 索引写入失败累计次数（持续性能退化）。
+	GlobalMemoryFTSIndexFailuresTotal atomic.Int64
+	// GlobalMemoryColdArchiveDetachFailuresTotal EventArchiver DETACH DATABASE 失败累计次数
+	// （defer 内尽力而为，失败会累积连接句柄，值得单独观测）。
+	GlobalMemoryColdArchiveDetachFailuresTotal atomic.Int64
+	// GlobalBlackboardFailTaskErrorsTotal DebateWorker.FailTask 失败累计次数（任务卡在既非成功也非失败态，依赖 Reaper 兜底）。
+	GlobalBlackboardFailTaskErrorsTotal atomic.Int64
+	// GlobalLearningCursorErrorsTotal 自进化引擎游标扫描失败累计次数（会导致从错误位置重放）。
+	GlobalLearningCursorErrorsTotal atomic.Int64
+	// GlobalLearningSkillRegisterFailuresTotal 合成技能注册失败累计次数（LLM 调用成本已花掉但成果丢失）。
+	GlobalLearningSkillRegisterFailuresTotal atomic.Int64
+	// GlobalGatewayPreferenceWriteFailuresTotal Gateway 偏好/系统提示词模板落库失败累计次数。
+	GlobalGatewayPreferenceWriteFailuresTotal atomic.Int64
+	// GlobalSchemaMigrationDiagWriteFailuresTotal SchemaManager.BeginMigration 写入
+	// migration_version 诊断字段失败累计次数（不影响 migration_status 主状态机正确性，
+	// 仅影响崩溃后人工排查时"上次卡在哪个版本"的可诊断性，定级 L2）。
+	GlobalSchemaMigrationDiagWriteFailuresTotal atomic.Int64
+	// GlobalCheckpointWriteFailuresTotal DebateExecutor/StateGraphExecutor 写入
+	// task_checkpoints 失败累计次数（2026-08-02 补齐，见
+	// local_playground/upgrade/99-new-findings.md 阶段02 §2.5 发现）。影响崩溃恢复
+	// 续跑的可诊断性——checkpoint 写入是尽力而为（不阻断主执行链路），但持续失败
+	// 意味着崩溃后无法从最近状态续跑，值得单独观测，定级 L2。
+	GlobalCheckpointWriteFailuresTotal atomic.Int64
+)
+
+// foundingAnchorDriftScorePtr 以 atomic.Pointer 持有漂移评分注入函数，避免包级可变 var。
+// atomic.Pointer[T] 零值为 nil，Load() 安全返回 nil，无需 init()。
+var foundingAnchorDriftScorePtr atomic.Pointer[func() float64]
+
+// SetFoundingAnchorDriftScorer 供 main.go 在启动时注入真实漂移评分实现（避免包循环依赖）。
+func SetFoundingAnchorDriftScorer(fn func() float64) {
+	foundingAnchorDriftScorePtr.Store(&fn)
+}
+
+// GetFoundingAnchorDriftScore 返回创始锚点漂移评分（委托给注入函数）。
+// 若实现未注入（测试/冷启动场景），安全返回 0.0。
+func GetFoundingAnchorDriftScore() float64 {
+	if p := foundingAnchorDriftScorePtr.Load(); p != nil {
+		return (*p)()
+	}
+	return 0.0
+}
+
+// RecordTurnRoute 记录回合路由决策（ADR-0098）。perceive_unparsed 占比升高即
+// Perceive 输出契约失效的信号，是 re_eval 的 Eval 输入之一。
+func RecordTurnRoute(ctx context.Context, route string) {
+	if InstrTurnRouteTotal != nil {
+		InstrTurnRouteTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route)))
+	}
+}
+
+// RecordSystem1Bypass 记录 System-1 Bypass 触发次数。
+func RecordSystem1Bypass(ctx context.Context, matched bool) {
+	if InstrSystem1BypassTotal != nil {
+		matchedStr := "false"
+		if matched {
+			matchedStr = "true"
+		}
+		InstrSystem1BypassTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("matched", matchedStr)))
+	}
+}

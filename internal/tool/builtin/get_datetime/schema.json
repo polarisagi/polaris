@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "get_datetime",
+  "description": "Return the current date and time in UTC and local timezone.",
+  "type": "object",
+  "properties": {}
+}

@@ -1,0 +1,6 @@
+name: spawn_agents
+description: "并发派生一个或多个子智能体执行任务；可指定模型、思考档、工具集、只读。"
+capability: read-only
+read_only: false
+idempotent: false
+risk_level: medium

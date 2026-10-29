@@ -1,0 +1,589 @@
+// boot_server.go — §11~§11.5 启动阶段：
+// HTTP Server 装配 → LogicCollapseMonitor（P2-FIX）→ OTA 热更新管理器 → STT/TTS → Start。
+// 返回 *server.Server 供 run() 执行 Shutdown 和 printStartupSummary。
+package main
+
+import (
+	"runtime"
+
+	"github.com/polarisagi/polaris/configs"
+	"github.com/polarisagi/polaris/internal/channel"
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/store/repo"
+
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"golang.org/x/time/rate"
+
+	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/action/codeact"
+	autopkg "github.com/polarisagi/polaris/internal/automation"
+	extplugin "github.com/polarisagi/polaris/internal/extension/plugin"
+	extskill "github.com/polarisagi/polaris/internal/extension/skill"
+	"github.com/polarisagi/polaris/internal/gateway/server"
+	"github.com/polarisagi/polaris/internal/gateway/server/chat"
+	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
+	si "github.com/polarisagi/polaris/internal/learning"
+	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
+	"github.com/polarisagi/polaris/internal/sysmgr/updater"
+	"github.com/polarisagi/polaris/internal/tool/builtin/bash"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+)
+
+var (
+	// 用于单元测试注入 mock
+	execFunc          = syscall.Exec        //nolint:gochecknoglobals
+	exitFunc          = os.Exit             //nolint:gochecknoglobals
+	loadProvidersFunc = LoadProvidersFromDB //nolint:gochecknoglobals
+)
+
+// bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
+// 返回 *server.Server，调用方 run() 负责 Shutdown。
+func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, ab *AgentBundle, localToken string) (*server.Server, error) { //nolint:gocyclo
+	if sb.Cfg.Security.LocalOnlyMode {
+		slog.Info("polaris: initializing local_only network sandbox")
+		// maxAllowlistSize=5：M11-Policy-Safety.md §5.3 明确规定 Tier3 local_only
+		// 白名单上限 5 条（此前恒为 100，因为 Allowlist.Add 从未被真正调用过，
+		// 上限值本身没有约束意义；2026-07-21 deadcode 审查补齐加载器时一并订正）。
+		ns := network.NewNetworkSandbox(5)
+		ns.SetSafeDialer(sb.Dialer)
+		// 补充接线（2026-07-04 审计）：SetLocalProvider 此前从未被调用，导致
+		// StartupCheck() 里的 Tier3 本地模型内存预算守卫（checkLocalModelMemoryBudget）
+		// 因 ns.localProvider==nil 被静默跳过，纵深防御少了一层。此处补齐。
+		provider, hasProvider := sb.InfReg.Get("llama-local")
+		if lp, ok := provider.(protocol.LocalProvider); hasProvider && ok {
+			ns.SetLocalProvider(lp)
+		}
+		// Allowlist 加载（2026-07-21 deadcode 审查补齐）：配套 Ed25519 签名 TOML
+		// 加载器此前从未实现，Allowlist.Add/.IsAllowed 构造后从未被填充/查询。
+		// 文件不存在时 InitAllowlistFromFile 返回 nil（未配置白名单，local_only 仍
+		// 全阻断，行为不变）；文件存在但签名缺失/校验失败 → fail-closed 拒绝启动。
+		if err := ns.InitAllowlistFromFile(sb.Layout.LocalOnlyAllowlistFile, os.Getenv(config.EnvPolarisLocalOnlyAllowlistPubKey)); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "local_only allowlist load failed", err)
+		}
+		// 顺序修复（2026-07-04 审计）：StartupCheck() 的 loopback-only 连通性自检
+		// 前提是沙箱防护已生效（探测 8.8.8.8:53 应该被拒绝才算通过）。若先于
+		// Enable() 调用，网络仍完全开放，探测必然拿到 SYN-ACK，StartupCheck
+		// 会 100% 返回 "OS sandbox not effective" 错误，导致 local_only_mode=true
+		// 时服务器永远无法启动。必须先 Enable() 激活三层防御，再 StartupCheck()
+		// 验证防御确实生效。
+		if err := ns.Enable(); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "failed to enable local_only network sandbox", err)
+		}
+		if err := ns.StartupCheck(); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "local_only startup check failed", err)
+		}
+		slog.Info("polaris: local_only network sandbox activated successfully")
+	}
+
+	addr := fmt.Sprintf("%s:%d", sb.Cfg.Interface.Host, sb.Cfg.Interface.Port)
+	apiRateLimiter := rate.NewLimiter(rate.Limit(50), 100)
+	mpData, _ := configs.FS.ReadFile("extensions/marketplaces.yaml")
+	regData, _ := configs.FS.ReadFile("extensions/registry.yaml")
+
+	httpServer := server.NewServer(ctx, addr, sb.DataDir, ab.AgentPool, ab.Blackboard, tb.HITLGateway,
+		sb.Store.DB(), sb.Store.ReadDB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.Cfg.Agent, sb.Cfg.A2A, sb.TBR, apiRateLimiter)
+	httpServer.SetDataLayout(sb.Layout)
+	// 跨节点委派（ADR-0111）：额外监听地址 + 委派门面 + 结果留存维护协程。
+	httpServer.SetExtraListen(sb.Cfg.Interface.ExtraListen)
+	// 设置页「多节点」改写的就是这份用户 config.toml（只改目标行，见 config.PatchUserConfig）。
+	httpServer.SetConfigPath(configFilePath())
+	httpServer.SetMeshConfig(sb.Cfg.Mesh)
+	if ab.Mesh != nil {
+		httpServer.SetMeshService(ab.Mesh, sb.Cfg.Mesh)
+		concurrent.SafeGo(ctx, "mesh.service.sweep", ab.Mesh.Run)
+	}
+	httpServer.SetPromptManager(sb.PromptMgr)
+	httpServer.SetKillSwitch(sb.KS)
+	// MCP Apps Sandbox proxy 监听器配置（M8f-1）：必须在 Start() 之前注入。
+	httpServer.SetMCPAppsSandboxConfig(server.NewMCPAppsSandboxConfig(sb.Cfg.Interface))
+	// ModelVersionRegistry 运营触发入口（P3-2，2026-07-21 deadcode 审查补齐）：
+	// mb.ModelRegistry 早于本函数在 bootMemory 阶段构造完毕，此处仅补一次注入。
+	httpServer.SetModelRegistry(mb.ModelRegistry)
+	httpServer.SetInferenceRouter(sb.Router)
+	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}, channel.WithSafeDialer(sb.Dialer))
+	httpServer.SetChannelStarter(channelMgr)
+	if ca := httpServer.ChannelsAdmin(); ca != nil {
+		channelMgr.SetMessageHandler(ca.DispatchChannelMessage)
+		if ca.SessionOrch != nil && tb.PluginChannels != nil {
+			tb.PluginChannels.BindTurns(channelTurnRunner{orch: ca.SessionOrch})
+		}
+	}
+	httpServer.SetPluginChannels(tb.PluginChannels)
+	httpServer.SetPluginDependencies(tb.PluginDeps)
+	httpServer.SetCatalogServices(tb.CatalogSync, tb.CatalogInstaller)
+	httpServer.SetCatalogOverlay(tb.CatalogOverlay)
+
+	httpServer.SetAuditTrail(sb.AuditTrail)
+	// 2026-07-12 修复：此前从未调用，s.outboxWriter 恒为 nil，导致
+	// handleAgentInterrupt 的 Interrupt 异步路由 + ChatHandler.SaveMessage 的
+	// 持久化重试兜底（GD-13-004 复核修复）均无法生效。Outbox 本身已在
+	// bootSubstrate 阶段构造完毕（sb.Outbox），此处补齐注入。
+	httpServer.SetOutboxWriter(sb.Outbox)
+	// SQLiteChatRepository 是无状态的 *sql.DB 薄封装，这里另建一个实例指向同一
+	// 底层连接给 handler 专用，无需从 Server 内部暴露其私有 chatRepo 字段。
+	sb.Outbox.RegisterHandler(protocol.TopicChatMessagePersistRetry,
+		chat.NewChatMessagePersistHandler(repo.NewSQLiteChatRepository(sb.Store.DB())).Handle)
+	httpServer.SetLogStore(sb.LogStore)
+	httpServer.SetToolRegistry(tb.ToolReg)
+	httpServer.SetPipelineOrchestrator(ab.PipelineOrch)
+	httpServer.SetPatternDAGExecutor(ab.PatternDAGExec)
+	httpServer.SetMapReduceExecutor(ab.MapReduceExec)
+	httpServer.SetParallelExecutor(ab.ParallelExec)
+	httpServer.SetSequentialExecutor(ab.SequentialExec)
+	httpServer.SetSwarmCoordinator(ab.SwarmCoord)
+	// 2026-07-14 补齐：ContinuousSamplingMonitor 写侧（RecordSample）此前零
+	// 生产调用点，见 boot_agent.go 构造处注释 + sampling_scorer.go。
+	httpServer.SetSamplingMonitor(ab.SamplingMonitor)
+	httpServer.SetCatalog(tb.Catalog)
+	httpServer.SeedBuiltinConfig(mpData, regData)
+	httpServer.SetReloadProviders(func() {
+		if err := loadProvidersFunc(context.Background(), sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR); err != nil {
+			slog.Error("polaris: failed to hot-reload providers", "err", err)
+		}
+	})
+	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
+	httpServer.SetSkillRegistry(tb.SkillRegistry)
+	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
+	httpServer.SetEmbeddingStatusProvider(func() server.EmbeddingStatus {
+		state := "fts"
+		if sb.Embedder != nil {
+			state = "starting" // 引擎（如显式 Ollama）仍在安装/拉模型，尚未 Set
+			if sb.DynEmbedder != nil {
+				select {
+				case <-sb.DynEmbedder.WaitReady():
+					state = "ready"
+				default:
+				}
+			}
+		}
+		consecFailures := 0
+		nextRetry := ""
+		if sb.EmbedBackoff != nil {
+			consecFailures = sb.EmbedBackoff.ConsecutiveFailures()
+			if !sb.EmbedBackoff.NextRetryAt().IsZero() {
+				nextRetry = sb.EmbedBackoff.NextRetryAt().Format(time.RFC3339)
+			}
+			if sb.EmbedBackoff.IsStopped() {
+				state = "failed"
+			} else if consecFailures > 0 {
+				state = "backoff"
+			}
+		}
+		return server.EmbeddingStatus{
+			Backend:             sb.EmbedChoice.Kind,
+			Model:               embedStatusModel(sb),
+			Dim:                 sb.EmbedChoice.Dim,
+			State:               state,
+			ConsecutiveFailures: consecFailures,
+			NextRetryAt:         nextRetry,
+		}
+	})
+	httpServer.SetEmbeddingRebencher(func(ctx context.Context) error {
+		return triggerRebench(ctx, sb)
+	})
+	accelProbe := probe.NewAcceleratorProbe()
+	concurrent.SafeGo(context.Background(), "boot_server.accelerator_probe", func(ctxBg context.Context) {
+		accelProbe.Probe(ctxBg)
+	})
+	httpServer.SetAcceleratorProbe(accelProbe)
+	httpServer.SetAmbientSkillMaxChars(sb.Cfg.Thresholds.M13Interface.AmbientSkillMaxChars)
+	// M09 §1.3 /steer 命令面（2026-07-21 deadcode 审查补齐）：sb.Steering/sb.CVStore
+	// 均可为 nil（FeatureActivationSteer 未启用），SetSteering/handleSteer 全链 nil-safe。
+	httpServer.SetSteering(sb.Steering, sb.CVStore)
+	// 设置插件同步向量索引器
+	// 传低优先级 BackgroundEmbedder（ADR-0099）：它实现 EmbedBatch，经批处理器 Low 通道按
+	// 单批上限切块串行下发。此前直传 sb.DynEmbedder，一次把上百条扩展描述整批压给串行
+	// 后端（实测 100 条 13.8s），交互嵌入在后端排队而超时。
+	if sb.SurrealStore != nil {
+		idx := plugin.NewEmbeddingIndexer(&pluginCognIndexAdapter{s: sb.SurrealStore}, backgroundEmbedder(sb))
+		httpServer.SetEmbeddingIndexer(idx)
+	}
+
+	// ─── Skill 签名密钥 ──────────────────────────────────────────────────────
+	var skillSigningKey []byte
+	if key := os.Getenv(config.EnvPolarisSkillSigningKey); key != "" { //nolint:nestif
+		skillSigningKey = []byte(key)
+	} else {
+		if b, err := os.ReadFile(sb.Layout.SkillSignKey); err == nil && len(b) > 0 {
+			skillSigningKey = b
+		} else {
+			h := sha256.Sum256(fmt.Appendf(nil, "polaris-local-%d", time.Now().UnixNano()))
+			skillSigningKey = h[:]
+			if err := os.WriteFile(sb.Layout.SkillSignKey, skillSigningKey, 0600); err != nil {
+				slog.Warn("polaris: failed to write skill_signing.key", "err", err)
+			}
+		}
+	}
+
+	// ─── [B4-F2] CodeAct 引擎初始化（FeatureL3Sandbox 门控）───────────────────
+	// CodeAct 强制依赖 Sbx-L3（ContainerSandbox）；L3 未启用时跳过。
+	// 架构文档: docs/arch/M07-Tool-Action-Layer.md §7.4
+	if tb.ContainerSandbox != nil {
+		// GovernanceAgent 是 CodeAct 的 L1 代码安全校验网关（必须非 nil）。
+		// policyGate：protocol.PolicyGate 接口；security/policy.Gate 通过 IsAuthorized 满足。
+		govAgent, _ := swarmAgents.NewGovernanceAgent(sb.Gate, sb.Store.DB())
+
+		// L2：SecurityAuditAgent 提供 LLM 语义审查（Prompt Injection 消毒 + ThinkingMax
+		// 推理 + 结构化风险输出）。此前 CodeAct 的 WithASTChecker(L0)/WithPeerReviewer(L2)
+		// 从未在生产环境被调用——三层校验实际上只有 L1(regex) 生效，L0(真实 AST 解析)和
+		// L2(LLM 语义审查+HITL) 形同虚设。这里补齐，使三层审查真正全部生效。
+		// hitl/timeout 参数已随 AuditAsync 死代码一并删除（2026-07-02）：SecurityAuditAgent
+		// 现在只提供同步 ReviewSync，HITL 审批统一由下面 codeact.WithHITL(tb.HITLGateway) 处理。
+		auditAgent := swarmAgents.NewSecurityAuditAgent(tb.LLMInfer, "zh")
+		trustPol := policy.ProfilePolicy(policy.TrustProfile(sb.Cfg.Security.TrustProfile))
+
+		codeActEngine := codeact.NewCodeAct(
+			tb.Envelope,
+			sb.AuditTrail, // inv_global_07 全链路审计（GR-4.2-005：此前传 nil，生产从未写审计）
+			codeact.WithGovernanceAgent(&govAgentAdapter{inner: govAgent}),
+			codeact.WithASTChecker(&codeact.DefaultASTChecker{}),
+			codeact.WithPeerReviewer(&securityAuditReviewerAdapter{inner: auditAgent}),
+			codeact.WithHITL(tb.HITLGateway),
+			codeact.WithMaxCodeSize(sb.Cfg.Thresholds.M7Tool.MaxCodeSizeBytes),
+			codeact.WithPIIGuard(tb.PIIDetector, tb.PIIDesensitizer),
+			codeact.WithTokenManager(action.GetTokenManager()),
+			codeact.WithStateDir(sb.Layout.Workspace),         // GD-4-002: REPL 状态快照根目录
+			codeact.WithScriptStagingBackend(tb.VFSWorkspace), // 批次4 XR-11 复核修复：临时脚本落盘迁移至 VFS 隔离边界
+			codeact.WithToolExecutor(tb.ToolReg),              // ADR-0115 WP5: 注入工具桥执行器
+			codeact.WithPolicy(trustPol),                      // ADR-0115 WP5: 注入安全策略
+		)
+		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
+		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})
+		// gateway 侧同样只依赖 action.ActionFacade 接口，不直接持有 *codeact.CodeAct（docs/specs/04-Module-Boundary.md §B2）
+		httpServer.SetCodeActEngine(action.NewActionFacade(codeActEngine))
+		slog.Info("polaris: CodeAct engine initialized and injected",
+			"sandbox", "L3-container",
+			"backend", sb.AutoConf.Config.L3SandboxBackend,
+		)
+	} else {
+		slog.Info("polaris: CodeAct engine skipped (FeatureL3Sandbox disabled or ContainerSandbox nil)")
+	}
+	// ─── [/B4-F2] ────────────────────────────────────────────────────────────
+
+	// ─── [P2-FIX] M9：LogicCollapseMonitor + StagingPipeline ────────────────
+	// 在 skillSigningKey 初始化之后创建，确保编译器签名密钥可用。
+	// FeatureLogicCollapse 门控：内存 < 1024MB 时跳过（避免在 Tier-0 低内存 VPS 加重负担）。
+	logicCollapseEnabled := sb.AutoConf != nil &&
+		sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled
+
+	if logicCollapseEnabled && tb.ContainerSandbox != nil {
+		bootLogicCollapseMonitor(sb, tb, ab, skillSigningKey)
+	} else {
+		slog.Info("polaris: LogicCollapseMonitor skipped (FeatureLogicCollapse disabled, AutoConf nil, or ContainerSandbox nil)")
+	}
+	// ─── [/P2-FIX] ───────────────────────────────────────────────────────────
+
+	// BudgetManager 由 buildAgent 为每个 Agent 注入（绑定各自 sessionID，账本 = llm_calls；
+	// ADR-0104 决策四），此处不再对 agent-0 单独注入或推送月度上限。
+
+	// ─── OTA 热更新管理器 ─────────────────────────────────────────────────────
+	updMgr := updater.New(Version, CommitHash, BuildDate, sb.SafeHTTP)
+	updMgr.StartBackgroundCheck(ctx, 2*time.Hour)
+	updMgr.SetRestartFn(func() {
+		performHotRestart(sb)
+	})
+	httpServer.SetUpdater(updMgr)
+	httpServer.SetAgentController(ab.Agent)
+
+	// ─── 其余 Server 装配 ─────────────────────────────────────────────────────
+	httpServer.SetInstallManager(tb.InstallMgr)
+	// PluginCreator（LLM 驱动 MCP 插件自动生成，2026-08-02 阶段03 R-06 死代码
+	// 接线补齐）：GeneratePlugin 实现本身早已完整（生成/落盘/注册为 MCP
+	// Server），此前只是缺"用哪个 Provider 生成"这层适配器与 boot 期
+	// SetPluginCreator 调用，导致 gateway/server/plugin/custom.go 的 intent
+	// 分支恒因 h.PluginCreator==nil 不可达。Provider 取用方式与
+	// sysadmin/skill_create.go pickSkillCreatorProvider 完全一致的
+	// default→general 兜底链；baseDir 落地目录同
+	// docs/arch/M13-bis-Extension-Registry.md §5.8 约定的
+	// ~/.polaris/extensions/local/。
+	pluginCreatorProvider := sb.InfReg.PickProvider("default")
+	if pluginCreatorProvider == nil {
+		pluginCreatorProvider = sb.InfReg.PickProvider("general")
+	}
+	httpServer.SetPluginCreator(extplugin.NewPluginCreator(
+		&extplugin.ProviderLLMClient{Provider: pluginCreatorProvider},
+		filepath.Join(sb.Layout.Extensions, "local"),
+	))
+	httpServer.SetSkillSigningKey(skillSigningKey)
+	httpServer.SetMCPManager(tb.MCPMgr)
+	httpServer.SetPluginConfig(tb.PluginConfig)
+	httpServer.SetToolRegistry(tb.ToolReg)
+	httpServer.SetCatalog(tb.Catalog)
+	httpServer.SeedBuiltinConfig(mpData, regData)
+	httpServer.SetReloadProviders(func() {
+		if err := loadProvidersFunc(context.Background(), sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR); err != nil {
+			slog.Error("polaris: failed to hot-reload providers", "err", err)
+		}
+	})
+	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
+	httpServer.SetSkillRegistry(tb.SkillRegistry)
+	httpServer.SetUserSkills(tb.SkillRegistry, tb.SkillExecutor)
+	httpServer.SetHookRunner(tb.HookRunner)
+	httpServer.SetElicitationBroker(tb.ElicitationBroker)
+	httpServer.SetAgentDefinitions(tb.AgentDefs)
+	if ab.Subagents != nil {
+		httpServer.SetSubagentRunner(ab.Subagents)
+	}
+	// WP5: 会话结束按配置清理后台任务（ADR-0115 WP5）
+	httpServer.RegisterSessionEndCallback(func(ctx context.Context, sessionID, reason string) {
+		if config.CurrentThresholds().M4Kernel.JobsKillOnSessionEnd {
+			bash.GetDefaultJobManager().CleanupSessionJobs(sessionID)
+		}
+	})
+	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
+	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
+	httpServer.SetToolExecutor(tb.Dispatcher.Execute)
+	//llmopts:exempt 作为依赖注入传入 HttpServer.SetPipelineDeps，实际调用在 workflowadmin.llmCallerAdapter 并已显式声明 PurposeWorkflowLLMStep 与 ThinkingMode
+	httpServer.SetPipelineDeps(tb.Dispatcher, sb.Router.Infer, sb.ResourceGov)
+	httpServer.SetLogStore(sb.LogStore)
+	httpServer.SetEvalRunner(ab.EvalRunner)
+	// V8-S2 Meta-Eval Sentinel 运维接口（POST /v1/eval/meta-holdout/cases,
+	// POST|GET /v1/eval/meta-audit），见 evaladmin 包文档。
+	httpServer.SetEvalAdmin(ab.EvalStore, ab.MetaEvalSentinel, ab.EvalRunner)
+	httpServer.SetToolRefOffloader(tb.ToolRefOffloader)
+
+	// ─── §11.5 STT/TTS 语音服务装配（ADR-0107 / ADR-0108）：
+	// 若 auto_install=true，启动后延迟 45s 串行后台预置支持的模型；引擎懒加载、空闲卸载。
+	var tierParams *probe.TierParameters
+	if sb.AutoConf != nil {
+		tierParams = &sb.AutoConf.Config.Params
+		httpServer.SetTier(sb.AutoConf.Config.Tier, sb.AutoConf.Config.Params)
+	}
+	totalRAM, _ := probe.MemoryProbe()
+	if sb.AutoConf != nil && sb.AutoConf.Probe != nil {
+		totalRAM = sb.AutoConf.Probe.TotalRAM
+	}
+	cpuSampler := probe.NewCPUSampler()
+	initAudio(ctx, audioInit{
+		Server:        httpServer,
+		DataDir:       sb.DataDir,
+		ModelsDir:     sb.Layout.Models,
+		TierParams:    tierParams,
+		HTTPClient:    sb.SafeHTTP,
+		Cfg:           sb.Cfg.Inference,
+		Prefs:         tb.SysRepo,
+		TotalRAMBytes: totalRAM,
+		AutoInstall:   sb.Cfg.Inference.Audio.AutoInstall,
+		CPUUsage:      cpuSampler.Usage,
+	})
+	// tts 内置工具与 Provider 同源：工具调用与 /v1/audio/speech 走同一套懒加载/不支持/未安装语义。
+	tb.TTSBridge.Bind(httpServer.SynthesizeSpeech)
+	// automation_* 内置工具晚绑定到网关 Server 的自动化门面（ADR-0114）
+	tb.AutomationBridge.Bind(httpServer.AutomationFacade())
+
+	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
+	triggerPluginVectorBackfill(sb, httpServer.PluginHandler())
+
+	// Task 7: SystemPromptGuard
+	// V-3 核实：SystemPromptGuard 已在内部组件级完成拦截器接线，无需在 boot 层全局注入。
+	// - SSE 交互路径：已在 internal/gateway/server/chat/sse.go 接入
+	// - Headless 路径：已在 internal/agent/pool.go 接入
+
+	// 本地令牌必须在 Start() 之前注入：Start 之后立刻有请求进来（Web UI 首屏），
+	// 那时若令牌还没到位，Cookie 分支会全部落空，表现为界面一片 401。
+	httpServer.SetLocalToken(localToken)
+
+	if err := httpServer.Start(); err != nil {
+		slog.Error("polaris: failed to start HTTP server", "err", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "boot_server: HTTP 服务启动失败", err)
+	}
+
+	return httpServer, nil
+}
+
+// bootLogicCollapseMonitor 从 bootServer 中拆出（nestif 治理，行为不变）：
+// 构造 LogicCollapseCompiler + LogicCollapseMonitor，注入 ToolCallRecorder/
+// HeuristicsWriter/SkillEvolutionMonitor。仅在 logicCollapseEnabled &&
+// tb.ContainerSandbox != nil 时由调用方触发。
+func bootLogicCollapseMonitor(sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle, skillSigningKey []byte) {
+	collapseCompilerTier := sb.AutoConf.Config.Tier
+	collapseCompiler := extskill.NewLogicCollapseCompiler(extskill.LogicCollapseConfig{
+		Gate:             extskill.NewCompileGate(collapseCompilerTier),
+		CodeGen:          si.NewDefaultLLMCodeGenerator(sb.Router),
+		Registry:         tb.SkillRegistry,
+		WorkDir:          sb.Layout.Workspace,
+		SigningKey:       skillSigningKey,
+		ContainerSandbox: tb.ContainerSandbox,
+	})
+	collapseMonitor := si.NewLogicCollapseMonitor(
+		collapseCompiler,
+		si.NewDefaultLLMCodeGenerator(sb.Router),
+		tb.SkillRegistry,
+		&hitlNotifierAdapter{gateway: tb.HITLGateway},
+		skillSigningKey,
+		sb.Layout.Workspace,
+	)
+	// 2026-07-10：复用 bootAgent 构造的 ab.RolloutStore（与 M9Engine 共用同一份
+	// rollout_states 状态），此前这里各自 new 一份 SQLiteRolloutStore，
+	// 与 M9Engine 的候选状态互不相干，Gate 推进对不上号。
+	if ab.RolloutStore != nil {
+		collapseMonitor.WithStagingPipeline(ab.RolloutStore)
+		slog.Info("polaris: StagingPipeline (shared with M9Engine) injected into LogicCollapseMonitor")
+	} else {
+		slog.Warn("polaris: RolloutStore unavailable, LogicCollapseMonitor L2 staging disabled")
+	}
+	ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
+	// [W-1-C] 接入 HeuristicsWriter
+	if ab.M9Engine != nil {
+		ab.M9Engine.SetHeuristicsWriter(newCollapseMonitorAdapter(collapseMonitor))
+	}
+	slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel",
+		"feature", probe.FeatureLogicCollapse,
+		"tier", collapseCompilerTier,
+	)
+
+	// [Task 10] 技能重生成监控
+	if tb.ConsolidationPipeline != nil {
+		skillEvolutionMonitor := extskill.NewSkillEvolutionMonitor(
+			sb.Store.DB(),
+			tb.SkillRegistry,
+			collapseCompiler,
+			&sb.Cfg.Thresholds,
+		)
+		tb.ConsolidationPipeline.WithSkillEvolver(skillEvolutionMonitor)
+		slog.Info("polaris: SkillEvolutionMonitor injected into ConsolidationPipeline")
+	}
+}
+
+func performHotRestart(sb *SubstrateBundle) {
+	// syscall.Exec 完全替换进程镜像，Go runtime 不执行任何 defer/finalizer。
+	// 关闭序列（与 graceful shutdown 保持一致）：
+	//   1. stop()           — 取消主 ctx，后台生产者退出
+	//   2. DBWriter.Close() — 单写者与信号 ctx 解耦（GR-3-001），须显式关闭以排空并落盘
+	//   3. <-dbWriterDone   — 确认 DatabaseWriter goroutine 完全退出
+	//   4. store.Close()    — SQLite WAL checkpoint + 清理 .db-wal / .db-shm
+	exe, _ := os.Executable()
+	slog.Info("polaris: initiating graceful db shutdown before exec-restart")
+
+	shutdownSubstrateForRestart(sb)
+
+	// Windows 不支持 syscall.Exec：二进制替换与重新拉起由 OTA 更新脚本负责
+	// （updater.writeWindowsUpdateScript），此处在优雅关停完成后正常退出即可。
+	if runtime.GOOS == "windows" {
+		slog.Info("polaris: graceful shutdown done, exiting for windows update script")
+		exitFunc(0)
+		return
+	}
+	slog.Info("polaris: exec-restarting with new binary", "path", exe)
+	if err := execFunc(exe, os.Args, os.Environ()); err != nil {
+		slog.Error("polaris: hot-restart failed to exec new binary", "exe", exe, "args", os.Args, "err", err)
+		exitFunc(1)
+		return
+	}
+	exitFunc(0)
+}
+
+type collapseMonitorAdapter struct {
+	monitor *si.LogicCollapseMonitor
+}
+
+func newCollapseMonitorAdapter(m *si.LogicCollapseMonitor) *collapseMonitorAdapter {
+	return &collapseMonitorAdapter{monitor: m}
+}
+
+func (a *collapseMonitorAdapter) RecordSuccess(taskID, taskType string) {
+	traj := &protocol.CollapseTrajectory{
+		SkillID: taskType,
+	}
+	a.monitor.RecordSuccess(context.Background(), traj, nil)
+}
+
+// shutdownSubstrateForRestart 热重启前的关停序列（从 performHotRestart 拆出以降低嵌套）：
+// 停后台生产者 → 停 EmbedBatcher → 关 DBWriter 并等待排空 → 关库。
+func shutdownSubstrateForRestart(sb *SubstrateBundle) {
+	if sb == nil {
+		return
+	}
+	sb.Stop()
+	sb.EmbedBatcher.Stop()
+	if sb.DBWriter != nil {
+		concurrent.SafeGo(context.Background(), "polaris.hot_restart.dbwriter_close", func(context.Context) { sb.DBWriter.Close() })
+	}
+	if sb.DBWriterDone != nil {
+		select {
+		case <-sb.DBWriterDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("polaris: dbWriter flush timeout during hot-restart, proceeding anyway")
+		}
+	}
+	if sb.Store != nil {
+		// 热重启前的最后一次关库：Close 失败意味着可能有未刷盘数据，新进程
+		// 起来后会看到不一致的库。此处不阻断重启（旧二进制已准备退出，
+		// 阻断会把系统卡在"既没重启也没服务"的状态），但必须留痕——
+		// 吞掉的话，重启后的数据异常将完全无从溯源。
+		// GD-13-004 评估：失败后仍继续 exec 是有意为之——已提交事务在 WAL 中持久，
+		// 新进程打开时由 SQLite 自动恢复；Go 打开的 fd 均带 O_CLOEXEC，exec 后旧句柄
+		// 与文件锁随之释放，不会与新进程互锁。重试无意义（sql.DB.Close 幂等，第二次
+		// 必返回 nil 会伪装成功），中止 exec 则把系统卡在"未服务也未重启"。
+		if err := sb.Store.Close(); err != nil {
+			slog.Error("polaris: store close failed before hot-restart, relying on WAL recovery in new process", "err", err)
+		}
+	}
+}
+
+// triggerPluginVectorBackfill 在动态嵌入器就绪后触发插件向量回填 (ADR-0109)。
+func triggerPluginVectorBackfill(sb *SubstrateBundle, pluginHandler *plugin.PluginHandler) {
+	if sb.Embedder == nil {
+		slog.Info("polaris: embedder is nil (FTS mode), skipping plugin vector backfill")
+		return
+	}
+	if sb.DynEmbedder == nil || pluginHandler == nil {
+		return
+	}
+	concurrent.SafeGo(context.Background(), "boot_server.vector_backfill", func(ctx context.Context) {
+		<-sb.DynEmbedder.WaitReady()
+		if sb.EmbedBackoff != nil && !sb.EmbedBackoff.CanAttempt() {
+			slog.Debug("polaris: plugin vector backfill skipped due to backoff guardrail",
+				"consecutive_failures", sb.EmbedBackoff.ConsecutiveFailures(),
+				"next_retry_at", sb.EmbedBackoff.NextRetryAt())
+			return
+		}
+		release, ok := waitForBackgroundSlot(ctx, sb, "plugin_vector_backfill")
+		if !ok {
+			slog.Warn("polaris: plugin vector backfill aborted (shutting down or never admitted)")
+			return
+		}
+		defer release()
+		slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
+		if _, err := pluginHandler.SyncAllMarketplaces(ctx, true); err != nil {
+			if sb.EmbedBackoff != nil {
+				delay, stopped, failures := sb.EmbedBackoff.RecordFailure()
+				slog.Warn("polaris: Background vector backfill encountered errors",
+					"err", err,
+					"consecutive_failures", failures,
+					"next_retry_delay", delay,
+					"next_retry_at", sb.EmbedBackoff.NextRetryAt(),
+					"stopped", stopped)
+			} else {
+				slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
+			}
+		} else if sb.EmbedBackoff != nil {
+			sb.EmbedBackoff.RecordSuccess()
+		}
+	})
+}
+
+// embedStatusModel 状态展示用模型名：引擎就绪后取其真实模型版本（ONNX 档位由基准决定，
+// 配置值只是 "auto"）；未就绪时回退到配置决议。
+func embedStatusModel(sb *SubstrateBundle) string {
+	if sb.DynEmbedder != nil {
+		if v := sb.DynEmbedder.ModelVersion(); v != "" {
+			return v
+		}
+	}
+	return sb.EmbedChoice.Model
+}

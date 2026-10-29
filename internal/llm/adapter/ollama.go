@@ -1,0 +1,164 @@
+package adapter
+
+import (
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+
+	"context"
+	"net/http"
+
+	llmparent "github.com/polarisagi/polaris/internal/llm"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// OllamaAdapter 对接本地 Ollama 服务（OpenAI 兼容接口 + /api/chat）。
+// Ollama 默认监听 http://localhost:11434，FeatureLocalInference 门控。
+type OllamaAdapter struct {
+	model   string
+	baseURL string
+	client  *OpenAICompatibleClient
+	caps    types.ProviderCapabilities
+	tbr     *metrics.TokenBurnRate
+}
+
+var _ protocol.Provider = (*OllamaAdapter)(nil)
+
+// NewOllamaAdapter 构造 Ollama 本地推理适配器。
+func NewOllamaAdapter(model string, httpClient *http.Client, tbr *metrics.TokenBurnRate) *OllamaAdapter {
+	if httpClient == nil {
+		httpClient = defaultHTTPClient()
+	}
+	baseURL := "http://localhost:11434/v1"
+	return &OllamaAdapter{
+		model:   model,
+		baseURL: baseURL,
+		client: &OpenAICompatibleClient{
+			BaseURL:    baseURL,
+			HTTPClient: httpClient,
+		},
+		caps: types.ProviderCapabilities{
+			SupportsStreaming: true,
+			SupportsTools:     true,
+			SupportsThinking:  false,
+			MaxContextTokens:  32768,
+			CostPerMTokInput:  0.0,
+			CostPerMTokOutput: 0.0,
+		},
+		tbr: tbr,
+	}
+}
+
+func (a *OllamaAdapter) ModelID() string                          { return a.model }
+func (a *OllamaAdapter) Capabilities() types.ProviderCapabilities { return a.caps }
+
+func (a *OllamaAdapter) Tokenizer() protocol.TokenizerAdapter { return &llmparent.SimpleTokenizer{} }
+
+func (a *OllamaAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultInferTimeout)
+		defer cancel()
+	}
+	options := &types.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &types.InferRequest{
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
+	}
+	apiReq := translateRequest(req, a.caps.SupportsVision)
+	apiReq.Model = a.model
+	apiReq.Stream = false
+
+	resp, err := a.client.SendRequest(ctx, nil, apiReq)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "ollama infer", err)
+	}
+
+	out := &types.ProviderResponse{
+		Model: a.model,
+		Usage: types.Usage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		},
+	}
+	if len(resp.Choices) > 0 {
+		contentStr, _ := resp.Choices[0].Message.Content.(string)
+		out.Content = contentStr
+	}
+	if out.Usage.InputTokens > 0 || out.Usage.OutputTokens > 0 {
+		if a.tbr != nil {
+			a.tbr.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		}
+	}
+	if out.Content == "" && len(out.ToolCalls) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")
+	}
+
+	return out, nil
+}
+
+func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
+	}
+	options := &types.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &types.InferRequest{
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ToolChoice:     options.ToolChoice,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
+	}
+	apiReq := translateRequest(req, a.caps.SupportsVision)
+	apiReq.Model = a.model
+	tok := &llmparent.SimpleTokenizer{}
+
+	raw, err := a.client.SendStreamRequest(ctx, nil, nil, apiReq, tok.EstimateRequestTokens(req))
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "OllamaAdapter.StreamInfer", err)
+	}
+	// [SafeGo] R-04：此前直接透传 raw，未接入 TokenBurnRate，本地推理的
+	// 单流硬阻断（预算探测）在 Ollama 上完全失效。中间层转发协程对齐
+	// openai.go:204-221 的 canonical 模式。
+	out := make(chan types.StreamEvent, cap(raw))
+	concurrent.SafeGo(ctx, "llm.ollama.stream_tbr", func(context.Context) {
+		defer close(out)
+		// 超时 ctx 的 cancel 必须等 relay 排空 raw 之后再触发，否则尾部事件被 ctx.Done 抢先丢弃
+		// （与 openai.go 同一根因，见 REPORT B2）。无 tbr 时本层也保留，仅作为 cancel 的归属点。
+		if cancel != nil {
+			defer cancel()
+		}
+		for ev := range raw {
+			if a.tbr != nil && ev.Usage.InputTokens+ev.Usage.OutputTokens > 0 {
+				a.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens))
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return // 消费方已放弃，退出避免 goroutine 泄漏
+			}
+		}
+	})
+	return out, nil
+}

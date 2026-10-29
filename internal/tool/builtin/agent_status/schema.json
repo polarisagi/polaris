@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "要查询的子智能体ID列表，留空表示查询所有由当前智能体派生的子智能体"
+    }
+  }
+}

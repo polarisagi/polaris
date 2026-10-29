@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "list_models",
+  "description": "列出当前所有已启用厂商下的模型列表。",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "按模型引用、显示名称或厂商名称进行过滤（大小写不敏感，可选）。"
+    },
+    "refresh": {
+      "type": "boolean",
+      "description": "是否立即触发在线探测刷新各厂商的最新可用模型（默认 false）。"
+    }
+  }
+}

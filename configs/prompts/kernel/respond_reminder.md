@@ -1,0 +1,1 @@
+Final step: write your reply to the user now, in natural language only. Tools are not available in this phase — do not output tool calls, tool-call markup or plans. If information is still missing, say what is missing and offer to continue.

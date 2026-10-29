@@ -1,0 +1,11 @@
+name: get_datetime
+description: "Return the current date and time in UTC and local timezone."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - datetime
+  - utility

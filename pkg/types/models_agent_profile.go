@@ -1,0 +1,34 @@
+package types
+
+// AgentProfileSpec 一次子 Agent 运行的角色规格（ADR-0103 决策三：Claude agents/*.md、Codex
+// agents/*.toml 归一后的运行期形态）。由委派方解析后经 WithAgentProfile 注入内核；
+// 只能收窄能力（工具白/黑名单、只读、步数），永不放宽宿主已有的安全边界。
+type AgentProfileSpec struct {
+	Name   string // 调用名：插件 agent 为 "<plugin>:<agent>"
+	Source string // "plugin:<id>" / "project" / "user"
+	// Instructions 角色指令（Claude 正文 / Codex developer_instructions，含预加载技能正文）。
+	// 来自扩展或项目文件，按 InstructionTaint 写入可变技能区，不进入内核指令区。
+	Instructions     string
+	InstructionTaint TaintLevel
+	// Tools 为空 = 继承父 Agent 全部工具（Claude 语义）；名称按 catalog.NewToolRestriction 解析。
+	Tools           []string
+	DisallowedTools []string
+	ReadOnly        bool // Codex sandbox_mode = "read-only"：拒绝写文件/起进程/改状态的工具
+	MaxTurns        int  // Claude maxTurns：>0 时收紧内核步数上限
+	// AllowDelegation 子 Agent 能否继续委派。Claude 子 Agent 不能再派生子 Agent，
+	// Codex agents.max_depth 默认 1——两家默认均为 false。
+	AllowDelegation bool
+	// SuppressHooks 本角色的工具调用不触发 hooks.json（agent 类型 hook 的评估子 Agent：
+	// 其工具调用再触发 hook 会无限递归）。亦不触发 SubagentStart/SubagentStop。
+	SuppressHooks bool
+	// FileRoot 非空时，内置文件/命令工具只能访问这一个目录（替换进程级白名单与项目目录，而非追加）。
+	// 对端节点委派来的任务用它把可读范围收窄到共享目录：只读不等于安全——进程级白名单含整个
+	// DataDir，read_file / data_query 可直接读到 vault.key 与 polaris.db（ADR-0111）。
+	FileRoot string
+	// Model 角色指定的模型名或池名（ADR-0115 WP3）：
+	// 插件 agent 的 model: 字段映射（opus->reasoning, sonnet->general, haiku->default, inherit/空->不指定）。
+	// 池名原样保留，其他值作为模型名原样存入，运行时经 resolveModelRoute 解析成引用。
+	Model string
+	// Thinking 角色指定的思考模式/预算档位（ADR-0115 WP3）。
+	Thinking string
+}

@@ -1,0 +1,147 @@
+package chat
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/polarisagi/polaris/internal/gateway/authcontext"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// HandleAgentStream 处理 SSE 方式的流式对话。
+//
+// [A-03 Step4] 原 281 行的完整会话生命周期编排（会话确保/历史加载/Hook 分发/
+// 斜线命令路由/上下文压缩/SystemPromptGuard/消息持久化/Transcript 写入/FSM
+// 驱动）已收敛至 session.Orchestrator.RunTurn（见 A-03 Step2）。本函数仅保留
+// HTTP 边界层职责：请求解码与校验（含 S-07 的 sessionID 白名单早期拒绝）/
+// SSE 响应头与 Flusher/ResponseController 写超时/把 wire 请求翻译为
+// session.Request/构造 sseSink（Step3）/调用 RunTurn/错误码映射。
+//
+// SSE 事件协议（与前端 app.js _onEvent 对齐，逐字段对齐关系见
+// chat/sse_sink.go 顶部注释）：
+//
+//	reasoning → {"content":"..."} 思考过程增量
+//	token     → {"content":"..."} 正文增量
+//	status    → {"type":"...","message":"..."} 状态提示
+//	context_warning → {"usage_percent":...,...} 上下文使用率告警
+//	system_notice   → {"message":"...","retry":bool} Agent 池资源降级提示
+//	session   → {"session_id":"...","turn_id":"..."} 会话 ID 确定后立即推送（新会话据此重连）
+//	complete  → {"session_id":"...",...}
+//	error     → {"code":"...","message":"..."}
+func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) {
+	var req agentStreamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Input) == "" && len(req.Attachments) == 0 && len(req.ImageParts) == 0 {
+		http.Error(w, "input required", http.StatusBadRequest)
+		return
+	}
+
+	// S-07 入口白名单校验（双重防御第一层，第二层见
+	// session.Orchestrator.resolveSessionID/openTranscript）：sessionID 后续
+	// 会拼入 transcript 文件路径等场景，未经校验的值可携带 "../" 实现路径穿越。
+	// 空值（新会话）由 Orchestrator 内部生成，恒定合法，不在此处校验。
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID != "" && !session.SessionIDPattern.MatchString(sessionID) {
+		httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "invalid session_id"), http.StatusBadRequest)
+		return
+	}
+
+	// project_id 与 session_id 同一白名单：格式非法在边界即拒绝，项目是否存在由
+	// EnsureSessionInProject 的外键约束判定（不存在 → session_error）。
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID != "" && !session.SessionIDPattern.MatchString(projectID) {
+		httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "invalid project_id"), http.StatusBadRequest)
+		return
+	}
+
+	if s.Orchestrator == nil {
+		flusher, ok := prepareSSE(w)
+		if !ok {
+			return
+		}
+		writeSSEWithID(w, flusher, 1, "error", map[string]any{"code": "no_orchestrator", "message": "系统错误：会话编排器未初始化"})
+		return
+	}
+
+	domainReq := session.Request{
+		SessionID:       sessionID,
+		ProjectID:       projectID,
+		Input:           req.Input,
+		ModelID:         req.ModelID,
+		Attachments:     toDomainAttachments(req.Attachments),
+		ImageParts:      toDomainImageParts(req.ImageParts),
+		Channel:         "web",
+		OwnerTrusted:    ownerTrustedRequest(r),
+		Streaming:       true,
+		RunID:           req.RunID,
+		ReasoningEffort: req.ReasoningEffort,
+	}
+
+	// 回合在 TurnHub 持有的 ctx 下后台运行（ADR-0116）；本连接只是第一个订阅者，
+	// 断开只退订、不取消回合。
+	turn := s.startTurn(w, r, sessionID, domainReq)
+	if turn == nil {
+		return
+	}
+	flusher, ok := prepareSSE(w)
+	if !ok {
+		return
+	}
+	streamSubscription(r.Context(), w, flusher, turn.Subscribe(0))
+}
+
+// toDomainAttachments 把 wire 协议的 sseAttachment 翻译为 session.Attachment
+// （纯格式转译，不含业务决策，留在 HTTP 边界层）。
+func toDomainAttachments(atts []sseAttachment) []session.Attachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]session.Attachment, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, session.Attachment{
+			URI:      a.URI,
+			MimeType: a.MimeType,
+			Name:     a.Name,
+			Data:     a.Data,
+		})
+	}
+	return out
+}
+
+// toDomainImageParts 把 wire 协议的 legacy base64 sseImagePart 解码为
+// types.ImagePart（纯格式转译：base64 解码不含磁盘 IO/业务决策，留在 HTTP
+// 边界层；单条解码失败跳过并计入日志，与原 buildStreamUserMessage 内联逻辑
+// 行为等价，见 session.buildUserMessage 注释）。
+func toDomainImageParts(parts []sseImagePart) []types.ImagePart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]types.ImagePart, 0, len(parts))
+	for _, ip := range parts {
+		raw, err := base64.StdEncoding.DecodeString(ip.Data)
+		if err != nil {
+			continue
+		}
+		out = append(out, types.ImagePart{
+			Type:      "image",
+			MediaType: ip.MimeType,
+			Data:      raw,
+		})
+	}
+	return out
+}
+
+// ownerTrustedRequest 判定请求是否来自已认证的本地可信客户端（机器主人本人）。
+// 信任只取自鉴权上下文：匿名回环兜底（Authenticated=false）与远程 API 客户端都不算。
+func ownerTrustedRequest(r *http.Request) bool {
+	a := authcontext.FromContext(r.Context())
+	return a != nil && a.Authenticated && a.ClientType.IsLocalTrusted()
+}

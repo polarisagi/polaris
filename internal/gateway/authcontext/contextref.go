@@ -1,0 +1,319 @@
+package authcontext
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+)
+
+// ─── 配置常量 ───────────────────────────────────────────────────────────────────
+
+const (
+	defaultMaxExpandTokens = 32000   // 所有引用展开后的 token 软上限
+	maxSingleFileBytes     = 1 << 20 // 单个文件上限 1MB
+	maxSingleURLBytes      = 1 << 19 // 单个 URL 上限 512KB
+	httpFetchTimeout       = 15 * time.Second
+)
+
+// ─── 引用模式 ───────────────────────────────────────────────────────────────────
+
+// ExpandReport 展开操作的结果报告。
+type ExpandReport struct {
+	TotalBytes  int               // 展开后总字节数
+	TokenBudget int               // 当前 token 上限
+	OverBudget  bool              // 是否超预算（展开结果被截断）
+	Skipped     []string          // 被跳过/拒绝的引用（敏感路径等）
+	Resolved    map[string]string // 引用原文 → 展开摘要（诊断用）
+}
+
+// ContextRefExpander 消息引用展开器。
+// 扫描用户输入中的 @file / @url 引用，异步并发展开后替换回原文。
+type ContextRefExpander struct {
+	client          *http.Client
+	maxExpandTokens int
+	workDir         string // 文件路径解析基准目录（空 = CWD）
+	refPattern      *regexp.Regexp
+}
+
+// NewContextRefExpander 创建展开器。
+func NewContextRefExpander(client *http.Client, opts ...func(*ContextRefExpander)) *ContextRefExpander {
+	e := &ContextRefExpander{
+		client:          client,
+		maxExpandTokens: defaultMaxExpandTokens,
+		refPattern:      regexp.MustCompile(`@(file|url|git):"([^"]*)"`),
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+// WithWorkDir 设置文件读取的基准目录。
+func WithWorkDir(dir string) func(*ContextRefExpander) {
+	return func(e *ContextRefExpander) { e.workDir = dir }
+}
+
+// ─── 敏感路径检测 ──────────────────────────────────────────────────────────────
+
+// isSensitivePath 判定 @file 引用是否落在敏感路径。判据只有一份：policy 路径目录（ADR-0122 决策二），
+// 不在此另维护清单。按写口径取类别——持久化落点（.git/config、shell rc）与系统目录读出来也不该内联给模型；
+// workDir 根目录断言（见 resolveFile）仍是主控制，这里是"即便落在工作区内也永不内联"的第二层。
+func isSensitivePath(path string) bool {
+	pc := policy.ClassifyPath(filepath.Clean(path), true, nil)
+	return pc.Self || pc.Blocked() || policy.PathHitsSensitiveFragment(path)
+}
+
+// ─── 展开主流程 ────────────────────────────────────────────────────────────────
+
+// Expand 扫描并展开文本中的 @file / @url 引用。
+// 返回展开后的文本和操作报告。
+func (e *ContextRefExpander) Expand(ctx context.Context, text string) (string, *ExpandReport) {
+	matches := e.refPattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return text, &ExpandReport{TokenBudget: e.maxExpandTokens}
+	}
+
+	report := &ExpandReport{
+		TokenBudget: e.maxExpandTokens,
+		Resolved:    make(map[string]string),
+	}
+
+	// 去重：相同原文只展开一次
+	type matchKey struct{ typ, val string }
+	type rawMatch struct{ typ, val, raw string }
+	seen := make(map[matchKey]bool)
+	var uniqueMatches []rawMatch //nolint:prealloc
+	for _, m := range matches {
+		if len(m) < 3 {
+			continue
+		}
+		k := matchKey{typ: m[1], val: m[2]}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		uniqueMatches = append(uniqueMatches, rawMatch{typ: m[1], val: m[2], raw: m[0]})
+	}
+
+	// 并发展开唯一引用
+	type result struct {
+		raw     string
+		content string
+		err     string
+		bytes   int
+	}
+	ch := make(chan result, len(uniqueMatches))
+	var wg sync.WaitGroup
+
+	for _, m := range uniqueMatches {
+		wg.Add(1)
+		raw, typ, val := m.raw, m.typ, m.val
+		concurrent.SafeGo(ctx, "gateway.authcontext.expand_ref", func(ctx context.Context) {
+			defer wg.Done()
+			r := result{raw: raw}
+
+			if typ == "file" && isSensitivePath(val) {
+				r.err = "blocked: sensitive path"
+				ch <- r
+				return
+			}
+
+			content, bytes, err := e.resolveOne(ctx, typ, val)
+			if err != nil {
+				r.err = err.Error()
+				ch <- r
+				return
+			}
+			r.content = content
+			r.bytes = bytes
+			ch <- r
+		})
+	}
+	wg.Wait()
+	close(ch)
+
+	// 收集结果
+	type replacement struct {
+		raw     string
+		content string
+	}
+	var replacements []replacement //nolint:prealloc
+	totalBytes := 0
+
+	for r := range ch {
+		if r.err != "" {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("%s (%s)", r.raw, r.err))
+			report.Resolved[r.raw] = "skipped: " + r.err
+			continue
+		}
+		totalBytes += r.bytes
+		replacements = append(replacements, replacement{raw: r.raw, content: r.content})
+		report.Resolved[r.raw] = fmt.Sprintf("expanded (%d bytes)", r.bytes)
+	}
+
+	report.TotalBytes = totalBytes
+
+	// 检查 token 预算（粗略估算 bytes/4）
+	estimatedTokens := totalBytes / 4
+	if estimatedTokens > e.maxExpandTokens {
+		report.OverBudget = true
+	}
+
+	// 逐引用替换（不包含原文在 replacement 中，避免已替换文本被二次匹配）
+	out := text
+	for _, rp := range replacements {
+		replacement := fmt.Sprintf("\n[以下来自引用]\n%s\n[/引用结束]\n", rp.content)
+		out = strings.ReplaceAll(out, rp.raw, replacement)
+	}
+
+	return out, report
+}
+
+func (e *ContextRefExpander) resolveOne(ctx context.Context, typ, val string) (content string, bytes int, err error) {
+	switch typ {
+	case "file":
+		return e.resolveFile(ctx, val)
+	case "url":
+		return e.resolveURL(ctx, val)
+	case "git":
+		return "", 0, apperr.New(apperr.CodeUnimplemented, "git references not yet supported")
+	default:
+		return "", 0, apperr.New(apperr.CodeInternal, fmt.Sprintf("unknown reference type: %s", typ))
+	}
+}
+
+// ─── 文件引用解析 ──────────────────────────────────────────────────────────────
+
+func (e *ContextRefExpander) resolveFile(_ context.Context, val string) (string, int, error) { //nolint:gocyclo
+	path := val
+	var lineStart, lineEnd int
+
+	// 解析行范围 "path.go:10-20" 或 "path.go:10"
+	if colonIdx := strings.LastIndexByte(val, ':'); colonIdx > 0 {
+		rangePart := val[colonIdx+1:]
+		if strings.Contains(rangePart, "-") {
+			sp := strings.SplitN(rangePart, "-", 2)
+			v1, err1 := strconv.Atoi(strings.TrimSpace(sp[0]))
+			v2, err2 := strconv.Atoi(strings.TrimSpace(sp[1]))
+			if err1 == nil && err2 == nil && v1 > 0 && v2 >= v1 {
+				lineStart, lineEnd = v1, v2
+				path = val[:colonIdx]
+			}
+		} else if v, err := strconv.Atoi(rangePart); err == nil && v > 0 {
+			lineStart, lineEnd = v, v
+			path = val[:colonIdx]
+		}
+	}
+
+	if e.workDir == "" {
+		return "", 0, apperr.New(apperr.CodeForbidden, "contextref: workDir 未配置，按 fail-closed 拒绝文件引用")
+	}
+
+	root, err := filepath.Abs(filepath.Clean(e.workDir))
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "resolve workDir", err)
+	}
+	// root 也必须解一次符号链接：下面对 abs 解了链接，只解一侧会让两边处于
+	// 不同的命名空间。macOS 的 /var → /private/var、Linux 上把数据目录挂在
+	// 软链背后都属此列——那种情况下 HasPrefix 恒不成立，整个 @file 引用功能
+	// 会被自己的越界断言全量拒绝（2026-08-13 轮实测：本机全部用例被拒）。
+	if resolvedRoot, symErr := filepath.EvalSymlinks(root); symErr == nil {
+		root = resolvedRoot
+	}
+
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "resolve path", err)
+	}
+
+	if _, err := os.Stat(abs); err == nil {
+		abs, err = filepath.EvalSymlinks(abs)
+		if err != nil {
+			return "", 0, apperr.Wrap(apperr.CodeInternal, "eval symlinks", err)
+		}
+	}
+
+	if !strings.HasPrefix(abs, root+string(filepath.Separator)) && abs != root {
+		return "", 0, apperr.New(apperr.CodeForbidden, "contextref: 路径穿越，拒绝访问")
+	}
+
+	if isSensitivePath(abs) {
+		return "", 0, apperr.New(apperr.CodeForbidden, fmt.Sprintf("blocked: sensitive path %q", abs))
+	}
+
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "read file", err)
+	}
+	if len(data) > maxSingleFileBytes {
+		data = data[:maxSingleFileBytes]
+	}
+
+	// 行范围裁剪
+	if lineEnd > 0 {
+		lines := strings.Split(string(data), "\n")
+		if lineStart > len(lines) {
+			return "", 0, apperr.New(apperr.CodeInternal, fmt.Sprintf("line %d exceeds file length %d", lineStart, len(lines)))
+		}
+		if lineEnd > len(lines) {
+			lineEnd = len(lines)
+		}
+		data = []byte(strings.Join(lines[lineStart-1:lineEnd], "\n"))
+	}
+
+	return string(data), len(data), nil
+}
+
+// ─── URL 引用解析 ──────────────────────────────────────────────────────────────
+
+func (e *ContextRefExpander) resolveURL(ctx context.Context, val string) (string, int, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", val, nil)
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "bad url", err)
+	}
+	req.Header.Set("User-Agent", "polaris/1.0")
+
+	client := e.client
+	if client == nil {
+		// http.DefaultClient 绕过 SafeDialer 的 SSRF 校验，禁止静默降级。
+		// 生产路径必须通过 NewContextRefExpander(substrate.NewSafeHTTPClient(...)) 注入。
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "http client not injected: use NewSafeHTTPClient", nil)
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, httpFetchTimeout)
+	defer cancel()
+	req = req.WithContext(fetchCtx)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "fetch url", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", 0, apperr.New(apperr.CodeInternal, fmt.Sprintf("HTTP %d", resp.StatusCode))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxSingleURLBytes)))
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "read body", err)
+	}
+
+	return string(body), len(body), nil
+}

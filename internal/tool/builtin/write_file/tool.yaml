@@ -1,0 +1,12 @@
+name: write_file
+description: "Write or append content to a file. Creates the file if it does not exist. Restricted to allowed directories."
+version: "1.0.0"
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - file-write
+tags:
+  - filesystem
+  - io
+  - write

@@ -1,0 +1,434 @@
+// File: internal/store/outbox_worker.go
+// RuleVerified: [XR-04] 写路径三层规范 | [outbox-cursor-monotonic] 游标单调递增
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// outboxDeferDelay 记录因资源水位线推迟时的下次重试间隔。
+const outboxDeferDelay = 30 * time.Second
+
+// 哨兵错误 ErrVersionStale / ErrUnknownTargetEngine / ErrPoisonPill 见 outbox_errors.go。
+
+// OutboxWorker — 跨引擎投递 Worker。
+// 消费 M2 outbox 表，将投影写入目标引擎（[Storage-SQLite] / [Storage-SurrealDB-Core]）。
+// 架构文档: docs/arch/M02-Storage-Fabric.md §2.5
+
+type OutboxWorker struct {
+	db           *sql.DB
+	handlers     map[string]OutboxHandler // TargetEngine → HandlerFunc
+	versionCheck map[string]func(context.Context, *OutboxRecord) (int64, error)
+	pollInterval int64 // seconds，5s 默认
+	maxRetries   int   // 3
+	initialMs    int64
+	maxMs        int64
+}
+
+// NewOutboxWorker 创建 OutboxWorker，db 必须非 nil（fail-fast）。
+func NewOutboxWorker(db *sql.DB, pollInterval int64, maxRetries int, initialMs, maxMs int64) *OutboxWorker {
+	if pollInterval <= 0 {
+		pollInterval = 5
+	}
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+	if initialMs <= 0 {
+		initialMs = 100
+	}
+	if maxMs <= 0 {
+		maxMs = 8000
+	}
+	return &OutboxWorker{
+		db:           db,
+		handlers:     make(map[string]OutboxHandler),
+		versionCheck: make(map[string]func(context.Context, *OutboxRecord) (int64, error)),
+		pollInterval: pollInterval,
+		maxRetries:   maxRetries,
+		initialMs:    initialMs,
+		maxMs:        maxMs,
+	}
+}
+
+// OutboxHandler 处理单个 Outbox 任务。
+type OutboxHandler func(ctx context.Context, record *OutboxRecord) error
+
+// OutboxRecord 单条 Outbox 记录。
+type OutboxRecord struct {
+	ID                 int64
+	TargetEngine       string
+	Operation          string
+	Scope              string
+	Payload            []byte
+	IdempotencyKey     types.IdempotencyKey
+	Version            int64
+	Attempts           int
+	CrashRecoveryCount int
+}
+
+// RegisterHandler 注册 Outbox 任务处理器。可选传入版本检查器以支持高水位拦截。
+func (w *OutboxWorker) RegisterHandler(taskType string, handler OutboxHandler, checker ...func(context.Context, *OutboxRecord) (int64, error)) {
+	w.handlers[taskType] = handler
+	if len(checker) > 0 {
+		w.versionCheck[taskType] = checker[0]
+	}
+}
+
+// Write 实现 protocol.OutboxWriter 接口，提供同步写入 Outbox 表的能力。
+func (w *OutboxWorker) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	if w.db == nil {
+		return apperr.New(apperr.CodeInternal, "outbox db is nil")
+	}
+	const q = `INSERT INTO outbox (target_engine, operation, scope, payload, idempotency_key, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`
+	now := time.Now().UnixMilli()
+	if entry.RetryOnDead {
+		return w.writeRetryOnDead(ctx, entry, now)
+	}
+	_, err := w.db.ExecContext(ctx, q, entry.TargetEngine, entry.Operation, entry.Scope, entry.Payload, entry.IdempotencyKey, now)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to write outbox", err)
+	}
+	return nil
+}
+
+// writeRetryOnDead 同键幂等写入：非 dead 的同键记录保持不动（重复点击不重复入队），
+// dead 记录删除后以新 id 重新入队。必须是"删旧插新"而非原地改状态：游标只向前扫
+// id > cursor，原地复活的旧 id 记录会落在游标之后永远不被消费。
+func (w *OutboxWorker) writeRetryOnDead(ctx context.Context, entry protocol.OutboxEntry, now int64) error {
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to write outbox: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `DELETE FROM outbox WHERE idempotency_key = ? AND status = 'dead'`, entry.IdempotencyKey)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to write outbox: drop dead record", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		slog.Warn("outbox: 同键 dead 记录被替换并重新入队", "idempotency_key", entry.IdempotencyKey, "target", entry.TargetEngine)
+	}
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO outbox (target_engine, operation, scope, payload, idempotency_key, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+		 ON CONFLICT(idempotency_key) DO NOTHING`,
+		entry.TargetEngine, entry.Operation, entry.Scope, entry.Payload, entry.IdempotencyKey, now); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to write outbox", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to write outbox: commit", err)
+	}
+	return nil
+}
+
+// ListBatch 读取待处理 Outbox 记录。
+// 主查询: WHERE id > cursor AND status IN ('pending','failed')
+//
+//	AND (next_retry_at IS NULL OR next_retry_at <= now) ORDER BY id LIMIT batchSize
+//
+// 补充查询 (cursor>0): WHERE id <= cursor AND status='failed' ORDER BY id LIMIT batchSize/4
+func (w *OutboxWorker) ListBatch(ctx context.Context, cursor int64, batchSize int) ([]*OutboxRecord, error) {
+	if w.db == nil {
+		return nil, apperr.New(apperr.CodeInternal, "outbox db is nil")
+	}
+	now := time.Now().UnixMilli()
+
+	const mainQ = `
+		SELECT id, target_engine, operation, scope, payload, idempotency_key,
+		       attempts, crash_recovery_count
+		FROM outbox
+		WHERE id > ? AND status IN ('pending','failed')
+		  AND (next_retry_at IS NULL OR next_retry_at <= ?)
+		ORDER BY id LIMIT ?`
+
+	rows, err := w.db.QueryContext(ctx, mainQ, cursor, now, batchSize)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "outbox fetch failed", err)
+	}
+	defer rows.Close()
+
+	records, err := scanOutboxRows(rows)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "OutboxWorker.ListBatch", err)
+	}
+
+	// 补充查询: cursor 以前遗漏的失败记录
+	if cursor > 0 && batchSize > 4 {
+		suppLimit := batchSize / 4
+		const suppQ = `
+			SELECT id, target_engine, operation, scope, payload, idempotency_key,
+			       attempts, crash_recovery_count
+			FROM outbox
+			WHERE id <= ? AND status = 'failed'
+			  AND (next_retry_at IS NULL OR next_retry_at <= ?)
+			ORDER BY id LIMIT ?`
+		suppRows, suppErr := w.db.QueryContext(ctx, suppQ, cursor, now, suppLimit)
+		if suppErr == nil {
+			defer suppRows.Close()
+			if supp, scanErr := scanOutboxRows(suppRows); scanErr == nil {
+				records = append(records, supp...)
+			}
+		}
+	}
+	return records, nil
+}
+
+func scanOutboxRows(rows *sql.Rows) ([]*OutboxRecord, error) {
+	var records []*OutboxRecord
+	for rows.Next() {
+		r := &OutboxRecord{}
+		var ikey string
+		if err := rows.Scan(
+			&r.ID, &r.TargetEngine, &r.Operation, &r.Scope, &r.Payload,
+			&ikey, &r.Attempts, &r.CrashRecoveryCount,
+		); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "outbox scan failed", err)
+		}
+		r.IdempotencyKey = types.IdempotencyKey(ikey)
+		parts := strings.Split(ikey, ":")
+		if len(parts) >= 5 {
+			if v, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
+				r.Version = v
+			}
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "outbox rows error", err)
+	}
+	return records, nil
+}
+
+// Run 启动增量消费主循环，阻塞直到 ctx 取消。
+//
+// 设计约束（HE-Rule-6 State-in-DB）：
+//   - cursor 持久化到 sys_config 表（键 "outbox_cursor"），重启后从 DB 恢复，防止漏消费。
+//   - 每批处理完成后原子 CAS 更新 cursor，保证 Exactly-Once 推进。
+//   - 毒丸记录（crash_recovery_count ≥ 3）直接标记 dead，不再重试。
+//   - 处于 ReplayMode 时跳过所有副作用（只消费，不触发 handler）。
+func (w *OutboxWorker) Run(ctx context.Context) error {
+	// 投影（情景抽取、图谱构建、摘要…）的推理属于可推迟后台工作：水位线下让位于用户
+	// 对话，且单条推迟不阻塞其后的 Agent 中断 / 消息持久化等记录（processAndMark）。
+	ctx = protocol.WithDeferrableBackgroundWork(ctx)
+	// 从 DB 恢复 cursor（崩溃重启场景）。cursorReady=false 表示尚未获得可信 cursor，
+	// 此时绝不能带着 0 值跑 processBatch（会从头重复处理全部 outbox，见 L3 定级）。
+	cursor, cursorReady := w.loadCursorSafe(ctx)
+
+	ticker := time.NewTicker(time.Duration(w.pollInterval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
+		case <-ticker.C:
+			if !cursorReady {
+				cursor, cursorReady = w.loadCursorSafe(ctx)
+				if !cursorReady {
+					continue // 游标仍未恢复，本轮跳过，避免从 0 重放
+				}
+			}
+			newCursor, err := w.processBatch(ctx, cursor, 50)
+			if err != nil {
+				// 非致命：记录并继续，防止单批失败中断整个 worker
+				continue
+			}
+			if newCursor > cursor {
+				cursor = newCursor
+				w.saveCursor(ctx, cursor)
+			}
+		}
+	}
+}
+
+// processBatch 获取并处理一批记录，返回处理完成后的最大 ID（新 cursor）。
+func (w *OutboxWorker) processBatch(ctx context.Context, cursor int64, batchSize int) (int64, error) {
+	records, err := w.ListBatch(ctx, cursor, batchSize)
+	if err != nil {
+		return cursor, apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processBatch", err)
+	}
+
+	maxID := cursor
+	for _, r := range records {
+		// L2：单条失败不应中断整批处理（其余记录仍需推进），但必须可观测，
+		// 否则某个 target_engine 持续失败会在 dead-letter 之前完全无声（HE-1）。
+		if err := w.processAndMark(ctx, r); err != nil {
+			slog.WarnContext(ctx, "store/outbox: 单条记录处理失败，跳过继续处理下一条",
+				"outbox_id", r.ID, "target_engine", r.TargetEngine, "operation", r.Operation, "err", err)
+			metrics.RecordOutboxProcessFailure(ctx, r.TargetEngine)
+		}
+		if r.ID > maxID {
+			maxID = r.ID
+		}
+	}
+	return maxID, nil
+}
+
+// processAndMark 处理记录并更新状态（done / failed + 指数退避）。
+func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord) error {
+	now := time.Now().UnixMilli()
+
+	// Atomically mark as processing to prevent concurrent worker pick-up
+	res, err := w.db.ExecContext(ctx,
+		"UPDATE outbox SET status='processing', updated_at=? WHERE id=? AND status IN ('pending', 'failed')",
+		now, record.ID)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return nil // Grabbed by another worker, simply skip
+	}
+
+	err = w.Process(ctx, record)
+	now = time.Now().UnixMilli()
+
+	if err == nil {
+		// L1：标记 done 失败会让记录永久卡在 'processing'（既不会被 ListBatch 的
+		// pending/failed 条件重新捡起，也不会重试），必须向上传播由调用方感知。
+		if _, execErr := w.db.ExecContext(ctx,
+			"UPDATE outbox SET status='done', processed_at=? WHERE id=?",
+			now, record.ID); execErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark done failed", execErr)
+		}
+		return nil
+	}
+
+	if handled, markErr := w.markNonFailure(ctx, record, now, err); handled {
+		return markErr
+	}
+
+	newAttempts := record.Attempts + 1
+	if newAttempts >= w.maxRetries {
+		_, execErr := w.db.ExecContext(ctx,
+			"UPDATE outbox SET status='dead', attempts=?, processed_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
+			newAttempts, now, record.ID)
+		if execErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead max retries failed", execErr)
+		}
+		metrics.GlobalOutboxDeadLetterTotal.Add(1)
+		slog.Error("outbox message dead", "id", record.ID, "target", record.TargetEngine, "attempts", newAttempts, "crash", record.CrashRecoveryCount)
+	} else {
+		// 指数退避：initialMs << newAttempts，且不超过 maxMs
+		backoffMs := w.initialMs << newAttempts
+		if backoffMs > w.maxMs {
+			backoffMs = w.maxMs
+		}
+		nextRetry := now + backoffMs
+		_, execErr := w.db.ExecContext(ctx,
+			"UPDATE outbox SET status='failed', attempts=?, next_retry_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
+			newAttempts, nextRetry, record.ID)
+		if execErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark failed failed", execErr)
+		}
+	}
+	return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
+}
+
+// markNonFailure 处理不计入重试次数的结局：资源压力推迟（稍后重做）、版本过期（跳过）、
+// 未知引擎与毒丸（直接 dead）。handled=false 表示 err 是普通失败，交由调用方退避重试。
+func (w *OutboxWorker) markNonFailure(ctx context.Context, record *OutboxRecord, now int64, err error) (handled bool, markErr error) {
+	var q, what string
+	var args []any
+	var offPeak *protocol.OffPeakDeferral
+	switch {
+	case errors.As(err, &offPeak):
+		// 错峰推迟（ADR-0105 决策七）：与资源压力推迟同为"非失败"——不累加 attempts，否则等窗口的
+		// 几小时里记录会被当作反复失败送进死信。next_retry_at 直接设为窗口起点，避免 30s 空转轮询。
+		q, what = "UPDATE outbox SET status='failed', next_retry_at=?, updated_at=? WHERE id=?", "off-peak deferred"
+		args = []any{max(offPeak.Until.UnixMilli(), now+outboxDeferDelay.Milliseconds()), now, record.ID}
+		metrics.RecordOutboxDeferred(ctx, record.TargetEngine)
+		slog.DebugContext(ctx, "store/outbox: 错峰推迟处理", "outbox_id", record.ID, "target_engine", record.TargetEngine, "until", offPeak.Until)
+	case errors.Is(err, protocol.ErrBackgroundDeferred):
+		// 资源压力下推迟不是失败：不累加 attempts / crash_recovery_count，否则压力持续几轮
+		// 记录就会进死信、投影永久丢失（inv_M2_05）。置 failed 以便补充查询在游标之后仍能捡回。
+		q, what = "UPDATE outbox SET status='failed', next_retry_at=?, updated_at=? WHERE id=?", "deferred"
+		args = []any{now + outboxDeferDelay.Milliseconds(), now, record.ID}
+		metrics.RecordOutboxDeferred(ctx, record.TargetEngine)
+		slog.DebugContext(ctx, "store/outbox: 资源压力下推迟处理", "outbox_id", record.ID, "target_engine", record.TargetEngine)
+	case errors.Is(err, ErrVersionStale):
+		q, what = "UPDATE outbox SET status='skipped', processed_at=? WHERE id=?", "skipped"
+		args = []any{now, record.ID}
+	case errors.Is(err, ErrUnknownTargetEngine), errors.Is(err, ErrPoisonPill):
+		q, what = "UPDATE outbox SET status='dead', processed_at=?, last_error=? WHERE id=?", "dead"
+		args = []any{now, err.Error(), record.ID}
+	default:
+		return false, nil
+	}
+	if _, execErr := w.db.ExecContext(ctx, q, args...); execErr != nil {
+		return true, apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark "+what+" failed", execErr)
+	}
+	return true, nil
+}
+
+// loadCursorSafe 从 sys_config 读取持久化的消费游标。
+// L3 fail-safe：Scan 失败（非 sql.ErrNoRows）不得退回零值继续跑——那会导致从头
+// 重复处理全部 outbox。真实解析失败时返回 ok=false，调用方（Run）据此本轮跳过、
+// 下一 tick 重试，而不是带着 cursor=0 消费。sql.ErrNoRows 是合法的首次启动场景。
+func (w *OutboxWorker) loadCursorSafe(ctx context.Context) (cursor int64, ok bool) {
+	row := w.db.QueryRowContext(ctx,
+		"SELECT CAST(value AS INTEGER) FROM sys_config WHERE key='outbox_cursor' LIMIT 1")
+	if err := row.Scan(&cursor); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, true // 首次运行，游标表尚无记录，从 0 开始合法
+		}
+		slog.ErrorContext(ctx, "store/outbox: 游标解析失败，本轮跳过消费以避免从 0 重放", "err", err)
+		metrics.RecordOutboxCursorError(ctx, "load")
+		return 0, false
+	}
+	return cursor, true
+}
+
+// saveCursor 原子更新消费游标到 sys_config。
+// [MUST] 游标只能单调递增：WHERE 子句物理阻断游标回溯，防止重放历史消息。
+// 若外部传入比当前值更小的 cursor（理论上不应发生），SQL 静默忽略，不报错。
+// L2：持久化失败下次仍会重复处理（幂等键兜底），Warn + counter 即可，不阻断 Run 循环。
+// sys_config.value 是 TEXT 列，裸比较走字典序（'10' < '9'），跨位数时游标会冻结，必须 CAST（GR-1.1-002）。
+func (w *OutboxWorker) saveCursor(ctx context.Context, cursor int64) {
+	if _, err := w.db.ExecContext(ctx,
+		"INSERT INTO sys_config(key,value) VALUES('outbox_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(excluded.value AS INTEGER) > CAST(sys_config.value AS INTEGER)",
+		cursor); err != nil {
+		slog.WarnContext(ctx, "store/outbox: 游标持久化失败，下次重启将重复处理（幂等键兜底）", "cursor", cursor, "err", err)
+		metrics.RecordOutboxCursorError(ctx, "save")
+	}
+}
+
+// Process 处理单条 Outbox 记录。
+// 版本高水位拦截: existing_version >= incoming_version → 丢弃 + ErrVersionStale
+// Poison Pill: crash_recovery_count >= 3 → 直接标记 dead
+func (w *OutboxWorker) Process(ctx context.Context, record *OutboxRecord) error {
+	// 处于重放模式时物理切断外部副作用
+	if protocol.IsReplaying() {
+		return nil
+	}
+
+	if record.CrashRecoveryCount >= 3 {
+		metrics.GlobalOutboxDeadLetterTotal.Add(1)
+		slog.Error("outbox message dead (poison pill)", "id", record.ID, "target", record.TargetEngine)
+		return ErrPoisonPill
+	}
+
+	if check, ok := w.versionCheck[record.TargetEngine]; ok && check != nil {
+		existingVersion, err := check(ctx, record)
+		if err == nil && existingVersion >= record.Version {
+			return ErrVersionStale
+		}
+	}
+
+	handler, ok := w.handlers[record.TargetEngine]
+	if !ok {
+		metrics.GlobalOutboxDeadLetterTotal.Add(1)
+		slog.Error("outbox: unknown target engine, marking dead", "engine", record.TargetEngine, "id", record.ID)
+		return ErrUnknownTargetEngine
+	}
+	return handler(ctx, record)
+}

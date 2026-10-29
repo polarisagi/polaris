@@ -1,0 +1,230 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+// ============================================================================
+// 系统全局参数与规范名称的单一事实源（Single Source of Truth, SSoT）
+// 所有目录、默认文件名、环境变量名、服务标识均在此定义，禁止在业务代码中散落硬编码字符串。
+// ============================================================================
+
+const (
+	// AppName 系统应用名称。
+	AppName = "polaris"
+
+	// ServiceLabelLaunchd macOS launchd 守护进程服务标识（ADR-0096 反向域名标识）。
+	ServiceLabelLaunchd = "com.polarisagi.polaris"
+
+	// WindowsTaskName Windows 任务计划程序中的服务标识名。
+	WindowsTaskName = "PolarisAGI-Polaris"
+)
+
+// 全局统一环境变量名定义。
+const (
+	// EnvPolarisDataDir 指定运行时数据根目录（最高优先级，覆盖配置文件）。
+	EnvPolarisDataDir = "POLARIS_DATA_DIR"
+
+	// EnvPolarisConfig 指定配置文件绝对或相对路径。
+	EnvPolarisConfig = "POLARIS_CONFIG"
+
+	// EnvPolarisAPIKey 全局 API Key 鉴权环境变量。
+	EnvPolarisAPIKey = "POLARIS_API_KEY"
+
+	// EnvPolarisVaultPassphrase 保密凭据库冷启动密钥环境变量。
+	EnvPolarisVaultPassphrase = "POLARIS_VAULT_PASSPHRASE"
+
+	// EnvPolarisFeatureGate 硬件门控覆盖环境变量。
+	EnvPolarisFeatureGate = "POLARIS_FEATURE_GATE"
+
+	// EnvPolarisTier 硬件分级覆盖环境变量。
+	EnvPolarisTier = "POLARIS_TIER"
+
+	// EnvPolarisServerURL 指定客户端连接的 API 服务端基础地址。
+	EnvPolarisServerURL = "POLARIS_SERVER_URL"
+
+	// EnvPolarisThresholdsDir 覆盖阈值配置文件存放目录。
+	EnvPolarisThresholdsDir = "POLARIS_THRESHOLDS_DIR"
+
+	// EnvPolarisGitHubProxy 指定 GitHub 资源加速代理前缀。
+	EnvPolarisGitHubProxy = "POLARIS_GITHUB_PROXY"
+
+	// EnvPolarisSubstrateLib 指定 Rust 核心动态库路径覆盖。
+	EnvPolarisSubstrateLib = "POLARIS_SUBSTRATE_LIB"
+
+	// EnvPolarisPlatform 服务端所在宿主平台标识覆盖。
+	EnvPolarisPlatform = "POLARIS_PLATFORM"
+
+	// EnvPolarisTrustedProxy 是否信任反向代理前置（1 开启）。
+	EnvPolarisTrustedProxy = "POLARIS_TRUSTED_PROXY"
+
+	// EnvPolarisLocalOnlyAllowlistPubKey 本地网络白名单公钥。
+	EnvPolarisLocalOnlyAllowlistPubKey = "POLARIS_LOCAL_ONLY_ALLOWLIST_PUBKEY"
+
+	// EnvPolarisSkillSigningKey 技能编译签名密钥覆盖。
+	EnvPolarisSkillSigningKey = "POLARIS_SKILL_SIGNING_KEY"
+
+	// EnvPolarisRemoteSandboxToken 远端沙箱 Bearer 认证令牌。
+	EnvPolarisRemoteSandboxToken = "POLARIS_REMOTE_SANDBOX_TOKEN"
+
+	// EnvPolarisEmbeddingAPIKey 专用向量嵌入模型 API 密钥。
+	EnvPolarisEmbeddingAPIKey = "POLARIS_EMBEDDING_API_KEY"
+
+	// EnvPolarisFoundingAnchorPrivKey 根锚点私钥。
+	EnvPolarisFoundingAnchorPrivKey = "POLARIS_FOUNDING_ANCHOR_PRIVKEY"
+)
+
+// 网络与服务端口默认定义。
+const (
+	// DefaultPort 默认守护进程 HTTP API 服务端口。
+	DefaultPort = 28888
+
+	// DefaultServerURL 默认守护进程 HTTP API 基础 URL。
+	DefaultServerURL = "http://localhost:28888"
+)
+
+// 插件目录覆盖层（ADR-0123）：官方插件仓库 main 分支 catalog/data/ 下的生成产物。
+const (
+	// DefaultCatalogOverlayURL 目录覆盖层 index.json 默认地址。
+	DefaultCatalogOverlayURL = "https://raw.githubusercontent.com/polarisagi/polaris-plugins-official/main/catalog/data/index.json"
+	// EnvCatalogOverlayURL 覆盖目录覆盖层地址（自建镜像 / 测试）；须为 https。
+	EnvCatalogOverlayURL = "POLARIS_CATALOG_OVERLAY_URL"
+)
+
+// CatalogOverlayURL 返回目录覆盖层地址：环境变量优先，否则默认地址。
+func CatalogOverlayURL() string {
+	if v := strings.TrimSpace(os.Getenv(EnvCatalogOverlayURL)); v != "" {
+		return v
+	}
+	return DefaultCatalogOverlayURL
+}
+
+// 核心目录名称与相对路径定义。
+const (
+	// DefaultDataDirRel 默认数据根目录相对于用户家目录的相对路径。
+	// 若需更改系统默认目录，仅需修改此处的常量值。
+	DefaultDataDirRel = ".polaris"
+
+	// DefaultDataDirTilde 默认数据根目录的 ~ 表示法（用于配置文件与文档）。
+	DefaultDataDirTilde = "~/" + DefaultDataDirRel
+
+	// 规范子目录名
+	SubdirData           = "data"
+	SubdirLogs           = "logs"
+	SubdirConfig         = "config"
+	SubdirExtensions     = "extensions"
+	SubdirSkills         = "skills"
+	SubdirModels         = "models"
+	SubdirWorkspace      = "workspace"
+	SubdirSessions       = "sessions"
+	SubdirAudit          = "audit"
+	SubdirReports        = "reports"
+	SubdirCache          = "cache"
+	SubdirHooks          = "hooks"
+	SubdirTmp            = "tmp"
+	SubdirBin            = "bin"
+	SubdirRun            = "run"
+	SubdirEval           = "eval"
+	SubdirSecrets        = "secrets"
+	SubdirPrompts        = "prompts"
+	SubdirArchive        = "archive"
+	SubdirHarnessOverlay = "harness_overlay"
+)
+
+// 规范文件名定义。
+const (
+	ConfigFileName         = "config.toml"
+	SQLiteDBFileName       = "polaris.db"
+	SurrealDBFileName      = "surreal.db"
+	KillSwitchFileName     = "KILLSWITCH"
+	FullStopFileName       = ".fullstop"
+	VaultKeyFileName       = "vault.key"
+	PIDFileName            = "polaris.pid"
+	PortFileName           = "polaris.port"
+	TokenFileName          = "polaris.token"
+	LockFileName           = "polaris.lock"
+	CLISessionFileName     = "cli_session.json"
+	CLILastSessionFileName = "last_cli_session"
+	AllowlistFileName      = "local_only_network_allowlist.toml"
+	SkillSignKeyFileName   = "skill_signing.key"
+	SoulMDFileName         = "SOUL.md"
+
+	// CLIScanBufferMaxBytes 本地交互式 CLI 单行输入缓冲区上限（64 KiB）。
+	CLIScanBufferMaxBytes = 64 * 1024
+)
+
+// DefaultDataDir 返回当前用户家目录下的默认规范数据根目录（如 ~/.polaris）。
+func DefaultDataDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "failed to resolve user home directory", err)
+	}
+	return filepath.Join(home, DefaultDataDirRel), nil
+}
+
+// ExpandHome 展开路径开头的 ~/ 为用户绝对家目录路径。若不以 ~/ 开头则原样返回。
+func ExpandHome(p string) string {
+	if len(p) >= 2 && p[:2] == "~/" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+// ResolveDataDir 统一解析运行时数据根目录的权威决议函数：
+// 1. 优先读取 POLARIS_DATA_DIR 环境变量；
+// 2. 其次读取传入的 explicitDir（如配置文件或 CLI 参数中的 system.data_dir）；
+// 3. 兜底使用默认目录 DefaultDataDir()；
+// 4. 对结果进行 ~/ 展开并执行平滑迁移逻辑。
+func ResolveDataDir(explicitDir string) (string, error) {
+	dir := os.Getenv(EnvPolarisDataDir)
+	if dir == "" {
+		dir = explicitDir
+	}
+	if dir == "" || dir == DefaultDataDirTilde {
+		var err error
+		dir, err = DefaultDataDir()
+		if err != nil {
+			return "", err
+		}
+	} else if strings.HasPrefix(dir, "~/") {
+		dir = ExpandHome(dir)
+	}
+	return dir, nil
+}
+
+// ResolveConfigFile 统一解析配置文件绝对路径：
+// 1. 优先读取 POLARIS_CONFIG 环境变量；
+// 2. 其次使用 explicitPath（CLI -config 传入）；
+// 3. 再次在 dataDir 下查找 config.toml；
+// 4. 兜底回退到默认数据目录下的 config.toml。
+func ResolveConfigFile(explicitPath, dataDir string) string {
+	if envPath := os.Getenv(EnvPolarisConfig); envPath != "" {
+		return ExpandHome(envPath)
+	}
+	if explicitPath != "" {
+		return ExpandHome(explicitPath)
+	}
+	if dataDir != "" {
+		cfgPath := filepath.Join(dataDir, ConfigFileName)
+		if _, err := os.Stat(cfgPath); err == nil {
+			return cfgPath
+		}
+	}
+
+	// 默认路径检查
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, DefaultDataDirRel, ConfigFileName)
+	}
+	return filepath.Join(".", ConfigFileName)
+}
+
+// UsageDisplayFXCNYPerUSD 用量费用的展示汇率（人民币/美元）。llm_calls 一律存 USD，界面语言为中文时
+// 客户端按此折算成 ¥ 展示，并标注"估算"；设置页可覆盖。它只影响显示，不参与任何计费或预算判定。
+const UsageDisplayFXCNYPerUSD = 7.1

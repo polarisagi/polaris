@@ -1,0 +1,235 @@
+package types
+
+import "time"
+
+type
+
+// StoreCapabilities 存储引擎的能力声明（供 StorageRouter 路由决策）。
+StoreCapabilities struct {
+	SupportsSQL       bool
+	SupportsVector    bool
+	SupportsGraph     bool
+	SupportsFullText  bool
+	SupportsStreaming bool
+	Engine            string
+}
+
+type
+
+// Op 单条批量写操作（Put / Delete）。
+Op struct {
+	Key   []byte
+	Value []byte
+	Type  OpType
+}
+
+type
+
+// RetryPolicy 工具调用重试策略。
+RetryPolicy struct {
+	MaxAttempts int
+	Backoff     time.Duration
+}
+
+type
+
+// SafetyRule 安全规则条目（ImmutableCore 的一条记录）。
+SafetyRule struct {
+	RuleText string
+	Severity string // info / warn / block
+	Scope    string
+}
+
+type
+
+// DocumentRef 外部文档引用（Connector 返回的文档列表条目）。
+DocumentRef struct {
+	URI         string
+	Title       string
+	SourceType  string // markdown | pdf | code | web | notion_page | gdoc
+	ContentHash string
+	ModifiedAt  int64
+	Metadata    map[string]any
+	Size        int64
+}
+
+type
+
+// SyncDocument 拉取到的文档内容。
+SyncDocument struct {
+	URI      string
+	Title    string
+	Content  []byte
+	Metadata map[string]string
+}
+
+type
+
+// SyncConfig 数据源同步配置声明。
+SyncConfig struct {
+	DefaultInterval int  // seconds
+	SupportsWatch   bool // 是否支持基于事件的 Watch 模式
+	MaxBatchSize    int
+}
+
+type
+
+// PolicyReviewRequest 策略评审请求（Cedar 策略引擎入参）。
+PolicyReviewRequest struct {
+	Principal string
+	Action    string
+	Resource  string
+	Context   map[string]any
+}
+
+type
+
+// PolicyReviewResult 策略评审结果（Cedar 策略引擎出参）。
+PolicyReviewResult struct {
+	Allowed bool
+	Reason  string
+	Etag    string
+}
+
+type
+
+// HITLPrompt 人工审批请求（HITL 网关发出）。
+//
+// 2026-07-07 补齐 json tag（此前无 tag 时按 Go 字段名原样序列化，如 "ID"/
+// "CheckpointType"，与 Web UI `/v1/approvals/pending` 消费方期望的 snake_case
+// 完全对不上，审批页面的风险徽章/倒计时长期显示异常，见 web/src/js/store/
+// approvals.js、web/src/pages/automation.html）。
+HITLPrompt struct {
+	ID string `json:"id"`
+	// AgentID 发起审批的 Agent 标识，仅在真实 Agent 执行流程中可得
+	// （如 interceptComputerUse/provider_exhausted）；扩展安装审查、
+	// automation 预执行等场景无对应概念时留空，前端应据此隐藏该行而非
+	// 显示 "undefined"。
+	AgentID        string       `json:"agent_id,omitempty"`
+	CheckpointType string       `json:"checkpoint_type"`
+	PromptText     string       `json:"prompt_text"`
+	Options        []HITLOption `json:"options,omitempty"`
+	// DeadlineNs 绝对 Unix 纳秒时间戳（非相对 Duration），构造方式统一为
+	// time.Now().Add(N).UnixNano()。前端可直接 `deadline_ns/1e6 - Date.now()`
+	// 算剩余毫秒数，无需额外的 created_at/timeout_ms 字段。
+	DeadlineNs int64      `json:"deadline_ns,omitempty"`
+	RiskLevel  int        `json:"risk_level"`
+	TaintLevel TaintLevel `json:"taint_level,omitempty"`
+	// DecisionEtag 决策时刻的 Cedar policy etag，auto_approve 前校验原子性。
+	DecisionEtag string `json:"decision_etag,omitempty"`
+	// EligibleApproveTime 最早允许审批的时间，用于 L3 强制冷却期（Task 21）
+	EligibleApproveTime int64 `json:"eligible_approve_time,omitempty"`
+	// PermissionMode 仅电脑操控类 checkpoint（CheckpointDeviceControlReview）填充，
+	// 记录发起 HITL 时用户在"设置 → 设备操控"选择的权限模式，供超时兜底
+	// （resolveTimeoutAction）区分处理。零值表示"不适用"——非电脑操控类
+	// checkpoint（扩展安装审查/L3-L4 自改进晋升/自动化预执行等）必须忽略此字段，
+	// 不得让设备操控偏好影响与之无关的信任/合规判断（M13 §2.4 权限模式联动）。
+	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
+	// ExemptionFieldContent 是 M04 §3 TaintBlocked→HITL 审批→颁发豁免令牌 转义
+	// 路径专用字段：CheckpointType=="data_exfiltration" 时携带被拦截的原始字节
+	// （由 policy.TaintEgressBlockedError.Data 提取），供审批通过后
+	// automation/hitl.GatewayImpl.Respond 铸造 TaintExemptionToken——豁免令牌的
+	// 哈希必须精确匹配被拦截的内容，不能用 PromptText 的人类可读摘要代替。
+	// 非该转义场景的 HITLPrompt 一律留空。
+	ExemptionFieldContent []byte `json:"exemption_field_content,omitempty"`
+	// 以下四个字段仅 CheckpointToolApproval 使用（ADR-0117 决策五）：Reason 是向用户展示的
+	// 一句话询问理由；HardLimit 为真时审批卡不提供“以后不再询问”；RememberLabel 是勾选框的
+	// 单行说明；Items 是同一轮校验里全部待审节点（一轮只弹一张卡）。
+	Reason        string         `json:"reason,omitempty"`
+	HardLimit     bool           `json:"hard_limit,omitempty"`
+	RememberLabel string         `json:"remember_label,omitempty"`
+	Items         []ApprovalItem `json:"items,omitempty"`
+	// Unattended 为真表示发起审批的回合无人在对话界面前（cron / workflow / webhook，ADR-0117 追记）：
+	// 审批进入待审批队列等待用户事后处理，等待期限取 M13 hitl.default_deadline_min_long（默认 24 小时）。
+	// SessionID 是发起审批的会话，供自动化页把待审批项关联到对应的运行。
+	Unattended bool   `json:"unattended,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+}
+
+type
+
+// HITLOption HITL 审批选项。
+HITLOption struct {
+	Key   string
+	Label string
+}
+
+// HITLResponse 用户对 HITL 审批的响应。
+type HITLResponse struct {
+	OptionKey string
+	UserID    string
+	Approved  bool
+	Reason    string
+	// Remember 用户勾选了“以后不再询问”：由发起审批的 Agent 在批准后落库项目级规则，
+	// 硬限制项永远忽略该标志。
+	Remember bool `json:"remember,omitempty"`
+}
+
+// WithThinkingMode 设置思考模式。
+func WithThinkingMode(mode ThinkingMode) InferOption {
+	return func(o *InferOptions) { o.ThinkingMode = mode }
+}
+
+// WithPurpose 标注调用用途，写入 llm_calls 供按用途统计 token 与费用。
+func WithPurpose(purpose string) InferOption {
+	return func(o *InferOptions) { o.Purpose = purpose }
+}
+
+// WithMaxTokens 设置最大输出 token 数。
+func WithMaxTokens(n int) InferOption {
+	return func(o *InferOptions) { o.MaxTokens = n }
+}
+
+// WithModel 设置覆盖使用的 Model。
+func WithModel(model string) InferOption {
+	return func(o *InferOptions) { o.Model = model }
+}
+
+// WithModelPool 设置请求的目标 Model Pool（Provider 注册时绑定的 role，
+// 取值 general | default | reasoning | budget）。
+//
+// 语义是**偏好**而非硬约束：目标 Pool 无可用 Provider 时，InferenceRouter 按
+// 降级链级联回退（reasoning → general → default → budget），链尾还有一次
+// 不限 role 的全局兜底（见 internal/llm/router_failover.go tryPoolFallback）。
+// 兜底不可省——自托管最常见形态是只注册了一个 role 为空串的本地 Provider
+// （cmd/polaris/boot_substrate.go 的 reg.Register），若把 Pool 当硬约束，
+// 指定 "reasoning" 会在健康 Provider 就在眼前时直接拒绝服务，比 GD-13-005
+// 原本要修的"单池耗尽即断链"更糟。
+//
+// 与 WithModel 的分工：WithModel 传的是模型名（透传给 adapter），
+// WithModelPool 传的是路由用的角色池，二者不可互相替代。
+func WithModelPool(pool string) InferOption {
+	return func(o *InferOptions) { o.ModelPool = pool }
+}
+
+// WithProviderRef 设置请求的目标 Provider/Model 引用（ADR-0115 WP3）。
+// 引用格式：
+// 1. <provider_models 记录 ID 前缀>（与 PickProviderByRecordID 同口径）
+// 2. <provider_id>/<model_id>（实时目录中的任意模型）
+func WithProviderRef(ref string) InferOption {
+	return func(o *InferOptions) { o.ProviderRef = ref }
+}
+
+type
+
+// DecisionLogEntry 对应 006_decision_log.sql 表的数据结构
+DecisionLogEntry struct {
+	SessionID    string
+	AgentID      string
+	DecisionType string
+	Context      []byte // JSON
+	Choice       string
+	Alternatives []byte // JSON
+	Reason       string
+	Outcome      []byte // JSON
+}
+
+// WithTemperature 设置温度
+func WithTemperature(temp float64) InferOption {
+	return func(o *InferOptions) { o.Temperature = temp }
+}
+
+// WithTopP 设置 TopP
+func WithTopP(topP float64) InferOption {
+	return func(o *InferOptions) { o.TopP = topP }
+}

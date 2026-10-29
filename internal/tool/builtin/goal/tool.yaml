@@ -1,0 +1,11 @@
+name: goal
+description: "Track a multi-turn goal. set: start working toward an objective (the system keeps continuing turns until you mark it complete or blocked). update: status=complete|blocked|paused plus a note. get: show the goal and rounds used. clear: pause it."
+version: "1.0.0"
+capability: write-local
+risk_level: low
+sandbox: in-process
+side_effects:
+  - state-mutate
+tags:
+  - agentic
+  - planning

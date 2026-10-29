@@ -1,0 +1,12 @@
+name: diff_text
+description: "Compute the unified diff between two text strings and return the diff output."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - text
+  - diff
+  - utility

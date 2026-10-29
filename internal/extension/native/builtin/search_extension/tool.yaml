@@ -1,0 +1,13 @@
+name: search_extension
+description: "Search plugins, skills and MCP servers that add capabilities (natural-language query: \"send a tweet\", \"read emails\"). Use proactively when you lack a capability. Workflow: search_extension → catalog ID → install_extension."
+version: "1.0.0"
+capability: write-network
+risk_level: low
+sandbox: in-process
+side_effects:
+  - network-call
+tags:
+  - marketplace
+  - extensions
+  - search
+  - semantic

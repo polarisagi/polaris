@@ -1,0 +1,136 @@
+package store
+
+import (
+	"context"
+	"testing"
+
+	"github.com/polarisagi/polaris/pkg/types"
+
+	"github.com/polarisagi/polaris/internal/memory/testutil"
+)
+
+func TestWorkingMemDB(t *testing.T) {
+	w := NewWorkingMemWithDB(nil)
+	if w.Notes() == nil {
+		t.Fatal("Notes should be initialized")
+	}
+}
+
+func TestImmutableCore(t *testing.T) {
+	ic := NewImmutableCore()
+	ic.GlobalGoal = "goal"
+	ic.UserPreferences["theme"] = "dark"
+
+	view, err := ic.Load(context.Background(), "user", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.SessionGoal != "goal" {
+		t.Fatal("goal mismatch")
+	}
+
+	ic.SystemPromptTemplate = "Hello {{.GlobalGoal}}"
+	res := ic.renderSystemPrompt()
+	if res != "Hello goal" {
+		t.Fatalf("template failed: %s", res)
+	}
+
+	ic.SystemPromptTemplate = "{{.Invalid}}"
+	res = ic.renderSystemPrompt()
+	if len(res) == 0 {
+		t.Fatal("expected error message")
+	}
+
+	ic.SystemPromptTemplate = ""
+	ic.SoulMDContent = "soul"
+	ic.ModelGuidance = "guide"
+	ic.CustomInstructions = "custom"
+	ic.PlatformHint = "hint"
+	ic.VolatileBlock = "volatile"
+	res = ic.renderSystemPrompt()
+	// UserPreferences["theme"]="dark" 由本函数开头设置（用于 Load() 断言），
+	// §5.7 补齐渲染后必然出现在 stable 层组装结果中，一并断言。
+	// 易变层不在稳定层渲染：它单独成为第二条 system 消息（ADR-0101 决策四）。
+	want := "soul\n\nguide\n\ncustom\n\nhint\n\n## User Preferences\n- theme: dark"
+	if res != want {
+		t.Fatalf("parts assembly failed: %s", res)
+	}
+
+	ic.AmbientContext = "\n\n## skill-a\ndo a"
+	msgs := []types.Message{{Role: "user", Content: "hi"}}
+	msgs = ic.PrependToMessages(msgs)
+	if len(msgs) != 3 || msgs[0].Role != "system" || msgs[1].Role != "system" {
+		t.Fatalf("PrependToMessages should emit stable + volatile system messages, got %d", len(msgs))
+	}
+	if msgs[0].Content != want {
+		t.Fatalf("stable system message must exclude volatile content: %q", msgs[0].Content)
+	}
+	if msgs[1].Content != "# VOLATILE CONTEXT\nvolatile\n\n## skill-a\ndo a" {
+		t.Fatalf("volatile system message mismatch: %q", msgs[1].Content)
+	}
+	// 问题变化只改变易变层：第一条消息字节不变，才能命中 Provider 前缀缓存。
+	ic.AmbientContext = "## skill-b\ndo b"
+	if again := ic.PrependToMessages(nil); again[0].Content != msgs[0].Content {
+		t.Fatal("stable system message must be byte-identical across queries")
+	}
+	ic.AmbientContext = ""
+
+	// Default fallback
+	ic.SoulMDContent = ""
+	ic.ModelGuidance = ""
+	ic.CustomInstructions = ""
+	ic.PlatformHint = ""
+	ic.VolatileBlock = ""
+	msgs = ic.PrependToMessages([]types.Message{})
+	if msgs[0].Content == "" {
+		t.Fatal("default content failed")
+	}
+}
+
+func TestContextWindowCompress(t *testing.T) {
+	cw := NewContextWindow(5)
+	cw.Append(types.Message{Role: "system", Content: "sys"})
+	cw.Append(types.Message{Role: "tool", Content: "tool1"})
+	cw.Append(types.Message{Role: "user", Content: "user1"})
+	cw.Append(types.Message{Role: "assistant", Content: "ast1"})
+	cw.Append(types.Message{Role: "user", Content: "user2"})
+	cw.Append(types.Message{Role: "user", Content: "user3"}) // capacity exceeded
+
+	// Should have evicted tool1 or similar
+	if cw.Tokens() == 0 {
+		t.Fatal("Tokens failed")
+	}
+
+	ctx := context.Background()
+	// Compress to very small token count
+	err := cw.Compress(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	em := NewEpisodicMem(testutil.NewMockStore())
+
+	cw2 := NewContextWindow(10)
+	cw2.Append(types.Message{Role: "system", Content: "sys"})
+	cw2.Append(types.Message{Role: "tool", Content: "t1"})
+	cw2.Append(types.Message{Role: "user", Content: "u1"})
+
+	err = CompactWorkingMemory(ctx, cw2, em, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScratchPad(t *testing.T) {
+	s := NewScratchPad()
+	s.Set("key", "val")
+	v, ok := s.Get("key")
+	if !ok || v != "val" {
+		t.Fatal("ScratchPad failed")
+	}
+	s.Clear()
+	_, ok = s.Get("key")
+	if ok {
+		t.Fatal("Clear failed")
+	}
+}

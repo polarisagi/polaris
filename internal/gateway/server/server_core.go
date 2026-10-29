@@ -1,0 +1,676 @@
+package server
+
+import (
+	"net"
+	"sync"
+
+	"github.com/polarisagi/polaris/internal/action/hook"
+	"github.com/polarisagi/polaris/internal/gateway/elicitation"
+	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
+
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/probe"
+
+	"github.com/polarisagi/polaris/internal/gateway/server/chat"
+	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
+	"github.com/polarisagi/polaris/internal/gateway/server/provider"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/workflowadmin"
+	"github.com/polarisagi/polaris/internal/gateway/session"
+
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+
+	"context"
+	"log/slog"
+	"sync/atomic"
+
+	"net/http"
+
+	"golang.org/x/time/rate"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/internal/sysmgr/updater"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// Server 包装 HTTP 与 WebSocket 服务，作为 M13 的对外网关。
+type Server struct {
+	// rootCtx 是 cmd/polaris/main.go 通过 signal.NotifyContext(SIGINT/SIGTERM)
+	// 构造并沿 bootSubstrate→...→bootServer 链路传入的进程级根 context
+	// （原 bootstrap 包的 RootContext 机制已删除，ADR-0112 决策八 #1）。withMiddleware 内
+	// 长驻的 RateLimitManager/AuthManager 清理协程必须锚定在这个真根 context
+	// 上才能在进程收到 SIGINT/SIGTERM 时真正退出，而不是永久驻留。
+	rootCtx context.Context
+	addr    string
+	// boundAddr 是监听器实际绑定的地址（addr 端口为 0 时二者不同）。
+	// 仅 Start() 内写入，调用方在 Start() 返回后读，无并发窗口。
+	boundAddr string
+	// localToken 是本次启动的本地令牌（与 run/polaris.token 同值）。
+	// 由 cmd/polaris 在 Start() 之前经 SetLocalToken 注入；请求处理期只读。
+	// 用 atomic 而非裸字段：注入发生在装配阶段，而读发生在每个请求的处理协程里，
+	// 裸字段会被 -race 判为竞态（即便实际时序上无重叠）。
+	localToken     atomic.Pointer[string]
+	srv            *http.Server
+	isReady        atomic.Bool
+	agentPool      protocol.AgentPool
+	blackboard     protocol.Blackboard
+	pipelineOrch   *orchestrator.PipelineOrchestrator
+	patternDAGExec *orchestrator.PatternDAGExecutor
+	mapReduceExec  *orchestrator.MapReduceExecutor
+	parallelExec   *orchestrator.ParallelExecutor
+	sequentialExec *orchestrator.SequentialExecutor
+	swarmCoord     *orchestrator.SwarmCoordinator
+	hitlGateway    protocol.HITL
+	db             protocol.SQLQuerier
+	chatRepo       protocol.ChatRepository
+	providerRepo   protocol.ProviderRepository
+	extRepo        protocol.ExtensionRepository
+	budgetRepo     prepo.BudgetRepository
+	systemRepo     prepo.SystemRepository
+	channelRepo    prepo.ChannelRepository
+	automationRepo prepo.AutomationRepository
+	eventRepo      prepo.EventRepository
+	workflowRepo   prepo.WorkflowRepository
+	projectRepo    prepo.ProjectRepository  // ADR-0097
+	registry       protocol.LLMRegistry     // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
+	httpClient     *http.Client             // 复用 SafeHTTPClient
+	transcriptDir  string                   // per-session JSONL transcript 目录
+	hooks          *session.StandardHooks   // hooks.json 会话事件适配（ADR-0103 决策六）
+	compressor     *chat.CompressionService // 上下文超长自动压缩
+	channelMgr     ChannelStarter           // 所有聊天平台 poller 管理（接口）
+	mcpMgr         MCPManager               // MCP Server 连接管理（接口）
+	toolReg        protocol.ToolRegistry    // builtin tool 元数据
+	catalog        catalog.Catalog
+	skillReg       protocol.SkillRegistry                                                         // skill 元数据
+	toolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error) // tool_use 执行器
+	logStore       *LogStore                                                                      // 日志环形缓冲 + SSE 广播
+	evalRunner     protocol.EvalRunner                                                            // M12 评测套件
+	dataDir        string                                                                         // 项目统一的数据根目录
+	installMgr     ExtensionInstaller                                                             // 扩展安装/卸载管理器（接口）
+	pluginCreator  plugin.PluginGenerator                                                         // LLM 驱动 MCP 插件自动生成（M2 PluginCreator，消费端接口）
+	skillSignKey   []byte
+
+	ks *security.KillSwitch // [B1] KillSwitch
+
+	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
+	soulMDContent       string                // ~/.polaris/config/SOUL.md 内容
+	serverPlatform      string                // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
+	promptMgr           protocol.PromptFacade // 提示词管理器（接口）
+	baseSystemPromptTpl string                // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积
+
+	// systemPromptDegraded [阶段02-错误吞没整改 §2.8] system_prompt_template
+	// 落库失败时置位：内存中已用新模板正常运行（baseSystemPromptTpl 不受影响），
+	// 但下次重启会重新读到残缺兜底版，需 /healthz 暴露供运维介入。不阻断启动
+	// （Tier-0 可用性优先）。
+	systemPromptDegraded atomic.Bool
+
+	// M9 激活的系统提示词（从 DB prompt_versions 表读取，Activate 回调热更新）
+	activatedSystemPrompt string // task_type='general' 的激活版本
+
+	tier       probe.Tier
+	tierParams probe.TierParameters
+
+	// ttsEnginePref 前端朗读引擎偏好 auto|server|system（inference.tts.engine）。
+	// 后端不据此行事，只经 capabilities 下发；用 atomic：装配期写、请求期读。
+	ttsEnginePref atomic.Pointer[string]
+	// autoInstallAudio 标识守护进程是否在后台自动预置语音模型（ADR-0108）。
+	autoInstallAudio atomic.Bool
+
+	// Cron runner 生命周期控制
+	cronCancel context.CancelFunc
+	// workflowStepWorkerCancel workflow_step 自订阅 Worker 生命周期控制（2026-07-12
+	// StateGraphExecutor workflow 接入，见 server_lifecycle.go Start/Shutdown）。
+	workflowStepWorkerCancel context.CancelFunc
+
+	tbr *metrics.TokenBurnRate
+
+	rateLimiter      *rate.Limiter
+	interruptLimiter *RateLimitManager
+	// interruptDebounce taskID → 占位；30s 窗口内同 task 重复中断返回 429
+	interruptDebounce sync.Map
+	auditTrail        AuditRecorder
+	outboxWriter      protocol.OutboxWriter // Interrupt 异步路由（nil 时降级为进程内直调）
+	providerHandler   *provider.ProviderHandler
+	pluginHandler     *plugin.PluginHandler
+	chatHandler       *chat.ChatHandler
+	sysadminHandler   *sysadmin.SysAdminHandler
+	codeActEngine     CodeActEngine // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
+	a2aCfg            config.A2AConfig
+	// mesh 跨节点委派门面（ADR-0111），SetMeshService 注入，请求期原子读取。
+	mesh atomic.Pointer[meshState]
+	// extraListen 额外监听地址（interface.extra_listen，已经 config.Validate 校验），Start 时逐个绑定；
+	// 设置页改写后由 applyExtraListen 增量启停（extraMu 保护，extraLns 为当前已绑定的监听器）。
+	extraListen []string
+	extraMu     sync.Mutex
+	extraLns    map[string]net.Listener
+	// a2aLive 设置页改写后的 [a2a] 配置（nil = 沿用启动时的 a2aCfg），经 a2aConf 读取。
+	a2aLive atomic.Pointer[config.A2AConfig]
+	// meshCfg 启动时的 [mesh] 配置（SetMeshConfig 注入，设置页读取 peer_file_root 等原始值）。
+	meshCfg atomic.Pointer[config.MeshConfig]
+	// configPath 用户 config.toml 的绝对路径（SetConfigPath 注入）：设置页据此读写。
+	configPath string
+	// elicitationBroker MCP elicitation 网关侧 broker（ADR-0103 决策八）：nil 表示未接入
+	// hooks.json/HTTP 交互能力，handleGetElicitations/handleRespondElicitation 均降级 501。
+	elicitationBroker *elicitation.Broker
+
+	// appsSandboxCfg / appsSandboxSrv：MCP Apps Sandbox proxy 监听器（M8f-1，见
+	// server_apps_sandbox.go）。appsSandboxSrv 仅 appsSandboxCfg.Enabled=true 时
+	// 由 Start() 赋值；Shutdown() 据其是否为 nil 决定是否需要关停。
+	appsSandboxCfg MCPAppsSandboxConfig
+	appsSandboxSrv *http.Server
+	// appsSandboxBoundPort 沙箱监听器实际绑定端口（配置端口为 0 时由操作系统分配）。
+	appsSandboxBoundPort atomic.Int32
+	// appsViewTickets 视图文档一次性票据表（ADR-0126，见 server_apps_view.go）。
+	appsViewTickets mcpAppsViewTicketStore
+
+	embeddingStatusFn func() EmbeddingStatus
+	rebenchFn         func(ctx context.Context) error
+	acceleratorProbe  *probe.AcceleratorProbe
+}
+
+// EmbeddingStatus 网关暴露的向量化运行时状态 (ADR-0109 D5)。
+type EmbeddingStatus struct {
+	Backend             string `json:"backend"`
+	Model               string `json:"model"`
+	Dim                 int    `json:"dim"`
+	State               string `json:"state"` // "ready" | "starting" | "fts" | "backoff" | "failed"
+	ConsecutiveFailures int    `json:"consecutive_failures"`
+	NextRetryAt         string `json:"next_retry_at,omitempty"`
+}
+
+// SetEmbeddingStatusProvider 注入向量化状态查询回调。
+func (s *Server) SetEmbeddingStatusProvider(fn func() EmbeddingStatus) {
+	s.embeddingStatusFn = fn
+}
+
+// SetEmbeddingRebencher 注入重新基准测定回调（ADR-0109）。
+func (s *Server) SetEmbeddingRebencher(fn func(ctx context.Context) error) {
+	s.rebenchFn = fn
+}
+
+// SetAcceleratorProbe 注入硬件加速算力探针 (ADR-0109 P3)。
+func (s *Server) SetAcceleratorProbe(p *probe.AcceleratorProbe) {
+	s.acceleratorProbe = p
+}
+
+// GetAcceleratorInfo 获取当前硬件加速探测信息。
+func (s *Server) GetAcceleratorInfo() probe.AcceleratorInfo {
+	if s.acceleratorProbe == nil {
+		return probe.AcceleratorInfo{Kind: "none"}
+	}
+	return s.acceleratorProbe.Get()
+}
+
+// GetEmbeddingStatus 获取当前向量化状态快照。
+func (s *Server) GetEmbeddingStatus() EmbeddingStatus {
+	if s.embeddingStatusFn != nil {
+		return s.embeddingStatusFn()
+	}
+	return EmbeddingStatus{Backend: "none", State: "fts"}
+}
+
+func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
+
+// SetDataLayout 注入统一的数据目录布局，覆盖默认推导的 sessions/skills/workspace 路径。
+func (s *Server) SetDataLayout(l config.DataLayout) {
+	if l.Sessions != "" {
+		s.transcriptDir = l.Sessions
+	}
+	if s.sysadminHandler != nil {
+		if l.Skills != "" {
+			s.sysadminHandler.SkillsDir = l.Skills
+		}
+		if l.Workspace != "" {
+			s.sysadminHandler.WorkspaceDir = l.Workspace
+		}
+	}
+}
+
+// ChannelsAdmin 返回底层管理的 ChannelsAdmin，供 boot 阶段获取并给 channelMgr 绑定 handler
+func (s *Server) ChannelsAdmin() *channelsadmin.ChannelsAdmin {
+	if s.sysadminHandler != nil {
+		return s.sysadminHandler.Channels
+	}
+	return nil
+}
+
+// AutomationFacade 返回自动化管理门面（当前汇聚 CronAdmin，供 automationBridge 晚绑定）。
+func (s *Server) AutomationFacade() *sysadmin.AutomationFacade {
+	if s.sysadminHandler == nil {
+		return &sysadmin.AutomationFacade{}
+	}
+	return &sysadmin.AutomationFacade{
+		Cron:     s.sysadminHandler.Cron,
+		Workflow: s.sysadminHandler.Workflow,
+	}
+}
+
+// SetOutboxWriter 注入 Outbox 写入器。此前该 setter 在 cmd/polaris 启动流程中
+// 从未被调用过——s.outboxWriter 恒为 nil，导致 handleAgentInterrupt 的
+// Interrupt 异步路由（server_handlers_hitl.go）永远退化为"outboxWriter 未注入，
+// 无法直调"分支（2026-07-12 复核发现，boot_server.go 现已补上调用）。
+// 同时转发给 chatHandler.OutboxWriter，供 SaveMessage 的持久化重试兜底使用
+// （GD-13-004 复核修复）——二者共用同一个 Outbox 实例，无需重复注入。
+func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) {
+	s.outboxWriter = w
+	if s.chatHandler != nil && s.chatHandler.PersistenceService != nil {
+		s.chatHandler.PersistenceService.OutboxWriter = w
+	}
+}
+
+func (s *Server) SetInstallManager(m ExtensionInstaller) {
+	s.installMgr = m
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.InstallMgr = m
+		// 2026-07-07 mcp_servers.go 拆分为 mcpadmin 子包后需要单独回填，
+		// 否则 MCP Server 创建/更新走 PolicyGate 授权时永远 fail-closed 拒绝
+		// （见 mcpadmin/mcp_servers.go 的 h.InstallMgr == nil 检查）。
+		s.sysadminHandler.MCP.InstallMgr = m
+	}
+	if s.pluginHandler != nil {
+		s.pluginHandler.InstallMgr = m
+	}
+}
+
+func (s *Server) SetPluginCreator(pc plugin.PluginGenerator) {
+	s.pluginCreator = pc
+	if s.pluginHandler != nil {
+		s.pluginHandler.PluginCreator = pc
+	}
+}
+
+// SetSamplingMonitor 见 server_setters_sampling.go（R7 拆分：server_core.go
+// 加入该 setter 会突破 400 行上限）。
+
+// SetAmbientSkillMaxChars 注入 ambient skill 全文注入的字符预算（M13-bis §3）。
+// SSoT: spec/state.yaml §thresholds.m13_interface.ambient_skill_max_chars。
+// <=0 时不覆盖，ChatHandler 侧回落 defaultAmbientMaxChars。
+func (s *Server) SetAmbientSkillMaxChars(n int) {
+	if s.chatHandler != nil && s.chatHandler.PromptService != nil && n > 0 {
+		s.chatHandler.PromptService.AmbientMaxChars = n
+	}
+}
+
+// SetEmbedder 注入语义向量化引擎（Tier 2 Ambient 匹配 + tool schema 语义过滤）。
+// nil 时 ChatHandler/SysAdminHandler 均自动降级 Tier 1（全量 schema 注入）。
+func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
+	if threshold <= 0 {
+		threshold = 0.60
+	}
+	if s.chatHandler != nil {
+		if s.chatHandler.PromptService != nil {
+			s.chatHandler.PromptService.Embedder = e
+			s.chatHandler.PromptService.EmbedThreshold = threshold
+		}
+		if s.chatHandler.CompressionService != nil {
+			s.chatHandler.CompressionService.Embedder = e
+			s.chatHandler.CompressionService.EmbedThreshold = threshold
+		}
+	}
+	// SysAdminHandler 使用同一 Embedder 做 tool schema 语义过滤（>40 工具时激活）
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Embedder = e
+	}
+}
+
+func (s *Server) SetEmbeddingIndexer(idx *plugin.EmbeddingIndexer) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.EmbeddingIndexer = idx
+	}
+}
+
+func (s *Server) SetKillSwitch(ks *security.KillSwitch) {
+	s.ks = ks
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.KillSwitch = ks
+	}
+}
+
+func (s *Server) SetSkillSigningKey(k []byte) {
+	s.skillSignKey = k
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.SkillSignKey = k
+	}
+}
+
+// SetUpdater 把 OTA 管理器转交 SysAdminHandler（唯一消费方）。Server 自身此前
+// 另存一份只写不读的 updater 字段，并在 provider.go 声明了一个与
+// updater.Manager 方法集不符、全仓无实现的 OTAUpdater 接口（GR-9.1-002），均已删除。
+func (s *Server) SetUpdater(u *updater.Manager) {
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Updater = u
+	}
+}
+
+// SetCodeActEngine 注入 CodeAct 执行引擎门面（CodeActEngine）。在 NewServer 之后、Serve 之前调用。
+// af 为 nil 时 POST /v1/agent/codeact 返回 503。
+func (s *Server) SetCodeActEngine(af CodeActEngine) { s.codeActEngine = af }
+
+// SetMCPManager 注入 MCPManager（NewServer 之后、Start 之前调用）。
+// 同时注册缓存失效回调：异步插件 MCP 连接完成时自动清除 toolSchemaCache，
+// 确保 LLM 在下次推理时能看到新工具，而非返回连接前构建的过期缓存。
+func (s *Server) SetMCPManager(m MCPManager) {
+	s.mcpMgr = m
+	m.SetOnToolsChanged(func() {
+		if s.sysadminHandler != nil {
+			s.sysadminHandler.ClearToolSchemaCache()
+		}
+	})
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.MCPMgr = m
+		// mcpadmin 子处理器在 NewSysAdminHandler 里按值拷贝了构造时的 nil，此前从未回填：
+		// POST /v1/mcp-servers 建档后不立即连接、/test 恒返回 503（ADR-0111 双实例实测发现）。
+		if s.sysadminHandler.MCP != nil {
+			s.sysadminHandler.MCP.MCPMgr = m
+		}
+	}
+	if s.pluginHandler != nil {
+		s.pluginHandler.MCPMgr = m
+	}
+	if s.chatHandler != nil {
+		s.chatHandler.MCPMgr = m
+		// GR-9.2-005：PromptAssemblyService 构造时 mcpMgr 传 nil，此前从未回填，
+		// Ambient 技能/MCP 段落组装永久跳过。
+		if s.chatHandler.PromptService != nil {
+			s.chatHandler.PromptService.MCPMgr = m
+		}
+	}
+}
+
+// SetToolRegistry 注入 ToolRegistry（NewServer 之后、Start 之前调用）。
+func (s *Server) SetToolRegistry(r protocol.ToolRegistry) {
+	s.toolReg = r
+	// 插件设置向导经注册表的 ExecuteAppTool 触发设置工具（与聊天回合同一执行体）。
+	if ex, ok := r.(plugin.AppToolExecutor); ok && s.pluginHandler != nil {
+		s.pluginHandler.AppTools = ex
+	}
+	if s.chatHandler != nil {
+		s.chatHandler.ToolReg = r
+		// GR-9.2-005：同上，内置工具清单（ic.BuiltinTools）依赖 PromptService.ToolReg。
+		if s.chatHandler.PromptService != nil {
+			s.chatHandler.PromptService.ToolReg = r
+		}
+	}
+}
+
+// SetReloadProviders 注入重新加载提供商的函数
+func (s *Server) SetReloadProviders(f func()) {
+	if s.providerHandler != nil {
+		s.providerHandler.ReloadProviders = f
+	}
+}
+
+// SetCatalog 注入工具目录
+func (s *Server) SetCatalog(c catalog.Catalog) {
+	s.catalog = c
+	// 懒加载的工具索引进系统提示（ADR-0119）。
+	if ti, ok := c.(chat.ToolIndexer); ok && s.chatHandler != nil && s.chatHandler.PromptService != nil {
+		s.chatHandler.PromptService.ToolIndex = ti
+	}
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Catalog = c
+	}
+}
+
+// SetPluginConfig 注入插件 userConfig 服务（NewServer 之后、Start 之前调用）。
+func (s *Server) SetPluginConfig(svc plugin.PluginConfigManager) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.PluginConfig = svc
+	}
+}
+
+// SetUserSkills 注入技能注册表与执行器，启用 /plugin:skill、$skill 用户技能调用（ADR-0103 决策五）。
+func (s *Server) SetUserSkills(reg protocol.SkillRegistry, exec protocol.SkillExecutor) {
+	if s.chatHandler != nil && s.chatHandler.SlashRouter != nil {
+		s.chatHandler.SlashRouter.SetSkills(reg, exec)
+	}
+}
+
+// SetHookRunner 注入 hooks.json 引擎，启用会话与压缩事件（SessionStart / UserPromptSubmit / Stop / PreCompact 等）。
+func (s *Server) SetHookRunner(r *hook.Runner) {
+	s.hooks.SetRunner(r)
+	if s.pluginHandler != nil {
+		s.pluginHandler.HookRunner = r
+	}
+}
+
+// RegisterSessionEndCallback 注册在 SessionEnd 时触发的清理回调函数。
+func (s *Server) RegisterSessionEndCallback(fn func(ctx context.Context, sessionID, reason string)) {
+	if s.hooks != nil {
+		s.hooks.RegisterSessionEndCallback(fn)
+	}
+}
+
+// SetElicitationBroker 注入 MCP elicitation 网关侧 broker，启用
+// GET /v1/elicitations 与 POST /v1/elicitations/{id}。
+func (s *Server) SetElicitationBroker(b *elicitation.Broker) { s.elicitationBroker = b }
+
+// SetSubagentRunner 注入子 Agent 执行器，启用用户调用 context: fork 技能（ADR-0103 决策五）。
+func (s *Server) SetSubagentRunner(r chat.SubagentRunner) {
+	if s.chatHandler != nil && s.chatHandler.SlashRouter != nil {
+		s.chatHandler.SlashRouter.SetSubagents(r)
+	}
+}
+
+// SetCatalogServices 注入市场目录同步与目录安装（ADR-0103 决策七）。
+func (s *Server) SetCatalogServices(sync plugin.CatalogSyncer, installer plugin.CatalogInstaller) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.CatalogSync, s.pluginHandler.Catalog = sync, installer
+	}
+}
+
+// SetCatalogOverlay 注入目录覆盖层同步（中文 + 四维分类，ADR-0123）。
+func (s *Server) SetCatalogOverlay(o plugin.CatalogOverlaySyncer) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.CatalogOverlay = o
+	}
+}
+
+// SetPluginDependencies 注入插件依赖检查（启用阻断、级联停用、GET /v1/plugins/{id}/dependencies）。
+func (s *Server) SetPluginDependencies(d plugin.PluginDependencyManager) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.Dependencies = d
+	}
+}
+
+// SetPluginChannels 注入 Claude 插件 channels 管理，启用 /v1/plugins/channels。
+func (s *Server) SetPluginChannels(c plugin.PluginChannelManager) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.Channels = c
+	}
+}
+
+// SetAgentDefinitions 注入子 Agent 定义来源，启用 GET /v1/agents（ADR-0103 决策三）。
+func (s *Server) SetAgentDefinitions(defs plugin.AgentDefinitionLister) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.AgentDefs = defs
+	}
+}
+
+// SetSkillRegistry 注入 SkillRegistry（NewServer 之后、Start 之前调用）。
+func (s *Server) SetSkillRegistry(r protocol.SkillRegistry) {
+	s.skillReg = r
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.SkillReg = r
+	}
+	if s.pluginHandler != nil {
+		s.pluginHandler.SkillReg = r
+	}
+	if s.chatHandler != nil {
+		s.chatHandler.SkillReg = r
+	}
+}
+
+// SetToolExecutor 注入工具执行函数，用于 tool_use 循环（NewServer 之后、Start 之前调用）。
+func (s *Server) SetToolExecutor(fn func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)) {
+	s.toolExec = fn
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.ToolExec = fn
+		s.sysadminHandler.Cron.ToolExec = fn
+		// 2026-07-07 workflow.go/channels.go 拆分为独立子包后需要单独回填，
+		// 否则 workflow 步骤 / 频道消息分发里的 tool_use 循环永远拿不到
+		// ToolExec（见 workflowadmin/workflow_engine.go、
+		// channelsadmin/webhook_receive.go 的 h.ToolExec nil check）。
+		s.sysadminHandler.Workflow.ToolExec = fn
+		s.sysadminHandler.Channels.ToolExec = fn
+	}
+}
+
+// SetPipelineDeps 注入管线引擎所需的工具执行器、LLM 推理函数及后台资源准入闸门（ADR-0114）。
+func (s *Server) SetPipelineDeps(
+	exec protocol.AgentToolExecutor,
+	infer func(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error),
+	admitter workflowadmin.BackgroundAdmitter,
+) {
+	if s.sysadminHandler != nil && s.sysadminHandler.Workflow != nil {
+		s.sysadminHandler.Workflow.ToolExecutor = exec
+		s.sysadminHandler.Workflow.LLMInfer = infer
+		s.sysadminHandler.Workflow.Admitter = admitter
+	}
+}
+
+// SetLogStore 注入日志存储（NewServer 之后、Start 之前调用）。
+func (s *Server) SetLogStore(ls *LogStore) { s.logStore = ls }
+
+// SetEvalRunner 注入 M12 评测套件（NewServer 之后、Start 之前调用）。
+func (s *Server) SetEvalRunner(r protocol.EvalRunner) { s.evalRunner = r }
+
+// SetEvalAdmin 见 server_setters_eval.go（R7 拆分：server_core.go 逼近 400 行上限）。
+
+// SetToolRefOffloader 注入 ToolRefOffloader 到 Compressor（NewServer 之后、Start 之前调用）。
+func (s *Server) SetToolRefOffloader(offloader chat.ToolRefOffloader) {
+	if s.compressor != nil {
+		s.compressor.SetToolRefOffloader(offloader)
+	}
+}
+
+// NewServer / Start / Shutdown 见 server_lifecycle.go（R7 拆分）。
+
+func (s *Server) PluginHandler() *plugin.PluginHandler {
+	return s.pluginHandler
+}
+
+func (s *Server) SetPromptManager(mgr protocol.PromptFacade) {
+	s.promptMgr = mgr
+	s.soulMDContent = s.promptMgr.GetSoulMD()
+
+	// 初始化 system_prompt_template
+	prefs, _ := s.systemRepo.ListPreferences(context.Background())
+	sysTmpl, ok := prefs["system_prompt_template"]
+	// 如果之前因为 bug 导致数据库缓存了残缺兜底版，强制覆盖
+	if !ok || sysTmpl == "你是 {{.AgentName}}，{{.AgentRole}}。\n当前运行模型：{{.ModelID}}。" {
+		sysTmpl = s.promptMgr.ReadPromptDefault("system_prompt.md")
+		if sysTmpl == protocol.DefaultPolarisIdentityFallback {
+			sysTmpl = "你是 {{.AgentName}}，{{.AgentRole}}。\n当前运行模型：{{.ModelID}}。"
+		}
+		// [阶段02-错误吞没整改 §2.8] L2→Error：落库失败不阻断启动（Tier-0 可用性
+		// 优先，本轮请求仍用内存中的正确模板），但系统会在残缺兜底版持久化状态
+		// 下"看起来正常"直到下次重启，必须 Error 级可见 + /healthz 可读的降级标记。
+		if err := s.systemRepo.UpsertPreference(context.Background(), "system_prompt_template", sysTmpl); err != nil {
+			slog.Error("server: system_prompt_template 持久化失败，重启后将回退到残缺兜底版", "err", err)
+			s.systemPromptDegraded.Store(true)
+		}
+	}
+	s.baseSystemPromptTpl = sysTmpl
+
+	if s.chatHandler != nil && s.chatHandler.PromptService != nil {
+		s.chatHandler.PromptService.PromptMgr = mgr
+		s.chatHandler.PromptService.BaseSystemPromptTpl = s.baseSystemPromptTpl
+	}
+}
+
+func (s *Server) SetChannelStarter(mgr ChannelStarter) {
+	s.channelMgr = mgr
+}
+
+func (s *Server) SetInferenceRouter(router protocol.ProviderRouter) {
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Router = router
+	}
+}
+
+func (s *Server) SetSTTProvider(provider chat.STTTranscriber) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetSTTEngine(provider)
+	}
+}
+
+func (s *Server) SetTTSProvider(provider chat.TTSProvider, name string) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetTTSEngine(provider, name)
+	}
+}
+
+// PublishSTTStatus 整体替换 STT 资产状态快照（供 cmd 层语音服务汇报；经 capabilities 暴露给前端）。
+func (s *Server) PublishSTTStatus(st chat.AudioAssetStatus) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.STTStatus.Replace(st)
+	}
+}
+
+// PublishTTSStatus 整体替换 TTS 资产状态快照。
+func (s *Server) PublishTTSStatus(st chat.AudioAssetStatus) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.TTSStatus.Replace(st)
+	}
+}
+
+// SetTTSEnginePref 注入前端朗读引擎偏好（auto|server|system），经 /v1/system/capabilities 下发。
+func (s *Server) SetTTSEnginePref(pref string) { s.ttsEnginePref.Store(&pref) }
+
+// SetAudioAutoInstall 注入是否自动后台预置语音模型。
+func (s *Server) SetAudioAutoInstall(enabled bool) { s.autoInstallAudio.Store(enabled) }
+
+// GetSTTStatus 读取当前 STT 资产状态快照。
+func (s *Server) GetSTTStatus() chat.AudioAssetStatus {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		return s.chatHandler.AudioService.STTStatus.Get()
+	}
+	return chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+}
+
+// GetTTSStatus 读取当前 TTS 资产状态快照。
+func (s *Server) GetTTSStatus() chat.AudioAssetStatus {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		return s.chatHandler.AudioService.TTSStatus.Get()
+	}
+	return chat.AudioAssetStatus{State: chat.AudioStateDisabled}
+}
+
+// SetAudioInstaller 注入语音资产安装器（POST /v1/audio/{stt|tts}/install 的后端）。
+func (s *Server) SetAudioInstaller(i chat.AudioInstaller) {
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetInstaller(i)
+	}
+}
+
+// SynthesizeSpeech 用当前 TTS Provider 合成文本，供 tts 内置工具等进程内调用方复用，
+// 与 HTTP 接口走同一 Provider（含懒加载/不支持/未安装的同一套错误）。
+func (s *Server) SynthesizeSpeech(ctx context.Context, text string) (chat.TTSAudio, error) {
+	if s.chatHandler == nil || s.chatHandler.AudioService == nil {
+		return chat.TTSAudio{}, apperr.New(apperr.CodeUnimplemented, "音频服务未初始化")
+	}
+	return s.chatHandler.AudioService.Synthesize(ctx, text) //nolint:wrapcheck // 原样透传 NotReady
+}
+
+func (s *Server) SetTier(tier probe.Tier, params probe.TierParameters) {
+	s.tier = tier
+	s.tierParams = params
+}
+
+// SetWorktreeManagerFactory 注入工作区管理器工厂
+func (s *Server) SetWorktreeManagerFactory(f func(workingDir, worktreeRoot string) sysadmin.WorktreeManager) {
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.NewWorktreeManager = f
+		s.sysadminHandler.Cron.NewWorktreeManager = func(workingDir, worktreeRoot string) cronadmin.WorktreeManager {
+			return f(workingDir, worktreeRoot)
+		}
+	}
+}

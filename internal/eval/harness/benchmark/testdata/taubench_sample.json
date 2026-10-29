@@ -1,0 +1,13 @@
+[
+  {
+    "task_id": "test-1",
+    "user_goal": "Book a flight",
+    "available_tools": ["search_flights"],
+    "golden_actions": [
+      {
+        "name": "search_flights",
+        "arguments": "{\"dest\":\"NYC\"}"
+      }
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "diff_text",
+  "description": "Compute the unified diff between two text strings and return the diff output.",
+  "type": "object",
+  "properties": {
+    "old": {
+      "type": "string",
+      "description": "The original text (left side of the diff, shown as '-' lines)."
+    },
+    "new": {
+      "type": "string",
+      "description": "The new text (right side of the diff, shown as '+' lines)."
+    }
+  },
+  "required": ["old", "new"]
+}

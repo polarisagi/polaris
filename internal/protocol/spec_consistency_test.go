@@ -1,0 +1,385 @@
+package protocol
+
+// spec_consistency_test 守护 docs/arch/spec/state.yaml ↔ Go 代码的一致性。
+// 设计依据: docs/arch/decisions/ADR-0006-state-yaml-ssot.md（决策二，含原 ADR-0012）
+// SSoT 决策: docs/arch/decisions/ADR-0006-state-yaml-ssot.md
+//
+// 当前覆盖 Tier 1（CI fail-closed）:
+//   - taint.levels        ↔ TaintLevel 枚举（含 ord 值精确匹配）
+//   - par.states          ↔ AgentState 枚举
+//   - par.transitions     ↔ from/to 必须引用已定义的状态（结构性校验）
+//   - kill_switch.stages  ↔ KillState 三阶段（不含隐式 Normal base）
+//   - thresholds.m9_self_improve.canary_steps ↔ config 默认 M9SelfImprove.CanarySteps
+//     （thresholds.m6_skill.canary_steps 无对应 config 字段，暂不断言）
+//
+// Tier 2/3 在后续迭代增量补充——见 ADR-0006 决策二（原 ADR-0012）§测试范围分级。
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// stateSpec 是 state.yaml 的部分映射（按 Tier 1 需要解构）。
+type stateSpec struct {
+	Par struct {
+		States      []string                 `yaml:"states"`
+		Transitions []map[string]interface{} `yaml:"transitions"`
+	} `yaml:"par"`
+
+	Taint struct {
+		Levels []taintLevelEntry `yaml:"levels"`
+	} `yaml:"taint"`
+
+	KillSwitch struct {
+		Stages map[string]map[string]interface{} `yaml:"stages"`
+	} `yaml:"kill_switch"`
+
+	TaskStatus struct {
+		States []string `yaml:"states"`
+	} `yaml:"task_status"`
+
+	Outbox struct {
+		States []string `yaml:"states"`
+	} `yaml:"outbox"`
+}
+
+type taintLevelEntry struct {
+	Name string `yaml:"name"`
+	Ord  int    `yaml:"ord"`
+}
+
+// loadStateSpec 定位并解析 docs/arch/spec/state.yaml。
+// 路径用 runtime.Caller 锚定本文件位置，跨平台稳定。
+func loadStateSpec(t *testing.T) *stateSpec {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	specPath := filepath.Join(filepath.Dir(file), "..", "..", "docs", "arch", "spec", "state.yaml")
+	raw, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatalf("读取 state.yaml 失败: %v (路径=%s)", err, specPath)
+	}
+	var spec stateSpec
+	if err := yaml.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("解析 state.yaml 失败: %v", err)
+	}
+	return &spec
+}
+
+// TestSpecTaintLevels 验证 state.yaml taint.levels 与 Go TaintLevel 枚举一致。
+// 名称匹配（snake_case ↔ PascalCase 显式映射）+ ord 值精确等值。
+func TestSpecTaintLevels(t *testing.T) {
+	spec := loadStateSpec(t)
+	// state.yaml 用 snake_case，Go 用 PascalCase；显式映射避免歧义
+	expected := map[string]types.TaintLevel{
+		"none":          types.TaintNone,
+		"low":           types.TaintLow,
+		"medium":        types.TaintMedium,
+		"high":          types.TaintHigh,
+		"user_reviewed": types.TaintUserReviewed,
+	}
+	if len(spec.Taint.Levels) != len(expected) {
+		t.Fatalf("taint.levels 数量 %d ≠ Go TaintLevel 枚举数 %d", len(spec.Taint.Levels), len(expected))
+	}
+	for _, lvl := range spec.Taint.Levels {
+		goLvl, ok := expected[lvl.Name]
+		if !ok {
+			t.Errorf("state.yaml taint.levels 含 %q，Go TaintLevel 未定义对应常量", lvl.Name)
+			continue
+		}
+		if int(goLvl) != lvl.Ord {
+			t.Errorf("taint.levels[%s].ord = %d，Go %s = %d（应相等）",
+				lvl.Name, lvl.Ord, lvl.Name, int(goLvl))
+		}
+	}
+}
+
+// TestSpecParStates 验证 state.yaml par.states 与 Go AgentState 枚举集合一致。
+// 双向校验: yaml 中每项必有 Go 对应；Go 中每项必在 yaml 中。
+func TestSpecParStates(t *testing.T) {
+	spec := loadStateSpec(t)
+	expected := map[string]types.AgentState{
+		"s_idle":        types.AgentStateIdle,
+		"s_perceive":    types.AgentStatePerceive,
+		"s_plan":        types.AgentStatePlan,
+		"s_validate":    types.AgentStateValidate,
+		"s_execute":     types.AgentStateExecute,
+		"s_reflect":     types.AgentStateReflect,
+		"s_replan":      types.AgentStateReplan,
+		"s_rollback":    types.AgentStateRollback,
+		"s_complete":    types.AgentStateComplete,
+		"s_failed":      types.AgentStateFailed,
+		"s_interrupt":   types.AgentStateInterrupt,
+		"s_suspended":   types.AgentStateSuspended,
+		"s_await_agent": types.AgentStateAwaitAgent,
+		"s_respond":     types.AgentStateRespond,
+		"s_loop":        types.AgentStateLoop,
+		"s_loop_exec":   types.AgentStateLoopExec,
+		"s_loop_await":  types.AgentStateLoopAwait,
+		"s_loop_recall": types.AgentStateLoopRecall,
+	}
+	yamlSet := make(map[string]bool, len(spec.Par.States))
+	for _, s := range spec.Par.States {
+		yamlSet[s] = true
+	}
+	// Go → yaml 方向
+	for name, val := range expected {
+		if !yamlSet[name] {
+			t.Errorf("Go AgentState %q（值=%d）未在 state.yaml par.states 中定义", name, val)
+		}
+	}
+	// yaml → Go 方向
+	for _, name := range spec.Par.States {
+		if _, ok := expected[name]; !ok {
+			t.Errorf("state.yaml par.states 含 %q，Go AgentState 枚举未定义", name)
+		}
+	}
+}
+
+// TestSpecParTransitionsReferenceKnownStates 验证每条 transition 的 from/to 引用已定义的状态。
+// 结构性校验，不强制每个 Go transition 与 yaml 1:1 对应（Tier 2 范畴）。
+func TestSpecParTransitionsReferenceKnownStates(t *testing.T) {
+	spec := loadStateSpec(t)
+	states := make(map[string]bool, len(spec.Par.States))
+	for _, s := range spec.Par.States {
+		states[s] = true
+	}
+	// GD-2 修复（local_playground/upgrade/01-架构设计变更规范.md）：此前
+	// state.yaml 的 s_perceive/s_plan on_failure 错误引用了未声明的幽灵状态
+	// s_error，本测试曾为此开白名单豁免（掩盖问题而非修复）。现已将 yaml
+	// 侧 on_failure 统一改为合法终态 s_failed，不再需要任何豁免——恢复
+	// 测试的完整严格性，未来若再出现未声明状态引用应直接失败暴露。
+	for i, tr := range spec.Par.Transitions {
+		if from, ok := tr["from"].(string); ok {
+			if !states[from] {
+				t.Errorf("par.transitions[%d].from = %q 未在 par.states 中定义", i, from)
+			}
+		}
+		if to, ok := tr["to"].(string); ok {
+			if !states[to] {
+				t.Errorf("par.transitions[%d].to = %q 未在 par.states 中定义", i, to)
+			}
+		}
+	}
+}
+
+// TestSpecKillSwitchStages 验证 state.yaml kill_switch.stages 三阶段定义存在。
+// Go 侧 KillState 含隐式 KillNormal base（yaml 未显式列），仅校验 3 个非 Normal 阶段对齐。
+func TestSpecKillSwitchStages(t *testing.T) {
+	spec := loadStateSpec(t)
+	expected := []string{
+		"Stage1_THROTTLE",
+		"Stage2_PAUSE",
+		"Stage3_FULLSTOP",
+	}
+	if len(spec.KillSwitch.Stages) != len(expected) {
+		t.Fatalf("kill_switch.stages 数量 %d ≠ 期望 %d (Stage 1/2/3，Normal 隐式)",
+			len(spec.KillSwitch.Stages), len(expected))
+	}
+	for _, name := range expected {
+		if _, ok := spec.KillSwitch.Stages[name]; !ok {
+			t.Errorf("kill_switch.stages 缺 %q", name)
+		}
+	}
+}
+
+// TestSpecTaskStatus 验证 state.yaml task_status 与 Go TaskStatus 枚举集合一致。
+func TestSpecTaskStatus(t *testing.T) {
+	spec := loadStateSpec(t)
+	expected := map[string]types.TaskStatus{
+		"pending":      types.TaskPending,
+		"claimed":      types.TaskClaimed,
+		"executing":    types.TaskExecuting,
+		"done":         types.TaskDone,
+		"failed":       types.TaskFailed,
+		"suspended":    types.TaskSuspended,
+		"compensating": types.TaskCompensating,
+	}
+	yamlSet := make(map[string]bool, len(spec.TaskStatus.States))
+	for _, s := range spec.TaskStatus.States {
+		yamlSet[s] = true
+	}
+	// Go → yaml
+	for name, val := range expected {
+		if !yamlSet[name] {
+			t.Errorf("Go TaskStatus %q（值=%d）未在 state.yaml task_status.states 中定义", name, val)
+		}
+	}
+	// yaml → Go
+	for _, name := range spec.TaskStatus.States {
+		if _, ok := expected[name]; !ok {
+			t.Errorf("state.yaml task_status.states 含 %q，Go TaskStatus 枚举未定义", name)
+		}
+	}
+}
+
+// TestSpecOutboxStatus 验证 state.yaml outbox 与 Go OutboxStatus 枚举集合一致。
+func TestSpecOutboxStatus(t *testing.T) {
+	spec := loadStateSpec(t)
+	expected := map[string]types.OutboxStatus{
+		"pending":    types.OutboxPending,
+		"processing": types.OutboxProcessing,
+		"done":       types.OutboxDone,
+		"dead":       types.OutboxDead,
+		"skipped":    types.OutboxSkipped,
+		"failed":     types.OutboxFailed,
+	}
+	yamlSet := make(map[string]bool, len(spec.Outbox.States))
+	for _, s := range spec.Outbox.States {
+		yamlSet[s] = true
+	}
+	// Go → yaml
+	for name, val := range expected {
+		if !yamlSet[name] {
+			t.Errorf("Go OutboxStatus %q（值=%q）未在 state.yaml outbox.states 中定义", name, val)
+		}
+	}
+	// yaml → Go
+	for _, name := range spec.Outbox.States {
+		if _, ok := expected[name]; !ok {
+			t.Errorf("state.yaml outbox.states 含 %q，Go OutboxStatus 枚举未定义", name)
+		}
+	}
+}
+
+// TestSpecParTransitionsGoImplementation 验证 state.yaml par.transitions 中的事件枚举能映射到 Go 中
+func TestSpecParTransitionsGoImplementation(t *testing.T) {
+	spec := loadStateSpec(t)
+
+	expectedStates := map[string]types.AgentState{
+		"s_idle":        types.AgentStateIdle,
+		"s_perceive":    types.AgentStatePerceive,
+		"s_plan":        types.AgentStatePlan,
+		"s_validate":    types.AgentStateValidate,
+		"s_execute":     types.AgentStateExecute,
+		"s_reflect":     types.AgentStateReflect,
+		"s_replan":      types.AgentStateReplan,
+		"s_rollback":    types.AgentStateRollback,
+		"s_complete":    types.AgentStateComplete,
+		"s_failed":      types.AgentStateFailed,
+		"s_interrupt":   types.AgentStateInterrupt,
+		"s_suspended":   types.AgentStateSuspended,
+		"s_await_agent": types.AgentStateAwaitAgent,
+		"s_respond":     types.AgentStateRespond,
+		"s_loop":        types.AgentStateLoop,
+		"s_loop_exec":   types.AgentStateLoopExec,
+		"s_loop_await":  types.AgentStateLoopAwait,
+		"s_loop_recall": types.AgentStateLoopRecall,
+	}
+
+	expectedTriggers := map[string]types.AgentTrigger{
+		"new_intent":                types.TriggerIntentReceived,
+		"perceive_done":             types.TriggerPerceiveDone,
+		"plan_done":                 types.TriggerPlanDone,
+		"validate_pass":             types.TriggerValidateOk,
+		"validate_fail":             types.TriggerValidateFail,
+		"all_steps_success":         types.TriggerExecuteDone,
+		"step_failed_unrecoverable": types.TriggerExecuteFail,
+		"reflect_done":              types.TriggerReflectDone,
+		"rollback_done":             types.TriggerRollbackDone,
+		"replan_done":               types.TriggerReplanDone,
+		"replan_exhausted":          types.TriggerReplanExhausted,
+		"interrupt_received":        types.TriggerInterruptReceived,
+		"interrupt_resume":          types.TriggerInterruptResume,
+		"interrupt_abort":           types.TriggerInterruptAbort,
+		"suspend":                   types.TriggerSuspend,
+		"resume":                    types.TriggerResume,
+		"await_agent":               types.TriggerAwaitAgent,
+		"agent_handoff_done":        types.TriggerAgentHandoffDone,
+		"respond_ready":             types.TriggerRespondReady,
+		"respond_done":              types.TriggerRespondDone,
+		"fill_retry":                types.TriggerFillRetry,
+		"reflect_continue":          types.TriggerReflectContinue,
+		"loop_step_done":            types.TriggerLoopStepDone,
+		"loop_exec_done":            types.TriggerLoopExecDone,
+		"loop_done":                 types.TriggerLoopDone,
+		"loop_recall_done":          types.TriggerLoopRecallDone,
+	}
+
+	allowedExtraEvents := map[string]bool{
+		"terminal":                true, // Implicit state machine cleanup
+		"step_failed_recoverable": true, // Internal retry loop without explicit state change trigger
+	}
+
+	// GD-2 修复：s_error 幽灵状态豁免已随 state.yaml on_failure 改为
+	// s_failed 一并移除，见上方 TestSpecParTransitionsReferenceKnownStates。
+
+	for i, tr := range spec.Par.Transitions {
+		fromStr, _ := tr["from"].(string)
+		toStr, _ := tr["to"].(string)
+		eventStr, _ := tr["event"].(string)
+
+		if _, ok := expectedStates[fromStr]; !ok {
+			t.Errorf("par.transitions[%d].from = %q 未在 Go AgentState 枚举中定义", i, fromStr)
+		}
+
+		if _, ok := expectedStates[toStr]; !ok {
+			t.Errorf("par.transitions[%d].to = %q 未在 Go AgentState 枚举中定义", i, toStr)
+		}
+
+		if _, ok := expectedTriggers[eventStr]; !ok && !allowedExtraEvents[eventStr] {
+			t.Errorf("par.transitions[%d].event = %q 未在 Go AgentTrigger 枚举中定义", i, eventStr)
+		}
+	}
+}
+
+// yamlPath 沿映射键路径在 yaml.Node 树中取值节点。
+// 不经结构体解码: thresholds 下 m5_memory 在 state.yaml 中出现两次，
+// 结构体/map 解码会触发 yaml.v3 的重复键报错；Node 遍历对此宽容。
+func yamlPath(t *testing.T, root *yaml.Node, path ...string) *yaml.Node {
+	t.Helper()
+	n := root
+	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	for _, key := range path {
+		var next *yaml.Node
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i].Value == key {
+				next = n.Content[i+1]
+				break
+			}
+		}
+		if next == nil {
+			t.Fatalf("state.yaml 缺少路径 %v（停在 %q）", path, key)
+		}
+		n = next
+	}
+	return n
+}
+
+// TestSpecM9CanarySteps 验证 state.yaml thresholds.m9_self_improve.canary_steps
+// 与 internal/config 默认 M9SelfImprove.CanarySteps 一致（ADR-0112 决策八 #6）。
+func TestSpecM9CanarySteps(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "docs", "arch", "spec", "state.yaml"))
+	if err != nil {
+		t.Fatalf("读取 state.yaml 失败: %v", err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("解析 state.yaml 失败: %v", err)
+	}
+	var want []float64
+	if err := yamlPath(t, &doc, "thresholds", "m9_self_improve", "canary_steps").Decode(&want); err != nil {
+		t.Fatalf("解码 canary_steps 失败: %v", err)
+	}
+	got := config.DefaultThresholds().M9SelfImprove.CanarySteps
+	if len(want) == 0 {
+		t.Fatal("state.yaml thresholds.m9_self_improve.canary_steps 为空")
+	}
+	if len(got) != len(want) {
+		t.Fatalf("canary_steps 长度: config=%v，state.yaml=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("canary_steps[%d]: config=%v ≠ state.yaml=%v", i, got[i], want[i])
+		}
+	}
+}

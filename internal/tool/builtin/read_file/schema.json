@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "First line to return, 1-based."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Number of lines to return."
+    }
+  },
+  "required": ["path"]
+}

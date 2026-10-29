@@ -1,0 +1,18 @@
+{
+  "description": "真实会话 sess_ee5b995b407b351f9759c3789219d96e 的 12 次 LLM 调用（~/.polaris/data/polaris.db llm_calls 脱敏提取，仅保留时间与 token 计数）。该会话 58s、input 171226（cache_hit 147584）、output 2857、成本 $0.011，是一次正常的浏览器扩展排障，却在旧口径与旧阈值下被 KillSwitch 写入 .fullstop。",
+  "model": "deepseek-flash",
+  "calls": [
+    {"start_ms": 0,     "latency_ms": 4415, "input": 4656,  "cache_hit": 0,     "output": 161},
+    {"start_ms": 4817,  "latency_ms": 825,  "input": 6598,  "cache_hit": 4736,  "output": 75},
+    {"start_ms": 20076, "latency_ms": 911,  "input": 7388,  "cache_hit": 6528,  "output": 104},
+    {"start_ms": 24605, "latency_ms": 1850, "input": 9165,  "cache_hit": 7296,  "output": 219},
+    {"start_ms": 36584, "latency_ms": 2299, "input": 13524, "cache_hit": 9088,  "output": 429},
+    {"start_ms": 42704, "latency_ms": 2191, "input": 14783, "cache_hit": 13440, "output": 260},
+    {"start_ms": 44974, "latency_ms": 1392, "input": 16058, "cache_hit": 14720, "output": 136},
+    {"start_ms": 46755, "latency_ms": 1974, "input": 16996, "cache_hit": 16000, "output": 340},
+    {"start_ms": 50264, "latency_ms": 2853, "input": 17831, "cache_hit": 16896, "output": 433},
+    {"start_ms": 53264, "latency_ms": 968,  "input": 19174, "cache_hit": 17792, "output": 82},
+    {"start_ms": 54327, "latency_ms": 2655, "input": 22093, "cache_hit": 19072, "output": 384},
+    {"start_ms": 58093, "latency_ms": 1894, "input": 22960, "cache_hit": 22016, "output": 234}
+  ]
+}

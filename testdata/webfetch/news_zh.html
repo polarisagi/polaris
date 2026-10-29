@@ -1,0 +1,2257 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+    "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" id="sixapart-standard" lang="zh-CN">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta name="generator" content="Movable Type  5.2.2" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--link rel="stylesheet" href="http://www.ruanyifeng.com/blog/styles.css" type="text/css" /-->
+<link rel="start" href="https://www.ruanyifeng.com/blog/" title="Home" />
+<link rel="alternate" type="application/atom+xml" title="Recent Entries" href="https://feeds.feedburner.com/ruanyifeng" />
+<script type="text/javascript" src="https://www.ruanyifeng.com/blog/mt.js"></script>
+<script type="text/javascript" src="/blog/advertisements.js"></script>
+<!--
+<rdf:RDF xmlns="http://web.resource.org/cc/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<Work rdf:about="http://www.ruanyifeng.com/blog/2011/07/formula_online_generator.html">
+<dc:title>数学公式生成器</dc:title>
+<dc:description>上一篇文章《数学常数e的含义》，有很多数学公式。...</dc:description>
+<dc:creator>阮一峰</dc:creator>
+<dc:date>2011-07-11T22:12:13+08:00</dc:date>
+<license rdf:resource="http://creativecommons.org/licenses/by-nc-nd/3.0/" />
+</Work>
+<License rdf:about="http://creativecommons.org/licenses/by-nc-nd/3.0/">
+</License>
+</rdf:RDF>
+-->
+
+<style>
+body {
+  background-color: #f5f5d5;
+}
+
+#container::before {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  background: rgba(0,0,0,0.1);
+  text-align: center;
+  content: "本站显示不正常，可能因为您使用了广告拦截器。";
+}
+
+</style>
+<script>
+function loadjscssfile(filename, filetype){
+    if (filetype=="js"){ //if filename is a external JavaScript file
+        var fileref=document.createElement('script')
+        fileref.setAttribute("type","text/javascript")
+        fileref.setAttribute("src", filename)
+    }
+    else if (filetype=="css"){ //if filename is an external CSS file
+        var fileref=document.createElement("link")
+        fileref.setAttribute("rel", "stylesheet")
+        fileref.setAttribute("type", "text/css")
+        fileref.setAttribute("href", filename)
+    }
+    if (typeof fileref!="undefined")
+        document.getElementsByTagName("head")[0].appendChild(fileref)
+}
+//loadjscssfile("http://www.ruanyifeng.com/blog/styles.css", "css");
+loadjscssfile('/static/themes/theme_scrapbook/theme_scrapbook.min.css', "css");
+
+
+function checker() {
+  if (/mobile|android/i.test(navigator.userAgent)) return; 
+  window.comments && window.comments.setAttribute("style", "!important");
+  // var img = document.querySelector('img[src^="http://www.ruanyifeng.com/blog/images"]');
+  var img = document.querySelector('a > img[src*="wangbase.com/blogimg/asset/"]');
+  var isAdblocker = (typeof adblock === 'undefined');
+  if (
+    /*isAdblocker || */
+    (img && window.getComputedStyle(img).display === 'none') ||
+    (img && window.getComputedStyle(img.parentElement).display === 'none')
+  ){
+    var sponsor = document.querySelector('#main-content');
+    var prompt = document.createElement('div');
+    prompt.style = 'border: 1px solid #c6c6c6;border-radius: 4px;background-color: #f5f2f0;padding: 15px; font-size: 14px;';
+    prompt.innerHTML = '<p>您使用了广告拦截器，导致本站内容无法显示。</p><p>请将 www.ruanyifeng.com 加入白名单，解除广告屏蔽后，刷新页面。谢谢。</p>';
+    sponsor.parentNode.replaceChild(prompt, sponsor);
+    // document.querySelector('#main-content').innerHTML = '';
+  }
+}
+
+setTimeout(checker, 1000);
+</script>
+    
+    <link rel="prev" href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-287.html" title="科技爱好者周刊（第 287 期）：禄丰恐龙谷记行" />
+    <link rel="next" href="https://www.ruanyifeng.com/blog/2024/02/weekly-issue-289.html" title="科技爱好者周刊（第 289 期）：宽容从何而来" />
+    
+    <title>科技爱好者周刊（第 288 期）：技术写作的首要诀窍 - 阮一峰的网络日志</title>
+</head>
+<body id="scrapbook" class="mt-entry-archive one-column">
+<script>
+if (/mobile/i.test(navigator.userAgent) || /android/i.test(navigator.userAgent)) document.body.classList.add('mobile');
+
+/*
+window.addEventListener('load', function(event) {
+  setTimeout(function () {
+    hab('#sup-post-2');
+    hab('#cre-inner');
+  }, 1000);
+});
+*/
+</script>
+    <div id="container">
+        <div id="container-inner">
+
+            <div id="header">
+    <div id="header-inner">
+        <div id="header-content">
+
+
+            <div id="header-name">阮一峰的网络日志 <span id="site_location"> » <a href="https://www.ruanyifeng.com/blog/" accesskey="1">首页</a></span><span id="site_archive"> » <a href="https://www.ruanyifeng.com/blog/archives.html">档案</a></span>
+</div>
+
+<div id="google_search">
+<!-- SiteSearch Google -->
+<form action="https://www.baidu.com/s" target="_blank" method="get" id="cse-search-box">
+  <div>
+  <input type="text" size="20" name="origin" class="searchbox" id="sbi" value="" />
+  <input type="hidden" name="wd" value="" />
+  <!--input type="image" src="/static/themes/theme_scrapbook/images/top_search_submit.gif" class="searchbox_submit" value="" alt="搜索" name="sa" onclick="this.form.wd.value = this.form.origin.value + ' inurl:www.ruanyifeng.com/blog'" /-->
+  <input type="image" src="/static/themes/theme_scrapbook/images/top_search_submit.gif" class="searchbox_submit" value="" alt="搜索" name="sa" onclick="this.form.wd.value = this.form.origin.value + ' 阮一峰'" />
+</div>
+</form>
+
+<!-- SiteSearch Google -->
+</div>
+<div id="feed_icon">
+<a href="/feed.html?utm_source=" title="订阅Feed">
+<!--img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAAUzSURBVHjavFdbbFRVFF3nPjoz7dTWTittaW0jUDRAUqaNojyqREnEQKgfUj9MqqAmhqRt/OCD4CuY+Kckoh+aiGKC+gMJbdHoRysJ8dkhhmJLNdDKtJU+6GMK87j3Hs85d2Z6HzNtMYWb3Dn3NWftvfba+5xNYDl+e6Fkj6yqb/oDRbWq14vlPBLRKCITkxf0ROLt+hNjp1PPSRK4kA3vF1dXNRcWlyA2OQU9eos9opAkAiKxD+XkKO6t15aRWO7J/MgmAZU8MEgexgZHMX518Dh72sYMmVKShnxWuWHdHtxKIDIYTgMuDzgfmSOIQkYMpdUF8OY92Hytt4/jvkg47czzU16iQovM3QFwmNck+Yyduu7D6NA0Z6JR4THntFs9V4tWQg6Ui3s6MwKDncsFTnXKLJhDSeUK3AgPtyhccDzmVs999buRt/1Vm4i0od+hX7+MRG87jPGB/w1u8FPj9xEw7McVrnYuOCvtpjTth3J/nTg99c8LRhKhr6D3dTB5R24bXFwbMXBsyZzeoXaycEpJ95TB09AGX/NpqLVNtw8urnVzLvHjFNxiFqRy2OOHuqUVnue+ACkoWzo4O6lGzTmuHq6nPvY2m9rVqjrIK2rMEKxqyG5NPAKt+wjo0LklgfNxJkZMA3KJvqRUk3z5UFY3QH14P0h+WUY79HPvgv7VuSg4ZRGY1YgZgqXmORccF17sy2ehnf9AeO085K2HQFbtXBScj0LcpgF2cN+WV+DZ/LJQu6gD4R7oV7pBJwbSgtMvfiPoVp56DySwxm7EtkMs1WdAB7qzggsDJKQYsHucSkOudrkiCPWR/fA2nYCn8SNIK4NptSMyAu3sAdDRkIsJdfth0LzSrODUoPNZ4KI9SxJI5UHk7D4GdQfz2us31c7CoHMjRkKuDPHseCMrONVhNcDJwMJpKFVvg9L4OaTiNWm1x789KCqkrXhVBiEz0WYCT2nAzQAD1/vaETv1GrRfP4Vx5cfMNcDPwvP0h0DhanPym7OIf/+O67vcJ1/PCJ4KgdzaUP6Wz+dU+5yIL6fV+PsHGAOdwlPpvvUOyeeAVGyCdqkDNB6DPjsBSrnndfOGevOh3RhGItxvA+fX1CtbGFhgYUFkFMZPR6F1HnClHq8HyubWtJexX06CRmdt33hrd7nA7SFY4qoGpnYuOKcRykPPgDCBcsHx9Iv+fNL2PueBehCWUfYQIIMGLOCcOmXDXsh1+yCt35tUPfvzGFuSvzvoinXOxqa02qOhM6733nVP2MAdaej2XN11DPKjLZCD+yBvahGCo7JfTKAN9UD7s8Oe9zUNIhz8fWI8DG2k38WCFdxugANcXrvTVd1IEbuv3Jour7Hzn7jLMBNfKs7R3i67gRVrbeCOEDhinmWhAatsqdquM2XzHZINhK2cqTjHr/XZdVJUbgN3MWAVXKbSyg9jesRW2xP9di+lwrL5ojM3m2H/kG9hwcIA37c71W6wJdW2J2S5nrjYbq/t1AHAhJsKQeyfPvf6IMJgghPJhFZ4x0KlfLFvt22du45Au/A1SOlGc0P672XXwhLtOcM0kTTEMMd0qkVmMNXxMd/tsedUjInr4SQDgOfeXMSiN0FCL5WHah4L1qqYXPJOJlttd+a5M+YpcG5poLYKQ5f+6JJ4r8bbJYP47hq4r7QAs9PjYNhHJd4o8l5taiwuOpa7AS4XKqI/5NjJbTnaWK92nLdLuhQAJayRNMiygXPBeQN+Qbvu0zDc3y+aUzhbkGR73sI7ljvUnndx2q3t+X8CDAD66FtrIL864AAAAABJRU5ErkJggg==" alt="" style="border: 0pt none;" /-->
+<img src="https://cdn.beekka.com/blogimg/asset/202107/bg2021072117.png" alt="" style="border: 0pt none;" />
+</a></div>
+
+        </div>
+    </div>
+</div>
+
+
+
+            <div id="content">
+                <div id="content-inner">
+
+
+                    <div id="alpha">
+                        <div id="alpha-inner">
+
+
+                            <div id="entry-2402" class="entry-asset asset hentry">
+                                <div class="asset-header">
+<div class="asset-nav entry-nav">
+
+<div class="entry-location">
+<ul>
+<li>上一篇：<a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-287.html" title="科技爱好者周刊（第 287 期）：禄丰恐龙谷记行">科技爱好者周刊（第&nbsp;2</a></li>
+<li>下一篇：<a href="https://www.ruanyifeng.com/blog/2024/02/weekly-issue-289.html" title="科技爱好者周刊（第 289 期）：宽容从何而来">科技爱好者周刊（第&nbsp;2</a></li>
+</ul>
+</div>
+
+
+    
+                                    <div class="entry-categories">
+                                        <p>分类<span class="delimiter">：</span></p>
+                                        <ul>
+                                            <li><a href="https://www.ruanyifeng.com/blog/weekly/" rel="tag">周刊</a></li>
+                                        </ul>
+                                    </div>
+    
+
+
+                                            
+<div class="entry-location-mobile" style="float: right;">
+<ul>
+<li><a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-287.html" title="科技爱好者周刊（第 287 期）：禄丰恐龙谷记行">⇐&nbsp;</a></li>
+<li><a href="https://www.ruanyifeng.com/blog/2024/02/weekly-issue-289.html" title="科技爱好者周刊（第 289 期）：宽容从何而来">&nbsp;⇒</a></li>
+</ul>
+</div>
+
+</div>
+</div>
+
+                          
+<article class="hentry">
+                                    <h1 id="page-title" class="asset-name entry-title">科技爱好者周刊（第 288 期）：技术写作的首要诀窍</h1>
+
+<div class="asset-meta">
+                                        
+
+                                            <p class="vcard author">作者： <a class="fn url" href="https://www.ruanyifeng.com">阮一峰</a></p>
+                                    <p>日期： <a href="https://www.ruanyifeng.com/blog/2024/01/"><abbr class="published" title="2024-01-26T08:13:42+08:00">2024年1月26日</abbr></a></p>
+
+
+</div>
+
+
+
+
+
+
+
+
+
+
+                                
+                                <div class="asset-content entry-content" id="main-content">
+
+                                    <!-- div class="asset-body" -->
+                                        <p>这里记录每周值得分享的科技内容，周五发布。</p>
+
+                                    <!-- /div -->
+
+
+                                    <!-- div id="more" class="asset-more" -->
+                                        <p>本杂志<a href="https://github.com/ruanyf/weekly">开源</a>，欢迎<a href="https://github.com/ruanyf/weekly/issues">投稿</a>。另有<a href="https://github.com/ruanyf/weekly/issues/3814">《谁在招人》</a>服务，发布程序员招聘信息。合作请<a href="/cdn-cgi/l/email-protection#f980909f9c979ed78b8c9897b99e94989095d79a9694">邮件联系</a>（<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="e49d8d82818a83ca9691858aa48389858d88ca878b89">[email&#160;protected]</a>）。</p>
+
+<h2>封面图</h2>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024011602.webp" alt="" title="" /></p>
+
+<p>在昔日的"皇家园林"北京颐和园，昆明湖已经完全结冰，变成了游人玩乐的大冰场。夕阳西下，湖上的十七孔桥现出了"金光穿洞"景观。（<a href="https://news.66wz.com/system/2024/01/15/105618610.shtml">via</a>）</p>
+
+<h2>技术写作的首要诀窍</h2>
+
+<p>技术写作非常重要，产品的开发、推广、维护都需要它。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012307.webp" alt="" title="" /></p>
+
+<p>跟大家想的不一样，<strong>技术写作的好坏，跟语文水平关系不大，更多是一个技巧问题</strong>。</p>
+
+<p>因为技术写作的评价标准，不是艺术性，而是表达是否清楚明白。它不需要华丽的词藻、巧妙的比喻、深刻的感悟，只需要把问题说清楚。</p>
+
+<p><strong>把问题说清楚的关键，在于你的思想是否清楚。</strong></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012308.webp" alt="" title="" /></p>
+
+<p>当你想清楚了一个问题，只要掌握几个基本诀窍，就能写出一篇很好的技术文章。</p>
+
+<p>今天，我来说说，技术写作的首要诀窍是什么。很简单，就是一句话：<strong>文章采用单线结构</strong>。</p>
+
+<p>所谓"单线结构"（也称"线性结构"），指的是一篇文章只说一件事，按照线性顺序进行叙述，由浅入深、循序渐进、平铺直叙、层层递进。</p>
+
+<p>这就好比一个游览区，只有一条游览路线，从入口到出口，跟着箭头一路走，就能看到所有景观，非常明白清楚。</p>
+
+<p>如果同时有好几条路线，游客就会糊涂，到底选哪一条？会不会错过景观？要是这些路线还互相交叉，那就更糟糕了，游客非串线不可。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012309.webp" alt="" title="" /></p>
+
+<p>（图片说明：上面的景区路线图，应该选择哪条路线吗？）</p>
+
+<p>只要采用了单线结构，技术文章就不会太差。即使内容是难懂的，至少结构是清晰的，一环扣一环，读者能知道自己卡在哪一环上。只要克服了这个难点，就能继续往前走，不会有陷入迷宫、找不到方向、如坠五里雾中。</p>
+
+<p>有一篇<a href="https://thisisimportant.net/posts/content-as-a-graph/">老外的文章</a>，使用图形表示文章结构，非常形象。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012310.webp" alt="" title="" /></p>
+
+<p>上图就是单线结构，按照箭头，一步步推进。</p>
+
+<p>有的问题比较复杂，涉及多个因素，可能是星状结构。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012311.webp" alt="" title="" /></p>
+
+<p>也可能是"层次结构"。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012312.webp" alt="" title="" /></p>
+
+<p>这时，建议把这个问题拆分成多篇文章，每篇文章保持单线结构，坚持做到一篇文章只讲一点，而且争取把这一点讲透。</p>
+
+<p>但是，单线结构说起来容易，做起来难。难就难在，人类的思想不是单线的，而是多线的，甚至是非线性。</p>
+
+<p>你要把混乱而跳跃的思维，整理成单线结构，表达出来，让他人理解，谈何容易，通常都需要反复推敲和提炼。</p>
+
+<p>举例来说，我们的思维可能是下图这样，好多点各自发散，连接在一起。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012313.webp" alt="" title="" /></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012314.webp" alt="" title="" /></p>
+
+<p>这种乱麻一团的思维并不可怕，可怕的是，你把文章也写成这样的结构，而不是耐心地梳理出一条线索。</p>
+
+<h2>科技动态</h2>
+
+<p>1、<a href="https://www.businessinsider.com/new-amazon-warehouse-robot-humanoid-2023-10">仓库机器人</a></p>
+
+<p>亚马逊公司开始在仓库，测试一款人形机器人。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202312/bg2023120804.webp" alt="" title="" /></p>
+
+<p>它用于捡货和搬运，每小时的运行成本是10至12美元。如果将来大量应用，成本可望降到2至3美元。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202312/bg2023120805.webp" alt="" title="" /></p>
+
+<p>它跟工人一起工作（下图）。工人都非常害怕，这种机器人取代他们。亚马逊表示，机器人只是协助工人，并不会取代后者。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202312/bg2023120806.webp" alt="" title="" /></p>
+
+<p>如果让你跟机器人一起上班，做差不多的事情，而且它还不要薪水，大概没人会心情好吧。</p>
+
+<p>2、<a href="https://theapiarist.org/barcoding-bees/">蜜蜂条形码</a></p>
+
+<p>科学家研究蜜蜂，需要追踪每一只蜜蜂的行为，但怎样才能在一群蜜蜂中，分清谁是谁呢？</p>
+
+<p>科学家想到了一个绝妙的办法，在每一只蜜蜂身上，贴上一个简化的二维码。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024011901.webp" alt="" title="" /></p>
+
+<p>这种二维码的面积是2.1平方毫米（即边长不足1.5毫米），重0.6毫克，是工蜂重量的 0.7%，共可以表示2048只蜜蜂。</p>
+
+<p>科学家手动为每只蜜蜂贴上二维码，一共贴了1400只，然后在高速摄像机下就可以读到这些二维码，从而分辨出每一只的行为。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024011902.webp" alt="" title="" /></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024011903.webp" alt="" title="" /></p>
+
+<p>蜂巢里面同时有上千只蜜蜂，放大图像后，就可以画出每只蜜蜂的行动路线（下图），分析它们在干什么，与谁合作。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024011904.webp" alt="" title="" /></p>
+
+<p>3、<a href="https://www.nbcnews.com/tech/tech-news/tongue-controlled-touchscreens-hit-market-year-rcna133270">舌头鼠标</a></p>
+
+<p>今年的拉斯维加斯"消费电子展" CES 上，展示了一款"舌头鼠标"。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024011905.webp" alt="" title="" /></p>
+
+<p>它使用牙套，将一块迷你触摸板固定在上颚，不需要用手，只用舌头就能控制鼠标。</p>
+
+<p>这个设备的原意是，方便手部损伤的或瘫痪的人士使用电脑，但后来发现，它在健全人中也有市场，机械师或外科医生可以用它控制电脑，同时腾出双手干其他事情。</p>
+
+<p>4、<a href="https://www.curbed.com/2023/01/shoplifting-crime-wave-spam-keeper-retail-loss-prevention-design.html">防盗盒</a></p>
+
+<p>欧美的小型零售店，比如杂货店和小超市，越来越流行把商品放在防盗盒里面。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202301/bg2023011702.webp" alt="" title="" /></p>
+
+<p>这种透明的塑料盒，需要钥匙才能打开，顾客自己取不出商品，只有店员才能打开。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202301/bg2023011703.webp" alt="" title="" /></p>
+
+<p>盒子还内置 RFID 芯片，如果擅自带出商店，会引发警报器。这样就大大减少了商品损耗和被窃。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202301/bg2023011704.webp" alt="" title="" /></p>
+
+<h2>文章</h2>
+
+<p>1、<a href="https://mp.weixin.qq.com/s/3_LNM62zoHaJsmvAryujEw">高德地图如何实现红绿灯倒计时？</a>（中文）</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012401.webp" alt="" title="" /></p>
+
+<p>高德地图会显示，红绿灯倒计时读秒。本文介绍背后的专利。</p>
+
+<p>2、<a href="https://mp.weixin.qq.com/s/LiygBJqMN8U_vSpAjxMibQ">2023年前端技术盘点与展望</a>（中文）</p>
+
+<p>腾讯云开发者公众号与腾讯 MoonWebTeam 前端团队联合推出的长篇技术报告。（<a href="https://github.com/ruanyf/weekly/issues/3917">@ryantang1991</a> 投稿）</p>
+
+<p>3、<a href="https://humanwhocodes.com/blog/2023/09/javascript-wtf-why-does-every-return-true-for-empty-array/">JS 空数组的 every() 方法</a>（英文）</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202312/bg2023120209.webp" alt="" title="" /></p>
+
+<p>every() 方法对于空数组总是返回 true，这是为什么。</p>
+
+<p>4、<a href="https://itsfoss.com/open-source-password-managers/">8个开源密码管理器介绍</a>（英文）</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202312/bg2023120205.webp" alt="" title="" /></p>
+
+<p>密码管理器用来管理各种登录密码，本文介绍8个开源的密码管理器。</p>
+
+<p>5、<a href="https://codersblock.com/blog/the-surprising-things-that-css-can-animate/">令人震惊的 CSS 动画效果</a>（英文）</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202312/bg2023120513.webp" alt="" title="" /></p>
+
+<p>本文介绍一些高级的 CSS 动画技巧。</p>
+
+<p>6、<a href="https://www.smashingmagazine.com/2021/08/http3-core-concepts-part1/">HTTP/3 详解</a>（英文）</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202309/bg2023091202.webp" alt="" title="" /></p>
+
+<p>一组系列文章，向初学者介绍 HTTP/3 协议的设计，以及与 HTTP/2 的不同之处。</p>
+
+<p>7、<a href="https://blog.robertelder.org/how-to-make-a-cpu/">CPU 制造过程图解</a>（英文）</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202310/bg2023102301.webp" alt="" title="" /></p>
+
+<p>作者使用大量图片，简明通俗解释如何从石头制造出 CPU。读了以后，对于 CPU 的制造流程就有一个大致的了解。</p>
+
+<h2>工具</h2>
+
+<p>1、<a href="https://github.com/lchh5/GeminiPro-Next-Web">Gemini Pro Chat</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012005.webp" alt="" title="" /></p>
+
+<p>作者修改了 ChatGPT Next Web 的源码，使其可以用于 Gemini Pro，这里是 <a href="https://chat.googlegemini.co/">demo</a>。（<a href="https://github.com/ruanyf/weekly/issues/3923">@lchh5</a> 投稿）</p>
+
+<p>2、<a href="https://github.com/jwenjian/wooden-fish">WoodenFish</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012006.webp" alt="" title="" /></p>
+
+<p>一个敲木鱼的网页 App，移动端打开时，只有侦测到手机陀螺仪的角度变化，才算一次敲击动作，这时可以把手机想象成敲木鱼的棒子。（<a href="https://github.com/ruanyf/weekly/issues/3929">@jwenjian</a> 投稿）</p>
+
+<p>3、<a href="https://github.com/geekyouth/moodist">Moodist</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012301.webp" alt="" title="" /></p>
+
+<p>一个开源的 Docker 镜像文件，提供50多种<a href="https://moodist.java666.cn/">背景声</a>，比如风声、雨声、咖啡馆的声音。（<a href="https://github.com/ruanyf/weekly/issues/3943">@geekyouth</a> 投稿）</p>
+
+<p>4、<a href="https://echoui.dev/zh/">Echo UI</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012302.webp" alt="" title="" /></p>
+
+<p>一款专为 Web Audio API 设计的 UI 库，适合用来搭建基于 Web 的音频应用。（<a href="https://github.com/ruanyf/weekly/issues/3946">@codeacme17</a> 投稿）</p>
+
+<p>5、<a href="https://www.photor.fun/">Photor</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012303.webp" alt="" title="" /></p>
+
+<p>截图美化工具，可以在线使用，也可以通过浏览器插件使用。（<a href="https://github.com/ruanyf/weekly/issues/3948">@sleepy-zone</a> 投稿）</p>
+
+<p>6、<a href="https://github.com/engigu/Message-Push-Nest">Message Nest</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012304.webp" alt="" title="" /></p>
+
+<p>开源的消息推送平台，整合邮件、钉钉、企业微信等多种通知方式。（<a href="https://github.com/ruanyf/weekly/issues/3947">@engigu</a> 投稿）</p>
+
+<p>7、<a href="https://redis.tinycraft.cc/zh/">Tiny RDM</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012306.webp" alt="" title="" /></p>
+
+<p>Redis 桌面管理客户端，支持 Mac、Windows、Linux。（<a href="https://github.com/ruanyf/weekly/issues/3955">@tiny-craft</a> 投稿）</p>
+
+<p>8、<a href="https://github.com/blakeblackshear/frigate">Frigate</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202311/bg2023111906.webp" alt="" title="" /></p>
+
+<p>开源的摄像头固件，具有实时目标物体侦测。</p>
+
+<p>9、<a href="https://github.com/InstantID/InstantID">InstantID</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012402.webp" alt="" title="" /></p>
+
+<p>只使用一张图片，就可以提取人脸，用于个性化图像合成，并支持各种不同的风格，试用 <a href="https://instantid.org/#playground">Demo</a>。（<a href="https://github.com/ruanyf/weekly/issues/3959">@zinc1234596</a> 投稿）</p>
+
+<p>10、<a href="https://handbrake.fr/">HandBrake</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202311/bg2023111910.webp" alt="" title="" /></p>
+
+<p>一个跨平台的桌面应用，用于转换视频编码。</p>
+
+<p>11、<a href="https://cssanimotion.pages.dev/">Animotion</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202311/bg2023111911.webp" alt="" title="" /></p>
+
+<p>一个网页 CSS 动画生成器，可视化设定动画，自动生成代码。</p>
+
+<p>12、<a href="https://github.com/ada-url/ada">Ada</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202311/bg2023112102.webp" alt="" title="" /></p>
+
+<p>一个 URL 解析器，符合最新规范，使用 C++ 编写，可以快速处理 URL。</p>
+
+<p>13、<a href="https://github.com/lxfater/inpaint-web">Inpaint-web</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012501.webp" alt="" title="" /></p>
+
+<p>开源的图片修复和超分辨率工具, 纯浏览器端实现。（<a href="https://github.com/ruanyf/weekly/issues/3964">@lxfater</a> 投稿）</p>
+
+<p>14、<a href="https://sinqi.tools/zh/avatar">人像生成工具</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012502.webp" alt="" title="" /></p>
+
+<p>基于手绘风 SVG 人物画像集合 <a href="https://www.openpeeps.com/">Open Peeps</a>，一个人物画像的在线定制工具。（<a href="https://github.com/ruanyf/weekly/issues/3968">@zerosoul</a> 投稿）</p>
+
+<h2>资源</h2>
+
+<p>1、<a href="http://www.tanglib.com/">唐库学习</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012003.webp" alt="" title="" /></p>
+
+<p>电子书网站，提供世界名著的中英双语对照朗读。（<a href="https://github.com/ruanyf/weekly/issues/3918">@bigtang5</a> 投稿）</p>
+
+<p>2、<a href="https://www.ai.zitijia.com/list/1">AI 字体模型市场</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012007.webp" alt="" title="" /></p>
+
+<p>该网站列出 AI 生成的字体，可以在线使用它们进行文字渲染。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012008.webp" alt="" title="" /></p>
+
+<p>它还支持网页手写八个字，生成自己的 AI 字体。（<a href="https://github.com/ruanyf/weekly/issues/3930">@qq345386817</a> 投稿）</p>
+
+<p>3、<a href="https://hub.grapps.cn/">云原生应用市场</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012305.webp" alt="" title="" /></p>
+
+<p>用户可以在这里浏览各种云原生应用，并一键安装到各类运行环境（ Docker、Kubernetes、Rainbond），支持国内镜像加速。（<a href="https://github.com/ruanyf/weekly/issues/3956">@RainBondsongyg</a> 投稿）</p>
+
+<p>4、<a href="https://ihateregex.io/">iHateRegex</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012009.webp" alt="" title="" /></p>
+
+<p>一个收集常用正则表达式的资源库，并通过可视化帮助理解，基于 <a href="https://github.com/ruanyf/weekly/issues/regexper.com">regexper</a>。（<a href="https://github.com/ruanyf/weekly/issues/3938">@zkerhcy</a> 投稿）</p>
+
+<p>5、<a href="https://aspoem.com/">AsPoem.com</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012010.webp" alt="" title="" /></p>
+
+<p>学习欣赏中国古诗词的网站。（<a href="https://github.com/ruanyf/weekly/issues/3941">@meetqy</a> 投稿）</p>
+
+<p>6、<a href="https://dev.mblog.club/">极简博客</a></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012004.webp" alt="" title="" /></p>
+
+<p>作者用 NextJS + Laf 云搭建的博客托管网站，赠送二级域名。（<a href="https://github.com/ruanyf/weekly/issues/3922">@kingwrcy</a> 投稿）</p>
+
+<h2>图片</h2>
+
+<p>1、<a href="https://zachklein.com/Sidewalk+Garden">旧金山人行道</a></p>
+
+<p>下面是美国旧金山市的一段人行道，2015年的样子。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202308/bg2023082603.webp" alt="" title="" /></p>
+
+<p>一位设计师决心改造这段人行道，营造出"城市森林"的景观。</p>
+
+<p>人行道宽3.66米，他保留中间一半供通行，两侧改为绿化。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202308/bg2023082604.webp" alt="" title="" /></p>
+
+<p>中间一段重新铺设路面以后，他在2016年在两侧种上植物。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202308/bg2023082605.webp" alt="" title="" /></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202308/bg2023082606.webp" alt="" title="" /></p>
+
+<p>2022年，这段路变成了下面这样。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202308/bg2023082607.webp" alt="" title="" /></p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202308/bg2023082608.webp" alt="" title="" /></p>
+
+<p>这不由让人想起了那句有名的话："种一棵树的最佳时间是十年前，其次就是现在。"</p>
+
+<h2>文摘</h2>
+
+<p>1、<a href="https://it-notes.dragas.net/2023/08/27/that-old-netbsd-server-running-since-2010/">我装了一台 NetBSD 服务器</a></p>
+
+<p>2010年的某一天，我接到一个电话。</p>
+
+<p>客户想在内网部署几个服务（dhcp、内部 DNS、Apache + PHP 服务器、NFS 和 Samba 件服务器），需要架设一台服务器。</p>
+
+<p>我建议客户购买企业级硬件，但是他们坚持使用已有的服务器，那是一台消费级电脑：没有双电源，没有远程管理功能，硬盘也是消费级的。</p>
+
+<p>客户原计划安装 Windows 2008 Server，然后在上面部署这些服务。我考虑到只有两天时间，就建议改成安装 NetBSD 系统。客户同意了。</p>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202401/bg2024012315.webp" alt="" title="" /></p>
+
+<p>我安装完以后，就移交给了客户。后面的一个月，除了一些网络延迟问题，客户的反馈基本是正面的。</p>
+
+<p>接下来的两三年里，我偶尔对这台服务器进行了一些调整，随后就与客户失去了联系。</p>
+
+<p>2021年2月，我又接到了那个客户的电话，他们想要一个新的防火墙。这意味着那台 NetBSD 服务器还在运行！出于好奇，我接受了这个任务。</p>
+
+<p>我惊讶地发现，这台服务器的工作完全正常。它不再对外网提供访问了，但在内网运行顺利。NFS SMB、DNS、SMTP 都是正常运行，它正在执行大约80%的原始任务。</p>
+
+<p>最让我惊讶的是它的正常运行时间。上一次重启是在2012年，那时发生了一次小地震。客户有备用发电机，因此服务器始终拥有不间断电源。</p>
+
+<p>谁能想到，这台机器当初只花了几个小时安装，而且全部都是消费级硬件，但是正常运行了九年没有重启，并且这些年基本上是无人管理的。</p>
+
+<p>我现在明白了，为什么我没有----也永远不会----发财。我以前的老板抱怨，我偏爱为客户推荐稳定可靠的解决方案，这等于较少的长期利润。据他说，需要频繁维护的不可靠解决方案，才能带来最多的收入。但是我觉得，出色的工作应该是持续有效的，不需要不断的修复。</p>
+
+<p>现在，我不确定这台服务器是否仍在运行，如果有机会我一定会检查一下。我很感激 NetBSD，它值得信赖，是一个轻量级、稳定、安全且高效的操作系统。在我看来，它至今仍然没有得到应有的赞誉和地位。</p>
+
+<h2>言论</h2>
+
+<p>1、</p>
+
+<p>AI 聊天机器人很快就会变得强大无比，看上去像神一样，未来也许会出现崇拜 AI 的教派。</p>
+
+<p>-- <a href="https://themessenger.com/tech/church-artificial-intelligence-worship-god">themessenger.com</a></p>
+
+<p>2、</p>
+
+<p>那些背负巨额债务以完成学业的学生，不太可能有远大的理想。因为当人们陷入债务时，他们就没有时间思考其他问题。</p>
+
+<p>债务是一种改造手段，当这些学生毕业时，他们不仅背负着沉重的债务，思想上已经被改造过了，使他们成为消费经济的有效组成部分。</p>
+
+<p>-- <a href="https://medium.com/blob-streaming/programming-as-a-career-isnt-right-for-me-f9f0846fef82">诺姆·乔姆斯基</a>，美国著名学者</p>
+
+<p>3、</p>
+
+<p>1931年，奥地利逻辑学家库尔特·哥德尔提出了重要的"哥德尔不完备定理"。他证明，任何一组数学公理都不可能是完备的，总有一些事实无法用这些公理来证明；同时，他还证明，没有一组公理具有一致性（即永远不会导致矛盾）。</p>
+
+<p>这意味着，任何一个理论体系总有一些无法证明的命题，或者说，你能证明什么，取决于你的起始假设，而这些假设是不能证明的。</p>
+
+<p>-- <a href="https://www.quantamagazine.org/how-godels-proof-works-20200714/">《哥德尔不完备定理的证明》</a></p>
+
+<p>4、</p>
+
+<p>一家公司需要多少工程师？这与软件功能的数量有关，与软件用户的数量无关。</p>
+
+<p>如果软件要添加更多功能，就需要更多工程师。如果软件功能单一，但是规模很大，甚至有几亿用户，事实上并不需要很多工程师。</p>
+
+<p>-- <a href="https://news.ycombinator.com/item?id=34567237">Hacker News 读者</a></p>
+
+<h2>往年回顾</h2>
+
+<p><a href="https://www.ruanyifeng.com/blog/2023/02/weekly-issue-241.html">中国的增长动力在内陆</a>（2023 #241）</p>
+
+<p><a href="https://www.ruanyifeng.com/blog/2022/01/weekly-issue-191.html">一个程序员的财务独立之路</a>（2022 #191）</p>
+
+<p><a href="https://www.ruanyifeng.com/blog/2021/01/weekly-issue-141.html">封闭系统的胜利</a>（2021 #141）</p>
+
+<p><a href="https://www.ruanyifeng.com/blog/2020/01/weekly-issue-91.html">印度孟买的房价，为什么跟北京一样高？</a>（2020 #91）</p>
+
+<p>（完）</p>
+
+                                    <!-- /div -->
+
+                                </div>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script type="text/javascript" src="/newwindow.js"></script>
+                                <div class="asset-footer">
+
+<h3>文档信息</h3>
+<ul>
+<li>版权声明：自由转载-非商用-非衍生-保持署名（<a href="http://creativecommons.org/licenses/by-nc-nd/3.0/deed.zh">创意共享3.0许可证</a>）</li>
+<li>发表日期： <abbr class="published" title="2024-01-26T08:13:42+08:00">2024年1月26日</abbr></li>
+
+</ul>
+                                </div>
+</article>
+                            </div>
+
+
+<div id="related_entries">
+<h2>相关文章</h2>
+<ul>
+
+<li><strong>2026.01.23: <a href="https://www.ruanyifeng.com/blog/2026/01/weekly-issue-382.html">科技爱好者周刊（第 382 期）：独立软件的黄昏</a></strong>
+
+                           <div class="entry-body">
+                              这里记录每周值得分享的科技内容，周五发布。
+
+                           </div>
+
+</li>
+
+ 
+<li><strong>2026.01.16: <a href="https://www.ruanyifeng.com/blog/2026/01/weekly-issue-381.html">科技爱好者周刊（第 381 期）：中国 AI 大模型领导者在想什么</a></strong>
+
+                           <div class="entry-body">
+                              这里记录每周值得分享的科技内容，周五发布。
+
+                           </div>
+
+</li>
+
+ 
+<li><strong>2026.01.09: <a href="https://www.ruanyifeng.com/blog/2026/01/weekly-issue-380.html">科技爱好者周刊（第 380 期）：为什么人们拥抱"不对称收益"</a></strong>
+
+                           <div class="entry-body">
+                              这里记录每周值得分享的科技内容，周五发布。
+
+                           </div>
+
+</li>
+
+ 
+<li><strong>2025.12.26: <a href="https://www.ruanyifeng.com/blog/2025/12/weekly-issue-379.html">科技爱好者周刊（第 379 期）：《硅谷钢铁侠》摘录</a></strong>
+
+                           <div class="entry-body">
+                              这里记录每周值得分享的科技内容，周五发布。（[通知] 下周元旦假期，周刊休息。）
+
+                           </div>
+
+</li>
+
+ 
+</ul>
+</div>
+
+
+
+                    
+
+                    <div id="comments" class="comments">
+
+
+    
+    
+        
+    <h2 class="comments-header">留言（42条）</h2>
+
+    <div id="comments-content" class="comments-content" style="clear: left;">
+        
+        <div id="comment-441187" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">ycy</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441187">
+            <p>我以前的老板抱怨，我偏爱为客户推荐稳定可靠的解决方案，这等于较少的长期利润。据他说，需要频繁维护的不可靠解决方案，才能带来最多的收入。</p>
+
+<p>懂了</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  8:58 AM">2024年1月26日 08:58</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441187">#</a>
+ | <a href="#comment-text" title="引用ycy的这条留言" onclick="return CommentQuote('comment-quote-441187','ycy');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441188" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">harrymore</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441188">
+            <p>我是去年进公司当平台算法工程师的，当时需要搭一个k8s平台，然后上司就给了三台台式让我去搭了，总体来说遇到一些小问题，譬如主机性能不一致，在跑AI推理算法的时候，时不时会出现一下延时，其他的基本没什么问题；后面内存不够，又升级了一下内存，现在还在稳定运行中</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  9:21 AM">2024年1月26日 09:21</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441188">#</a>
+ | <a href="#comment-text" title="引用harrymore的这条留言" onclick="return CommentQuote('comment-quote-441188','harrymore');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441189" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Denis</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441189">
+            <p>> 如果软件要添加更多功能，就需要更多工程师。如果软件功能单一，但是规模很大，甚至有几亿用户，事实上并不需要很多工程师。</p>
+
+<p>为几亿用户服务这件事本身就需要很多功能来实现，当然因为这是一项标准化的工作，现在可以交给云服务商解决，花点钱就行了<br />
+</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  9:31 AM">2024年1月26日 09:31</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441189">#</a>
+ | <a href="#comment-text" title="引用Denis的这条留言" onclick="return CommentQuote('comment-quote-441189','Denis');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441190" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">penn</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441190">
+            <p>photor 这个，最早看到过英文实现（名字忘记了），没用过。今早上刚好有需要，就试用了 photor， 但是发现一个无解的问题：导出的图片分辨率降低了，里面的文字看起来有些模糊。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024 10:15 AM">2024年1月26日 10:15</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441190">#</a>
+ | <a href="#comment-text" title="引用penn的这条留言" onclick="return CommentQuote('comment-quote-441190','penn');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441192" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">撒哈拉</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441192">
+            <p>技术写作按照单一线性思维去写，人脑思维是网状的，要梳理出一条主线，不容易</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024 10:22 AM">2024年1月26日 10:22</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441192">#</a>
+ | <a href="#comment-text" title="引用撒哈拉的这条留言" onclick="return CommentQuote('comment-quote-441192','撒哈拉');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441193" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">marvin</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441193">
+            <p>技术写作学习了，继续深入实践当中，像榜样对齐。 </p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024 10:45 AM">2024年1月26日 10:45</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441193">#</a>
+ | <a href="#comment-text" title="引用marvin的这条留言" onclick="return CommentQuote('comment-quote-441193','marvin');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441194" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Sanjo Tsubaki</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441194">
+            <p>iHateRegex<br />
+怕不是正则写烦了做出来的项目</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024 11:36 AM">2024年1月26日 11:36</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441194">#</a>
+ | <a href="#comment-text" title="引用Sanjo Tsubaki的这条留言" onclick="return CommentQuote('comment-quote-441194','Sanjo Tsubaki');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441195" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Tristan</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441195">
+            <p>感谢，又看到自己的作品被收录了 <a href="https://sinqi.tools/avatar" rel="nofollow">https://sinqi.tools/avatar</a></p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024 12:06 PM">2024年1月26日 12:06</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441195">#</a>
+ | <a href="#comment-text" title="引用Tristan的这条留言" onclick="return CommentQuote('comment-quote-441195','Tristan');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441196" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">吴昊昊</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441196">
+            <p>中国的人力成本是非常低的，平均每小时是12元</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024 12:32 PM">2024年1月26日 12:32</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441196">#</a>
+ | <a href="#comment-text" title="引用吴昊昊的这条留言" onclick="return CommentQuote('comment-quote-441196','吴昊昊');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441200" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Yellowpea</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441200">
+            <p>我现在明白了，为什么我没有----也永远不会----发财。我以前的老板抱怨，我偏爱为客户推荐稳定可靠的解决方案，这等于较少的长期利润。据他说，需要频繁维护的不可靠解决方案，才能带来最多的收入。<br />
+怪不得微软总喜欢在Windows上更新一些鸡肋的功能</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  1:48 PM">2024年1月26日 13:48</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441200">#</a>
+ | <a href="#comment-text" title="引用Yellowpea的这条留言" onclick="return CommentQuote('comment-quote-441200','Yellowpea');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441201" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">marcus</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441201">
+            <p>对于中国的仓库工人：<br />
+好消息：3美元每小时的机器人成本和中国的人工成本相当。<br />
+坏消息：中国制造的机器人使用成本可能在每小时3元人民币。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  2:08 PM">2024年1月26日 14:08</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441201">#</a>
+ | <a href="#comment-text" title="引用marcus的这条留言" onclick="return CommentQuote('comment-quote-441201','marcus');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441202" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">valar</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441202">
+            <p><b>只要克服了这个难点，就能继续往前走，不会有陷入迷宫、找不到方向、如坠五里雾中。</b><br />
+如坠五里雾中是不要改为云里雾中</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  2:32 PM">2024年1月26日 14:32</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441202">#</a>
+ | <a href="#comment-text" title="引用valar的这条留言" onclick="return CommentQuote('comment-quote-441202','valar');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441203" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">lofayo</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441203">
+            <p>咋啦？不太合常情呀！今天都这个点了，没见几个评论</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  2:34 PM">2024年1月26日 14:34</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441203">#</a>
+ | <a href="#comment-text" title="引用lofayo的这条留言" onclick="return CommentQuote('comment-quote-441203','lofayo');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441204" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">lofayo</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441204">
+            <p>NetBSD，职业操守与金钱利润，该如何去取舍？</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  2:37 PM">2024年1月26日 14:37</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441204">#</a>
+ | <a href="#comment-text" title="引用lofayo的这条留言" onclick="return CommentQuote('comment-quote-441204','lofayo');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441205" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Jason</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441205">
+            <p>这个舌头????鼠标简直就是ThinkPad小红点的完美平替，就是带着工作感觉会比较怪。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  2:39 PM">2024年1月26日 14:39</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441205">#</a>
+ | <a href="#comment-text" title="引用Jason的这条留言" onclick="return CommentQuote('comment-quote-441205','Jason');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441207" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Donne</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441207">
+            <p>红绿灯那个楞是没看懂，我一直以为是接入交通局之类的系统里的。这还能通过大数据计算出来？</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  3:00 PM">2024年1月26日 15:00</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441207">#</a>
+ | <a href="#comment-text" title="引用Donne的这条留言" onclick="return CommentQuote('comment-quote-441207','Donne');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441208" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">花花</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441208">
+            <p>追踪蜜蜂的话，是不是也可以选择小型雷达</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  3:19 PM">2024年1月26日 15:19</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441208">#</a>
+ | <a href="#comment-text" title="引用花花的这条留言" onclick="return CommentQuote('comment-quote-441208','花花');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441209" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">无法无天</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441209">
+            <p>那个商品防盗盒真的是直观的演示了什么叫做社会运行成本</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  3:24 PM">2024年1月26日 15:24</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441209">#</a>
+ | <a href="#comment-text" title="引用无法无天的这条留言" onclick="return CommentQuote('comment-quote-441209','无法无天');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441210" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">rt</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441210">
+            <p>兄弟们，开摸，周末愉快！</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  3:37 PM">2024年1月26日 15:37</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441210">#</a>
+ | <a href="#comment-text" title="引用rt的这条留言" onclick="return CommentQuote('comment-quote-441210','rt');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441214" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Erispyu</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441214">
+            <blockquote>
+<pre>引用Donne的发言：</pre>
+
+<p>红绿灯那个楞是没看懂，我一直以为是接入交通局之类的系统里的。这还能通过大数据计算出来？</p>
+
+</blockquote>
+
+<p>红绿灯的等待时间是固定的，很大程度上降低了预测难度。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  4:25 PM">2024年1月26日 16:25</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441214">#</a>
+ | <a href="#comment-text" title="引用Erispyu的这条留言" onclick="return CommentQuote('comment-quote-441214','Erispyu');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441215" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">莫三</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441215">
+            <p>其实加州很缺水的，在加州搞城市森林景观算是逆天而行了</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  4:50 PM">2024年1月26日 16:50</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441215">#</a>
+ | <a href="#comment-text" title="引用莫三的这条留言" onclick="return CommentQuote('comment-quote-441215','莫三');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441218" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">matt</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441218">
+            <p>原来高德地图的红绿灯倒计时是这样实现的，感觉很不安全，万一正好那个路口的的红绿灯时间间隔调整了，这种算法不能及时更新，岂不容易出问题</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 26, 2024  6:13 PM">2024年1月26日 18:13</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441218">#</a>
+ | <a href="#comment-text" title="引用matt的这条留言" onclick="return CommentQuote('comment-quote-441218','matt');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441225" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">kkk</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441225">
+            <blockquote>
+<pre>引用Donne的发言：</pre>
+
+<p>红绿灯那个楞是没看懂，我一直以为是接入交通局之类的系统里的。这还能通过大数据计算出来？</p>
+
+</blockquote>
+
+<p>两种都有。交通局有提供即时数据的，用交通局的。没有的，就自已算。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 27, 2024  8:41 AM">2024年1月27日 08:41</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441225">#</a>
+ | <a href="#comment-text" title="引用kkk的这条留言" onclick="return CommentQuote('comment-quote-441225','kkk');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441227" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">sssss</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441227">
+            <p>写清楚就行，有条理，画画流程图，言简意赅，没有难度，</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 27, 2024  9:49 AM">2024年1月27日 09:49</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441227">#</a>
+ | <a href="#comment-text" title="引用sssss的这条留言" onclick="return CommentQuote('comment-quote-441227','sssss');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441229" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">hikingman</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441229">
+            <p>看到去年的文章标题：中国的增长动力在内陆（2023 #241）<br />
+回看2023年，年初时大家还抱着解封后经济反弹的信心，但最终走来还是不尽如人意，内陆各省地方债问题比较严重，大家看不到未来收入增长的预期，储蓄率升高，消费低迷，一言难尽...</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 27, 2024  4:29 PM">2024年1月27日 16:29</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441229">#</a>
+ | <a href="#comment-text" title="引用hikingman的这条留言" onclick="return CommentQuote('comment-quote-441229','hikingman');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441231" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Michael kang</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441231">
+            <p>偶尔点开了看看，这个网页可真是宝藏</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 28, 2024  8:30 PM">2024年1月28日 20:30</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441231">#</a>
+ | <a href="#comment-text" title="引用Michael kang的这条留言" onclick="return CommentQuote('comment-quote-441231','Michael kang');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441232" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">Gang</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441232">
+            <p>古诗词那个网站内容很少</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 28, 2024 10:05 PM">2024年1月28日 22:05</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441232">#</a>
+ | <a href="#comment-text" title="引用Gang的这条留言" onclick="return CommentQuote('comment-quote-441232','Gang');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441233" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">toplus</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441233">
+            <blockquote>
+<pre>引用matt的发言：</pre>
+
+<p>原来高德地图的红绿灯倒计时是这样实现的，感觉很不安全，万一正好那个路口的的红绿灯时间间隔调整了，这种算法不能及时更新，岂不容易出问题</p>
+
+</blockquote>
+
+<p>算法里应该有兼容的代码，固定间隔时间执行一次推算红绿灯时间间隔，另外驾驶员也不可能完全只看导航里的红绿灯倒计时，只作为一个参考，现实肯定还是以人眼看到的红绿灯倒计时为准，路口慢行是老司机的基本驾驶意识(:dog)</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 29, 2024  8:49 AM">2024年1月29日 08:49</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441233">#</a>
+ | <a href="#comment-text" title="引用toplus的这条留言" onclick="return CommentQuote('comment-quote-441233','toplus');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441234" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">XZYY</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441234">
+            <p>机器人的确不用工资，但不是免费的。使用者需要支付运维费用以及升级费用，不用的话还要报废。如果这些总费用加起来低于人工的话，资本家早就换了。之所以现在还不替代，不是因为怜悯而纯粹是费用上的考量。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 29, 2024  9:07 AM">2024年1月29日 09:07</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441234">#</a>
+ | <a href="#comment-text" title="引用XZYY的这条留言" onclick="return CommentQuote('comment-quote-441234','XZYY');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441238" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">atirn</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441238">
+            <p>红绿灯的问题我原本以为是联网数据，好厉害的发明，学到了</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 29, 2024  6:10 PM">2024年1月29日 18:10</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441238">#</a>
+ | <a href="#comment-text" title="引用atirn的这条留言" onclick="return CommentQuote('comment-quote-441238','atirn');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441241" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">sruby</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441241">
+            <p>微信读书的特定版本（7.3.7）也支持中英双语朗读，只要导入英文书籍，使用听书功能就会先朗读一遍英文再朗读一遍中文。<br />
+新版本已经把这个功能去掉了，需要安装特定版本。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 30, 2024  9:22 AM">2024年1月30日 09:22</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441241">#</a>
+ | <a href="#comment-text" title="引用sruby的这条留言" onclick="return CommentQuote('comment-quote-441241','sruby');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441242" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">sruby</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441242">
+            <blockquote>
+<pre>引用hikingman的发言：</pre>
+
+<p>回看2023年，年初时大家还抱着解封后经济反弹的信心，但最终走来还是不尽如人意，内陆各省地方债问题比较严重，大家看不到未来收入增长的预期，储蓄率升高，消费低迷，一言难尽...</p>
+
+</blockquote>
+
+<p>不说增长了，看到的是收入下降的预期。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 30, 2024  9:31 AM">2024年1月30日 09:31</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441242">#</a>
+ | <a href="#comment-text" title="引用sruby的这条留言" onclick="return CommentQuote('comment-quote-441242','sruby');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441246" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">风铃Echo</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441246">
+            <blockquote>
+<pre>引用sruby的发言：</pre>
+
+<p>不说增长了，看到的是收入下降的预期。</p>
+
+</blockquote>
+
+<p>目前看来全世界都是这样，没有幸免，熬下去吧放弃非必要支出</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 31, 2024  3:55 PM">2024年1月31日 15:55</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441246">#</a>
+ | <a href="#comment-text" title="引用风铃Echo的这条留言" onclick="return CommentQuote('comment-quote-441246','风铃Echo');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441247" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">大头怪</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441247">
+            <blockquote>
+<pre>引用Donne的发言：</pre>
+
+<p>红绿灯那个楞是没看懂，我一直以为是接入交通局之类的系统里的。这还能通过大数据计算出来？</p>
+
+</blockquote>
+
+<p>调用以往车辆经过这个路口什么时候停下来又经过多长时间走，然后靠这种大量的数据计算出来。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="January 31, 2024  4:54 PM">2024年1月31日 16:54</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441247">#</a>
+ | <a href="#comment-text" title="引用大头怪的这条留言" onclick="return CommentQuote('comment-quote-441247','大头怪');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441253" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">m</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441253">
+            <blockquote>
+<pre>引用Donne的发言：</pre>
+
+<p>红绿灯那个楞是没看懂，我一直以为是接入交通局之类的系统里的。这还能通过大数据计算出来？</p>
+
+</blockquote>
+
+<p>一开始就感觉还是大数据做的，因为有一段时间我使用的时候红灯总会比实际的块几秒，猜测是大家在这些路口起步的比较早。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February  1, 2024 11:54 AM">2024年2月 1日 11:54</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441253">#</a>
+ | <a href="#comment-text" title="引用m的这条留言" onclick="return CommentQuote('comment-quote-441253','m');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441254" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">罐子</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441254">
+            <p>“我现在明白了，为什么我没有----也永远不会----发财。我以前的老板抱怨，我偏爱为客户推荐稳定可靠的解决方案，这等于较少的长期利润。据他说，需要频繁维护的不可靠解决方案，才能带来最多的收入”</p>
+
+<p>这种价值观不会被消费者追随，终会被抛弃。更好的价值观应该是推荐稳定可靠的解决方案，到达顶尖，再发展创新其他领域，往外拓展来解决如何发财的问题。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February  1, 2024  4:35 PM">2024年2月 1日 16:35</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441254">#</a>
+ | <a href="#comment-text" title="引用罐子的这条留言" onclick="return CommentQuote('comment-quote-441254','罐子');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441292" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">aaaa7703</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441292">
+            <p>言论2的超链接不对</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February  2, 2024  3:37 PM">2024年2月 2日 15:37</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441292">#</a>
+ | <a href="#comment-text" title="引用aaaa7703的这条留言" onclick="return CommentQuote('comment-quote-441292','aaaa7703');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441307" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">thrinity</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441307">
+            <p>上周去颐和园滑冰，结果手机丢了，应该被人捡到了，但是估计不想归还，一直关机和开飞行模式，最后连续三天的定位都在颐和园。再也不想去颐和园了，伤心~~~</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February  3, 2024  1:58 PM">2024年2月 3日 13:58</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441307">#</a>
+ | <a href="#comment-text" title="引用thrinity的这条留言" onclick="return CommentQuote('comment-quote-441307','thrinity');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441344" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">用愛發電</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441344">
+            <p>「哥德爾不完備定理」是說任何足夠複雜的公理系統都不可以同時是完備或一致性</p>
+
+<p>完備是指可以証明任何用該公理系統語言編寫的東西</p>
+
+<p>一致性是指沒有內部矛盾</p>
+
+<p>數學的公理系統必須是一致性，所以必然不完備</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February 11, 2024  1:59 AM">2024年2月11日 01:59</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441344">#</a>
+ | <a href="#comment-text" title="引用用愛發電的这条留言" onclick="return CommentQuote('comment-quote-441344','用愛發電');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441358" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">YellowMinions</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441358">
+            <p>WOW,新年第一帖，满满的干货！关于技术写作，也许金字塔原理更实用。</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February 18, 2024  6:07 PM">2024年2月18日 18:07</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441358">#</a>
+ | <a href="#comment-text" title="引用YellowMinions的这条留言" onclick="return CommentQuote('comment-quote-441358','YellowMinions');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441449" class="comment">
+    <div  class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">诸葛少富</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441449">
+            <p>NetBSD那个，和防御性编程有异曲同工之妙</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="February 29, 2024  3:00 PM">2024年2月29日 15:00</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441449">#</a>
+ | <a href="#comment-text" title="引用诸葛少富的这条留言" onclick="return CommentQuote('comment-quote-441449','诸葛少富');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    
+        
+        <div id="comment-441453" class="comment">
+    <div id="comment-last" class="inner">
+        <div class="comment-header">
+            <div class="asset-meta">
+<p>
+                <span class="byline">
+                    
+
+                    <span class="vcard author">小鲸鱼</span>
+
+ 说：
+                </span>
+</p>
+            </div>
+        </div>
+        <div class="comment-content" id="comment-quote-441453">
+            <p>技术写作 的内容受教了。不论是写作、PPT还是程序设计，要围绕着某个线索，梳理成单线结构</p>
+        </div>
+<div class="comment-footer">
+<div class="comment-footer-inner">
+<p>
+                   <abbr class="published" title="March  1, 2024 12:11 AM">2024年3月 1日 00:11</abbr>
+ | <a href="https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html#comment-441453">#</a>
+ | <a href="#comment-text" title="引用小鲸鱼的这条留言" onclick="return CommentQuote('comment-quote-441453','小鲸鱼');">引用</a>
+</p>
+</div>
+</div>
+    </div>
+</div>
+        
+    </div>
+        
+    
+
+
+    
+    
+    <div class="comments-open" id="comments-open">
+        <h2 class="comments-open-header">我要发表看法</h2>
+        <div class="comments-open-content">
+
+        
+            <div id="comment-greeting"></div>
+
+            <form method="post" action="https://www.ruanyifeng.com/cgi-bin/mtos/mt-comments.cgi" name="comments_form" id="comments-form" onsubmit="return pleaseWait();">
+                <input type="hidden" name="static" value="1" />
+                <input type="hidden" name="entry_id" value="2402" />
+                <input type="hidden" name="__lang" value="en" />
+                <input type="hidden" name="parent_id" value="" id="comment-parent-id" />
+                <input type="hidden" name="armor" value="1" />
+                <input type="hidden" name="preview" value="" />
+                <input type="hidden" name="sid" value="" />
+                <div id="comments-open-data">
+            <div id="comments-open-text">
+                    <p><label for="comment-text">您的留言
+                    （HTML标签部分可用）</label></p>
+                    <p><textarea id="comment-text" name="text" rows="10" cols="50"></textarea></p>
+                </div>
+                    <div id="comment-form-name">
+                        <p><label for="comment-author">您的大名：</label></p>
+                        <p><input id="comment-author" name="author" size="30" value="" />  <span class="hint"> &laquo;-必填</span></p>
+                    </div>
+                    <div id="comment-form-email">
+                        <p><label for="comment-email">电子邮件：</label></p>
+                        <p><input id="comment-email" name="email" size="30" value="" />  <span class="hint"> &laquo;-必填，不公开</span></p>
+                    </div>
+                    <div id="comment-form-url">
+                        <p><label for="comment-url">个人网址：</label></p>
+                        <p><input id="comment-url" name="url" size="30" value="" />  <span class="hint"> &laquo;-我信任你，不会填写广告链接</span></p>
+                    </div>
+                    <div id="comment-form-remember-me">
+                        <p>
+                        <label for="comment-bake-cookie">记住个人信息？</label><input type="checkbox" id="comment-bake-cookie" name="bakecookie" onclick="!this.checked?forgetMe(document.comments_form):rememberMe(document.comments_form)" value="1" accesskey="r" /></p>
+                    </div>
+                </div>
+                    <div id="comment-form-reply" style="display:none">
+                    <input type="checkbox" id="comment-reply" name="comment_reply" value="" onclick="mtSetCommentParentID()" />
+                    <label for="comment-reply" id="comment-reply-label"></label>
+                </div>
+                <div id="comments-open-captcha"></div>
+                <div id="comments-open-footer">
+<div id="wait" style="display:none;">
+<p><strong>正在发表您的评论，请稍候</strong></p>
+<p>
+<input type="text" name="percent" size="3" style="font-family:Arial; color:black;text-align:center; border-width:medium; border-style:none;">           
+<input type="text" name="chart" size="46" style="font-family:Arial;font-weight:bolder; color:black; padding:0px; border-style:none;">
+</p>
+</div>
+
+                    <p><input type="submit" accesskey="s" name="post" id="comment-submit" value="发表" />  <span class="hint"> &laquo;- 点击按钮</span></p>
+                </div>
+            </form>
+
+
+        </div>
+    </div>
+
+    
+
+
+</div>
+
+
+
+
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        <script type="text/javascript" src="https://www.ruanyifeng.com/blog/js/prism.js"></script>
+        <script type="text/javascript" src="/blog/checker.js"></script> 
+            <div id="footer">
+<div id="footer-inner">
+  <div id="footer-content">
+
+      
+<!--
+      <section> 
+     </section>
+  <p><a title="Instagram" target="_blank" href="http://instagram.com/ruanyf">Instagram</a></p>
+       <p><a title="订阅" href="https://app.feedblitz.com/f/f.fbz?Sub=348868" target="_blank">邮件订阅</a></p>
+  
+       <h2>Feed</h2>
+       <p><a title="FeedBurner" href="http://feeds.feedburner.com/ruanyifeng" target="_blank">FeedBurner</a></p>
+       <p><a title="atom.xml" href="http://www.ruanyifeng.com/blog/atom.xml" target="_blank">atom.xml</a></p>
+     
+      <p>支付宝：<a title="支付宝" href="alipays://platformapi/startapp?appId=20000067&url=http%3A%2F%2Fwww.ruanyifeng.com%2Fblog" target="_blank">yifeng.ruan@gmail.com</a></p>
+-->
+
+     <section>
+<!--
+       <h2>授权方式</h2>
+       <p><a title="许可证" href="http://creativecommons.org/licenses/by-nc-nd/3.0/deed.zh" target="_blank">自由转载-非商用-非衍生-保持署名</a></p>
+       <h2>微信公号</h2>
+       <h2>社交帐号</h2>
+       <h2>联系方式</h2>
+     -->
+       <p><img src="https://cdn.beekka.com/blogimg/asset/202001/bg2020013101.jpg" alt="微信扫描"></p>
+       <p>
+         <a title="微博" href="http://weibo.com/ruanyf" target="_blank">Weibo</a> | 
+         <a title="Twitter" target="_blank" href="https://twitter.com/ruanyf">Twitter</a> |
+         <a title="GitHub" target="_blank" href="https://github.com/ruanyf">GitHub</a>
+       </p>
+     
+     <p>Email: <a title="电子邮件" href="/cdn-cgi/l/email-protection#c3baaaa5a6ada4edb1b6a2ad83a4aea2aaafeda0acae" target="_blank"><span class="__cf_email__" data-cfemail="7e0717181b1019500c0b1f103e19131f1712501d1113">[email&#160;protected]</span></a></p>
+     </section>
+  
+  
+
+
+  </div>
+</div>
+</div>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+function insertLine(e,t){for(var n=0;n<t;n++)e.parentNode.insertBefore(document.createElement("p"),e)}function getImg(){if(!window["main-content"])return!1;for(var e,t=Array.prototype.slice.call(window["main-content"].getElementsByTagName("img")),n=0;n<t.length;n++){if("display: none !important;"===(e=t[n]).getAttribute("style"))return e;if(n===t.length-1)return!1}}function toObjectUrl(e,t){return fetch(e).then(e=>e.blob()).then(e=>{t(URL.createObjectURL(e))})}function toDataURL(e,t){var n=new XMLHttpRequest;n.open("get",e),n.responseType="blob",n.onload=function(){var e=new FileReader;e.onload=function(){t(this.result)},e.readAsDataURL(n.response)},n.send()}setTimeout(function(){var e=getImg();e&&(insertLine(e.parentNode,2),toObjectUrl(e.src,function(t){var n=document.createElement("p"),r=document.createElement("img");r.src=t,n.appendChild(r),e.parentNode.parentNode.insertBefore(n,e.parentNode)}))},3e3);
+</script>                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+
+
+<script type="text/javascript" src="/blog/stats.js"></script>
+<script>
+var supportImg = document.querySelector('#support-img');
+
+if (supportImg && _hmt) {
+  _hmt.push(['_trackEvent', 'banner', 'load']);
+  supportImg.addEventListener('click', function () {
+    _hmt.push(['_trackEvent', 'banner', 'click']);
+  }, false);
+}
+
+var homepageImg = document.querySelector('#homepage_sponsor');
+if (homepageImg && _hmt) {
+  _hmt.push(['_trackEvent', 'homepage-banner', 'load']);
+  homepageImg.addEventListener('click', function () {
+    _hmt.push(['_trackEvent', 'homepage-banner', 'click']);
+  }, false);
+}
+</script>
+
+
+
+        </div>
+    </div>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4a442ea3c10e6e0',t:'MTc5MTk1NjU1Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

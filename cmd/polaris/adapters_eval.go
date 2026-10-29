@@ -1,0 +1,64 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
+
+	"github.com/polarisagi/polaris/internal/agent"
+	"github.com/polarisagi/polaris/internal/automation/hitl"
+	"github.com/polarisagi/polaris/internal/eval/regression"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// ─── evalAgentAdapter ─────────────────────────────────────────────────────────
+//
+// 将 agent.Agent 适配为 eval.EvalAgent 接口。
+// agent.Agent.Run(ctx) error 与 eval.EvalAgent.Run(ctx, []byte) ([]byte, []string, error) 签名不匹配。
+type evalAgentAdapter struct {
+	agent *agent.Agent
+}
+
+func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []string, error) {
+	a.agent.SetTaskIntent(taint.NewTaintedString(string(input), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "eval_input"))
+
+	errCh := make(chan error, 1)
+	concurrent.SafeGo(ctx, "adapters_eval.agent_run", func(ctx context.Context) {
+		errCh <- a.agent.Run(ctx)
+	})
+
+	// 意图没送进去，下面的 select 会一直等到 ctx 超时才收场，表现为"这条 eval
+	// 用例莫名超时"而非"意图投递失败"。
+	if err := a.agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		slog.Error("adapters_eval: 意图投递失败，本次 eval 将空转至超时", "err", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return nil, nil, err
+		}
+		return a.agent.GetExecuteResult(), nil, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err() //nolint:wrapcheck
+	}
+}
+
+// regressionDetectorAdapter 将 eval/regression.LightweightRegressionDetector 适配为 hitl.RegressionDetector。
+type regressionDetectorAdapter struct {
+	inner *regression.LightweightRegressionDetector
+}
+
+func (a *regressionDetectorAdapter) DetectRegression(ctx context.Context, checkpointType string) (*hitl.RegressionReport, error) {
+	r, err := a.inner.DetectRegression(ctx, checkpointType)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "detect regression", err)
+	}
+	return &hitl.RegressionReport{
+		Markdown: r.Markdown,
+		Severity: r.Severity,
+	}, nil
+}

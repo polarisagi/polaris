@@ -1,0 +1,485 @@
+// Package orchestrator — SQLiteBlackboard 实现 protocol.Blackboard（M8 多 Agent 协调）。
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §1
+//
+// 设计约束:
+//   - CAS 原子认领: UPDATE tasks SET status='claimed', claimed_by=? WHERE task_id=? AND status='pending'
+//   - Reaper goroutine: 每秒扫描过期 Claimed → 回归 Pending（DefaultLeaseTTL=60s）
+//   - KillSwitch FullStop: StopAll() → 所有 Executing → Suspended(oom_evicted)
+//   - 订阅 fan-out: 每个 Subscribe 调用获得独立 chan，黑板事件广播
+//
+// 写路径说明:
+//   - 直接持有 *sql.DB（MaxOpenConns=1），不经 MutationBus。
+//   - CAS 操作（ClaimTask/CompleteTask/FailTask）需要同步确认 RowsAffected，
+//     MutationBus 的异步批量模型无法满足此语义，故保留直接写。
+//   - 串行化由 sql.DB MaxOpenConns=1 + WAL busy_timeout=5000ms 保证写串行化。
+//   - 事务内所有查询必须走 tx.*，禁止在同一 goroutine 内混用 bb.db.*（连接池耗尽死锁）。
+//
+// 本文件保留 CAS 认领与生命周期推进的核心路径（PostTask~FailTask）；
+// 租约续约/TOCTOU 校验/订阅广播/统计等辅助操作见 sqlite_blackboard_ops.go（R7 拆分）。
+
+package orchestrator
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/trace"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+const (
+	DefaultLeaseTTL    = 60 * time.Second
+	HeartbeatInterval  = 15 * time.Second
+	ReaperScanInterval = 1 * time.Second
+	MaxSpawnDepth      = 3 // inv_M8_06: 委托链深度 ≤3
+
+	statusPending   = "pending"
+	statusClaimed   = "claimed"
+	statusRunning   = "running"
+	statusDone      = "done"
+	statusFailed    = "failed"
+	statusSuspended = "suspended"
+)
+
+// SQLiteBlackboard 实现 protocol.Blackboard，以 SQLite 为持久化后端。
+// 与现有内存 Blackboard 结构共存，此实现为持久化版本。
+type SQLiteBlackboard struct {
+	db               protocol.BlackboardDB
+	registry         *AgentRegistry
+	mu               sync.Mutex
+	subscribers      []chan types.BlackboardEvent
+	subMu            sync.RWMutex
+	cancels          map[string]context.CancelFunc            // 记录每个执行中任务的取消函数
+	taskEventSubs    map[string][]chan types.AgentStreamEvent // 任务级事件订阅者（GD-13-001）
+	taskCtrlSubs     map[string][]chan types.TaskControl      // 任务级独立控制通道订阅者（R3-04）
+	taskRetentionTTL time.Duration                            // 终态任务保留时长，默认 24h
+}
+
+// DB exposes the underlying BlackboardDB.
+func (bb *SQLiteBlackboard) DB() protocol.BlackboardDB {
+	return bb.db
+}
+
+// SetRegistry 注入 AgentRegistry 用于校验 SpawnDepth
+func (bb *SQLiteBlackboard) SetRegistry(r *AgentRegistry) {
+	bb.mu.Lock()
+	defer bb.mu.Unlock()
+	bb.registry = r
+}
+
+// SetTaskRetentionTTL 注入任务归档和清理的保留时间
+func (bb *SQLiteBlackboard) SetTaskRetentionTTL(ttl time.Duration) {
+	bb.mu.Lock()
+	defer bb.mu.Unlock()
+	if ttl >= 5*time.Minute {
+		bb.taskRetentionTTL = ttl
+	}
+}
+
+var _ protocol.Blackboard = (*SQLiteBlackboard)(nil)
+
+// PostTask 发布任务到黑板（INSERT OR IGNORE，幂等键保护）。
+func (bb *SQLiteBlackboard) PostTask(ctx context.Context, task *types.TaskEntry) error {
+	// 防止 Custom Agent 无限递归派生（inv_M8_06）
+	maxDepth := bb.resolveMaxDepth(task.Type)
+	if task.SpawnDepth > maxDepth {
+		return apperr.New(apperr.CodeForbidden,
+			fmt.Sprintf("blackboard.PostTask: SpawnDepth %d exceeds max %d for agent %q",
+				task.SpawnDepth, maxDepth, task.Type))
+	}
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// A16: 从 ctx 提取 trace，落盘延续
+	span := trace.SpanFromContext(ctx)
+	var traceID, spanID string
+	if span != nil {
+		traceID = span.TraceID
+		spanID = span.SpanID
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, intent, intent_taint, trace_id, span_id, spawn_depth, parent_task_id, created_at, updated_at)
+		VALUES(?,?,?,?,0,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'),strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
+		task.ID, task.Type, statusPending, task.Priority, task.Namespace, task.Intent, int(task.IntentTaint), traceID, spanID, task.SpawnDepth, task.ParentTaskID,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostTask", err)
+	}
+	// INSERT OR IGNORE：仅首次插入（rows>0）写事件，避免重复幂等 post 产生噪音事件
+	rows, raErr := result.RowsAffected()
+	if raErr != nil {
+		slog.Warn("blackboard: RowsAffected failed", "err", raErr)
+	}
+	if rows > 0 {
+		if err := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_posted", task.ID); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "blackboard.PostTask: write event", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostTask: commit", err)
+	}
+	bb.broadcast(types.BlackboardEvent{Type: "task_posted", TaskID: task.ID})
+	return nil
+}
+
+// PostBatch 原子性地批量发布多个任务到黑板。
+func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*types.TaskEntry) error {
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, intent, intent_taint, trace_id, span_id, spawn_depth, parent_task_id, created_at, updated_at)
+		VALUES(?,?,?,?,0,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'),strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
+	}
+	defer stmt.Close()
+
+	span := trace.SpanFromContext(ctx)
+	var traceID, spanID string
+	if span != nil {
+		traceID = span.TraceID
+		spanID = span.SpanID
+	}
+
+	for _, task := range tasks {
+		maxDepth := bb.resolveMaxDepth(task.Type)
+		if task.SpawnDepth > maxDepth {
+			return apperr.New(apperr.CodeForbidden,
+				fmt.Sprintf("blackboard.PostBatch: SpawnDepth %d exceeds max %d for agent %q",
+					task.SpawnDepth, maxDepth, task.Type))
+		}
+		result, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority, task.Namespace, task.Intent, int(task.IntentTaint), traceID, spanID, task.SpawnDepth, task.ParentTaskID)
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
+		}
+		rows, raErr := result.RowsAffected()
+		if raErr != nil {
+			slog.Warn("blackboard: RowsAffected failed", "err", raErr)
+		}
+		if rows > 0 {
+			if err := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_posted", task.ID); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch: write event", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
+	}
+
+	for _, task := range tasks {
+		bb.broadcast(types.BlackboardEvent{
+			Type:   "task_posted",
+			TaskID: task.ID,
+		})
+	}
+	return nil
+}
+
+// ClaimTask CAS 原子认领：仅 status=pending 且无 claimed_by 时成功。
+// 返回 (true, nil) 表示认领成功；(false, nil) 表示被他人抢先。
+func (bb *SQLiteBlackboard) ClaimTask(ctx context.Context, taskID, agentID string) (bool, error) {
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	expiresAt := time.Now().Add(DefaultLeaseTTL).UTC().Format(time.RFC3339)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status=?, claimed_by=?, claimed_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'), expires_at=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE task_id=? AND status=?`,
+		statusClaimed, agentID, expiresAt, taskID, statusPending,
+	)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask", err)
+	}
+	rows, raErr := result.RowsAffected()
+	if raErr != nil {
+		slog.Warn("blackboard: RowsAffected failed", "err", raErr)
+	}
+	if rows == 0 {
+		return false, nil // CAS miss：被抢先或任务不存在，Rollback 由 defer 执行
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_claimed", taskID); err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask: write event", err)
+	}
+	// A16: 读取 PostTask 时落盘的 trace_id/span_id，随广播事件透传给认领方
+	// 认领方可用 trace.ContextWithRemoteSpan(ctx, ev.TraceID, ev.SpanID) 恢复 trace 连续性
+	// L3：读取失败只影响链路连续性（trace/span 透传丢失），不影响认领本身已经
+	// commit 成功的事实，claimTraceID/claimSpanID 保持零值继续广播。
+	var claimTraceID, claimSpanID string
+	if scanErr := tx.QueryRowContext(ctx, "SELECT COALESCE(trace_id,''), COALESCE(span_id,'') FROM tasks WHERE task_id=?", taskID).
+		Scan(&claimTraceID, &claimSpanID); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			slog.DebugContext(ctx, "blackboard: claim trace/span readback found no row (task deleted concurrently)", "task_id", taskID)
+		} else {
+			slog.WarnContext(ctx, "blackboard: claim trace/span readback failed, broadcast will carry empty trace context", "task_id", taskID, "err", scanErr)
+		}
+		metrics.RecordBlackboardScanError(ctx, "claim_trace_span_readback")
+	}
+	if err := tx.Commit(); err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask: commit", err)
+	}
+	bb.broadcast(types.BlackboardEvent{Type: "task_claimed", TaskID: taskID, AgentID: agentID, TraceID: claimTraceID, SpanID: claimSpanID})
+	return true, nil
+}
+
+// StartExecution 将任务从 claimed 推进到 running 状态，表示 Agent 已开始实际执行。
+// 需持有认领权（claimed_by == agentID）；幂等：already-running 不报错。
+func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID string) error {
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.StartExecution: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE task_id=? AND claimed_by=? AND status=?`,
+		statusRunning, taskID, agentID, statusClaimed,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.StartExecution", err)
+	}
+	rows, raErr := res.RowsAffected()
+	if raErr != nil {
+		slog.Warn("blackboard: RowsAffected failed", "err", raErr)
+	}
+	if rows == 0 {
+		// 可能已是 running（幂等）或未认领（错误），见 startExecutionIdempotentCheck。
+		return bb.startExecutionIdempotentCheck(ctx, tx, taskID, agentID)
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_running", taskID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.StartExecution: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.StartExecution: commit", err)
+	}
+	bb.broadcast(types.BlackboardEvent{
+		Type:    "task_running",
+		TaskID:  taskID,
+		AgentID: agentID,
+	})
+	return nil
+}
+
+// startExecutionIdempotentCheck 处理 StartExecution 的 UPDATE 影响行数为 0 的
+// 情况：任务可能已是 running（幂等，返回 nil）或未认领（错误，返回
+// ErrTaskNotOwned）。从 StartExecution 抽出以降低嵌套深度（golangci-lint
+// nestif 阈值），语义与原内联逻辑完全一致。
+//
+// L3：读取失败时 status 保持零值 ""，与"未认领"分支走同一 ErrTaskNotOwned
+// 出口——语义上安全（不会误判为已 running），但需要计数以便区分"真的未
+// 认领"与"读取本身失败"两种情况，避免误判被长期掩盖。
+//
+// GR-6.2-003：幂等成立的前提是"running 且持有者就是调用方"。原实现只看
+// status，任意其他 agent 对别人正在执行的任务调 StartExecution 都会得到
+// nil，误以为自己拿到了执行权。
+func (bb *SQLiteBlackboard) startExecutionIdempotentCheck(ctx context.Context, tx *sql.Tx, taskID, agentID string) error {
+	var status string
+	var claimedBy sql.NullString
+	if scanErr := tx.QueryRowContext(ctx, "SELECT status, claimed_by FROM tasks WHERE task_id=?", taskID).Scan(&status, &claimedBy); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			slog.DebugContext(ctx, "blackboard: start-execution status readback found no row (task deleted concurrently)", "task_id", taskID)
+		} else {
+			slog.WarnContext(ctx, "blackboard: start-execution status readback failed", "task_id", taskID, "err", scanErr)
+		}
+		metrics.RecordBlackboardScanError(ctx, "start_execution_status_readback")
+	}
+	if status != statusRunning || !claimedBy.Valid || claimedBy.String != agentID {
+		return ErrTaskNotOwned
+	}
+	// already-running 幂等路径：不写事件，直接 Rollback 返回 nil
+	return nil
+}
+
+// CompleteTask 将任务标记为完成（须持有认领权）。
+func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID string, result []byte) error {
+	bb.mu.Lock()
+	bb.removeCancelFunc(taskID)
+	bb.mu.Unlock()
+
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// B-3 修复：如果是 claimed 状态直接完成，内部强制先推到 running 态以记录历史轨迹
+	_, execErr := tx.ExecContext(ctx, `
+		UPDATE tasks SET status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE task_id=? AND claimed_by=? AND status=?`,
+		statusRunning, taskID, agentID, statusClaimed)
+	if execErr != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask: set running", execErr)
+	}
+
+	// [修复] 此前 UPDATE 语句未写入 result 参数——tasks 表长期只有 result_taint
+	// 没有 result 本体列，导致 CompleteTask 接收的产出内容被静默丢弃，PeekTask
+	// 永远读不到真实结果（见 007_tasks.sql result 列注释）。
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status=?, result=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE task_id=? AND claimed_by=? AND status=?`,
+		statusDone, result, taskID, agentID, statusRunning,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask", err)
+	}
+	rows, raErr := res.RowsAffected()
+	if raErr != nil {
+		slog.Warn("blackboard: RowsAffected failed", "err", raErr)
+	}
+	if rows == 0 {
+		return ErrTaskNotOwned
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_completed", taskID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask: commit", err)
+	}
+	bb.broadcast(types.BlackboardEvent{
+		Type:    "task_completed",
+		TaskID:  taskID,
+		AgentID: agentID,
+		// Payload 携带任务结果字节，对齐 FailTask 的 Payload:errBytes 既有模式
+		// （此前遗漏，导致 PatternDAGExecutor/StateGraphExecutor 等消费方读到的
+		// ev.Payload 恒为空——GD-8-001 StateGraph 条件边求值发现，见 M08 §3-quinquies）。
+		// DB 侧不落盘完整 result（tasks 表无独立 result 列，与 FailTask 的 errBytes
+		// 处理方式一致），仅通过广播事件传递给订阅方。
+		Payload: result,
+	})
+	return nil
+}
+
+// FailTask 将任务标记为失败。
+func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string, errBytes []byte) error {
+	bb.mu.Lock()
+	bb.removeCancelFunc(taskID)
+	bb.mu.Unlock()
+
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.FailTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 失败原因写入 result：委派方（transfer_to_agent 恢复分支）据此把原因回传给模型，
+	// 此前只随广播发送，恢复/重启后读到的失败任务没有任何原因。
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status=?, result=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,
+		statusFailed, errBytes, taskID, agentID, statusClaimed, statusRunning,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.FailTask", err)
+	}
+	rows, raErr := res.RowsAffected()
+	if raErr != nil {
+		slog.Warn("blackboard: RowsAffected failed", "err", raErr)
+	}
+	if rows == 0 {
+		return ErrTaskNotOwned
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_failed", taskID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.FailTask: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.FailTask: commit", err)
+	}
+	bb.broadcast(types.BlackboardEvent{
+		Type:    "task_failed",
+		TaskID:  taskID,
+		AgentID: agentID,
+		Payload: errBytes,
+	})
+	return nil
+}
+
+// SubscribeTaskEvents 订阅指定任务（含子 Agent 委派任务）的实时事件流。
+// 返回一个只读 channel，当任务产生流式事件时推送。
+// 调用方必须在不再需要时调用返回的 cancel 函数取消订阅（GD-13-001）。
+//
+// 并发契约（与 Subscribe/broadcast 同一 idiom，见 sqlite_blackboard_ops.go）：
+// 订阅表用 bb.subMu 而非 bb.mu 保护——bb.mu 同时保护 cancels/registry 且被
+// 任务认领等 DB 路径持有，把广播扇出压到该锁上会放大争用；且此处必须**在持锁
+// 期间完成 channel 发送**（见 PublishTaskEvent 注释），锁的粒度必须尽可能小。
+//
+// cancel 幂等：重复调用只有第一次会摘除并 close，避免 close of closed channel。
+func (bb *SQLiteBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
+	ch := make(chan types.AgentStreamEvent, 64)
+	bb.subMu.Lock()
+	if bb.taskEventSubs == nil {
+		bb.taskEventSubs = make(map[string][]chan types.AgentStreamEvent)
+	}
+	bb.taskEventSubs[taskID] = append(bb.taskEventSubs[taskID], ch)
+	bb.subMu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			bb.subMu.Lock()
+			defer bb.subMu.Unlock()
+			subs := bb.taskEventSubs[taskID]
+			for i, s := range subs {
+				if s == ch {
+					subs = append(subs[:i], subs[i+1:]...)
+					break
+				}
+			}
+			// 空 slice 必须连 key 一起删除：每次 transfer_to_agent 委派都会新建一个
+			// taskID key，若只留空 slice，map 会随委派次数无界增长（Tier-0 2GB 约束
+			// 下这是真实的常驻内存泄漏，且任务终态后该 key 永远不会被复用）。
+			if len(subs) == 0 {
+				delete(bb.taskEventSubs, taskID)
+			} else {
+				bb.taskEventSubs[taskID] = subs
+			}
+			close(ch)
+		})
+	}
+	return ch, cancel
+}
+
+// PublishTaskEvent 向指定任务的所有订阅者广播事件（GD-13-001）。
+//
+// 必须**在持有 subMu 读锁期间**完成发送：若先复制订阅者切片再释放锁后发送，
+// 与 cancel() 的 close(ch) 之间存在窗口——订阅者取消（父 Agent 收到
+// task_completed 后 defer cancelSub）与子 Agent 收尾事件的投递几乎必然同时
+// 发生，命中窗口即 panic: send on closed channel。cancel 侧取写锁 + close，
+// 本侧取读锁 + 发送，二者互斥即消除该竞态（与 broadcast 完全一致的 idiom）。
+// 发送是 select/default 非阻塞的，持锁时间为 O(订阅者数)，不会长时间阻塞。
+func (bb *SQLiteBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {
+	bb.subMu.RLock()
+	defer bb.subMu.RUnlock()
+	for _, ch := range bb.taskEventSubs[taskID] {
+		select {
+		case ch <- event:
+		default:
+			// 订阅者消费慢，丢弃事件而非阻塞子 Agent
+		}
+	}
+}

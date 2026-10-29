@@ -1,0 +1,304 @@
+package fsm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
+	"github.com/polarisagi/polaris/internal/prompt"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
+)
+
+// ============================================================================
+// Effect 工厂方法（PromptFn + OnSuccess/OnFailure）
+// ============================================================================
+
+func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateContext) []types.Message {
+	// 有记忆系统时注入历史事件（Episodic 相关任务 + ReasoningState 跨轮持久化）
+	if pCtx.Mem != nil {
+		ctx, cancel := sm.bgCtx()
+		defer cancel()
+		if msgs, err := sm.cb.BuildPerceiveContext(ctx, pCtx.Mem, sCtx, sCtx.Cognitive); err == nil {
+			return msgs
+		}
+	}
+
+	// 降级路径（无记忆系统）与记忆路径同构：L1 会话层 → L2 历史 → L3 阶段模板 → L4 本轮意图
+	// （ADR-0105 决策一）。S-02：模板不再承载 ExtensionsSection 占位符——扩展自述属不可信
+	// 数据，由 WriteSessionLayer 单独按 TaintHigh 围栏写入，保持模板与 TaintNone 标记名副其实。
+	b := prompt.NewPromptBuilder()
+	sCtx.Mu.RLock()
+	rawIntent := sCtx.RawIntentTS
+	epochTracker := sCtx.EpochTracker
+	sCtx.Mu.RUnlock()
+
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("perceive: session layer failed, continuing without it", "err", err)
+	}
+	WriteConversationHistory(b, sCtx)
+	WriteKernelInstruction(b, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object.")
+
+	b.WriteUserData(rawIntent)
+	msgs := FinishLayered(b, nil)
+	if epochTracker != nil {
+		sCtx.Mu.Lock()
+		sCtx.ContextEpoch = epochTracker.check(msgs)
+		sCtx.Mu.Unlock()
+	}
+	return msgs
+}
+
+func (sm *StateMachine) onPerceiveSuccess(sCtx protocol.StateContext, fill []byte) (types.State, error) {
+	// 空 LLM 输出不得静默当作成功：fill 是下游 Plan/Execute 阶段感知上下文的
+	// 唯一来源，空内容意味着模型未产出有效结果（内容过滤/超时截断/Provider
+	// 异常返回空 completion），必须走与 onPerceiveFailure 相同的熔断路径，
+	// 而非让下游继续消费空上下文（A-01/P-2：LLM 输出零兜底）。
+	if len(bytes.TrimSpace(fill)) == 0 {
+		return types.State("S_PERCEIVE_FAILED"), apperr.New(apperr.CodeInternal, "perceive: LLM returned empty content")
+	}
+	return types.State("S_PERCEIVE_DONE"), nil
+}
+
+func (sm *StateMachine) onPerceiveFailure(sCtx protocol.StateContext, err error) (types.State, error) {
+	return types.State("S_PERCEIVE_FAILED"), apperr.New(apperr.CodeInternal, "perceive: LLM fill failed")
+}
+
+func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContext) []types.Message {
+	// 运行期提示块（重规划新增工具、<tool-hints>）先落到 sCtx，两条路径统一写入 L3。
+	// 此前记忆路径把它们追加到 msgs[0]，会改写 L0 稳定核（ADR-0105 决策一）。
+	blocks := sm.planHintBlocks()
+	sCtx.Mu.Lock()
+	sCtx.PlanHintBlocks = blocks
+	sCtx.Mu.Unlock()
+
+	// 有记忆系统时注入历史执行经验（Episodic Top-5 + 任务目标 + 工具列表）
+	if pCtx.Mem != nil {
+		ctx, cancel := sm.bgCtx()
+		defer cancel()
+		if msgs, err := sm.cb.BuildPlanContext(ctx, pCtx.Mem, sCtx, nil, sCtx.Cognitive); err == nil {
+			if sCtx.EpochTracker != nil {
+				sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+			}
+			return msgs
+		}
+	}
+
+	b := prompt.NewPromptBuilder()
+	sCtx.Mu.RLock()
+	groundingGap := sCtx.GroundingGap
+	preferences := sCtx.Preferences
+	sCtx.Mu.RUnlock()
+
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("plan: session layer failed, continuing without it", "err", err)
+	}
+	WriteConversationHistory(b, sCtx)
+
+	// TaskID 激活作用域同源于 pCtx.SessionID（与 agent_execute.go 的
+	// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID) 保持一致），
+	// 否则 tool_search 上一轮激活的工具在本轮（无 Memory 系统时的降级路径）
+	// 重建 ToolsSection 时读不到，见 internal/tool/catalog/composite.go Schemas()。
+	toolListCtx, cancel := sm.bgCtx()
+	defer cancel()
+	toolListCtx = context.WithValue(toolListCtx, protocol.CtxTaskIDKey{}, pCtx.SessionID)
+
+	// L3 阶段层。S-02：模板不再承载 ToolsSection/ExtensionsSection 占位符。
+	WriteKernelInstruction(b, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section.")
+
+	// 外部工具目录（第三方来源，禁止混入 ZoneImmutable）。拆成独立方法以控制 promptPlan
+	// 圈复杂度（R7/gocyclo）；工具目录只出现在 Plan，故属 L3 而非 L1。
+	sm.writePlanExternalCatalogs(b, toolListCtx)
+
+	mode, anyAppEnabled, chromeEnabled := computerUsePolicyFromPrefs(preferences)
+	// 未开启任何电脑操控能力时不注入策略（ADR-0119：约 250 token/轮，且对模型无可执行内容）。
+	if anyAppEnabled || chromeEnabled {
+		b.WriteComputerUsePolicy(mode, anyAppEnabled, chromeEnabled)
+	}
+	WritePlanHints(b, sCtx)
+
+	// 预算压力约束：75% 阈值已触发时，要求 LLM 生成最小必要 DAG。
+	// 防止在预算末尾生成大型 DAG 导致 S_EXECUTE 阶段触发 INFERENCE_OOM。
+	if sCtx.BudgetPressure {
+		budgetHint := fmt.Sprintf(
+			"[BUDGET_CONSTRAINT] Token budget is above %d%%. Generate a MINIMAL DAG: "+
+				"maximum 3 nodes, only strictly necessary tool calls, no exploratory steps. "+
+				"Remaining budget: %d tokens.",
+			BudgetCriticalPct,
+			sCtx.TokenBudget-sCtx.TokensUsed,
+		)
+		budgetTS := taint.NewTaintedString(
+			budgetHint,
+			taint.TaintSource{OriginTaintLevel: types.TaintNone},
+			"system_budget_constraint",
+		)
+		safeHint, _ := taint.SanitizeToSafe(budgetTS)
+		b.WriteInstruction(safeHint)
+	}
+
+	// L4 回合层：TaskModel → GroundingGap → 观测 → 重规划反馈。
+	if sCtx.TaskModel != nil {
+		goalTS := taint.NewTaintedString(
+			"Task Goal: "+sCtx.TaskModel.Goal,
+			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
+			"m4_task_model",
+		)
+		b.WriteUserData(goalTS)
+	}
+	// GroundingGap 来自世界模型对外部知识的评估，属不可信数据：进 ZoneUserData 围栏，
+	// 禁止拼进 TaintNone 的系统模板（GR-4.1-003，特权区注入）。
+	if groundingGap != "" {
+		b.WriteUserData(taint.NewTaintedString(
+			"Critical Knowledge Gap (address it explicitly in the plan):\n"+groundingGap,
+			taint.TaintSource{Module: "world_model", OriginTaintLevel: types.TaintHigh},
+			"grounding_gap"))
+	}
+	WriteObservations(b, sCtx)
+	WriteReplanFeedback(b, sCtx)
+
+	msgs := FinishLayered(b, nil)
+	if sCtx.EpochTracker != nil {
+		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+	}
+	return msgs
+}
+
+func (sm *StateMachine) onPlanFailure(sCtx protocol.StateContext, err error) (types.State, error) {
+	return types.State("S_PLAN_FAILED"), apperr.New(apperr.CodeInternal, "plan: LLM fill failed")
+}
+
+// writePlanExternalCatalogs 将第三方来源的工具目录写入 ZoneExternalCatalog 的 L3 阶段层
+// （S-02：从 promptPlan 拆出以控制圈复杂度，语义不变）。扩展自述目录已移至 L1
+// （WriteSessionLayer），这里只剩仅 Plan 阶段需要的工具目录。
+func (sm *StateMachine) writePlanExternalCatalogs(b *prompt.PromptBuilder, toolListCtx context.Context) {
+	// MCP 外部工具描述禁止与内核指令混入同一 TaintNone 区；BuildToolListSection
+	// 返回该次目录中出现过的最高来源污点等级。
+	toolsSection, toolsTaint := sm.cb.BuildToolListSection(toolListCtx, nil)
+	if toolsSection != "" {
+		b.SetLayer(protocol.LayerPhase)
+		b.WriteExternalCatalog("tools", taint.NewTaintedString(
+			toolsSection,
+			taint.TaintSource{Module: "tool_catalog", OriginTaintLevel: toolsTaint},
+			"tool_catalog"))
+		b.ResetLayer()
+	}
+}
+
+// computerUsePolicyFromPrefs 从会话偏好解析电脑操控策略三元组
+// （S-02：从 promptPlan 拆出以控制圈复杂度，语义不变）。
+func computerUsePolicyFromPrefs(preferences map[string]string) (mode string, anyAppEnabled, chromeEnabled bool) {
+	mode = "auto_review"
+	if preferences == nil {
+		return mode, false, false
+	}
+	if v, ok := preferences[types.PrefPermissionMode]; ok && v != "" {
+		mode = v
+	} else if v, ok := preferences[types.LegacyPrefComputerUseMode]; ok && v != "" {
+		mode = v // 迁移前遗留的快照键；启动迁移后不会再出现
+	}
+	if v, ok := preferences["computer_any_app_enabled"]; ok {
+		anyAppEnabled = v == "true"
+	}
+	if v, ok := preferences["computer_chrome_enabled"]; ok {
+		chromeEnabled = v == "true"
+	}
+	return mode, anyAppEnabled, chromeEnabled
+}
+
+func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateContext) []types.Message {
+	// 有记忆系统时注入历史执行经验
+	if pCtx.Mem != nil {
+		ctx, cancel := sm.bgCtx()
+		defer cancel()
+		if msgs, err := sm.cb.BuildReflectContext(ctx, pCtx.Mem, sCtx); err == nil {
+			return msgs
+		}
+	}
+
+	b := prompt.NewPromptBuilder()
+	if err := WriteSessionLayer(context.Background(), b, nil, sCtx); err != nil {
+		slog.Warn("reflect: session layer failed, continuing without it", "err", err)
+	}
+	WriteConversationHistory(b, sCtx)
+	WriteKernelInstruction(b, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
+
+	resultTS := taint.NewTaintedString(
+		"Execution Result: "+string(ExecuteResultForPrompt(sCtx)),
+		taint.TaintSource{OriginTaintLevel: types.TaintHigh},
+		"m4_execute_result",
+	)
+	b.WriteUserData(resultTS)
+	msgs := FinishLayered(b, nil)
+	if sCtx.EpochTracker != nil {
+		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+	}
+	return msgs
+}
+
+// bgCtx 返回带超时的后台 context，用于内存检索（不绑定任务生命周期）。
+// 超时 3s 对齐 M05 §2 L1 Episodic 读 <5ms 要求，防 SQLite 锁争用无限阻塞。
+func (sm *StateMachine) bgCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 3*time.Second)
+}
+
+func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte) (types.State, error) {
+	// GR-4-005 复核修复：ReflectionModel 所有字段都是可选的（零值合法），schema 校验
+	// 失败时不改变既有"记录日志后仍推进 S_REFLECT_DONE"的降级语义（Reflect 阶段本来
+	// 就是尽力而为，不阻断主流程），仅补上此前完全没有的可观测性埋点。
+	// 与 parsePlanOnSuccess 同理：先剥掉模型惯用的 ```json 代码围栏再解析，
+	// 否则反思结果恒定解析失败、静默退化成空 ReflectionModel（2026-09-22）。
+	fill = []byte(util.ExtractJSONBraces(string(fill)))
+
+	if schemaErr := schemavalidate.Validate("reflect_result", fill); schemaErr != nil {
+		slog.Warn("reflect: content failed schema validation", "err", schemaErr)
+	}
+	var ref ReflectionModel
+	if err := json.Unmarshal(fill, &ref); err != nil {
+		slog.Warn("reflect: failed to parse ReflectionModel", "err", err)
+		return types.State("S_REFLECT_DONE"), nil
+	}
+
+	if len(ref.Learnings) > 0 && sCtx.Mem != nil {
+		ctx, cancel := sm.bgCtx()
+		defer cancel()
+		for _, learning := range ref.Learnings {
+			if learning == "" {
+				continue
+			}
+			event := types.Event{
+				ID:        fmt.Sprintf("reflect_%d", time.Now().UnixNano()),
+				Type:      types.EventType("learning"),
+				Status:    types.StatusDone,
+				TaskID:    sCtx.SessionID,
+				AgentID:   sCtx.AgentID,
+				ProjectID: sCtx.ProjectID, // bgCtx 不携带项目，须显式打标（ADR-0097 决策三修订）
+				Payload:   []byte(`{"learning":` + fmt.Sprintf("%q", learning) + `}`),
+				CreatedAt: time.Now(),
+			}
+			// learning 是 LLM 反思产出：至少 TaintMedium（LLM 输出硬地板），并继承会话累计污点（GR-4.1-002）。
+			learnTaint := types.PropagateTaint(types.TaintMedium, sCtx.MaxTaintLevel)
+			if err := sCtx.Mem.AppendEpisodicEvent(ctx, event, learnTaint); err != nil {
+				slog.Warn("reflect: failed to write learning to episodic memory",
+					"session_id", sCtx.SessionID, "err", err)
+			}
+		}
+	}
+
+	return types.State("S_REFLECT_DONE"), nil
+}
+
+// onReflectFailure 反思尽力而为（ADR-0098）：到这里工具已执行完毕，反思 LLM 失败
+// 只意味着 Respond 拿不到反思结论，不应以 S_FAILED 丢掉整轮回复。失败本身经日志
+// 与上游 executeEffect 的推理失败事件可见，不是静默吞错。
+func (sm *StateMachine) onReflectFailure(sCtx protocol.StateContext, err error) (types.State, error) {
+	slog.Warn("reflect: LLM fill failed, continuing to S_RESPOND without reflection",
+		"session_id", sCtx.SessionID, "err", err)
+	return types.State("S_REFLECT_DONE"), nil
+}

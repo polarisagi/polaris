@@ -1,0 +1,332 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"strconv"
+	"sync/atomic"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// outboxSeqCounter 进程内单调递增计数器，与纳秒时间戳组合生成幂等键后缀。
+// 单独使用 time.Now().UnixNano() 不足以保证唯一：同一 goroutine 内背靠背的
+// 两次调用（如 recordLLMFillEffectMemory 的 reflect 分支紧接着触发
+// consolidate 分支）可能落在同一操作系统时钟粒度内，UnixNano() 返回相同值
+// （已被 TestOutboxUniqueSuffix_Unique 实测命中）。加一个原子计数器可在
+// 时钟精度不足时兜底，保证进程内任意两次调用绝不相同。
+// 纯粹避免碰撞的单调序号，非业务共享状态，故豁免 gochecknoglobals。
+//
+//nolint:gochecknoglobals
+var outboxSeqCounter atomic.Uint64
+
+// outboxUniqueSuffix 返回一个真正唯一的幂等键后缀（纳秒时间戳 + 单调序号）。
+// 2026-07-22 一致性审查修复背景：本文件多处 Outbox 幂等键此前固定为
+// "{sessionID}:{阶段}:{agentID}" 形状——由于同一 chat session 的 sessionID/
+// AgentID 在其*整个生命周期*内保持不变（internal/agent/agent.go NewAgent：
+// sCtx.SessionID = id = AgentID），该键对同一会话的每一轮对话都完全相同。
+// outbox.idempotency_key 是 UNIQUE 约束列（002_outbox.sql），意味着这类
+// 投影事件（perceive/plan/exec/reflect 记忆投影 + 记忆蒸馏触发）此前只有
+// *会话的第一轮*能成功写入 outbox，第二轮起全部因约束冲突被静默丢弃
+// （`_ = ...Write(...)` 吞掉了错误）——多轮对话场景下记忆投影/蒸馏实际上从
+// 第二轮起就从未真正触发过。这里的调用点都是同步执行一次、无重试语义，
+// 用纳秒时间戳 + 单调序号即可保证每次真实投影都不会与历史记录或同一进程内
+// 其他调用冲突，不需要引入更复杂的跨 Agent 实例全局幂等状态机制。
+// ↑ 以上说明属于 outboxUniqueSuffix（见下方定义）。
+
+// outboxIdemKey 组装 FSM 派生事件的 outbox 幂等键：规范前缀 + 唯一性后缀。
+//
+// 前缀走 types.BuildIdempotencyKey，与全仓其余 11 个投递点保持同一格式
+// engine:type:id:op:version（ADR-0076）；后缀保留 outboxUniqueSuffix()，因为这批
+// 派生事件（记忆投影/语义抽取/巩固触发）**必须每次都是新事件、不可被 outbox 去重**，
+// 而 version 是 int，装不下「纳秒 + 进程内原子序号」两段，只能显式外挂。
+//
+// AgentID 不再进键：唯一性已由进程全局原子序号保证，键里带它并不能防任何碰撞，
+// 而它本来就在 payload 里——键的职责是去重，不是承载业务字段。
+func (a *Agent) outboxIdemKey(topic, entityType, entityID, op string) string {
+	return string(types.BuildIdempotencyKey(topic, entityType, entityID, op, 1)) +
+		":" + outboxUniqueSuffix()
+}
+
+func outboxUniqueSuffix() string {
+	seq := outboxSeqCounter.Add(1)
+	return strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + strconv.FormatUint(seq, 10)
+}
+
+// executeDeterministicEffect 处理 executeEffect 的非 LLM 效应分支，从
+// agent_execute_effect.go 拆出（R7 文件行数治理，2026-07-07），逻辑与拆分前完全一致。
+//
+// handled=true 表示该分支已自行完成状态机推进（S_VALIDATE/S_EXECUTE 均通过
+// runValidateDAG/runExecuteDAG 内部 SendIntent 推进 FSM），调用方应直接
+// return err，不再走 executeEffect 末尾的统一 stateToTriggerMap 分发，
+// 避免双重推进。
+func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.Effect) (nextState types.State, err error, handled bool) { //nolint:gocyclo,cyclop
+	detEff, ok := effect.(protocol.DeterministicEffect)
+	if !ok {
+		return "", apperr.New(apperr.CodeInternal, "invalid DeterministicEffect type"), true
+	}
+
+	// S_VALIDATE 阶段拦截：调用 Agent 层四层校验（可访问 policyGate 与完整 sCtx）。
+	// 此分支由 runValidateDAG 自行通过 SendIntent 推进 FSM（ValidateOk / ValidateFail），
+	// 因此直接返回，不走 stateToTriggerMap 路径，避免双重推进。
+	if a.sm.Current() == types.AgentStateValidate {
+		// FastPath 空执行路径（SurpriseIndex 触发但无 LLM 生成 DAG）：nil DAGModel 直接放行。
+		// runValidateDAG 对 nil plan 会触发 L0 拦截，因此在进入前短路。
+		if a.sCtx.DAGModel == nil {
+			a.asyncIntent(types.TriggerValidateOk)
+			return "", nil, true
+		}
+		if verr := a.runValidateDAG(ctx); verr != nil {
+			// 业务校验失败会触发 ValidateFail，不应被视为系统级致命错误导致 Run 崩溃退出
+			slog.Debug("kernel: validate DAG", "err", verr)
+		}
+		return "", nil, true
+	}
+
+	// S_LOOP_RECALL 阶段拦截：执行 agentic 循环首轮记忆召回与首条消息种入（R4-02）
+	if a.sm.Current() == types.AgentStateLoopRecall {
+		recallErr := a.runLoopRecall(ctx)
+		return "", recallErr, true
+	}
+
+	// S_LOOP_EXEC 阶段拦截：调用 Agent 层循环工具执行与校验
+	if a.sm.Current() == types.AgentStateLoopExec {
+		execErr := a.runExecuteLoop(ctx)
+		return "", execErr, true
+	}
+
+	// S_EXECUTE 阶段拦截：调用 Agent 层 DAG 执行（可访问 toolRegistry 与完整 sCtx）。
+	// 同理，由 runExecuteDAG 自行推进 FSM（ExecuteDone / ExecuteFail）。
+	if a.sm.Current() == types.AgentStateExecute { //nolint:nestif
+		// GD-13-003: 退出 S_AWAIT_AGENT 进入 S_EXECUTE 时，清理 Checkpoint
+		if a.sCtx.HandoffTaskID != "" && a.taskCheckpointRepo != nil {
+			err := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+				TaskID:     a.sCtx.SessionID,
+				NodeID:     a.sCtx.HandoffTaskID,
+				Attempt:    1,
+				Status:     "done",
+				StartedAt:  time.Now().Unix(),
+				Reason:     "handoff_wait",
+				TaintLevel: a.sCtx.GlobalTaintLevel,
+			})
+			if err != nil {
+				slog.Error("kernel: clear handoff wait checkpoint failed", "err", err)
+			}
+		}
+
+		// runExecuteDAG 内负责在完成后将结果写入 a.sCtx.ExecuteResult
+		execErr := a.runExecuteDAG(ctx)
+		if execErr == nil && a.memory != nil && len(a.sCtx.ExecuteResult) > 0 {
+			eventID := a.sm.NextEventID(a.sCtx.SessionID, "exec")
+			a.writeEpisodicWithExtract(ctx, types.Event{
+				ID:        eventID,
+				Type:      "execution_completed",
+				TaskID:    a.memoryPartitionKey(), // GD-14-001：命名空间内共享，未设置时等于 SessionID
+				Payload:   a.sCtx.ExecuteResult,
+				CreatedAt: time.Now(),
+			})
+			a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+				ID:        eventID,
+				Type:      "execution_completed",
+				TaskID:    a.memoryPartitionKey(),
+				Payload:   a.sCtx.ExecuteResult,
+				CreatedAt: time.Now(),
+			}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "exec"),
+				"execution_completed")
+		}
+		// 业务执行失败会触发 ExecuteFail，同样不抛出以免阻断状态机
+		return "", nil, true
+	}
+
+	// GD-1: S_AWAIT_AGENT 阶段拦截：持久化 Handoff 状态并启动后台 watcher。
+	//
+	// 修复说明：此前版本在此处额外投递了 TriggerSuspend——FSM 转移表
+	// 中该 Trigger 只定义了 S_IDLE → S_SUSPENDED 一条边，从
+	// S_AWAIT_AGENT 触发必然命中 Dispatch() 的"no transition"硬错误，
+	// Agent.Run() 主循环随即返回错误退出，导致每次 transfer_to_agent
+	// 调用都会让父任务在挂起后立即失败，且没有任何组件负责在委派完成时
+	// 唤醒它。现改为：不再投递 TriggerSuspend，FSM 保持在 S_AWAIT_AGENT
+	// 自然等待（与其它非终态一致，Run() 主循环的 select 会持续等待下一个
+	// Trigger），由 watchHandoffCompletion 启动的后台 watcher 负责在委派
+	// 完成时投递 TriggerAgentHandoffDone 恢复执行。
+	if a.sm.Current() == types.AgentStateAwaitAgent {
+		a.persistHandoffWaitCheckpoint(ctx)
+		// SpawnAgents 已启动覆盖全部子任务的 watcher 时不得再被单子任务 watcher 顶替
+		// （registerHandoffWatcher 会取消旧者，造成已转发/预订阅事件丢失）。
+		a.sCtx.Mu.RLock()
+		watching := a.sCtx.HandoffWatchCancel != nil
+		a.sCtx.Mu.RUnlock()
+		if !watching {
+			a.watchHandoffCompletion(a.sCtx.HandoffTaskID)
+		}
+		return "", nil, true
+	}
+
+	// S_LOOP_AWAIT 阶段拦截：持久化 Handoff 状态并等待子智能体完成唤醒（R2-03）
+	if a.sm.Current() == types.AgentStateLoopAwait {
+		a.persistHandoffWaitCheckpoint(ctx)
+		return "", nil, true
+	}
+
+	// S_RESPOND 的确定性 Effect 只有一种来源：Perceive 已同次产出回复（ADR-0102 决策四 4b′）。
+	// 正文在此以用户受众发布，与 LLM 回复路径经 doStreamInfer 发布的事件同形。
+	if a.sm.Current() == types.AgentStateRespond {
+		a.publishPreparedReply()
+	}
+
+	if detEff.Fn != nil {
+		nextState, err = detEff.Fn(ctx, a.toProtocolCtx())
+	}
+	// err 在此处故意不包装：handled=false 时调用方 executeEffect 会在其末尾统一
+	// 用 apperr.Wrap 包装后再返回给上层（与拆分前完全一致的错误传播路径）。
+	return nextState, err, false //nolint:wrapcheck
+}
+
+// recordLLMFillEffectMemory 是 executeEffect 中 HANDLE_MEM 标签体的拆出版本
+// （R7 文件行数治理，2026-07-07），逻辑与拆分前完全一致：LLMFillEffect 分支
+// 无论走 FastPath/PRM候选/标准单次推理哪条路径，最终都汇合到这里按 nextState
+// 落盘对应的 episodic 事件 + outbox 投递。
+//
+// gocyclo 偏高是三个 nextState 分支（S_PERCEIVE_DONE/S_PLAN_DONE/S_REFLECT_DONE）
+// 平铺并列导致，拆分前该复杂度计入 executeEffect 本身（已有 //nolint:gocyclo），
+// 拆分只是物理搬迁，不应也不必在这里拆得更碎去规避圈复杂度检查。
+//
+//nolint:gocyclo,nestif
+func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.State, resp *types.ProviderResponse) {
+	// ReplayMode 物理短路：回放时不写副作用，防止双写 EventLog / Outbox。
+	if protocol.IsReplaying() {
+		return
+	}
+	// 成功完成感知，将用户意图作为事件写入记忆（由于当前缺失 TaskIntent，仅做预留演示）
+	perceived := nextState == "S_PERCEIVE_DONE" || nextState == "S_PERCEIVE_DIRECT"
+	if perceived && a.memory != nil && (resp != nil || a.sCtx.SurpriseIndex < 0.3) {
+		var content string
+		if resp != nil {
+			content = resp.Content
+		} else {
+			content = `{"Goal":` + a.sCtx.RawIntentTS.MarshalJSONString() + `,"Complexity":0.1}`
+		}
+		eventID := a.sm.NextEventID(a.sCtx.SessionID, "perceive")
+		a.writeEpisodicWithExtract(ctx, types.Event{
+			ID:        eventID,
+			Type:      "task_perceived",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		})
+		a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+			ID:        eventID,
+			Type:      "task_perceived",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "perceive"),
+			"task_perceived")
+	}
+
+	// 成功完成计划，写入计划记忆
+	if nextState == "S_PLAN_DONE" && a.memory != nil && (resp != nil || a.sCtx.SurpriseIndex < 0.3) {
+		// 恢复步骤预算 (ISSUE-08)
+		if a.sCtx.InitialMaxStepsLimit > 0 {
+			a.sCtx.MaxStepsLimit = a.sCtx.InitialMaxStepsLimit
+		}
+
+		var content string
+		if resp != nil {
+			content = resp.Content
+		} else if a.sCtx.DAGModel != nil {
+			planBytes, _ := json.Marshal(a.sCtx.DAGModel)
+			content = string(planBytes)
+		}
+		eventID := a.sm.NextEventID(a.sCtx.SessionID, "plan")
+		a.writeEpisodicWithExtract(ctx, types.Event{
+			ID:        eventID,
+			Type:      "plan_generated",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		})
+		a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+			ID:        eventID,
+			Type:      "plan_generated",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "plan"),
+			"plan_generated")
+	}
+
+	// 成功完成反思，写入反思记忆，并保存 ReasoningState
+	if nextState == "S_REFLECT_DONE" && a.memory != nil && (resp != nil || a.sCtx.SurpriseIndex < 0.3) {
+		var content string
+		if resp != nil {
+			content = resp.Content
+		}
+		// 保存至内存上下文以供跨轮次携带
+		a.sCtx.ReasoningState = []byte(content)
+
+		eventID := a.sm.NextEventID(a.sCtx.SessionID, "reflect")
+		a.writeEpisodicWithExtract(ctx, types.Event{
+			ID:        eventID,
+			Type:      "reflection_completed",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		})
+		a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+			ID:        eventID,
+			Type:      "reflection_completed",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "reflect"),
+			"reflection_completed")
+
+	}
+}
+
+// reconstructReplayResponse 把 ReplayLLMCall.Response（TrajectoryRecorderImpl
+// 从 EventLog 扫描重建的通用 map[string]any，键名与
+// agent_execute_effect.go 写入 WriteLLMCallEvent 时的 respMap 完全对应：
+// content/reasoning_content/usage/tool_calls）还原为 *types.ProviderResponse，
+// 供崩溃恢复回放时替代真实 Provider 调用。
+//
+// usage/tool_calls 走 json 编解码往返而非逐字段类型断言：两者原始写入时是
+// resp.Usage（types.Usage）/resp.ToolCalls（[]types.InferToolCall）的 Go 值，
+// 经 json.Marshal 落盘、TrajectoryRecorderImpl 用 map[string]any 泛读回来，
+// 字段名与原 Go 结构体字段名一致（两个类型均无 json tag，用默认导出字段名）；
+// 重新 Marshal 该 map 再 Unmarshal 进目标类型，比手写字段映射更不易随
+// Usage/InferToolCall 后续增删字段而漂移。
+func reconstructReplayResponse(m map[string]any) *types.ProviderResponse {
+	resp := &types.ProviderResponse{}
+	if m == nil {
+		return resp
+	}
+	if v, ok := m["content"].(string); ok {
+		resp.Content = v
+	}
+	if v, ok := m["reasoning_content"].(string); ok {
+		resp.ReasoningContent = v
+	}
+	if u, ok := m["usage"]; ok {
+		if b, err := json.Marshal(u); err == nil {
+			if umErr := json.Unmarshal(b, &resp.Usage); umErr != nil {
+				slog.Warn("agent: replay response unmarshal partial failure",
+					"field", "Usage", "err", umErr)
+			}
+		}
+	}
+	if tc, ok := m["tool_calls"]; ok {
+		if b, err := json.Marshal(tc); err == nil {
+			if umErr := json.Unmarshal(b, &resp.ToolCalls); umErr != nil {
+				slog.Warn("agent: replay response unmarshal partial failure",
+					"field", "ToolCalls", "err", umErr)
+			}
+		}
+	}
+	return resp
+}

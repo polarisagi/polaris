@@ -1,0 +1,1 @@
+{"title": "multi_edit", "type": "object", "properties": {"path": {"type": "string", "description": "The file path."}, "edits": {"type": "array", "items": {"type": "object", "properties": {"old_str": {"type": "string"}, "new_str": {"type": "string"}}, "required": ["old_str", "new_str"]}, "description": "List of old/new string pairs to replace."}}, "required": ["path", "edits"]}

@@ -1,0 +1,271 @@
+// boot_knowledge.go — §7~§7.7 启动阶段：
+// 知识 RAG → GraphBuildPipeline → KnowledgeBase → PII 检测器。
+// KnowledgeBundle 持有所有知识层产物，向 run() 的 printStartupSummary 传递。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/protocol"
+
+	"github.com/polarisagi/polaris/internal/extension/native"
+	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
+	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+)
+
+// KnowledgeBundle 持有 §7~§7.7 所有知识 RAG 产物。
+type KnowledgeBundle struct {
+	Ingester      *knowledgepkg.DefaultIngestionPipeline
+	Retriever     protocol.HybridRetriever
+	KnowledgeBase *knowledgepkg.KnowledgeBase
+}
+
+// startKnowledgeReindexer 构造并启动知识库向量重嵌后台循环（ADR-0113 决策一）。
+// 需要 SurrealDB（向量落点）与嵌入器同时可用，否则不构造并返回 nil（知识向量路随之为空，
+// BM25/图谱照常）。嵌入走 Low 优先级通道（ADR-0099），ModelVersion 唯一来源是 DynamicEmbedder（ADR-0109）；
+// 后台准入与嵌入退避口径同 startOnlineReindexer。
+func startKnowledgeReindexer(ctx context.Context, sb *SubstrateBundle) *knowledgepkg.KnowledgeReindexer {
+	if sb.SurrealStore == nil || sb.Embedder == nil {
+		slog.Info("polaris: knowledge reindexer not started (SurrealDB or embedder unavailable); knowledge vector recall disabled",
+			"surreal", sb.SurrealStore != nil, "embedder", sb.Embedder != nil)
+		return nil
+	}
+	// newMemEmbedderAdapter 只是 Embed(ctx)+ModelVersion 的通用桥接（名称沿用记忆侧），版本取自 DynEmbedder。
+	kr := knowledgepkg.NewKnowledgeReindexer(
+		sb.Store.DB(),
+		newMemEmbedderAdapter(backgroundEmbedder(sb), sb),
+		&surrealCognAdapter{s: sb.SurrealStore},
+	).WithGate(func() (func(), bool) {
+		if sb.EmbedBackoff != nil && !sb.EmbedBackoff.CanAttempt() {
+			slog.Debug("polaris: knowledge reindexer skipped due to backoff guardrail",
+				"consecutive_failures", sb.EmbedBackoff.ConsecutiveFailures(),
+				"next_retry_at", sb.EmbedBackoff.NextRetryAt())
+			return nil, false
+		}
+		return admitBackground(sb, "knowledge_reindex")
+	}).WithResultHook(func(err error) {
+		if sb.EmbedBackoff == nil {
+			return
+		}
+		if err != nil {
+			sb.EmbedBackoff.RecordFailure()
+			return
+		}
+		sb.EmbedBackoff.RecordSuccess()
+	})
+	concurrent.SafeGo(ctx, "boot_knowledge.reindex_loop", func(ctx context.Context) {
+		kr.Loop(ctx, knowledgepkg.KnowledgeReindexInterval)
+	})
+	slog.Info("polaris: knowledge reindexer started", "backend", sb.EmbedChoice.Kind, "interval", knowledgepkg.KnowledgeReindexInterval)
+	return kr
+}
+
+// bootKnowledge 执行 §7~§7.7 初始化，返回知识 RAG bundle。
+func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle) (*KnowledgeBundle, error) { //nolint:gocyclo
+	// ragTaintSerializer 跨边界 HMAC 校验器（inv_M11_02），构造于 boot_substrate.go
+	// （sb.RAGChunksTaintSerializer，由 sb.Vault 派生），可 nil（sb.Vault 缺失时）。
+	ragTaintSerializer := sb.RAGChunksTaintSerializer
+
+	// ─── §7 Knowledge RAG (L2 M10) ───────────────────────────────────────────
+	// ApproximateColBERTReranker（2026-07-04 审计补齐，任务2）：按 FeatureDeepRAG
+	// 门控启用，复用 sb.Embedder。包一层 SafeRerank 提供超时+panic 保护。
+	// FeatureDeepRAG 已存在（MinTier:Tier0, MinMemoryMB:1024），无需新增 Feature。
+	var colbertReranker Reranker
+	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureDeepRAG) != probe.FeatureDisabled && sb.Embedder != nil {
+		colbertReranker = search.NewSafeRerank(search.NewApproximateColBERTReranker(sb.Embedder, 3), 2*time.Second)
+		slog.Info("polaris: ApproximateColBERTReranker enabled (FeatureDeepRAG)")
+	}
+
+	var retriever protocol.HybridRetriever
+	if sb.SurrealStore != nil { //nolint:nestif // 原因：启动期组合根（composition root）按 Tier 装配双检索栈 + ColBERT 重排 + CorpusStats 持久化，属一次性初始化分支树而非热路径业务逻辑，拆分为多个私有函数收益有限且会打散启动顺序的可读性，参考 internal/automation/hitl/gateway.go Prompt() 的既有豁免先例。
+		// Tier0+(≥8GB)：SQLite FTS5 + SurrealDB HNSW 双路检索
+		var knowledgeEmb knowledgepkg.VectorEmbedder
+		if sb.Embedder != nil {
+			knowledgeEmb = &knowledgeEmbedderAdapter{e: sb.Embedder}
+		}
+		retriever = knowledgepkg.NewHybridRetrieverWithCognitive(sb.Store.DB(), knowledgeEmb, &surrealCognAdapter{s: sb.SurrealStore})
+		// SurrealDB 路径使用 protocol.Reranker 接口（含 error 返回），通过
+		// colbertRerankerAdapter 适配同一个 colbertReranker 实例，两条检索栈
+		// 共用一套重排逻辑，不重复实例化 Embedder 调用链。
+		if colbertReranker != nil {
+			if hri, ok := retriever.(*knowledgepkg.HybridRetrieverImpl); ok {
+				hri.SetReranker(&colbertRerankerAdapter{inner: colbertReranker})
+			}
+		}
+		if hri, ok := retriever.(*knowledgepkg.HybridRetrieverImpl); ok {
+			hri.SetBoundarySerializer(ragTaintSerializer)
+			// M10 §2.6 LocalSearch 图检索接线（2026-08-06）：此前 graph 字段
+			// 无任何注入点、生产恒为 nil，融合管线的第三路（M10 §2.2 权重 0.1）
+			// 恒返回空。GraphTraverser 只需 SQLQuerier，读的是 GraphBuild 管线
+			// 已在填充的 semantic_entities / semantic_relations 两表。
+			hri.SetGraphTraverser(graphrag.NewGraphTraverser(sb.Store.DB()))
+		}
+		slog.Info("polaris: knowledge RAG initialized (FTS5 + SurrealDB HNSW, Tier0+/≥8GB)")
+	} else {
+		defaultRetriever := knowledgepkg.NewDefaultHybridRetriever(sb.StorageRouter, sb.Embedder, colbertReranker)
+		retriever = defaultRetriever
+		slog.Info("polaris: knowledge RAG initialized (StorageRouter only, <8GB VPS)")
+
+		// CorpusStats 持久化接线（2026-07-04 审计补齐，任务18）：启动时恢复历史
+		// BM25 语料库统计，之后每 5 分钟增量落盘一次（dirty 标记为 false 时
+		// FlushTo 直接 no-op，不产生无谓 IO）。仅 StorageRouter-only 路径使用
+		// search.CorpusStats/bm25Score；SurrealDB 路径走独立的 FTS5/HNSW 评分，
+		// 不涉及本套统计。
+		statsDB := sb.Store.DB()
+		if statsDB != nil {
+			stats := defaultRetriever.Engine().Stats()
+			if err := stats.RestoreStatsFromDB(ctx, statsDB); err != nil {
+				slog.Warn("polaris: CorpusStats.LoadFrom failed, starting from empty stats", "err", err)
+			} else {
+				slog.Info("polaris: CorpusStats restored from corpus_stats table")
+			}
+			concurrent.SafeGo(ctx, "corpus-stats-flush", func(ctx context.Context) {
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						if err := stats.FlushTo(ctx, statsDB); err != nil {
+							slog.Warn("polaris: CorpusStats.FlushTo failed", "err", err)
+						}
+					}
+				}
+			})
+		}
+	}
+
+	var searchEngine *search.HybridSearchEngine
+	if dr, ok := retriever.(*knowledgepkg.DefaultHybridRetriever); ok {
+		searchEngine = dr.Engine()
+	}
+	ingester := knowledgepkg.NewDefaultIngestionPipeline(sb.StorageRouter, sb.Router, sb.Outbox, searchEngine, ragTaintSerializer).WithOffPeak(sb.OffPeak)
+	// ADR-0113 决策一：知识向量由 KnowledgeReindexer 单一路径写入；摄入提交后非阻塞唤醒它。
+	if kr := startKnowledgeReindexer(ctx, sb); kr != nil {
+		ingester.WithReindexKick(kr.Kick)
+	}
+
+	// ─── §7.5 知识图谱构建管线（GraphBuildPipeline，M10 §2.7）────────────────
+	var graphLLMClient graphrag.LLMClient
+	if sb.Router != nil {
+		graphLLMClient = graphrag.NewProviderLLMClient(sb.Router, "")
+	}
+	graphTier := 0
+	if sb.AutoConf != nil {
+		graphTier = int(sb.AutoConf.Config.Tier)
+	}
+	var graphPipeline *graphrag.GraphBuildPipeline
+	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureGraphRAGFull) != probe.FeatureDisabled {
+		graphPipeline = graphrag.NewGraphBuildPipeline(graphLLMClient, graphTier, mb.Mem.Semantic())
+		var graphGuard *probe.OSMemoryGuard
+		var graphGate *probe.FeatureGate
+		if sb.AutoConf != nil {
+			graphGuard = sb.AutoConf.Guard
+			graphGate = sb.AutoConf.Gate
+		}
+		graphPipeline.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, graphGuard, graphGate))
+		// 2026-07-08 恢复接线：CommunityGenerativeSummarizer 是完整实现且有专属测试覆盖
+		// 的功能，此前仅其注入口 WithSummarizer 被误判死代码删除，导致永久不可达。
+		// 详见 local_playground/reports/phase4-hard-dep-and-deadcode-followup-20260708.md。
+		if sb.Router != nil {
+			graphPipeline.WithSummarizer(graphrag.NewCommunityGenerativeSummarizer(sb.Router))
+		}
+		slog.Info("polaris: knowledge graph pipeline initialized", "tier", graphTier)
+	} else {
+		slog.Info("polaris: GraphRAG pipeline disabled by FeatureGate (<8GB VPS or memory pressure, 1024MB min)")
+	}
+	// D3（ADR-0077 决策二，推翻原 ADR-0074 的"不做管线合并"结论）：Episodic 巩固与 RAG
+	// 文档摄取共享同一套实体/关系抽取实现。graphPipeline 在 Tier-0/内存压力下
+	// 可能为 nil（FeatureGraphRAGFull 关闭）——此时 tb.ConsolidationPipeline
+	// 保持其原有三级降级链（llmExtract→ruleExtract），不引入硬依赖，Tier-0 行为
+	// 零回归。
+	if graphPipeline != nil && tb.ConsolidationPipeline != nil {
+		tb.ConsolidationPipeline.WithEntityExtractor(graphPipeline)
+	}
+	if graphPipeline != nil {
+		// 建图（graphrag_extract/concept/community）与文档摘要（graphrag_summary）是可延迟批处理：
+		// 配置了错峰窗口时经 deferOffPeak 推迟到窗口起点（ADR-0105 决策七）；摄取本身与检索不受影响。
+		sb.Outbox.RegisterHandler(protocol.TopicGraphBuild, deferOffPeak(sb.OffPeak, func(ctx context.Context, rec *store.OutboxRecord) error {
+			var payload struct {
+				DocID string `json:"doc_id"`
+			}
+			if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "boot_knowledge: 解析 graph_build payload 失败", err)
+			}
+			return graphPipeline.Run(ctx, payload.DocID)
+		}))
+		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocIngested, deferOffPeak(sb.OffPeak, graphrag.NewGraphBuildOutboxHandler(graphPipeline).Handle))
+		// S-05：注入 ragTaintSerializer 同源的 ChunkTaintSealerAdapter，使摘要写入
+		// 与 ingester.go 的 canonical 写法一致签发 taint_hmac；ragTaintSerializer
+		// 为 nil 时 adapter 内部 sealChunkTaint 也按既有语义降级返回空串。
+		summaryGenHandler := graphrag.NewSummaryGenOutboxHandler(sb.Store.DB(), sb.Router,
+			&knowledgepkg.ChunkTaintSealerAdapter{Ser: ragTaintSerializer})
+		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocSummaryNeeded, deferOffPeak(sb.OffPeak, summaryGenHandler.Handle))
+		slog.Info("polaris: SummaryGenOutboxHandler registered for rag_doc_summary_needed")
+		slog.Info("polaris: GraphBuildPipeline registered to outbox for graph_build and rag_doc_ingested")
+	}
+
+	// ─── §7.6 KnowledgeBase（三阶段 DeepRAG 统一入口，M10 §2.5）──────────────
+	// FeatureDeepRAG（Tier 0+，≥8GB）：QueryPlanner + StructuredNavigator 激活。
+	var knowledgeBase *knowledgepkg.KnowledgeBase
+	{
+		expander := knowledgepkg.NewContextExpander(sb.StorageRouter)
+		expander.SetBoundarySerializer(ragTaintSerializer)
+		var navigator *knowledgepkg.StructuredNavigator
+		var planner *knowledgepkg.QueryPlanner
+		if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureDeepRAG) != probe.FeatureDisabled {
+			navigator = knowledgepkg.NewStructuredNavigator(sb.StorageRouter)
+			if sb.Router != nil {
+				planner = knowledgepkg.NewQueryPlanner(sb.Router)
+			}
+			slog.Info("polaris: KnowledgeBase initialized with DeepRAG (QueryPlanner + StructuredNavigator)")
+		} else {
+			slog.Info("polaris: KnowledgeBase initialized (basic mode, DeepRAG disabled, <8GB VPS)")
+		}
+		var kbGate interface {
+			IsEnabled(probe.Feature) bool
+		}
+		if sb.AutoConf != nil {
+			kbGate = sb.AutoConf.Gate
+		}
+		// KnowledgeConflictArbiter：此前恒传 nil，KnowledgeBase.Search 的冲突仲裁
+		// 分支永久跳过（ADR-0062 关联接线）；构造函数零依赖，直接激活。
+		knowledgeBase = knowledgepkg.NewKnowledgeBase(retriever, expander, navigator, planner, knowledgepkg.NewKnowledgeConflictArbiter(), kbGate)
+	}
+
+	// 将 knowledgeBase 注册为 "knowledge_search" builtin 工具（M10 §2.5）
+	kbAdapter := &knowledgeBaseAdapter{kb: knowledgeBase}
+	if err := native.RegisterExtensionTool(tb.InProcSandbox, tb.ToolReg, "knowledge_search", native.MakeKnowledgeSearchFn(kbAdapter)); err != nil {
+		slog.Warn("polaris: knowledge_search tool registration failed", "err", err)
+	} else {
+		slog.Info("polaris: knowledge_search tool registered (three-phase DeepRAG)")
+	}
+
+	// 将 ingester 注册为 "knowledge_ingest" builtin 工具（ADR-0114 决策六）
+	if ingester != nil {
+		if err := native.RegisterExtensionTool(tb.InProcSandbox, tb.ToolReg, "knowledge_ingest", native.MakeKnowledgeIngestFn(ingester)); err != nil {
+			slog.Warn("polaris: knowledge_ingest tool registration failed", "err", err)
+		} else {
+			slog.Info("polaris: knowledge_ingest tool registered (bulk ingestion pipeline)")
+		}
+	}
+
+	// ctx 仅供将来异步初始化路径使用，当前同步完成
+	_ = ctx
+
+	return &KnowledgeBundle{
+		Ingester:      ingester,
+		Retriever:     retriever,
+		KnowledgeBase: knowledgeBase,
+	}, nil
+}

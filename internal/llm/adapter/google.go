@@ -1,0 +1,324 @@
+package adapter
+
+import (
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	llmparent "github.com/polarisagi/polaris/internal/llm"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// GoogleAgentPlatformAdapter 对接 Google Agent Platform (GEAP / Gemini API)。
+// 认证方式: ?key=apiKey 查询参数（同 polaris-gateway google translator）。
+// 端点路由:
+//   - projectID 非空 → GEAP 企业端点 (aiplatform.googleapis.com)
+//   - projectID 为空 → Gemini Developer API (generativelanguage.googleapis.com)
+type GoogleAgentPlatformAdapter struct {
+	model     string
+	projectID string
+	location  string
+	credPool  *llmparent.CredentialPool
+	client    *http.Client
+	caps      types.ProviderCapabilities
+	tbr       *metrics.TokenBurnRate
+	// inlineNonLeadingSystem 开启时只有开头连续的 system 进 systemInstruction，其后的 system 转 user 角色
+	// <system_instruction> 文本 part 留在原位（ADR-0105 决策一，配置 m1_router.google.inline_nonleading_system）。
+	inlineNonLeadingSystem bool
+}
+
+var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
+
+// GoogleOption 适配器选项函数。
+type GoogleOption func(*GoogleAgentPlatformAdapter)
+
+// WithGoogleInlineNonLeadingSystem 控制非首部 system 消息的处理（ADR-0105 决策一）：
+// true=原位内联为 user 角色 <system_instruction> 文本，使 L3 阶段层位于 L2 历史之后、
+// 历史前缀在阶段间共享；false=全部提到 systemInstruction（旧行为，请求体字节不变）。
+func WithGoogleInlineNonLeadingSystem(on bool) GoogleOption {
+	return func(a *GoogleAgentPlatformAdapter) { a.inlineNonLeadingSystem = on }
+}
+
+// NewGoogleAgentPlatformAdapter 构造 Google Agent Platform 适配器。
+//
+// credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
+// llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
+func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate, opts ...GoogleOption) *GoogleAgentPlatformAdapter {
+	if client == nil {
+		client = defaultHTTPClient()
+	}
+	a := &GoogleAgentPlatformAdapter{
+		model:     model,
+		projectID: projectID,
+		location:  location,
+		credPool:  credPool,
+		client:    client,
+		caps: types.ProviderCapabilities{
+			SupportsStreaming: true,
+			SupportsTools:     true,
+			SupportsVision:    true, // Gemini 全系支持图像输入
+			SupportsVideo:     true, // Gemini 1.5+ 支持视频文件输入
+			MaxContextTokens:  1000000,
+			CostPerMTokInput:  0.075,
+			CostPerMTokOutput: 0.30,
+		},
+		tbr: tbr,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+func (a *GoogleAgentPlatformAdapter) ModelID() string                          { return a.model }
+func (a *GoogleAgentPlatformAdapter) Capabilities() types.ProviderCapabilities { return a.caps }
+func (a *GoogleAgentPlatformAdapter) Tokenizer() protocol.TokenizerAdapter {
+	return &llmparent.SimpleTokenizer{}
+}
+
+// buildEndpoint / geapHostAndLoc / appendKey / geminiTool 系列类型 / buildGeminiRequest /
+// parseGoogleStream 见 google_request.go（R7 拆分）。
+
+func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultInferTimeout)
+		defer cancel()
+	}
+	options := &types.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &types.InferRequest{
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
+	}
+	body, err := buildGeminiRequest(req, a.inlineNonLeadingSystem)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
+	}
+
+	out, err := a.sendGeminiInferRequest(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.buildInferResponseFromGemini(out, req.Model)
+}
+
+// geminiInferResponse 是 Gemini 非流式响应的解码结构（从 Infer 内联匿名结构体上提为
+// 具名类型，供 sendGeminiInferRequest 签名引用）。
+type geminiInferResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text         string              `json:"text"`
+				FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
+			} `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
+	} `json:"usageMetadata"`
+}
+
+// sendGeminiInferRequest 选取凭据、发送非流式 Gemini 请求并解码响应，同时记录凭据健康状态
+// 供 CredentialPool 轮换判定（从 Infer 拆出，gocyclo 治理，行为不变）。
+func (a *GoogleAgentPlatformAdapter) sendGeminiInferRequest(ctx context.Context, body []byte) (*geminiInferResponse, error) {
+	cred := a.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "GoogleAgentPlatformAdapter.Infer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
+	defer llmparent.ClearBytes(apiKey)
+
+	endpoint := appendKey(a.buildEndpoint(false), string(apiKey))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := a.client.Do(httpReq)
+	if err != nil {
+		cred.RecordResult(err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != 200 {
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
+		callErr := apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+		cred.RecordResult(callErr)
+		return nil, callErr
+	}
+	cred.RecordResult(nil)
+
+	var out geminiInferResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&out); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "google: decode", err)
+	}
+	return &out, nil
+}
+
+// buildInferResponseFromGemini 组装 ProviderResponse、记账 token 用量并做空响应兜底校验
+// （从 Infer 拆出，gocyclo 治理，行为不变）。
+//
+// 非流式路径此前只累积 p.Text，完全忽略 p.FunctionCall——纯 functionCall 响应（无 text
+// part）会被下方"空响应"兜底误判为 provider 异常直接报错。ID 生成策略与流式路径
+// emitGeminiStreamParts 保持一致（fmt.Sprintf("call_%d", <parts 内下标>)），Gemini
+// 原生协议本身不提供工具调用 ID。
+func (a *GoogleAgentPlatformAdapter) buildInferResponseFromGemini(out *geminiInferResponse, modelReq string) (*types.ProviderResponse, error) {
+	text, finishReason := "", ""
+	var toolCalls []types.InferToolCall
+
+	if len(out.Candidates) > 0 {
+		finishReason = out.Candidates[0].FinishReason
+		for i, p := range out.Candidates[0].Content.Parts {
+			if p.Text != "" {
+				text += p.Text
+			}
+			if p.FunctionCall != nil {
+				argsBytes, err := json.Marshal(p.FunctionCall.Args)
+				if err != nil {
+					return nil, apperr.Wrap(apperr.CodeInternal, "buildInferResponseFromGemini: marshal functionCall args", err)
+				}
+				toolCalls = append(toolCalls, types.InferToolCall{
+					ID:    fmt.Sprintf("call_%d", i),
+					Name:  p.FunctionCall.Name,
+					Input: argsBytes,
+				})
+			}
+		}
+	}
+
+	resp := &types.ProviderResponse{
+		Content:      text,
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
+		Model:        a.model,
+		Usage: types.Usage{
+			InputTokens:    out.UsageMetadata.PromptTokenCount,
+			OutputTokens:   out.UsageMetadata.CandidatesTokenCount,
+			CacheHitTokens: out.UsageMetadata.CachedContentTokenCount,
+		},
+	}
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		if a.tbr != nil {
+			a.tbr.Add(burnTokens(resp.Usage))
+		}
+	}
+
+	metrics.RecordLLMCacheHit("google", modelReq, resp.Usage.CacheHitTokens > 0)
+
+	if resp.Content == "" && len(resp.ToolCalls) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")
+	}
+
+	return resp, nil
+}
+func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var outerCancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		//nolint:govet // cancel is intentionally passed to SafeGo
+		ctx, outerCancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
+	}
+	options := &types.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &types.InferRequest{
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
+	}
+	body, err := buildGeminiRequest(req, a.inlineNonLeadingSystem)
+	if err != nil {
+		if outerCancel != nil {
+			outerCancel()
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
+	}
+	cred := a.credPool.Pick()
+	if cred == nil {
+		if outerCancel != nil {
+			outerCancel()
+		}
+		return nil, apperr.New(apperr.CodeResourceExhausted, "GoogleAgentPlatformAdapter.StreamInfer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
+
+	endpoint := appendKey(a.buildEndpoint(true), string(apiKey))
+	llmparent.ClearBytes(apiKey)
+
+	// 给单次推理加 120s 上限，防止 Google 连接 hang 住永不关闭导致前端卡死
+	inferCtx, inferCancel := context.WithTimeout(ctx, 120*time.Second)
+
+	httpReq, err := http.NewRequestWithContext(inferCtx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		inferCancel()
+		if outerCancel != nil {
+			outerCancel()
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := a.client.Do(httpReq)
+	if err != nil {
+		cred.RecordResult(err)
+		inferCancel()
+		if outerCancel != nil {
+			outerCancel()
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
+	}
+	if httpResp.StatusCode != 200 {
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
+		httpResp.Body.Close()
+		inferCancel()
+		if outerCancel != nil {
+			outerCancel()
+		}
+		callErr := apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+		cred.RecordResult(callErr)
+		return nil, callErr
+	}
+	cred.RecordResult(nil)
+
+	ch := make(chan types.StreamEvent, 64)
+	// [SafeGo] SSE 解码：畸形响应触发 panic 此前会直接崩进程；defer 链在 panic
+	// 展开时仍会执行（cancel/close(ch)/Body.Close 均不受影响）。
+	concurrent.SafeGo(inferCtx, "llm.adapter.google_stream_decode", func(ctx context.Context) {
+		defer inferCancel()
+		if outerCancel != nil {
+			defer outerCancel()
+		}
+		defer close(ch)
+		defer httpResp.Body.Close()
+		parseGoogleStream(ctx, httpResp.Body, ch, a.model, a.tbr)
+	})
+	return ch, nil
+}

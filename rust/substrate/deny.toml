@@ -1,0 +1,43 @@
+[advisories]
+unmaintained = "all"
+yanked = "warn"
+ignore = [
+    "RUSTSEC-2025-0141",
+    "RUSTSEC-2023-0071",
+    # webpki-roots 0.26.11 仅经 surrealdb→tokio-tungstenite 0.28 引入（0.26 线无修复版，修复在 >=1.0.10）；
+    # 本项目只用 surrealdb 嵌入式引擎（kv-mem/kv-rocksdb），不经该依赖发起公网 TLS 连接。
+    # 直接依赖链上的 rustls-webpki / webpki-roots 1.x 已升级到修复版。surrealdb 升级到不再依赖 0.26 后删除本条。
+    "RUSTSEC-2026-0381",
+    # crypto-bigint 0.5.5 经 surrealdb→surrealdb-core→jsonwebtoken→p256/p384→elliptic-curve 引入；
+    # 修复在 crypto-bigint >=0.7.6，需上游 elliptic-curve/jsonwebtoken/surrealdb 升级跨大版本依赖。
+    # 本项目仅使用 surrealdb 嵌入式引擎（kv-mem/kv-rocksdb），不通过其发起或验证公网 JWT/TLS 秘钥协商，无侧信道攻击面。
+    # 上游 surrealdb 升级后删除本条。
+    "RUSTSEC-2026-0387",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "OpenSSL",
+    "BUSL-1.1",
+    "GPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+    "0BSD",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "AGPL-3.0-or-later"
+]

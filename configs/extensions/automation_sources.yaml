@@ -1,0 +1,45 @@
+# 自动化模板来源配置
+# 格式说明：
+#   id          - 来源唯一标识（"publisher/name"）
+#   name        - 展示名称
+#   type        - local（本地文件）| remote（HTTP index.json）
+#   path        - type=local 时的本地目录路径（相对于二进制工作目录）
+#   url         - type=remote 时的 index.json URL
+#   description - 简短说明
+#   enabled     - true/false
+#   trust_tier  - 1=官方 2=受信第三方 3=社区（仅展示，不影响沙箱）
+
+- id: polaris/builtin
+  name: Polaris 内置模板
+  type: local
+  path: automations/templates
+  description: Polaris 随版本附带的内置自动化模板，覆盖日常开发常见场景
+  enabled: true
+  trust_tier: 1
+
+# 以下为社区/第三方远程源示例，默认禁用
+# 启用后服务器将在首次请求时拉取并缓存（TTL 1h）
+
+# - id: anthropic/prompts
+#   name: Anthropic Prompt Library
+#   type: remote
+#   url: https://raw.githubusercontent.com/anthropics/prompt-library/main/automation-index.json
+#   description: Anthropic 官方 Prompt 库中适合自动化的任务模板
+#   enabled: false
+#   trust_tier: 1
+
+# - id: openai/cookbook
+#   name: OpenAI Cookbook Automations
+#   type: remote
+#   url: https://raw.githubusercontent.com/openai/openai-cookbook/main/automation-index.json
+#   description: OpenAI Cookbook 精选自动化工作流
+#   enabled: false
+#   trust_tier: 2
+
+# - id: community/general
+#   name: 社区通用模板
+#   type: remote
+#   url: https://polaris-automations.example.com/index.json
+#   description: 社区维护的通用自动化模板集合
+#   enabled: false
+#   trust_tier: 3

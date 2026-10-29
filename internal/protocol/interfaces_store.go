@@ -1,0 +1,308 @@
+package protocol
+
+import (
+	"context"
+	"database/sql"
+
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+type
+
+// Store 是所有存储引擎的统一接口。
+// 引擎选择由 StorageRouter 路由规则决定，[Storage-SQLite] 兜底。
+// 不同数据类型按访问模式路由到最匹配的引擎（向量/图/全文 → [Storage-SurrealDB-Core]，其余 → [Storage-SQLite]）。
+Store interface {
+	Get(ctx context.Context, key []byte) ([]byte, error)
+	Put(ctx context.Context, key, value []byte) error
+	Delete(ctx context.Context, key []byte) error
+	Scan(ctx context.Context, prefix []byte) (Iterator, error)
+	BatchWrite(ctx context.Context, ops []types.Op) error
+	Txn(ctx context.Context, fn func(tx Transaction) error) error
+	Capabilities() types.StoreCapabilities
+	Close() error
+}
+
+type
+
+// StoreExtStats 为底层存储引擎可选的统计扩展。
+// 由具体 Store 实现提供，上层通过类型断言进行安全调用。
+StoreExtStats interface {
+	Stats() (string, error)
+}
+
+type
+
+// StoreExtBackup 提供备份导入导出扩展。
+StoreExtBackup interface {
+	ImportBackupRow(ctx context.Context, table string, row map[string]any) error
+}
+
+type
+
+// StoreExtPreferences 提供偏好设置的存储扩展。
+StoreExtPreferences interface {
+	ListPreferences(ctx context.Context) (map[string]string, error)
+	SetPreference(ctx context.Context, key, value string) error
+}
+
+type
+
+// StoreExtVector 为底层存储引擎可选的向量操作扩展。
+StoreExtVector interface {
+	VecSetMode(mode int) error
+}
+
+type
+
+// AuditLogger 提供审计日志记录能力。
+AuditLogger interface {
+	Log(ctx context.Context, action string, meta map[string]any) error
+}
+
+type
+
+// SQLQuerier 是 *sql.DB 与 *sql.Tx 共同满足的最小 SQL 接口。
+// 非存储层包（internal/agent/ internal/swarm/ 等）必须接受此接口而非裸 *sql.DB，
+// 以保持层边界。调用方构造时直接传入 *sql.DB，Go 结构化类型自动满足。
+SQLQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type
+
+// BlackboardDB 是 SQLiteBlackboard 所需的最小 *sql.DB 接口。
+// 在 SQLQuerier 基础上扩展事务管理与健康检查，供 M8 多 Agent 协调层使用。
+// *sql.DB 自动满足此接口（Go 结构化类型系统），调用方可直接传入 *sql.DB。
+BlackboardDB interface {
+	SQLQuerier
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	PingContext(ctx context.Context) error
+}
+
+type
+
+// ChatRepository 会话与消息的完整读写契约。
+// @consumer: internal/gateway/server/chat/
+// @producer: internal/store/repo/repo_chat.go
+ChatRepository interface {
+	// Sessions
+	CreateSession(ctx context.Context, row types.ChatSessionRow) error
+	GetSession(ctx context.Context, id string) (*types.ChatSessionRow, error)
+	ListSessions(ctx context.Context, limit int) ([]types.ChatSessionRow, error)
+	// ListProjectSessions 列出某项目下最近的会话（ADR-0097）。
+	ListProjectSessions(ctx context.Context, projectID string, limit int) ([]types.ChatSessionRow, error)
+	// SetSessionProject 移动会话到另一个项目；会话或项目不存在返回 CodeNotFound。
+	SetSessionProject(ctx context.Context, sessionID, projectID string) error
+	UpdateSessionTitle(ctx context.Context, id, title string) error
+	UpdateSessionThrashingIndex(ctx context.Context, id string, idx float64) error
+	DeleteSession(ctx context.Context, id string) error
+
+	// Messages
+	// AppendMessage 返回新插入行的 chat_messages.id（AUTOINCREMENT 主键）——M8f-1：
+	// MCP Apps 视图（chat_app_views）需要在 assistant 消息落库后回填关联，是这个
+	// 返回值存在的唯一原因，见 LinkAppViewsToMessage。
+	AppendMessage(ctx context.Context, row types.ChatMessageRow) (int64, error)
+	// AppendMessageIdempotent 与 AppendMessage 语义相同，但要求 row.DedupeKey
+	// 非空并据此做 INSERT OR IGNORE（GD-13-004 复核修复：outbox 重试兜底路径
+	// 专用，供 ChatMessagePersistHandler 在 at-least-once 重投下避免重复插入）。
+	// 该路径写入时机与调用方（异步 outbox worker）脱节，不提供消息 ID 回填。
+	AppendMessageIdempotent(ctx context.Context, row types.ChatMessageRow) error
+	ListMessages(ctx context.Context, sessionID string, limit int) ([]types.ChatMessageRow, error)
+	SearchMessages(ctx context.Context, query string, limit int) ([]types.ChatMessageRow, error)
+
+	// Additional mutations required by gateway/server
+	RestoreSession(ctx context.Context, id, title, projectID string, thrashing float64, createdAt, updatedAt string) error
+	RestoreMessage(ctx context.Context, id, sessionID, role, content, createdAt string) error
+	TouchSession(ctx context.Context, id string) error
+	ClearNonSystemMessages(ctx context.Context, sessionID string) error
+	ReplaceSessionMessages(ctx context.Context, sessionID string, msgs []types.ChatMessageRow) error
+
+	// MCP Apps（M8f-1，io.modelcontextprotocol/ui）：chat_app_views 表读写 +
+	// chat_sessions.app_model_context 列读写。@producer 同上（repo_chat.go）。
+
+	// SaveAppView 落库一次工具调用产生的 UI 视图快照（HE-6 State-in-DB）。
+	SaveAppView(ctx context.Context, v types.ChatAppViewRow) error
+	// LinkAppViewsToMessage 把本轮产生的全部视图关联到刚落库的 assistant 消息
+	// （tool_ui 事件早于消息落库，见 ChatAppViewRow.MessageID 注释）。
+	LinkAppViewsToMessage(ctx context.Context, sessionID string, viewIDs []string, messageID int64) error
+	// GetAppView 按 view_id 查询单条视图（视图归属/存在性校验的唯一数据源，
+	// 供网关 view rpc/state/model-context 三个 handler 复用）。
+	GetAppView(ctx context.Context, viewID string) (*types.ChatAppViewRow, error)
+	// ListAppViewsByMessageIDs 批量查询一组 assistant 消息关联的视图（会话历史接口）。
+	ListAppViewsByMessageIDs(ctx context.Context, messageIDs []int64) ([]types.ChatAppViewRow, error)
+	// DeletePluginAppViews 删除某插件的全部设置视图（每插件只留最新一份，ADR-0125）。
+	DeletePluginAppViews(ctx context.Context, pluginID string) error
+	// UpdateAppViewWidgetState 持久化 ChatGPT widgetState 兼容字段（≤64 KiB 由调用方校验）。
+	UpdateAppViewWidgetState(ctx context.Context, viewID, widgetState string) error
+	// UpsertSessionModelContextServer 按 server_id 为键合并一份 View 模型上下文
+	// 更新内容到 chat_sessions.app_model_context（每 (session, server) 只保留最新一份）。
+	UpsertSessionModelContextServer(ctx context.Context, sessionID, serverID, payloadJSON string) error
+	// ConsumeSessionModelContext 读取并清空该会话全部待注入的 model-context
+	// （regulation: 只把最后一次更新送给模型，注入后即清空），返回原始 JSON
+	// 对象文本 {server_id: {...}}；空/无更新时返回 "{}"。
+	ConsumeSessionModelContext(ctx context.Context, sessionID string) (string, error)
+}
+
+type
+
+// ProviderRepository Provider 配置读写契约。
+// @consumer: internal/gateway/server/
+// @producer: internal/store/repo/repo_provider.go
+ProviderRepository interface {
+	ListProviders(ctx context.Context) ([]types.ProviderRow, error)
+	GetProvider(ctx context.Context, id string) (*types.ProviderRow, error)
+	CreateProvider(ctx context.Context, p types.ProviderRow) error
+	UpdateProvider(ctx context.Context, id string, p types.ProviderRow) error
+	DeleteProvider(ctx context.Context, id string) error
+	UpsertModel(ctx context.Context, row types.ProviderModelRow) error
+	ListModels(ctx context.Context, providerID string) ([]types.ProviderModelRow, error)
+	DeleteModel(ctx context.Context, id string) error
+	DeleteModelsByProvider(ctx context.Context, providerID string) error
+
+	ClearModelRoles(ctx context.Context, targetRoles []string, exceptID string) error
+	SetModelRole(ctx context.Context, id string, role string) error
+	// ActiveModelRoles 返回当前由"启用模型 + 启用厂商"持有的角色集合。
+	ActiveModelRoles(ctx context.Context) (map[string]bool, error)
+	// CreateProviderWithModels 单事务写入 provider 及其模型；models 中的 default/reasoning 为独占角色，
+	// 写入前把其他模型的同角色降为 general。任一步失败整体回滚。
+	CreateProviderWithModels(ctx context.Context, p types.ProviderRow, models []types.ProviderModelRow) error
+	// SeedIfEmpty 仅在 providers 表为空时插入默认配置；幂等。
+	SeedIfEmpty(ctx context.Context, rows []types.ProviderRow, models []types.ProviderModelRow) error
+	// SeedFromEnv 启动时根据环境变量插入或更新凭据。返回 (inserted_bool, error)
+	SeedFromEnv(ctx context.Context, p types.ProviderRow) (bool, error)
+	UpdateProviderAPIKey(ctx context.Context, id, apiKey, updatedAt string) error
+	SeedModelFromEnv(ctx context.Context, m types.ProviderModelRow) error
+}
+
+type
+
+// ExtensionRepository 扩展安装与目录读写契约。
+// @consumer: internal/extension/native/, internal/extension/marketplace/, internal/extension/mcp/
+// @producer: internal/store/repo/repo_extension.go
+ExtensionRepository interface {
+	// extension_instances
+	UpsertInstance(ctx context.Context, row types.ExtInstanceRow) error
+	GetInstance(ctx context.Context, id string) (*types.ExtInstanceRow, error)
+	UpdateInstanceStatus(ctx context.Context, id, status, errorMsg string) error
+	UpdateInstanceInstallPath(ctx context.Context, id, installPath string) error
+	UpdateInstanceRuntimeID(ctx context.Context, id, runtimeID string) error
+	UpdateInstanceInstalledVersion(ctx context.Context, id, version string) error
+	ListInstances(ctx context.Context) ([]types.ExtInstanceRow, error)
+	DeleteInstance(ctx context.Context, id string) error
+
+	// extension_catalog
+	GetCatalogEntry(ctx context.Context, id string) (*types.ExtCatalogRow, error)
+	// FindCatalogPluginByMarketplace 按市场清单 name + 插件名定位目录条目（依赖解析）；不存在返回 nil。
+	FindCatalogPluginByMarketplace(ctx context.Context, marketplaceName, pluginName string) (*types.ExtCatalogRow, error)
+	// GetMarketplace 按 ID 读取市场配置；不存在返回 nil。
+	GetMarketplace(ctx context.Context, id string) (*Marketplace, error)
+	SearchCatalog(ctx context.Context, query string, limit int) ([]types.ExtCatalogRow, error)
+	ListCatalogByIDs(ctx context.Context, ids []string) ([]types.ExtCatalogRow, error)
+	ReplaceMarketplaceCatalog(ctx context.Context, marketplaceID string, entries []types.ExtCatalogRow) (int, error)
+	DeleteOrphanCatalogEntries(ctx context.Context, activeMarketplaceIDs []any) error
+	SeedMarketplace(ctx context.Context, row Marketplace) error
+	CreateMarketplace(ctx context.Context, row Marketplace) error
+	UpdateMarketplace(ctx context.Context, id string, row Marketplace) error
+	UpdateMarketplaceSortOrder(ctx context.Context, id string, sortOrder int) error
+	DeleteMarketplace(ctx context.Context, id string) (bool, error)
+	GetMaxMarketplaceSortOrder(ctx context.Context) (int, error)
+	SeedCatalogEntry(ctx context.Context, row types.ExtCatalogRow) error
+
+	// extension_catalog_overlay（目录覆盖层，ADR-0123）
+	// ReplaceCatalogOverlay 整份替换覆盖层并写入元数据（同一事务）。
+	ReplaceCatalogOverlay(ctx context.Context, rows []types.ExtCatalogOverlayRow, meta map[string]string) error
+	// GetCatalogOverlayMeta 读取覆盖层元数据（etag / generated_at / taxonomy）；不存在返回空串。
+	GetCatalogOverlayMeta(ctx context.Context, key string) (string, error)
+	// ListCatalogOverlay 全部覆盖层行，按 catalog_id 索引。
+	ListCatalogOverlay(ctx context.Context) (map[string]types.ExtCatalogOverlayRow, error)
+
+	// plugins
+	UpsertPlugin(ctx context.Context, row types.PluginRow) error
+	// GetPluginInstallPath 返回插件安装根（插件变量 ${PLUGIN_ROOT} 的权威源）；不存在返回 CodeNotFound。
+	GetPluginInstallPath(ctx context.Context, pluginID string) (string, error)
+	// GetPluginManifest 返回 plugins.manifest（pluginspec 归一化快照 JSON）；不存在返回 CodeNotFound。
+	GetPluginManifest(ctx context.Context, pluginID string) (string, error)
+	// DeletePluginComponents 删除插件子组件行（mcp_servers / skills），保留 plugins 行与用户配置（升级重装用）。
+	DeletePluginComponents(ctx context.Context, pluginID string) error
+	ListPluginUserConfig(ctx context.Context, pluginID string) ([]types.PluginUserConfigRow, error)
+	// SavePluginUserConfig 以给定集合整体替换该插件的用户配置（事务内先删后写）。
+	SavePluginUserConfig(ctx context.Context, pluginID string, rows []types.PluginUserConfigRow) error
+	// ListPlugins 返回全部插件行（含 manifest 快照）。
+	ListPlugins(ctx context.Context) ([]types.PluginRow, error)
+	// ListHookTrust 返回 source_key → 已信任的定义哈希。
+	ListHookTrust(ctx context.Context) (map[string]string, error)
+	SaveHookTrust(ctx context.Context, sourceKey, digest string) error
+	DeleteHookTrust(ctx context.Context, sourceKey string) error
+	// ListPluginChannelStates / SavePluginChannelState 插件 channel 的用户启用状态（定义在 manifest 快照）。
+	ListPluginChannelStates(ctx context.Context) ([]types.PluginChannelState, error)
+	SavePluginChannelState(ctx context.Context, s types.PluginChannelState) error
+	// ListPluginAppBindings / ReplacePluginAppBindings Codex 应用绑定（ADR-0103 决策四）。
+	ListPluginAppBindings(ctx context.Context, pluginID string) ([]types.PluginAppBinding, error)
+	ReplacePluginAppBindings(ctx context.Context, pluginID string, bindings []types.PluginAppBinding) error
+	UpdatePluginStatus(ctx context.Context, id string, enabled int, mcpPolicy string, now string) error
+	SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error
+	UpdatePluginMCPServerEnabled(ctx context.Context, pluginID, serverID string, enabled int, now string) error
+	// mcp_servers
+	ListMCPServers(ctx context.Context) ([]types.MCPServerRow, error)
+	GetMCPServer(ctx context.Context, id string) (*types.MCPServerRow, error)
+	UpsertMCPServer(ctx context.Context, row types.MCPServerRow) error
+	UpdateMCPServer(ctx context.Context, id string, fields map[string]any) error
+	// DeleteMCPServer 删除服务器行；同时删除其 mcp_oauth_tokens 令牌（basic_authorization.md
+	// 无悬空令牌要求——服务器行是令牌 server_id 外键的权威源，SQLite 未启用 FK 级联，需显式清理）。
+	DeleteMCPServer(ctx context.Context, id string) error
+
+	// mcp_oauth_clients（DCR 动态注册结果，按 issuer+redirect_uri 隔离，见 040_mcp_oauth.sql）
+	GetMCPOAuthClient(ctx context.Context, issuer, redirectURI string) (*types.MCPOAuthClientRow, error)
+	UpsertMCPOAuthClient(ctx context.Context, row types.MCPOAuthClientRow) error
+
+	// mcp_oauth_tokens（每个 MCP Server 一份已获取的令牌）
+	GetMCPOAuthToken(ctx context.Context, serverID string) (*types.MCPOAuthTokenRow, error)
+	UpsertMCPOAuthToken(ctx context.Context, row types.MCPOAuthTokenRow) error
+	DeleteMCPOAuthToken(ctx context.Context, serverID string) error
+
+	// UninstallCleanup 卸载扩展时清理关联数据（mcp_servers/skills/plugins）
+	UninstallCleanup(ctx context.Context, id, runtimeID, extType string) error
+	// DeleteInstancesByPluginID 按 plugin_id 删除所有关联实例
+	DeleteInstancesByPluginID(ctx context.Context, pluginID string) error
+	// DeleteCatalogEntry 删除目录条目（非 builtin）
+	DeleteCatalogEntry(ctx context.Context, id string) error
+	// IsCatalogBuiltin 检查目录条目是否为内置
+	IsCatalogBuiltin(ctx context.Context, id string) (bool, error)
+}
+
+type
+
+// AuditRepository 审计日志读写契约。
+// @consumer: internal/security/audit_trail.go
+// @producer: internal/store/repo/repo_audit.go
+AuditRepository interface {
+	AppendAuditEvent(ctx context.Context, row types.AuditEventRow) error
+	ListAuditEvents(ctx context.Context, limit int, before string) ([]types.AuditEventRow, error)
+	DeleteAuditEventsBefore(ctx context.Context, before string) (int64, error)
+}
+
+type
+
+// TaskReadRepository 任务表只读契约（写路径由 Blackboard 的 CAS 持有 *sql.DB）。
+// @consumer: internal/agent/, internal/swarm/
+// @producer: internal/store/repo/repo_task.go
+TaskReadRepository interface {
+	GetTaskProviderSuspendCount(ctx context.Context, taskID string) (int, error)
+	GetTaskIntentTaint(ctx context.Context, taskID string) (int, error)
+}
+
+type
+
+// TaskCheckpointRepository 任务节点断点记录契约。
+// @consumer: internal/execute/orchestrator
+// @producer: internal/store/repo
+TaskCheckpointRepository interface {
+	GetCheckpoint(ctx context.Context, taskID, nodeID string, attempt int) (*types.TaskCheckpointRow, error)
+	GetLatestCheckpoint(ctx context.Context, taskID, nodeID string) (*types.TaskCheckpointRow, error)
+	UpsertCheckpoint(ctx context.Context, row types.TaskCheckpointRow) error
+	ListCheckpointsByTask(ctx context.Context, taskID string) ([]types.TaskCheckpointRow, error)
+	ListByStatus(ctx context.Context, status string) ([]types.TaskCheckpointRow, error)
+}

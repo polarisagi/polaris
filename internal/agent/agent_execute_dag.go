@@ -1,0 +1,582 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
+	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/observability/trace"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// handleDAGExecutionFailure 处理 DAG 节点执行失败后的分流：能力缺口 / TOCTOU 冲突 /
+// 污点出口拦截人工复核 / 兜底回滚（从 runExecuteDAG 拆出，nestif 治理，行为不变）。
+func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Span, err error) error {
+	if strings.Contains(err.Error(), "tool not found") {
+		return a.handleCapabilityGap(ctx, err)
+	}
+
+	if apperr.IsCode(err, apperr.CodeConflict) {
+		a.sCtx.RecordFailure(fsm.FailureTransient)
+		a.asyncIntent(types.TriggerExecuteFail)
+		return err //nolint:wrapcheck // Return directly for TOCTOU
+	}
+
+	if errors.Is(err, policy.ErrTaintBlockedEgress) && a.hitl != nil {
+		if retryErr := a.handleTaintEgressBlocked(ctx, err); retryErr != nil {
+			return retryErr
+		}
+	}
+
+	// 执行失败 → 触发 S_ROLLBACK
+	span.RecordError(err)
+	a.sCtx.RecordReplanFeedback("execution failed: " + err.Error())
+	a.sCtx.RecordFailure(executionFailureKind(err))
+	a.asyncIntent(types.TriggerExecuteFail)
+	return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
+}
+
+// handleCapabilityGap 处理 DAG 执行中 "tool not found" 能力缺口：投递 GapFill 事件并转入中断，
+// 若扩展激活已降级则直接失败。调用方保证 err 已确认为 tool-not-found。
+func (a *Agent) handleCapabilityGap(ctx context.Context, err error) error {
+	if a.sCtx.ReplanExtActivationDegraded {
+		return apperr.Wrap(apperr.CodeInvalidInput, "capability_gap with extension activation degraded", err)
+	}
+	a.sCtx.SuspendReason = "capability_gap"
+
+	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
+		if _, execErr := sqlRepo.ExecContext(ctx, `
+			INSERT INTO background_tasks (id, agent_id, status, type, args_json, created_at)
+			VALUES (?, ?, 'pending', 'prompt_optimization', ?, ?)
+		`, "opt_"+a.ID+"_"+time.Now().Format("150405"), a.ID, `{"target_metric": "quality"}`, time.Now().Unix()); execErr != nil {
+			slog.Error("agent: db exec failed in post-execute side-effect",
+				"agent_id", a.ID, "err", execErr)
+		}
+	}
+	// 经统一 outbox 抽象投递 m9_capability_gap，触发 GapFillWorker 能力补全（GR-4.1-006）：
+	// 此前强转 SQLQuerier 裸写 outbox 表、幂等键用随机 UUID，旁路了 emitOutbox 的构造校验与
+	// "规范前缀 + 唯一性后缀"幂等键约定（types.BuildIdempotencyKey）。
+	a.emitOutbox(ctx, protocol.TopicCapabilityGap, "upsert", map[string]string{"error": err.Error()},
+		a.outboxIdemKey(protocol.TopicCapabilityGap, "session", a.sCtx.SessionID, "gap"), "capability_gap")
+
+	a.asyncIntent(types.TriggerInterruptReceived)
+	return nil
+}
+
+// handleTaintEgressBlocked 处理 taint egress 拦截：提请 HITL 人工复核铸造豁免令牌。
+// 返回非 nil 表示应立即从 runExecuteDAG 返回该错误（豁免已批准，等待下轮重试）；
+// 返回 nil 表示未获批准，交由调用方走兜底回滚分支（与原逻辑一致）。
+func (a *Agent) handleTaintEgressBlocked(ctx context.Context, err error) error {
+	slog.Info("agent: taint egress blocked, requesting HITL exemption", "session_id", a.sCtx.SessionID)
+	// 2026-07-14 补齐：从错误链里取出被拦截的原始字节（*policy.TaintEgressBlockedError，
+	// 由 tool.InMemoryToolRegistry.checkPreExecution → CheckEgressWithExemption 产出），
+	// 随 HITLPrompt 一并送审——GatewayImpl.Respond 铸造 TaintExemptionToken 时必须对
+	// 精确匹配的字节内容计算哈希，不能用下面这行人类可读摘要代替。取不到（理论上不会
+	// 发生，因为触发条件就是这个错误类型）时留空，Respond 侧会因内容为空而跳过铸造，
+	// fail-closed，不铸造一个内容为空、可通配任意豁免检查的令牌。
+	var blockedErr *policy.TaintEgressBlockedError
+	var exemptionContent []byte
+	if errors.As(err, &blockedErr) {
+		exemptionContent = blockedErr.Data
+	}
+	hitlResp, hitlErr := a.promptHITLInTurn(ctx, types.HITLPrompt{
+		ID:                    fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
+		AgentID:               a.sCtx.AgentID,
+		CheckpointType:        "data_exfiltration",
+		PromptText:            fmt.Sprintf("Taint egress blocked (TaintMedium+). Error: %v. Approve to mint TaintExemptionToken.", err),
+		TaintLevel:            types.TaintMedium,
+		DeadlineNs:            time.Now().Add(10 * time.Minute).UnixNano(),
+		ExemptionFieldContent: exemptionContent,
+	}, "", exemptionContent)
+	if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
+		// Token minted by hitl.Respond. Will retry on next plan/exec.
+		a.asyncIntent(types.TriggerExecuteFail)
+		return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: taint exemption granted, please retry", err)
+	}
+	return nil
+}
+
+// runExecuteDAG 是 Agent 层面的 DAG 执行入口。
+// 从 a.sCtx.DAGModel 构建 protocol.DAGPlan，通过 a.dagRunner（execute/dag.Runner，
+// 2026-07-12 随 internal/execute 模块化改为消费端接口注入）按拓扑序并发执行工具，
+// 结果写入 a.sCtx.ExecuteResult。
+// 任意节点失败 → 推送 TriggerExecuteFail（触发 S_ROLLBACK 和 Saga 补偿）。
+func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
+	ctx, span := otel.Tracer("agent").Start(ctx, "agent.runExecuteDAG")
+	defer span.End()
+	a.publishTurnPhase(types.AgentStateExecute)
+	a.sCtx.Mu.Lock()
+	a.sCtx.ExecAllSucceeded = false
+	a.sCtx.Mu.Unlock()
+
+	if a.sCtx.DAGModel == nil {
+		// DAGModel 为空时跳过执行（等价于空 DAG），直接推进 ExecuteDone
+		span.AddEvent("empty_dag_skip")
+		a.asyncIntent(types.TriggerExecuteDone)
+		return nil
+	}
+
+	if a.toolRegistry == nil {
+		// fail-closed: 无工具注册表时拒绝执行
+		span.RecordError(apperr.New(apperr.CodeInternal, "toolRegistry is nil"))
+		a.asyncIntent(types.TriggerExecuteFail)
+		return apperr.New(apperr.CodeInternal, "runExecuteDAG: toolRegistry is nil (fail-closed)")
+	}
+
+	plan := &protocol.DAGPlan{
+		Nodes: a.sCtx.DAGModel.Nodes,
+		Edges: a.sCtx.DAGModel.Edges,
+		// GD-13-009：崩溃恢复续跑时 CompletedNodeIDs 由 ResumeAwaitingHandoff
+		// 从快照回填，使 Runner 跳过委派节点上游/自身已完成的节点，直接从
+		// 下游继续；正常路径下为空，无行为变化。
+		PreCompletedNodes: a.sCtx.CompletedNodeIDs,
+	}
+	// 恢复场景下 a.sCtx.ExecuteResult 此刻仍持有崩溃前快照的聚合结果（由
+	// ResumeAwaitingHandoff 回填），下方会被本次新执行的结果覆盖——先取出，
+	// 执行完成后与新结果合并，避免丢失委派节点之前已产出的内容。
+	priorExecuteResult := a.sCtx.ExecuteResult
+	isResume := len(a.sCtx.CompletedNodeIDs) > 0
+
+	if a.dagRunner == nil {
+		// fail-closed: 无 DAG 执行引擎时拒绝执行（2026-07-12 execute/dag 迁出后新增，
+		// 与上方 toolRegistry==nil 分支同一 fail-closed 原则；NewAgentWithDefaults/
+		// buildAgent 均默认注入，理论上不会命中，仅作防御）。
+		span.RecordError(apperr.New(apperr.CodeInternal, "dagRunner is nil"))
+		a.asyncIntent(types.TriggerExecuteFail)
+		return apperr.New(apperr.CodeInternal, "runExecuteDAG: dagRunner is nil (fail-closed)")
+	}
+
+	// Saga 补偿结果记录器：每次 DAG 执行新建一份，
+	//   写入方 = execute/dag.DAGExecutor.runCompensation（经下方 ctx 注入）
+	//   读取方 = FSM 的 rollbackSaga（经 buildStateContext 的 SagaRecorder 字段）
+	// 补偿由 DAG 层唯一执行，FSM 的 S_ROLLBACK 只据此汇报 OK/PARTIAL
+	// （ADR-0088 决策一）。
+	// 生命周期刻意是"每次 runExecuteDAG 一份"：它表达的是"本轮失败触发的这次
+	// 补偿结果如何"，跨轮复用会让 S_REPLAN 后新一轮的判定读到上一轮的残留。
+	a.sagaRecorder = protocol.NewSagaCompensationRecorder()
+	ctx = context.WithValue(ctx, protocol.CtxSagaRecorderKey{}, a.sagaRecorder)
+
+	// 将 AgentToolExecutor.ExecuteWithTaint 绑定为 a.dagRunner 的工具执行函数
+	//
+	// 此处曾有一段读 protocol.CtxCapabilityToken 并比对 Claims.MaxCallsPerTask
+	// 的配额校验（配 callCount 计数器）。该 ctx 键**全仓从未被任何代码写入过**，
+	// 分支结构上不可达——它营造了"这里在做配额校验"的假象，实际一次都没执行过。
+	// 令牌使用次数的真实兑现点是 security/token.TokenManager.Consume，
+	// 由 CodeAct.validatePolicyAndEnv 在放行副作用前调用（ADR-0088 决策二）。
+	// 按 ADR-0062 deadcode 纪律删除，避免后续维护者误以为此处已有防护。
+	toolExecFnInner := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+		// 子 Agent 角色的工具限制在全部特判分支之前硬拦截（ADR-0103 决策三）。
+		if err := a.checkProfileTool(toolName, delegateTarget(toolName, args)); err != nil {
+			return nil, err
+		}
+		ctx = a.profileToolContext(ctx)
+		if res, handled, err := a.tryForkSkill(ctx, toolName, args, taintLevel); handled {
+			return res, err
+		}
+		if toolName == "spawn_planner" {
+			// spawn_planner 特殊处理：不走普通工具执行路径，而是：
+			// 1. 发送 InterruptRequest{Action: InterruptResume}（挂起自身，等待 whisperChan）
+			// 2. 返回特殊的待定结果，主脑将依靠 PlannerPool 推送的结果恢复
+			// 3. 在这里不直接创建 PlannerPool，而是通过专门的回调或外层触发，
+			// 或者如果允许的话，在这里异步启动 PlannerPool。
+			// (稍后将通过 go func() 启动 PlannerPool)
+
+			// 解析参数
+			var argsMap map[string]string
+			_ = json.Unmarshal(args, &argsMap)
+			goal := argsMap["goal"]
+			taskType := argsMap["task_type"]
+			if taskType == "" {
+				taskType = "general"
+			}
+
+			if a.plannerSpawner != nil {
+				// DetachedWithLink 只保留 span，会丢掉 CtxTaskIDKey；在此显式带上会话标识，
+				// PlannerPool 落 planner_sessions.task_id 时据此关联（不改 plannerSpawner 签名）。
+				detached := trace.DetachedWithLink(ctx)
+				if a.sCtx != nil && a.sCtx.SessionID != "" {
+					detached = context.WithValue(detached, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+				}
+				concurrent.SafeGo(detached, "agent.planner_spawner", func(gctx context.Context) {
+					a.plannerSpawner(gctx, goal, taskType, a.provider)
+				})
+			}
+
+			// 发送挂起意图
+			a.asyncIntent(types.TriggerInterruptReceived)
+
+			return &types.ToolResult{
+				Success:   true,
+				Suspended: true,
+				Output:    []byte("Planner pool spawned, agent suspended waiting for whisper."),
+			}, nil
+		}
+
+		if strings.HasPrefix(toolName, "code_act:") {
+			lang := strings.TrimPrefix(toolName, "code_act:")
+			return a.runCodeAct(ctx, lang, args, taintLevel)
+		}
+
+		if toolName == "transfer_to_agent" {
+			// D5（GD-14-004）：与 code_act 同级特判，不走通用 ToolRegistry 分发。
+			var handoffArgs struct {
+				TargetAgentRole string `json:"target_agent_role"`
+				ContextSummary  string `json:"context_summary"`
+				// TaintLevel 字段仍解析但不采信（与 code_act 的 capability_id 同理，
+				// 见下方说明）——防止 LLM 通过工具参数伪造更低污点等级。
+				TaintLevel types.TaintLevel `json:"taint_level"`
+			}
+			if err := json.Unmarshal(args, &handoffArgs); err != nil {
+				return nil, apperr.Wrap(apperr.CodeInvalidInput, "transfer_to_agent: unmarshal args", err)
+			}
+			// 不采信 handoffArgs.TaintLevel：使用 DAG 执行器传入的授信 taintLevel
+			// （函数签名参数），与 F0-2/GD-04-001 同一不变量。
+			return a.executeTransferToAgent(ctx, handoffArgs.TargetAgentRole, handoffArgs.ContextSummary, taintLevel)
+		}
+
+		tool, err := a.toolRegistry.Lookup(toolName)
+		isIdempotent := true
+		if err == nil {
+			for _, se := range tool.SideEffects {
+				if se != types.SideNone {
+					isIdempotent = false
+					break
+				}
+			}
+		}
+
+		// KillThrottle 执行层拦截：禁止携带 network_call 副作用的工具（ADR-0009 §Stage1）。
+		if a.sCtx.ThrottleNoNetwork && err == nil {
+			for _, se := range tool.SideEffects {
+				if se == types.SideNetworkCall {
+					return nil, apperr.New(apperr.CodeForbidden,
+						fmt.Sprintf("killswitch throttle: tool %q blocked (network_call side-effect)", toolName))
+				}
+			}
+		}
+
+		var pendingEventID string
+		// ReplayMode：跳过 2PC 预写，工具副作用已由 dag_executor 层短路。
+		if protocol.IsReplaying() {
+			goto SKIP_2PC
+		}
+		// [2PC Phase 1] 检查是否曾意外崩溃，并预写日志
+		if !isIdempotent { //nolint:nestif
+			maxT := a.sCtx.RawIntentTS.Source.OriginTaintLevel
+			if maxT == types.TaintNone {
+				maxT = types.TaintHigh
+			}
+			query := types.EpisodicQuery{
+				SessionID:     a.sCtx.SessionID,
+				MaxTaintLevel: maxT,
+			}
+			events, err := a.memory.ListEpisodicEvents(ctx, query)
+			if err != nil {
+				return nil, apperr.Wrap(apperr.CodeInternal, "2PC phase1: list episodic events failed", err)
+			}
+			hasPending := false
+			hasDone := false
+			signature := fmt.Sprintf(`"tool":"%s"`, toolName)
+			for _, e := range events {
+				if strings.Contains(string((func() *types.Event {
+					if e := e.EventPtr(); e != nil {
+						return e
+					}
+					return &types.Event{}
+				}()).Payload), signature) {
+					if (func() *types.Event {
+						if e := e.EventPtr(); e != nil {
+							return e
+						}
+						return &types.Event{}
+					}()).Type == types.EventActionPending {
+						hasPending = true
+					} else if (func() *types.Event {
+						if e := e.EventPtr(); e != nil {
+							return e
+						}
+						return &types.Event{}
+					}()).Type == types.EventActionDone {
+						hasDone = true
+					}
+				}
+			}
+			if hasPending && !hasDone {
+				// Crashed during execution. 阻断以防止外部副作用重复发生
+				return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("double execution prevented: non-idempotent tool %s was interrupted previously", toolName))
+			}
+			if hasDone {
+				// 已成功执行但后续环节崩溃导致重跑
+				return &types.ToolResult{
+					Success: true,
+					Output:  []byte(fmt.Sprintf("tool %s was already executed successfully", toolName)),
+				}, nil
+			}
+
+			// 写预写日志 Action_Pending
+			pendingEventID = uuid.New().String()
+			a.writeEpisodicWithExtract(ctx, types.Event{
+				ID:        pendingEventID,
+				Type:      types.EventActionPending,
+				Status:    types.StatusExecuting,
+				TaskID:    a.sCtx.SessionID,
+				AgentID:   a.sCtx.AgentID,
+				Payload:   []byte(fmt.Sprintf(`{"tool":"%s","args":%s}`, toolName, string(args))),
+				CreatedAt: time.Now(),
+			})
+		}
+	SKIP_2PC:
+
+		// HITL 拦截逻辑 (Computer Use Confirmations Policy)
+		if errHITL := a.interceptComputerUse(ctx, toolName, args); errHITL != nil {
+			//nolint:nilerr // ToolExecutor expects error to be reported in ToolResult for LLM to see
+			return &types.ToolResult{
+				Success: false,
+				Error:   errHITL.Error(),
+			}, nil
+		}
+
+		ctx = context.WithValue(ctx, protocol.CtxModelSwitcherKey{}, a)
+		ctx = context.WithValue(ctx, protocol.CtxSubagentManagerKey{}, a)
+		capCtx, revokeCap, capErr := a.withJITCapability(ctx, toolName, args)
+		if capErr != nil {
+			return nil, capErr
+		}
+		start := time.Now()
+		res, err := a.toolRegistry.ExecuteWithTaint(capCtx, toolName, args, taintLevel)
+		revokeCap()
+		latencyMs := time.Since(start).Milliseconds()
+
+		// Adaptive Max-Steps: 为每次工具调用打分，低分时收紧步骤预算
+		// Tier1+ 且 provider 为 LocalProvider 时 scoreWithPRM 额外融合 PRM 语义打分
+		// （M04-Agent-Kernel.md §4.5）；否则等价于纯静态 score()。
+		if a.scorer != nil {
+			toolOK := err == nil && res != nil && res.Success
+			sc := a.scorer.scoreWithPRM(ctx, stepCtx{
+				ToolName:     toolName,
+				LatencyMs:    latencyMs,
+				TokensUsed:   0, // 工具调用不消耗 token，此维度不惩罚
+				SchemaPassed: true,
+				ToolResult:   toolOK,
+			}, summarizeStepForPRM(toolName, toolOK, res, err))
+			a.sCtx.MaxStepsLimit = adjustMaxSteps(a.sCtx.MaxStepsLimit, sc)
+		}
+
+		// [2PC Phase 2] 执行完成，写入日志闭环
+		if !isIdempotent && pendingEventID != "" {
+			status := types.StatusDone
+			if err != nil || (res != nil && !res.Success) {
+				status = types.StatusFailed
+			}
+			a.writeEpisodicWithExtract(ctx, types.Event{
+				ID:        uuid.New().String(),
+				Type:      types.EventActionDone,
+				Status:    status,
+				TaskID:    a.sCtx.SessionID,
+				AgentID:   a.sCtx.AgentID,
+				Payload:   []byte(fmt.Sprintf(`{"tool":"%s","status":"%s"}`, toolName, status)),
+				CreatedAt: time.Now(),
+			})
+		}
+
+		if err == nil && res != nil && res.Success {
+			// 此处曾按 toolDef.UndoFn 追加 sCtx.SagaLog，构成 FSM 侧的第二套
+			// Saga 补偿。该机制结构上是死的（UndoFn 全仓从未被赋值），且工具
+			// 定义层拿不到本次调用的实参、无法表达"撤销刚才那次具体操作"，
+			// 已随 ADR-0088 决策一整体删除。补偿的唯一声明来源是
+			// ExecNode.Compensation，唯一执行者是 execute/dag.runCompensation。
+
+			// Logic Collapse 触发器：记录工具调用成功轨迹（M9 §4 Skill 蒸馏）
+			if a.toolCallRecorder != nil {
+				a.toolCallRecorder.RecordToolSuccess(ctx, toolName)
+			}
+		}
+
+		if err != nil {
+			return res, apperr.Wrap(apperr.CodeInternal, "Agent.runExecuteDAG", err)
+		}
+		return res, nil
+	}
+
+	// toolExecFn 包一层流事件发布。任务画布（M05 §11.3）不再在此追踪：工具调用由
+	// tool 包 ExecuteTool 落 session_trajectory，画布按会话从轨迹渲染（ADR-0104 决策七）。
+	// 独立包装而非侵入 toolExecFnInner 内部多处 return，避免遗漏分支。
+	// nodeFailures 统计工具软失败（Success=false 但无 Go 错误），DAG 引擎不把它当节点失败，
+	// Reflect 跳过判据需要它（ADR-0102 决策四）。并行节点并发调用，故用原子量。
+	var nodeFailures atomic.Int32
+	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+		// [UP-03] 污点等级下传进程内工具（类型化 key，禁魔法字符串）：
+		// core_memory_edit 等写入型工具按此落库，缺失时按 TaintNone 处理会
+		// 造成 HE-2 污点静默丢失。
+		ctx = context.WithValue(ctx, protocol.CtxTaintLevelKey{}, taintLevel)
+
+		callID := "dag_" + uuid.NewString()
+		execStart := time.Now()
+		a.publishStreamEvent(types.AgentStreamEvent{
+			Type:       types.AgentStreamEventToolCall,
+			ToolName:   toolName,
+			ToolInput:  args,
+			TaintLevel: taintLevel,
+			CallID:     callID,
+		})
+
+		res, err := toolExecFnInner(ctx, toolName, args, taintLevel)
+		failed := err != nil || res == nil || !res.Success
+		if failed {
+			nodeFailures.Add(1)
+		}
+
+		var outputContent string
+		if err != nil {
+			outputContent = "error: " + err.Error()
+		} else if res != nil {
+			outputContent = string(res.Output)
+			if res.Error != "" {
+				if outputContent != "" {
+					outputContent += "\n"
+				}
+				outputContent += "error: " + res.Error
+			}
+		}
+		a.publishStreamEvent(types.AgentStreamEvent{
+			Type:       types.AgentStreamEventToolResult,
+			ToolName:   toolName,
+			Content:    outputContent,
+			TaintLevel: taintLevel,
+			UI:         a.buildToolUIRef(toolName, args, res),
+			CallID:     callID,
+			ResultRaw:  capStreamResultRaw(outputContent),
+			IsError:    failed,
+			DurationMs: time.Since(execStart).Milliseconds(),
+		})
+
+		return res, err
+	}
+
+	// leaseRenew 由 M8 注入，MVP 传 nil
+	results, degradedReplan, err := a.dagRunner.Run(ctx, plan, toolExecFn, nil, a.sCtx.SessionID, a.sCtx.AgentID)
+
+	if degradedReplan {
+		a.sCtx.DegradedReplan = true
+	}
+
+	if err != nil {
+		return a.handleDAGExecutionFailure(ctx, span, err)
+	}
+
+	// 检查是否有节点挂起
+	for _, res := range results {
+		if res.Suspended {
+			// GD-13-009：记录本轮已完成节点 ID（排除挂起节点自身），供随后
+			// executeDeterministicEffect 进入 S_AWAIT_AGENT 分支时
+			// buildHandoffResumeSnapshot 写入快照——恢复时 DAGExecutor 据此跳过
+			// 这些节点，只从挂起节点（含）继续。同一字段在本 Agent 实例内也
+			// 服务"活跃进程内恢复"（无崩溃、TriggerAgentHandoffDone 唤醒后
+			// 重新进入 runExecuteDAG 的第二次调用）：见函数顶部 PreCompletedNodes
+			// 注入，两条路径复用同一份数据，无需区分。
+			var completedIDs []string
+			for _, r := range results {
+				if !r.Suspended {
+					completedIDs = append(completedIDs, r.NodeID)
+				}
+			}
+			a.sCtx.CompletedNodeIDs = completedIDs
+			// spawn_planner 等工具已触发中断，无需再发 ExecuteDone
+			return nil
+		}
+	}
+
+	// 聚合所有节点输出为 JSON 数组，反思阶段可获取完整 DAG 执行结果。
+	// 单节点时保持向后兼容（直接取 output 字节）；多节点时序列化为 {"results":[...]} 结构。
+	raw := aggregateDAGResults(results)
+	if isResume && len(priorExecuteResult) > 0 {
+		// GD-13-009：合并崩溃前快照的聚合结果与本次续跑新产出的结果，避免
+		// 委派节点之前已完成部分的内容在恢复后从 ExecuteResult 中静默丢失
+		// （下游反思阶段 Prompt 依赖 ExecuteResult 获知完整执行结果）。
+		raw = mergeResumedExecuteResult(priorExecuteResult, raw)
+	}
+	view := a.spillExecResult(ctx, raw)
+	a.sCtx.ExecuteResult = view.render(maxExecResultBytes)
+	// 观察—再规划（ADR-0098 决策八）：ExecuteResult 每轮覆盖，下一轮规划与最终回复
+	// 需要本回合的全部观察。按观察上限单独投影，超限时预览首行带取回提示。
+	a.sCtx.RecordObservation(string(view.render(fsm.ObservationMaxBytes)))
+	// 单次消费：清空 CompletedNodeIDs，防止同一 Agent 实例后续正常轮次
+	// （非恢复）误用本轮已经合并过的 PreCompletedNodes/priorExecuteResult。
+	a.sCtx.CompletedNodeIDs = nil
+
+	var imgs []types.ImagePart
+	for _, r := range results {
+		if len(r.ImageParts) > 0 {
+			imgs = append(imgs, r.ImageParts...)
+		}
+	}
+	if len(imgs) > maxExecuteImageParts {
+		slog.Warn("agent: staged execute image parts truncated to limit",
+			"limit", maxExecuteImageParts, "kept", maxExecuteImageParts, "discarded", len(imgs)-maxExecuteImageParts)
+		imgs = imgs[:maxExecuteImageParts]
+	}
+	a.sCtx.ExecuteImageParts = imgs
+
+	// Inject Taint Warning if any node is highly tainted
+	hasHighTaint := false
+	for _, r := range results {
+		if r.TaintLevel >= types.TaintHigh {
+			hasHighTaint = true
+			break
+		}
+	}
+	if hasHighTaint {
+		warning := []byte(fsm.HighTaintWarning)
+		a.sCtx.ExecuteResult = append(a.sCtx.ExecuteResult, warning...)
+	}
+
+	// GR-4-002 修复：DAG 节点级污点同步抬升 GlobalTaintLevel（只升不降）。
+	// 原实现只拼警告文本（LLM 可能忽略），未同步 GlobalTaintLevel，导致
+	// agent_lifecycle.go 中 toProtocolCtx 计算 MaxTaintLevel 时完全不包含
+	// DAG 执行结果的真实污点——Cedar 策略/Reflect 阶段基于错误的污点判断。
+	maxNodeTaint := types.TaintNone
+	for _, r := range results {
+		if r.TaintLevel > maxNodeTaint {
+			maxNodeTaint = r.TaintLevel
+		}
+	}
+	a.elevateGlobalTaintLevel(maxNodeTaint)
+
+	a.sCtx.Mu.Lock()
+	a.sCtx.ExecAllSucceeded = nodeFailures.Load() == 0 && !degradedReplan
+	a.sCtx.Mu.Unlock()
+
+	span.AddEvent("dag_execute_done")
+	a.asyncIntent(types.TriggerExecuteDone)
+	return nil
+}
+
+// buildToolUIRef 判定本次工具调用是否关联 MCP Apps UI 视图（M8f-1，
+// io.modelcontextprotocol/ui）：仅当 Catalog 记录了该工具的 ResourceURI 且本次
+// 调用产出了 MCPRaw（MCP 原始 CallToolResult JSON）时才构造非 nil 引用——两个
+// 条件确保只有"MCP 来源 + 声明了 UI 资源 + 调用成功"的工具才触发，不改变
+// outputContent（模型可见文本）本身。ViewID 每次调用用 crypto/rand 重新生成。
+func (a *Agent) buildToolUIRef(toolName string, args []byte, res *types.ToolResult) *types.ToolUIRef {
+	if a.catalog == nil {
+		return nil
+	}
+	entry, ok := a.catalog.Lookup(toolName)
+	if !ok {
+		return nil
+	}
+	return types.BuildToolUIRef("", entry.ResourceURI, entry.MCPServerID, entry.MCPToolName, args, res)
+}

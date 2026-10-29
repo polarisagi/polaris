@@ -1,0 +1,12 @@
+name: list_dir
+description: "List the entries of a directory (name, type, size). Restricted to allowed directories."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - filesystem
+  - io
+  - directory

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge_ingest",
+  "description": "批量将文档摄入本地知识库，支持多格式内容与元数据索引。自动进行哈希去重与分块，触发向量重建与知识图谱构建。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["collection", "docs"],
+  "properties": {
+    "collection": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{1,40}$",
+      "description": "知识集合标识符，由 1~40 位小写字母、数字和下划线组成。"
+    },
+    "docs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "description": "待摄入的文档列表，最多 100 篇。",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "uri": {
+            "type": "string",
+            "description": "文档唯一 URI（如 https://... 或 file://...）。缺省时使用 url。"
+          },
+          "url": {
+            "type": "string",
+            "description": "文档 URL（uri 缺省时的回退字段）。"
+          },
+          "title": {
+            "type": "string",
+            "description": "文档标题。"
+          },
+          "content": {
+            "type": "string",
+            "description": "文档正文内容。缺省时使用 excerpt。"
+          },
+          "excerpt": {
+            "type": "string",
+            "description": "文档摘要/摘录（content 缺省时的回退字段）。"
+          },
+          "source": {
+            "type": "string",
+            "description": "来源标识（如 feed / web / manual）。"
+          },
+          "published_at": {
+            "type": "string",
+            "description": "发布时间（RFC3339 格式字符串）。"
+          }
+        }
+      }
+    }
+  }
+}

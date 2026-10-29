@@ -1,0 +1,172 @@
+package main
+
+import (
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/apperr"
+
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/ffi"
+	"github.com/polarisagi/polaris/internal/llm"
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// providerReplacer LoadProvidersFromDB 所需的注册表能力：整体原子替换（GD-13-002）。
+// 实现：*llm.ProviderRegistry。
+type providerReplacer interface {
+	ReplaceAllWithRow(build func(register func(name, displayName, role string, p protocol.Provider, row types.ProviderRow)))
+}
+
+// LoadProvidersFromDB 从 providers + provider_models 两表 JOIN，
+// 每个启用的 (provider, model) 组合注册一个带角色的 Adapter 到 ProviderRegistry。
+func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg providerReplacer, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
+	rows, err := db.QueryContext(ctx, `
+		SELECT p.id, p.name, p.type, COALESCE(p.base_url, ''), COALESCE(p.api_key, ''), COALESCE(p.project_id, ''), COALESCE(p.location, ''),
+		       COALESCE(p.is_local, 0),
+		       m.id, COALESCE(m.name, ''), m.model_id, m.role
+		  FROM providers p
+		  JOIN provider_models m ON m.provider_id = p.id
+		 WHERE p.enabled=1 AND m.enabled=1
+		 ORDER BY p.created_at, m.created_at`)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "LoadProvidersFromDB", err)
+	}
+	defer rows.Close()
+
+	// GD-13-002：先在本地收集全部 (name, provider) 再一次性原子替换注册表。
+	// 原实现先 UnregisterAll 再逐个注册，重载窗口内并发推理会看到空注册表
+	// 而报 "no provider available"；查询中途出错也会留下半套 Provider。
+	type staged struct {
+		name, displayName, role string
+		p                       protocol.Provider
+		row                     types.ProviderRow
+	}
+	var next []staged
+	stage := func(name, displayName, role string, p protocol.Provider, row types.ProviderRow) {
+		next = append(next, staged{name, displayName, role, p, row})
+	}
+
+	for rows.Next() {
+		var pID, pName, typ, baseURL, apiKeyStr, projectID, location string
+		var isLocalInt int
+		var mID, mName, modelID, role string
+		if err := rows.Scan(&pID, &pName, &typ, &baseURL, &apiKeyStr, &projectID, &location, &isLocalInt,
+			&mID, &mName, &modelID, &role); err != nil {
+			continue
+		}
+
+		if vault != nil && apiKeyStr != "" {
+			dec, err := vault.Decrypt(apiKeyStr)
+			if err != nil {
+				metrics.RecordCredentialDecryptFailed()
+				return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LoadProvidersFromDB: failed to decrypt api key for provider %s", pID), err)
+			}
+			apiKeyStr = dec
+		}
+
+		// 2026-07-12 P1 修复：api_key 列支持按行存放多个 Key（每行一个），
+		// 构造 CredentialPool 实现同一 Provider 记录下的多 Key 轮换 + 失败自动冷却
+		// （401/402/429 等触发 PooledCredential.RecordResult 冷却，不再是"单 Key
+		// 失效即整个 Provider 不可用"）。单 Key 场景行为与旧版 credPool 完全等价。
+		credPool := llm.NewCredentialPool(splitAPIKeys(apiKeyStr), llm.StrategyRoundRobin)
+
+		suffix := mID
+		if len(mID) > 8 {
+			suffix = mID[:8]
+		}
+		// 注册名使用 model 记录 ID 前缀，保证同厂商多模型不冲突
+		name := fmt.Sprintf("%s/%s", typ, suffix)
+
+		displayName := mName
+		if displayName == "" {
+			displayName = modelID
+		}
+		displayName = fmt.Sprintf("[%s] %s", pName, displayName)
+
+		pRow := types.ProviderRow{
+			ID:      pID,
+			Name:    pName,
+			Type:    typ,
+			IsLocal: isLocalInt == 1,
+		}
+
+		// ADR-0109 D6：本地对话模型未填 role 时默认 general，
+		// 避免空 role 落入 costTier=0 与 default 对话模型同档竞争、把后台调用路由到本地。
+		// 远程 Provider 保持原语义（空 role = 单 Provider 部署的便宜档），不得改动。
+		if role == "" && llm.IsLocalProvider(pRow) {
+			role = "general"
+		}
+
+		if p := buildProviderAdapter(typ, baseURL, modelID, projectID, location, credPool, httpClient, tbr); p != nil {
+			stage(name, displayName, role, p, pRow)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "rows error", err)
+	}
+	reg.ReplaceAllWithRow(func(register func(name, displayName, role string, p protocol.Provider, row types.ProviderRow)) {
+		for _, e := range next {
+			register(e.name, e.displayName, e.role, e.p, e.row)
+		}
+	})
+	return nil
+}
+
+// splitAPIKeys 将 providers.api_key 列解析为凭证列表：按行分隔，去除首尾空白，
+// 丢弃空行。单 key（无换行）场景与旧版行为完全一致；多行则启用 CredentialPool
+// 轮换 + 失败冷却（P1 2026-07-12）。DB 列本身不变更 schema，纯文本约定即可支持
+// 多 Key，避免上线前就引入新表/新增管理 API 的额外风险。
+func splitAPIKeys(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	keys := make([]string, 0, len(lines))
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			keys = append(keys, l)
+		}
+	}
+	return keys
+}
+
+// buildProviderAdapter 按厂商类型构造 Adapter；未知类型返回 nil（跳过）。
+// 从 LoadProvidersFromDB 拆出以控制圈复杂度（gocyclo）。
+func buildProviderAdapter(typ, baseURL, modelID, projectID, location string, credPool *llm.CredentialPool, httpClient *http.Client, tbr *metrics.TokenBurnRate) protocol.Provider {
+	switch typ {
+	case "openai_compat":
+		m1 := config.CurrentThresholds().M1Router
+		return llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr,
+			llmadapter.WithOpenAIPromptCacheRetention(m1.OpenAIPromptCacheRetention))
+	case "anthropic":
+		// WithAnthropicPromptCaching：向首/末 system block + 最近
+		// 2 条非 system 消息注入 cache_control:{type:"ephemeral"} 断点，命中时
+		// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
+		// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现
+		// 但从未有调用方传入该 Option，一直处于未激活状态。
+		m1 := config.CurrentThresholds().M1Router
+		return llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching(),
+			llmadapter.WithAnthropicCacheTTL(m1.AnthropicCacheTTL),
+			llmadapter.WithAnthropicInlineNonLeadingSystem(m1.AnthropicInlineNonLeadingSystem))
+	case "deepseek":
+		return llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr)
+	case "google_agent_platform":
+		return llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr,
+			llmadapter.WithGoogleInlineNonLeadingSystem(config.CurrentThresholds().M1Router.GoogleInlineNonLeadingSystem))
+	case "ollama":
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		return llmadapter.NewOpenAIAdapter(baseURL+"/v1", modelID, credPool, httpClient, tbr)
+	case "llama_local":
+		if ffi.LlamaAvailable() {
+			return llmadapter.NewLocalAdapter(tbr)
+		}
+	}
+	return nil
+}

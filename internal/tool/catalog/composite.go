@@ -1,0 +1,273 @@
+package catalog
+
+import (
+	"context"
+	"log/slog"
+	"sort"
+	"sync"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// CompositeCatalog fan-in 多来源 Catalog，统一去重 + 缓存 + LLM 名合法性检查。
+type CompositeCatalog struct {
+	mu      sync.RWMutex
+	sources []Catalog
+	cache   []protocol.CatalogEntry // nil 表示需要重建
+
+	LazyLoadThreshold int
+	// CoreTools 懒加载时常驻 tools 数组的工具名；为空用默认核心集（见 lazy.go coreToolNames，ADR-0119）。
+	CoreTools      []string
+	activeSessions map[string]*sessionActivation // sessionID -> 本会话激活的工具（保持激活顺序）
+}
+
+// maxActivatedToolsPerSession 单会话激活工具数上限（有界，防 tool_search 反复激活撑爆 tools 数组）。
+// 超限时淘汰最早激活的一个：极端情形下宁可付一次 tools 前缀失配，也不让数组无界增长。
+const maxActivatedToolsPerSession = 64
+
+// sessionActivation 单会话的激活集合。order 决定 Schemas 中激活工具的追加顺序，
+// set 用于 O(1) 判重；二者由 CompositeCatalog.mu 保护。
+type sessionActivation struct {
+	order []string
+	set   map[string]bool
+}
+
+func NewCompositeCatalog(sources ...Catalog) *CompositeCatalog {
+	return &CompositeCatalog{
+		sources:           sources,
+		LazyLoadThreshold: 40, // 默认阈值
+		activeSessions:    make(map[string]*sessionActivation),
+	}
+}
+
+func isValidLLMName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *CompositeCatalog) filterByTrust(entries []protocol.CatalogEntry, minTrust types.TrustTier) []protocol.CatalogEntry {
+	var filtered []protocol.CatalogEntry
+	for _, e := range entries {
+		if e.TrustTier >= minTrust {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
+func (c *CompositeCatalog) List(ctx context.Context, minTrust types.TrustTier) []protocol.CatalogEntry {
+	c.mu.RLock()
+	if c.cache != nil {
+		defer c.mu.RUnlock()
+		return c.filterByTrust(c.cache, minTrust)
+	}
+	c.mu.RUnlock()
+	return c.rebuild(ctx, minTrust)
+}
+
+func (c *CompositeCatalog) rebuild(ctx context.Context, minTrust types.TrustTier) []protocol.CatalogEntry {
+	seen := make(map[string]bool)
+	var result []protocol.CatalogEntry
+	for _, src := range c.sources {
+		// cache 是全量视图，按 minTrust 过滤只发生在出口（GR-5.2-005）：此前以首次调用方的
+		// minTrust 取源，高信任首调会把低信任工具永久挡在缓存外，后续低门槛调用方再也看不到。
+		for _, e := range src.List(ctx, types.TrustUntrusted) {
+			if seen[e.Name] {
+				continue
+			}
+			if !isValidLLMName(e.Name) { // 防御性过滤
+				slog.Warn("catalog: invalid LLM tool name, dropped", "name", e.Name)
+				continue
+			}
+			seen[e.Name] = true
+			result = append(result, e)
+		}
+	}
+
+	// Sort by Source (builtin -> mcp -> skill -> other) then by Name
+	sourceWeight := func(src types.ToolSource) int {
+		switch src {
+		case types.ToolBuiltin:
+			return 1
+		case types.ToolMCP:
+			return 2
+		case types.ToolSkill:
+			return 3
+		default:
+			return 4
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		wi, wj := sourceWeight(result[i].Source), sourceWeight(result[j].Source)
+		if wi != wj {
+			return wi < wj
+		}
+		return result[i].Name < result[j].Name
+	})
+
+	c.mu.Lock()
+	c.cache = result
+	c.mu.Unlock()
+	return c.filterByTrust(result, minTrust)
+}
+
+func (c *CompositeCatalog) Lookup(name string) (protocol.CatalogEntry, bool) {
+	c.mu.RLock()
+	if c.cache != nil {
+		defer c.mu.RUnlock()
+		for _, e := range c.cache {
+			if e.Name == name {
+				return e, true
+			}
+		}
+		return protocol.CatalogEntry{}, false
+	}
+	c.mu.RUnlock()
+
+	// If cache is empty, rebuild and try again
+	c.rebuild(context.Background(), types.TrustUntrusted)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, e := range c.cache {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return protocol.CatalogEntry{}, false
+}
+
+func (c *CompositeCatalog) Register(entry protocol.CatalogEntry) {
+	// Not typically called directly on CompositeCatalog unless we have a default target
+	// Or we can just panic/ignore
+}
+
+func (c *CompositeCatalog) Unregister(name string) {
+	// Same as above
+}
+
+func (c *CompositeCatalog) Invalidate() {
+	c.mu.Lock()
+	c.cache = nil
+	c.mu.Unlock()
+}
+
+// Schemas 构建懒加载后的工具 schema 列表。
+//
+// TaskID 激活作用域必须与写入端一致：internal/tool/tool_search.go 的
+// tool_search 执行路径（经 ExecuteTool → DAG 节点执行，protocol.CtxTaskIDKey
+// 由 internal/execute/dag/executor.go 注入）和本方法的读取路径统一使用
+// sCtx.SessionID 作为 TaskID 来源（agent_execute.go 的
+// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)）。
+// 提示词构建阶段的调用方（internal/agent/context/memory_context.go
+// BuildPlanContext → BuildToolListSection、internal/agent/fsm/state_machine.go
+// 无 Memory 降级路径）均已改为显式传入携带同一 TaskID 的 ctx，tool_search
+// 上一轮激活的工具能在下一轮提示词重建时正确出现在 Schemas() 列表里。
+// sysadmin 包（internal/gateway/server/sysadmin/tools.go 等）的管理态调用
+// 用 context.Background() 是有意为之——这些是无会话概念的一次性管理操作
+// （列全部工具供 Admin UI / 工作流校验），不涉及 tool_search 的会话级激活。
+func (c *CompositeCatalog) Schemas(ctx context.Context, minTrust types.TrustTier) []types.ToolSchema {
+	entries := c.List(ctx, minTrust)
+	threshold := c.LazyLoadThreshold
+	if threshold <= 0 {
+		threshold = 40
+	}
+
+	// 懒加载与 Embedder 无关（ADR-0119）：工具总数超阈值，且目录里确有 tool_search 可供激活时启用。
+	// 没有 tool_search 就无从激活，此时宁可全量下发也不能让工具不可达。
+	shouldLazyLoad := lazyActive(entries, threshold)
+
+	// 激活作用域 key 必须与 tool_search.go 的 MakeToolSearchFn 一致，
+	// 否则 tool_search 激活的工具在这里读不到（见该文件内注释）。
+	sessionID := ""
+	if tid, ok := ctx.Value(protocol.CtxTaskIDKey{}).(string); ok {
+		sessionID = tid
+	}
+
+	// 在锁内拷贝激活顺序：ActivateTool 会并发追加 order，锁外读取切片是数据竞争。
+	var activated []string
+	c.mu.RLock()
+	if sa := c.activeSessions[sessionID]; sa != nil {
+		activated = append(activated, sa.order...)
+	}
+	c.mu.RUnlock()
+
+	toSchema := func(e protocol.CatalogEntry) types.ToolSchema {
+		return types.ToolSchema{Name: e.Name, Description: e.Description, Parameters: e.Parameters}
+	}
+
+	if !shouldLazyLoad {
+		// 非懒加载：全量工具保持 List 的确定序（来源权重 + 名称）。
+		schemas := make([]types.ToolSchema, 0, len(entries))
+		for _, e := range entries {
+			schemas = append(schemas, toSchema(e))
+		}
+		return schemas
+	}
+
+	// 懒加载（ADR-0105 决策三 tools 数组只追加；ADR-0119 核心集不依赖 Embedder）：
+	//   [常驻核心工具（IsCoreTool，List 确定序，含 tool_search）] [本会话激活工具，按激活顺序]
+	// 激活只会在数组尾部追加，核心部分与已有激活部分的字节不随新激活而变——此前激活工具按名称
+	// 插进核心工具中间，插入点之后的 tools 定义全部失配（Anthropic 上 tools 变化使整个缓存失效）。
+	byName := make(map[string]protocol.CatalogEntry, len(entries))
+	schemas := make([]types.ToolSchema, 0, len(c.coreSet())+len(activated))
+	for _, e := range entries {
+		byName[e.Name] = e
+		if c.IsCore(e.Name) {
+			schemas = append(schemas, toSchema(e))
+		}
+	}
+	for _, name := range activated {
+		// 核心工具已在前段；已被卸载或被 minTrust 过滤的激活项静默跳过（不占位）。
+		if e, ok := byName[name]; ok && !c.IsCore(name) {
+			schemas = append(schemas, toSchema(e))
+		}
+	}
+	return schemas
+}
+
+// ActivateTool activates a dynamically discovered tool for the specified session.
+// 重复激活同一工具保持其首次激活的位置（tools 数组前缀不变）。
+func (c *CompositeCatalog) ActivateTool(sessionID string, toolName string) {
+	if sessionID == "" || toolName == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeSessions == nil {
+		c.activeSessions = make(map[string]*sessionActivation)
+	}
+	sa := c.activeSessions[sessionID]
+	if sa == nil {
+		sa = &sessionActivation{set: make(map[string]bool)}
+		c.activeSessions[sessionID] = sa
+	}
+	if sa.set[toolName] {
+		return
+	}
+	if len(sa.order) >= maxActivatedToolsPerSession {
+		delete(sa.set, sa.order[0])
+		sa.order = sa.order[1:]
+	}
+	sa.order = append(sa.order, toolName)
+	sa.set[toolName] = true
+}
+
+// CleanupSession cleans up activated tools when a session ends to prevent memory leaks.
+func (c *CompositeCatalog) CleanupSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeSessions != nil {
+		delete(c.activeSessions, sessionID)
+	}
+}

@@ -1,0 +1,12 @@
+name: web_fetch
+description: "读取网页正文。mode：markdown（默认，去导航广告，最省 token）、text、links（找链接）、raw。内容长时用 next_offset 经 offset 续读；unchanged=true 表示同上次。需登录/JS 渲染用浏览器插件，RSS 用 feed_fetch。"
+version: "2.0.0"
+capability: read-network
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - network-call
+tags:
+  - network
+  - http
+  - web

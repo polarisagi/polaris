@@ -1,0 +1,575 @@
+name: Release
+
+# ═══════════════════════════════════════════════════════════════════════
+# 发布流程
+#
+# 关键路径：
+#   prepare (ensure-rust, ~30s) ──┐
+#   build-frontend (~3min) ───────┤ 并行
+#   build-go [6×ubuntu] (~4min) ──┘
+#     → package (下载预编译 Rust, ~30s)
+#       ↘ desktop [4×各平台 runner] (~10min)   并行
+#         → publish：合并 core + desktop 为每平台单一归档 → GitHub Release
+#
+# 最终产物：每系统/架构组合一个归档（6 个），含守护进程 + 桌面外壳 + configs。
+# 无桌面版的平台（linux-arm64 / windows-arm64）归档仅含核心。
+#
+# 设计要点：
+#   ① Rust 完全剥离 — 产物存 GitHub pre-release（rust-build.yml 维护）
+#   ② Go 全部 ubuntu-latest 纯交叉编译，Go module cache 命中极快
+#   ③ Tauri 不支持交叉编译，desktop job 走三种 runner
+#   ④ publish 合并 package + desktop 产物，消除"带桌面/不带桌面"的分裂
+#   ⑤ 并发控制：同一 tag 只允许一个 release 流水线运行
+# ═══════════════════════════════════════════════════════════════════════
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  actions: read
+
+# 同一 tag 只允许一个 release 运行，防止并发写 release
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ───────────────────────────────────────────────
+  # 0a. ensure-rust：调用 rust-build.yml（可复用工作流）
+  #     产物已存在时 ~30s 秒跳过；不存在时自动编译发布。
+  #     完全自愈，无需手动触发。
+  # ───────────────────────────────────────────────
+  ensure-rust:
+    name: Ensure Rust Artifacts
+    uses: ./.github/workflows/rust-build.yml
+    permissions:
+      contents: write
+    with:
+      force_rebuild: false
+
+  # ───────────────────────────────────────────────
+  # 0b. prepare：从 ensure-rust 转发 rust_tag / rust_hash
+  #     供下游 package job 使用
+  # ───────────────────────────────────────────────
+  prepare:
+    name: Prepare
+    needs: ensure-rust
+    runs-on: ubuntu-latest
+    outputs:
+      rust_hash: ${{ needs.ensure-rust.outputs.rust_hash }}
+      rust_tag:  ${{ needs.ensure-rust.outputs.rust_tag }}
+    steps:
+      - name: Echo rust tag
+        run: |
+          echo "rust_tag=${{ needs.ensure-rust.outputs.rust_tag }}"
+          echo "rust_hash=${{ needs.ensure-rust.outputs.rust_hash }}"
+
+  # ───────────────────────────────────────────────
+  # 1. 构建前端
+  # ───────────────────────────────────────────────
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build UI
+        run: make build-ui
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: web/dist
+          retention-days: 1
+
+  # ───────────────────────────────────────────────
+  # 2. 交叉编译 Go 二进制（全部在 ubuntu-latest，CGO=0）
+  #    与 prepare 并行，等 frontend 完成后即启动
+  # ───────────────────────────────────────────────
+  build-go:
+    name: Build Go (${{ matrix.name }})
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true   # 任一平台失败立即取消其余，避免浪费
+      matrix:
+        include:
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+            cargo_target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+            cargo_target: aarch64-unknown-linux-gnu
+          - name: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            cargo_target: aarch64-apple-darwin
+          - name: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            cargo_target: x86_64-apple-darwin
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            cargo_target: x86_64-pc-windows-msvc
+            binary_suffix: ".exe"
+          - name: windows-arm64
+            goos: windows
+            goarch: arm64
+            cargo_target: aarch64-pc-windows-msvc
+            binary_suffix: ".exe"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true          # 缓存 GOPATH/pkg/mod 和 ~/.cache/go-build
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: web/dist
+
+      - name: Build Go binary (cross-compile)
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          SKIP_RUST_BUILD: 1
+          VERSION: ${{ github.ref_name }}
+        run: make build-backend
+
+      - name: Rename binary (Windows)
+        if: matrix.binary_suffix == '.exe'
+        run: mv bin/polaris bin/polaris.exe
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: go-${{ matrix.name }}
+          path: bin/polaris${{ matrix.binary_suffix }}
+          retention-days: 1
+
+  # ───────────────────────────────────────────────
+  # 3. 打包发布（依赖 build-go + prepare）
+  #    Rust 产物直接从 pre-release 下载，无编译开销
+  # ───────────────────────────────────────────────
+  package:
+    name: Package (${{ matrix.name }})
+    needs: [build-go, prepare]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: linux-amd64
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-linux-amd64.so
+            rust_libname:  libsubstrate.so
+          - name: linux-arm64
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-linux-arm64.so
+            rust_libname:  libsubstrate.so
+          - name: darwin-arm64
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-darwin-arm64.dylib
+            rust_libname:  libsubstrate.dylib
+          - name: darwin-amd64
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-darwin-amd64.dylib
+            rust_libname:  libsubstrate.dylib
+          - name: windows-amd64
+            archive_format: zip
+            rust_artifact: substrate-windows-amd64.dll
+            rust_libname:  substrate.dll
+          - name: windows-arm64
+            archive_format: zip
+            rust_artifact: substrate-windows-arm64.dll
+            rust_libname:  substrate.dll
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download Go binary
+        uses: actions/download-artifact@v8
+        with:
+          name: go-${{ matrix.name }}
+          path: bin
+
+      # 从 pre-release 下载对应平台的预编译 Rust .so / .dylib / .dll
+      - name: Download prebuilt Rust artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:      ${{ needs.prepare.outputs.rust_tag }}
+          ARTIFACT: ${{ matrix.rust_artifact }}
+          LIBNAME:  ${{ matrix.rust_libname }}
+        run: |
+          mkdir -p bin/lib
+          gh release download "$TAG" \
+            --pattern "$ARTIFACT" \
+            --dir bin/lib \
+            --clobber
+          # 重命名为运行时期望的规范文件名
+          if [ "$ARTIFACT" != "$LIBNAME" ]; then
+            mv "bin/lib/$ARTIFACT" "bin/lib/$LIBNAME"
+          fi
+
+      - name: Package release archive
+        run: |
+          ARCHIVE_NAME="polaris-${{ matrix.name }}"
+          mkdir -p "release_pkg/${ARCHIVE_NAME}"
+          cp -r bin/polaris* "release_pkg/${ARCHIVE_NAME}/"   # binary (含 .exe)
+          cp -r bin/lib      "release_pkg/${ARCHIVE_NAME}/"   # Rust dylib
+          cp -r configs      "release_pkg/${ARCHIVE_NAME}/"
+          cp LICENSE         "release_pkg/${ARCHIVE_NAME}/"
+          cd release_pkg
+          if [ "${{ matrix.archive_format }}" = "zip" ]; then
+            zip -r "../${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+          else
+            tar -czvf "../${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          fi
+          cd ..
+          sha256sum ${ARCHIVE_NAME}.${{ matrix.archive_format }} \
+            > ${ARCHIVE_NAME}.${{ matrix.archive_format }}.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: polaris-${{ matrix.name }}
+          path: polaris-${{ matrix.name }}.*
+          retention-days: 1
+
+  # ───────────────────────────────────────────────
+  # 3.5 桌面外壳构建（ADR-0096）
+  #
+  # Tauri **不支持交叉编译**：外壳链接各平台自己的 WebView（WKWebView /
+  # WebView2 / WebKitGTK），必须在目标 OS 上构建。故这里是三种 runner 的独立
+  # 矩阵，与上面单 runner 交叉编译 Go 的逻辑并行存在，刻意不合并。
+  #
+  # 产物在 publish job 中与 core 归档合并为每平台单一包，不单独发布。
+  #
+  # 无平台签名证书（决策八）：macOS 仅做 ad-hoc 签名（codesign -s -，Apple
+  # Silicon 的硬要求），不公证；Windows 不做 Authenticode。安装脚本走
+  # curl/Invoke-WebRequest 不写隔离属性/MOTW，故不触发 Gatekeeper
+  # 与 SmartScreen（ADR-0095）。
+  # ───────────────────────────────────────────────
+  desktop:
+    name: Desktop Shell (${{ matrix.name }})
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: darwin-arm64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+          - name: darwin-amd64
+            runner: macos-latest
+            rust_target: x86_64-apple-darwin
+          - name: windows-amd64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - name: linux-amd64
+            runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      # WebKitGTK 与 AppImage 打包依赖，仅 Linux 需要
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+
+      # 外壳版本必须与守护进程同源于 git tag：外壳启动时会比对 /healthz 回报的版本
+      # （startup.rs compatible()），0.x 阶段主次版本不同即判不兼容。不盖版本号的话，
+      # 外壳永远是 Cargo.toml 里的占位版本，每个正式发布都会被自己的外壳拒绝。
+      - name: Stamp version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          python3 - "$V" <<'PY'
+          import json, re, sys
+          v = sys.argv[1]
+          p = "desktop/src-tauri/tauri.conf.json"
+          c = json.load(open(p, encoding="utf-8"))
+          c["version"] = v
+          json.dump(c, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          p = "desktop/src-tauri/Cargo.toml"
+          s = open(p, encoding="utf-8").read()
+          s = re.sub(r'(?m)^version = "[^"]*"', f'version = "{v}"', s, count=1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+          grep -m1 '^version' desktop/src-tauri/Cargo.toml
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build desktop bundle
+        working-directory: desktop/src-tauri
+        run: cargo tauri build --target ${{ matrix.rust_target }}
+
+      # ad-hoc 签名：Apple Silicon 拒绝加载无签名可执行文件。免费、不需账号。
+      - name: Ad-hoc sign (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop/src-tauri
+        run: |
+          set -euo pipefail
+          APP=$(find target/${{ matrix.rust_target }}/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="desktop_pkg"
+          mkdir -p "$OUT"
+          RELEASE_DIR="desktop/src-tauri/target/${{ matrix.rust_target }}/release"
+          BUNDLE="${RELEASE_DIR}/bundle"
+          NAME="polaris-desktop-${{ matrix.name }}"
+          case "${{ runner.os }}" in
+            macOS)
+              APP=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' | head -1)
+              tar -czf "$OUT/${NAME}.tar.gz" -C "$(dirname "$APP")" "$(basename "$APP")"
+              ;;
+            Windows)
+              # 收集原始可执行文件而非 .msi——统一归档内不嵌套安装器
+              cp "${RELEASE_DIR}/polaris-desktop.exe" "$OUT/${NAME}.exe"
+              ;;
+            Linux)
+              find "$BUNDLE/appimage" -name '*.AppImage' -exec cp {} "$OUT/${NAME}.AppImage" \; || true
+              ;;
+          esac
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: polaris-desktop-${{ matrix.name }}
+          path: desktop_pkg/*
+          retention-days: 1
+
+  # ───────────────────────────────────────────────
+  # 4. 发布 GitHub Release
+  #
+  # 合并 package（core 二进制 + Rust dylib + configs）与 desktop（外壳）
+  # 的产物为每平台单一归档，消除 GitHub Release 页面上"带桌面 / 不带桌面"
+  # 的分裂。无桌面版的平台（linux-arm64 / windows-arm64）原样发布。
+  # 合并不违反 ADR-0096 决策四——安装脚本仍将二者放到各自位置。
+  # ───────────────────────────────────────────────
+  publish:
+    name: Publish GitHub Release
+    needs: [package, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: polaris-*
+          path: all_artifacts
+          merge-multiple: true
+
+      # 按文件名将产物分流：polaris-desktop-* → desktop/，其余 → core/
+      - name: Separate core and desktop artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p core_artifacts desktop_artifacts
+          shopt -s nullglob
+          for f in all_artifacts/*; do
+            [ -f "$f" ] || continue
+            bn=$(basename "$f")
+            if [[ "$bn" == polaris-desktop-* ]]; then
+              mv "$f" desktop_artifacts/
+            else
+              mv "$f" core_artifacts/
+            fi
+          done
+          rm -rf all_artifacts
+          echo "Core:"; ls core_artifacts/ 2>/dev/null || echo "  (empty)"
+          echo "Desktop:"; ls desktop_artifacts/ 2>/dev/null || echo "  (empty)"
+
+      # ─────────────────────────────────────────────────────────────
+      # 合并产物：将每平台的桌面外壳嵌入对应的核心归档
+      #
+      # 最终每平台只有一个归档，内部布局：
+      #   polaris-{os}-{arch}/
+      #   ├── polaris[.exe]      (Go 守护进程)
+      #   ├── lib/               (Rust dylib)
+      #   ├── desktop/           (桌面外壳，仅有桌面版的平台存在)
+      #   │   └── Polaris.app/ | polaris-desktop.exe | polaris-desktop (AppImage)
+      #   ├── configs/
+      #   └── LICENSE
+      # ─────────────────────────────────────────────────────────────
+      - name: Merge core + desktop into unified packages
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          # 桌面产物与核心归档的平台对应关系
+          # 格式：platform:desktop_file_extension
+          DESKTOP_PLATFORMS="darwin-arm64:tar.gz darwin-amd64:tar.gz windows-amd64:exe linux-amd64:AppImage"
+
+          # 遍历所有核心归档
+          shopt -s nullglob
+          for core_archive in core_artifacts/polaris-*.tar.gz core_artifacts/polaris-*.zip; do
+            [ -f "$core_archive" ] || continue
+            # 跳过 .sha256 和 .sig 文件（glob 不会匹配，但防御性检查）
+            [[ "$core_archive" == *.sha256 ]] && continue
+            [[ "$core_archive" == *.sig ]] && continue
+
+            BASENAME=$(basename "$core_archive")
+            # 提取平台名：polaris-linux-amd64.tar.gz → linux-amd64
+            PLATFORM=$(echo "$BASENAME" | sed 's/^polaris-//;s/\.tar\.gz$//;s/\.zip$//')
+
+            echo "━━━ Processing $PLATFORM ━━━"
+
+            # 解压核心归档到工作目录
+            WORK="work-${PLATFORM}"
+            mkdir -p "$WORK"
+            if [[ "$core_archive" == *.zip ]]; then
+              unzip -q "$core_archive" -d "$WORK"
+            else
+              tar -xzf "$core_archive" -C "$WORK"
+            fi
+
+            # 查找并嵌入对应的桌面产物
+            DESKTOP_EXT=""
+            for mapping in $DESKTOP_PLATFORMS; do
+              p="${mapping%%:*}"
+              e="${mapping##*:}"
+              if [ "$p" = "$PLATFORM" ]; then
+                DESKTOP_EXT="$e"
+                break
+              fi
+            done
+
+            if [ -n "$DESKTOP_EXT" ]; then
+              DESKTOP_FILE="desktop_artifacts/polaris-desktop-${PLATFORM}.${DESKTOP_EXT}"
+              if [ -f "$DESKTOP_FILE" ]; then
+                DEST="$WORK/polaris-${PLATFORM}/desktop"
+                mkdir -p "$DEST"
+                case "$DESKTOP_EXT" in
+                  tar.gz)
+                    # macOS: 解开 .tar.gz 取出 .app 目录
+                    tar -xzf "$DESKTOP_FILE" -C "$DEST"
+                    ;;
+                  *)
+                    # Windows (.msi) / Linux (.AppImage): 直接复制
+                    cp "$DESKTOP_FILE" "$DEST/"
+                    ;;
+                esac
+                echo "  ✓ 嵌入桌面外壳 ($DESKTOP_EXT)"
+              else
+                echo "  ⚠ 桌面产物 $DESKTOP_FILE 不存在，仅发布核心"
+              fi
+            else
+              echo "  ℹ $PLATFORM 无桌面版，仅发布核心"
+            fi
+
+            # 重新打包
+            cd "$WORK"
+            if [[ "$core_archive" == *.zip ]]; then
+              zip -r "../release/$BASENAME" "polaris-${PLATFORM}"
+            else
+              tar -czf "../release/$BASENAME" "polaris-${PLATFORM}"
+            fi
+            cd ..
+            rm -rf "$WORK"
+            echo "  ✓ 已生成 $BASENAME"
+          done
+
+          # 生成 SHA256 校验和
+          cd release
+          for f in *; do
+            [ -f "$f" ] || continue
+            sha256sum "$f" > "$f.sha256"
+          done
+
+          echo ""
+          echo "═══ 最终发布产物 ═══"
+          ls -la
+          echo ""
+          echo "产物总数: $(ls -1 | wc -l)"
+
+      # ─────────────────────────────────────────────────────────────
+      # 供应链签名（ADR-0095 决策二）
+      #
+      # 签的是每个 <archive>.sha256 而非归档本身：客户端本来就要下载 .sha256，
+      # 签名让这个几十字节的文件变得可信，归档的完整性再由其中的 SHA-256 承接。
+      # 一次签名同时锚住"校验值"与"归档"，且客户端无需把整个归档喂给验签器。
+      # 这直接消解 mirror 降级问题：校验值即使取自 ghproxy 也无法被伪造。
+      #
+      # 签名与验签都用 Go 标准库（tools/release_sign.go），不依赖 cosign/openssl
+      # ——2026-08-11 实测 cosign v3 已移除分离式签名路径、openssl 3 的加密 PKCS#8
+      # 解码有 provider 缺陷，理由详见 internal/sysmgr/updater/signer.go 头部。
+      #
+      # 状态判定不写在 YAML 里而是调 tools/release_signing_gate.go：签名是流水线与
+      # 客户端的双侧协议，两侧对"现在是否该有签名"的判断必须永远一致，各判各的
+      # 迟早漂移，而漂移的表现是"发出去的包客户端装不上"。四象限中三种放行、
+      # 一种阻断（有公钥无私钥 → 客户端已 fail-closed，此时发不带签名的包会被
+      # 每个已升级客户端拒装，而流水线全绿）。
+      # ─────────────────────────────────────────────────────────────
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Resolve release signing state
+        id: signing
+        env:
+          POLARIS_RELEASE_PRIVATE_KEY: ${{ secrets.POLARIS_RELEASE_PRIVATE_KEY }}
+        run: env GOOS= GOARCH= go run tools/release_signing_gate.go >> "$GITHUB_OUTPUT"
+
+      - name: Sign checksum files
+        if: steps.signing.outputs.should_sign == 'true'
+        env:
+          POLARIS_RELEASE_PRIVATE_KEY: ${{ secrets.POLARIS_RELEASE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(release/*.sha256)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::release/ 下没有 .sha256 文件，package 阶段产物异常"
+            exit 1
+          fi
+          # release_sign 内部签完即对照 releasekeys/ 已提交公钥自验，
+          # 任一公钥验过即通过（与客户端 verifyWithKeys 同语义，轮换期必需）。
+          env GOOS= GOARCH= go run tools/release_sign.go "${files[@]}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          generate_release_notes: true

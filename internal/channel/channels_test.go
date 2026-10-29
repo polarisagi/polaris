@@ -1,0 +1,77 @@
+package channel
+
+import (
+	"net/http"
+	"testing"
+
+	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
+)
+
+// ── ExtractMessage dispatcher ─────────────────────────────────────────────────
+
+func TestExtractMessage_Telegram(t *testing.T) {
+	body := `{"message":{"text":"tg","chat":{"id":1},"from":{"id":2}}}`
+	msg := ExtractMessage("telegram", []byte(body), nil)
+	if msg.Text != "tg" {
+		t.Errorf("expected 'tg', got %q", msg.Text)
+	}
+}
+
+func TestExtractMessage_Discord(t *testing.T) {
+	body := `{"content":"dc","channel_id":"c1","author":{"id":"u1"}}`
+	msg := ExtractMessage("discord", []byte(body), nil)
+	if msg.Text != "dc" {
+		t.Errorf("expected 'dc', got %q", msg.Text)
+	}
+}
+
+func TestRegistry_RegisteredAdapters(t *testing.T) {
+	// A simple sanity check that some known adapters are registered.
+	knownAdapters := []string{"telegram", "discord", "webhook"}
+	for _, name := range knownAdapters {
+		if _, ok := cadapter.GetAdapter(name); !ok {
+			t.Errorf("expected adapter %q to be registered, but it was not", name)
+		}
+	}
+}
+
+// TestRegistry_ReturnsSingletonInstance 防止 GetAdapter 退化为每次调用新建实例的
+// 工厂函数（曾发生过的回归：WecomAdapter.wecomSends / MatrixAdapter.txnCounter 是
+// 跨 StartPoller→Send 调用必须持久的实例状态，工厂模式会导致 Send 读到的永远是
+// 空状态，wecom 回复静默丢失）。GetAdapter 必须对同一 channelType 始终返回同一个
+// 已注册单例。
+func TestRegistry_ReturnsSingletonInstance(t *testing.T) {
+	for _, name := range []string{"wecom", "matrix", "telegram"} {
+		a1, ok1 := cadapter.GetAdapter(name)
+		a2, ok2 := cadapter.GetAdapter(name)
+		if !ok1 || !ok2 {
+			t.Fatalf("adapter %q should be registered", name)
+		}
+		if a1 != a2 {
+			t.Errorf("GetAdapter(%q) returned different instances across calls — adapter state (e.g. wecomSends/txnCounter) will not persist between StartPoller and Send", name)
+		}
+	}
+}
+
+func TestExtractMessage_Unknown(t *testing.T) {
+	msg := ExtractMessage("unknown_platform", []byte(`{}`), nil)
+	if msg.Text != "" || msg.ChatID != "" {
+		t.Error("unknown platform should return empty Message")
+	}
+}
+
+// ── NewManager ────────────────────────────────────────────────────────────────
+
+func TestNewManager_NotNil(t *testing.T) {
+	m := NewManager(http.DefaultClient, nil)
+	if m == nil {
+		t.Fatal("NewManager should return non-nil Manager")
+	}
+}
+
+func TestNewManager_WithSafeDialer(t *testing.T) {
+	m := NewManager(http.DefaultClient, nil, WithSafeDialer(nil))
+	if m == nil {
+		t.Fatal("NewManager with WithSafeDialer should return non-nil Manager")
+	}
+}

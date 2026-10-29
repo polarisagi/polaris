@@ -1,0 +1,270 @@
+// Package lint_test 补充两条 Phase 8 治理闭环规则：
+//   - Test_inv_NoForbiddenVerbRoot：R2.2 动词词根扫描，防止 Load*/Query*/Fetch*/
+//     Retrieve* 类命名重新扩散（2026-07-06 审计 + 2026-07-07 复核修复了存量 33
+//     处违规，本文件是"不让它再长回来"的机械检查）。
+//   - Test_inv_FileLineLimit：R7 文件行数软 800 / 硬 850 CI 门控，覆盖存量代码
+//     而不只是新增 diff（2026-07-07 复核发现原 .golangci.yml 配置对存量文件
+//     未生效，60 个文件早已超标却从未被拦下）。
+//
+// 单独成文件而非塞进已经 1200+ 行的 inv_lint_test.go：本次审计的核心结论之一就是
+// "大文件应该拆而不是继续堆"，本文件的存在方式本身也应遵循这条结论。
+package lint_test
+
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// ─── inv_NoForbiddenVerbRoot ──────────────────────────────────────────────────
+
+// forbiddenVerbRootAllowlist 收录的每一项都必须在旁边写清楚"为什么不遵循 R2.2"，
+// 不接受无理由加白名单——新增条目视为放宽规则，需在 PR 描述里说明理由（R8）。
+var forbiddenVerbRootAllowlist = map[string]string{
+	// dlopen 动态库加载：有副作用的初始化动作，不是"读数据返回调用方"语义，
+	// Get/List/FindBy 均不贴切；且 LoadLibrary 是历史悠久的跨语言惯用名
+	// （Windows API 同名函数）。
+	"LoadLibrary": "内置工具/引擎动态库加载(dlopen)，非数据读取语义",
+	// 模型加载进运行时内存，同样是有副作用的初始化动作。
+	"LoadModel": "AI 模型加载进运行时内存，非数据读取语义",
+	// 复合语义：不存在则创建。镜像 Go 标准库 sync.Map.LoadOrStore 的既有命名惯例，
+	// 强改 GetOrCreate 反而偏离社区共识。
+	"LoadOrCreate": "镜像 sync.Map.LoadOrStore 命名惯例的 create-if-absent 语义",
+	// 镜像 database/sql 标准库接口方法名（SQLQuerier 等协议接口的实现方法）。
+	"QueryContext":    "镜像 database/sql 标准库接口方法名",
+	"QueryRowContext": "镜像 database/sql 标准库接口方法名",
+	// 组件访问器命名，与同构的 Working()/Episodic()/Semantic()/Procedural()/
+	// Reflection() 一致：返回子组件本身（名词 Retriever，检索子系统名），
+	// 不是执行"读取数据"动作的动词 Retrieve，故不落入 R2.2 管辖范围。
+	"Retriever":    "组件访问器命名(同构 Working/Episodic/Semantic/Procedural/Reflection)，返回子组件而非执行检索动作",
+	"FetchDataset": "benchmark runner required func",
+}
+
+// forbiddenVerbRoots 参照 docs/specs/00-Constitution.md R2.2：
+// 读单条 → Get；读多条 → List；按条件读 → FindBy<Field>；
+// 禁用 Fetch/Load/Retrieve/Query 与之并存表达同一"读"语义。
+var forbiddenVerbRoots = []string{"Fetch", "Retrieve", "Load", "Query"}
+
+// Test_inv_NoForbiddenVerbRoot 扫描 internal/ 下导出函数/方法名，禁止新增
+// R2.2 违禁动词词根，白名单外一律拦截。
+func Test_inv_NoForbiddenVerbRoot(t *testing.T) {
+	root := repoRoot(t)
+
+	var violations []violation
+	walkGoFilesUnder(t, root, "internal", nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Name == nil {
+				continue
+			}
+			name := fn.Name.Name
+			if !ast.IsExported(name) {
+				continue // 私有方法命名不在 R2.2 强制范围内，允许更自由的内部命名
+			}
+			if _, ok := forbiddenVerbRootAllowlist[name]; ok {
+				continue
+			}
+			for _, root := range forbiddenVerbRoots {
+				if strings.HasPrefix(name, root) && name != root {
+					pos := fset.Position(fn.Pos())
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail: fmt.Sprintf(
+							"func %s — 动词词根 %q 违反 R2.2 命名字典，应改用 Get<单条>/List<多条>/FindBy<Field>；"+
+								"若确有必要豁免，须在 internal/lint/naming_and_size_test.go 的 forbiddenVerbRootAllowlist 中登记理由",
+							name, root),
+					})
+					break
+				}
+			}
+		}
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_NoForbiddenVerbRoot VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_FileLineLimit ────────────────────────────────────────────────────────
+
+// fileLineLimitExemptSuffixes 结构性豁免：生成代码不受手写代码的可读性上限约束。
+var fileLineLimitExemptSuffixes = []string{".pb.go"}
+
+// fileLineLimitBaselinePath 存量超标文件的冻结名单（R7 ratchet，只减不增）。
+// 新文件/新增代码不得依赖此名单——名单只承接 2026-07-06 审计时已存在的历史债务，
+// 每拆完一个从名单移除；新违规不得加入,必须当场拆分。
+const fileLineLimitBaselinePath = "file_line_limit_baseline.json"
+
+// R7 文件行数双阈值（00-Constitution.md §R7，2026-10-02 由软 500 / 硬 550 调整为软 800 / 硬 850）：
+// ≤ soft 达标；(soft, hard] 容差区只告警不拦截；> hard 必须拆分。
+const (
+	fileLineLimitSoft = 800
+	fileLineLimitHard = 850
+)
+
+// Test_inv_FileLineLimit 验证 R7 文件行数上限对存量代码同样生效，不只是
+// .golangci.yml 里对着 diff 生效的 lll 规则。
+//
+// 2026-07-07 新增背景：2026-07-06 审计发现 60 个文件超标，整改分支处理后仍有
+// 59 个超标（见 local_playground/reports/
+// code-quality-remediation-verification-20260707.md），说明存量超标只能靠人工
+// 记得去修，没有机械门控会一直反复出现同样的问题。本规则用 baseline ratchet
+// 模式落地：baseline 里的文件允许继续超标（历史债务，逐个偿还），baseline 之外
+// 新出现的超标文件一律拦截，防止"又长出一个 2000 行的文件"。
+func Test_inv_FileLineLimit(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, fileLineLimitBaselinePath)
+
+	// baseline 路径必须真实存在（与 global_var / errcheck 两处 baseline 同款
+	// 防护，2026-08-08）：文件被拆分或删除后遗留的条目不会报错，只是安静失效，
+	// 让"还欠多少行数债"这个数字失真。本轮 internal/knowledge/ingester.go 被
+	// 删除即属此类。
+	for rel := range exempt {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Stat(full); err != nil {
+			t.Errorf("%s 条目 %q 指向不存在的文件——拆分/删除文件后须同步清理该条目",
+				fileLineLimitBaselinePath, filepath.ToSlash(rel))
+			continue
+		}
+		// ratchet 只减不增：已降到硬线内的文件留在名单里会让它日后重新长胖而不报警。
+		if n := countFileLines(t, full); n <= fileLineLimitHard {
+			t.Errorf("%s 条目 %q 已降到 %d 行（≤ %d）——须从名单移除",
+				fileLineLimitBaselinePath, filepath.ToSlash(rel), n, fileLineLimitHard)
+		}
+	}
+
+	var violations, warnings []violation
+	for _, dir := range []string{"internal", "pkg"} {
+		walkGoFilesUnder(t, root, dir, nil, func(_ *token.FileSet, _ *ast.File, relPath string) {
+			checkFileLineLimit(t, root, relPath, exempt, &violations, &warnings)
+		})
+	}
+
+	for _, w := range warnings {
+		t.Logf("inv_FileLineLimit WARN: %s", w)
+	}
+	for _, v := range violations {
+		t.Errorf("inv_FileLineLimit VIOLATED: %s", v)
+	}
+}
+
+func countFileLines(t *testing.T, full string) int {
+	t.Helper()
+	data, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("read %s: %v", full, err)
+	}
+	return strings.Count(string(data), "\n")
+}
+
+// TestModelPoolEnumStrictTyping (ADR-0094 决策八) 校验 types.ModelPool 枚举定义完整，
+// 且四个合法值（唯一 SSoT: internal/llm/router.go poolFallbackChain）齐全、不含
+// 从未合法过的 "standard"。
+func TestModelPoolEnumStrictTyping(t *testing.T) {
+	root := repoRoot(t)
+	targetFile := filepath.Join(root, "pkg", "types", "enums_llm.go")
+
+	data, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("TestModelPoolEnumStrictTyping: read %s failed: %v", targetFile, err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "type ModelPool string") ||
+		!strings.Contains(content, "ModelPoolReasoning") ||
+		!strings.Contains(content, "ModelPoolGeneral") ||
+		!strings.Contains(content, "ModelPoolDefault") ||
+		!strings.Contains(content, "ModelPoolBudget") {
+		t.Errorf("ModelPoolEnumStrictTyping VIOLATED: types.ModelPool enum declaration missing or incomplete in pkg/types/enums_llm.go (需含 Reasoning/General/Default/Budget 四值)")
+	}
+	// 只匹配真实的常量声明模式（ModelPool = "standard" 或 ModelPoolStandard 标识符），
+	// 不匹配散文注释里解释"为什么 standard 不合法"时提到的 "standard" 字样。
+	if strings.Contains(content, `ModelPool = "standard"`) || strings.Contains(content, "ModelPoolStandard") {
+		t.Errorf("ModelPoolEnumStrictTyping VIOLATED: %q 从未是合法池名（唯一 SSoT: internal/llm/router.go poolFallbackChain），不得作为枚举值出现", "standard")
+	}
+}
+
+// TestModelPoolEnumOnly (ADR-0094 决策八) AST 扫描全仓调用点：禁止 types.WithModel /
+// types.WithModelPool 传入字面量 "standard"，禁止 ModelPool: "standard" 结构体字面量
+// 赋值。TestModelPoolEnumStrictTyping 只检查枚举定义文件本身，本规则补齐"调用点是否
+// 真的用了枚举"这一环——2026-08-10 复核发现枚举定义与四处调用点分别修复过、
+// 但都可能被后续 PR 悄悄改回字面量，此处是唯一的调用点级机械门控。
+func TestModelPoolEnumOnly(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			// 场景一：types.WithModel("standard") / types.WithModelPool("standard")
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok &&
+					(sel.Sel.Name == "WithModel" || sel.Sel.Name == "WithModelPool") {
+					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "types" {
+						for _, arg := range call.Args {
+							if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"standard"` {
+								pos := fset.Position(call.Pos())
+								violations = append(violations, violation{
+									relPath: relPath, line: pos.Line,
+									detail: "types." + sel.Sel.Name + `("standard") — "standard" 不是合法 ModelPool，改用 pkg/types.ModelPool 具名常量`,
+								})
+							}
+						}
+					}
+				}
+			}
+			// 场景二：ModelPool: "standard" 结构体字面量字段
+			if kv, ok := n.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "ModelPool" {
+					if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"standard"` {
+						pos := fset.Position(kv.Pos())
+						violations = append(violations, violation{
+							relPath: relPath, line: pos.Line,
+							detail: `ModelPool: "standard" — 改用 string(types.ModelPoolGeneral/Default/Reasoning/Budget)`,
+						})
+					}
+				}
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("ModelPoolEnumOnly VIOLATED: %s", v)
+	}
+}
+
+func checkFileLineLimit(t *testing.T, root, relPath string, exempt map[string]bool, violations, warnings *[]violation) {
+	t.Helper()
+	for _, suf := range fileLineLimitExemptSuffixes {
+		if strings.HasSuffix(relPath, suf) {
+			return
+		}
+	}
+	if exempt[relPath] {
+		return
+	}
+	lines := countFileLines(t, filepath.Join(root, relPath))
+	switch {
+	case lines > fileLineLimitHard:
+		*violations = append(*violations, violation{
+			relPath: relPath,
+			line:    1,
+			detail: fmt.Sprintf(
+				"文件 %d 行，超过 R7 硬上限 %d 行 — 须按职责拆分；"+
+					"若属于已知存量债务，须登记进 internal/lint/testdata/%s 并附拆分计划，不得无理由静默豁免",
+				lines, fileLineLimitHard, fileLineLimitBaselinePath),
+		})
+	case lines > fileLineLimitSoft:
+		*warnings = append(*warnings, violation{
+			relPath: relPath,
+			line:    1,
+			detail: fmt.Sprintf("文件 %d 行，处于 R7 容差区（%d, %d]，不拦截；职责可分时顺手拆分",
+				lines, fileLineLimitSoft, fileLineLimitHard),
+		})
+	}
+}

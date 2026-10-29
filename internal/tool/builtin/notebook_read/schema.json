@@ -1,0 +1,1 @@
+{"title": "notebook_read", "type": "object", "properties": {"path": {"type": "string", "description": "The path to the notebook file."}}, "required": ["path"]}
