@@ -10,7 +10,7 @@ function Write-Msg {
 }
 
 # 全局系统参数与路径配置（与 internal/config/system_params.go 保持单一事实源一致）
-$Repo          = "polarisagi/polaris-agent"
+$Repo          = "polarisagi/polaris"
 $BinName       = "polaris.exe"
 $InstallDir    = "$env:USERPROFILE\.polaris\bin"
 $DataDir       = "$env:USERPROFILE\.polaris"

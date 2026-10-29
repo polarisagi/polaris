@@ -22,7 +22,7 @@ Polaris 是一个可以自己托管（self-host）的 AI 助手。把它安装�
 在终端里粘贴这一行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/polarisagi/polaris-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
 ```
 
 ### Windows
@@ -30,12 +30,12 @@ curl -fsSL https://raw.githubusercontent.com/polarisagi/polaris-agent/main/scrip
 在 PowerShell 里粘贴这一行：
 
 ```powershell
-irm https://raw.githubusercontent.com/polarisagi/polaris-agent/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
 ```
 
 安装完成后，Polaris 会自动启动，并告诉你该在浏览器里打开哪个地址。
 
-> 也可以到 [Releases](https://github.com/polarisagi/polaris-agent/releases) 页面直接下载对应平台的安装包。
+> 也可以到 [Releases](https://github.com/polarisagi/polaris/releases) 页面直接下载对应平台的安装包。
 
 ## 从源码构建（给开发者）
 
@@ -49,8 +49,8 @@ make build
 
 ## 帮助与反馈
 
-- [Releases](https://github.com/polarisagi/polaris-agent/releases)：下载安装包
-- [Issues](https://github.com/polarisagi/polaris-agent/issues)：反馈问题
+- [Releases](https://github.com/polarisagi/polaris/releases)：下载安装包
+- [Issues](https://github.com/polarisagi/polaris/issues)：反馈问题
 
 ## 许可
 
@@ -58,7 +58,7 @@ Polaris 采用 [AGPL-3.0-or-later](LICENSE) 许可。
 
 ## 安全
 
-发现安全漏洞请通过 [GitHub Security Advisories](https://github.com/polarisagi/polaris-agent/security/advisories/new) 私下报告，详见 [SECURITY.md](SECURITY.md)。
+发现安全漏洞请通过 [GitHub Security Advisories](https://github.com/polarisagi/polaris/security/advisories/new) 私下报告，详见 [SECURITY.md](SECURITY.md)。
 
 ---
 
@@ -84,7 +84,7 @@ Polaris is a self-hosted AI assistant. Install it on your own computer or server
 Paste this into a terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/polarisagi/polaris-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
 ```
 
 ### Windows
@@ -92,12 +92,12 @@ curl -fsSL https://raw.githubusercontent.com/polarisagi/polaris-agent/main/scrip
 Paste this into PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/polarisagi/polaris-agent/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
 ```
 
 When installation finishes, Polaris starts and tells you which address to open in your browser.
 
-> You can also download a package from [Releases](https://github.com/polarisagi/polaris-agent/releases).
+> You can also download a package from [Releases](https://github.com/polarisagi/polaris/releases).
 
 ## Build from source (for developers)
 
@@ -111,8 +111,8 @@ The executable is written to `bin/polaris`.
 
 ## Help
 
-- [Releases](https://github.com/polarisagi/polaris-agent/releases): download packages
-- [Issues](https://github.com/polarisagi/polaris-agent/issues): report a problem
+- [Releases](https://github.com/polarisagi/polaris/releases): download packages
+- [Issues](https://github.com/polarisagi/polaris/issues): report a problem
 
 ## License
 
@@ -120,4 +120,4 @@ Polaris is licensed under [AGPL-3.0-or-later](LICENSE).
 
 ## Security
 
-Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/polarisagi/polaris-agent/security/advisories/new). See [SECURITY.md](SECURITY.md).
+Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/polarisagi/polaris/security/advisories/new). See [SECURITY.md](SECURITY.md).

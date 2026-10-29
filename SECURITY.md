@@ -1,6 +1,6 @@
 # Security policy
 
-Please report security vulnerabilities privately through [GitHub Security Advisories](https://github.com/polarisagi/polaris-agent/security/advisories/new). Do not post unpatched vulnerabilities in public issues.
+Please report security vulnerabilities privately through [GitHub Security Advisories](https://github.com/polarisagi/polaris/security/advisories/new). Do not post unpatched vulnerabilities in public issues.
 
 If private reporting is unavailable, email polarisagi.online@gmail.com with the subject “Polaris security report”. Include the affected version, steps to reproduce, and potential impact.
 
