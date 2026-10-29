@@ -1,0 +1,350 @@
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/a2a"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+)
+
+func (s *Server) registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	mux.HandleFunc("GET /v1/status", s.handleStatus)
+	mux.HandleFunc("GET /v1/system/capabilities", s.handleGetCapabilities)
+	mux.HandleFunc("GET /v1/doctor", s.sysadminHandler.HandleDoctor)
+	// M13 §接口清单：OpenAI 兼容端点（第三方客户端接入）。处理器与单测早已完备但
+	// 路由从未注册，生产 404（GR-9.2-001）。经 /v1/ 前缀统一鉴权中间件保护。
+	mux.HandleFunc("POST /v1/chat/completions", s.sysadminHandler.HandleOpenAIChat)
+	mux.Handle("GET /metrics", metrics.MetricsHandler(s.tbr))
+	mux.HandleFunc("GET /v1/logs/stream", s.handleLogStream)
+	mux.HandleFunc("POST /v1/agent/query", s.handleAgentQuery)
+	mux.HandleFunc("POST /v1/agent/codeact", s.handleCodeAct)
+	mux.HandleFunc("POST /v1/agent/stream", s.chatHandler.HandleAgentStream)
+	mux.HandleFunc("GET /v1/agent/tasks/{taskID}", s.handleGetAgentTask)
+	mux.HandleFunc("POST /v1/agent/{taskID}/interrupt", s.handleAgentInterrupt)      // inv_global_08 <200ms
+	mux.HandleFunc("GET /v1/agent/mmd-canvas", s.sysadminHandler.HandleGetMMDCanvas) // M05 §11.3 TaskMermaidCanvas 只读展示
+	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
+	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval)           // /v1/approvals/{id}/resolve
+	mux.HandleFunc("GET /v1/elicitations", s.handleGetElicitations)          // MCP elicitation 待办列表（ADR-0103 决策八）
+	mux.HandleFunc("POST /v1/elicitations/{id}", s.handleRespondElicitation) // 用户作答
+
+	// MCP Apps（M8f-1，io.modelcontextprotocol/ui）宿主后端 API。
+	mux.HandleFunc("GET /v1/mcp-apps/config", s.handleGetMCPAppsConfig)
+	mux.HandleFunc("POST /v1/mcp-apps/views/{viewID}/document", s.handleMCPAppsViewDocument)
+	mux.HandleFunc("POST /v1/mcp-apps/views/{viewID}/rpc", s.handleMCPAppsViewRPC)
+	mux.HandleFunc("PUT /v1/mcp-apps/views/{viewID}/state", s.handleMCPAppsViewState)
+	mux.HandleFunc("PUT /v1/mcp-apps/views/{viewID}/model-context", s.handleMCPAppsViewModelContext)
+
+	// 跨节点委派（ADR-0111）：Agent Card + A2A 1.0 + MCP 门面，实现在 meshapi，经 serveMesh 分发
+	// （委派服务晚于 NewServer 注入）。a2a.enabled=false 时 serveMesh 一律 404。
+	mux.HandleFunc("GET /.well-known/agent-card.json", s.serveMesh)
+	mux.HandleFunc("/a2a/v1", s.serveMesh)
+	mux.HandleFunc("/mcp", s.serveMesh)
+	// 跨节点委派本机管理（配对 / 令牌）。/v1 下：对端令牌被路由白名单拒绝。
+	mux.HandleFunc("GET /v1/mesh/self", s.handleMeshSelf)
+	mux.HandleFunc("GET /v1/mesh/settings", s.handleGetMeshSettings)
+	mux.HandleFunc("PUT /v1/mesh/settings", s.handlePutMeshSettings)
+	mux.HandleFunc("POST /v1/mesh/invites", s.handleMeshCreateInvite)
+	mux.HandleFunc("GET /v1/mesh/peers", s.handleMeshListPeers)
+	mux.HandleFunc("POST /v1/mesh/peers", s.handleMeshAcceptPeer)
+	mux.HandleFunc("DELETE /v1/mesh/peers/{name}", s.handleMeshRemovePeer)
+	mux.HandleFunc("GET /v1/mesh/tokens", s.handleMeshListTokens)
+	mux.HandleFunc("DELETE /v1/mesh/tokens/{tokenID}", s.handleMeshRevokeToken)
+	// 旧私有端点 delegate_task 保留一个版本，默认关闭（ADR-0111 决策二第 7 条）。
+	if s.a2aCfg.Enabled && s.a2aCfg.LegacyEndpoint {
+		mux.HandleFunc("POST /v1/a2a/tasks", a2a.TaskSubmitHandler(s.blackboard))
+	}
+
+	// KillSwitch (M11) 管理端点
+	mux.HandleFunc("POST /_admin/kill", s.sysadminHandler.HandleKill)
+	mux.HandleFunc("POST /_admin/unseal", s.sysadminHandler.HandleUnseal)
+
+	// credential.Vault 主密钥轮换（ADR-0096 决策一修复，见 vault_admin.go 文件头注释）
+	mux.HandleFunc("POST /v1/vault/rotate-master-key", s.sysadminHandler.HandleVaultRotateMasterKey)
+
+	// 厂商字典 API（只读，内置种子）
+	mux.HandleFunc("GET /v1/catalog/providers", s.providerHandler.HandleListCatalogProviders)
+
+	// LLM 厂商配置 API
+	mux.HandleFunc("GET /v1/providers", s.providerHandler.HandleListProviders)
+	mux.HandleFunc("POST /v1/providers", s.providerHandler.HandleCreateProvider)
+	mux.HandleFunc("POST /v1/providers/from-catalog", s.providerHandler.HandleCreateProviderFromCatalog)
+	mux.HandleFunc("PUT /v1/providers/{providerID}", s.providerHandler.HandleUpdateProvider)
+	mux.HandleFunc("DELETE /v1/providers/{providerID}", s.providerHandler.HandleDeleteProvider)
+	mux.HandleFunc("POST /v1/providers/{providerID}/test", s.providerHandler.HandleTestProvider)
+
+	// 厂商模型管理 API（两层架构：provider → models）
+	mux.HandleFunc("GET /v1/providers/{providerID}/models", s.providerHandler.HandleListModels)
+	mux.HandleFunc("POST /v1/providers/{providerID}/models", s.providerHandler.HandleCreateModel)
+	mux.HandleFunc("PUT /v1/providers/{providerID}/models/{modelID}", s.providerHandler.HandleUpdateModel)
+	mux.HandleFunc("DELETE /v1/providers/{providerID}/models/{modelID}", s.providerHandler.HandleDeleteModel)
+	mux.HandleFunc("POST /v1/providers/{providerID}/models/refresh", s.providerHandler.HandleRefreshModels)
+
+	// ModelVersionRegistry 运营触发入口（P3-2，M01 §9；2026-07-21 deadcode 审查补齐）
+	mux.HandleFunc("POST /v1/providers/{providerID}/models/{modelID}/upgrade", s.providerHandler.HandleModelUpgrade)
+	mux.HandleFunc("POST /v1/providers/{providerID}/models/{modelID}/deprecate", s.providerHandler.HandleModelDeprecate)
+
+	// 模型角色配置 API（对话模型 / 推理模型）
+	mux.HandleFunc("GET /v1/config/model-roles", s.providerHandler.HandleGetModelRoles)
+	mux.HandleFunc("PUT /v1/config/model-roles", s.providerHandler.HandleSetModelRoles)
+	mux.HandleFunc("GET /v1/config", s.handleGetConfig)
+	mux.HandleFunc("GET /v1/config/server", s.handleGetConfig)
+
+	// Preferences API
+	mux.HandleFunc("GET /v1/preferences", s.sysadminHandler.HandleGetPreferences)
+	mux.HandleFunc("PUT /v1/preferences/{key}", s.sysadminHandler.HandleSetPreference)
+
+	// 提示词管理 API（三层所有权：Layer 1 用户自定义层，读写 ~/.polaris/config/prompts/）
+	// Layer 0（embedded 内置默认）和 Layer 2（M9 优化）不通过此 API 暴露。
+	//
+	// 【状态：实现完整、刻意未接线，2026-08-12 复核】
+	// sysadmin/prompts.go 的 HandleGetPrompt/HandleSetPrompt/HandleResetPrompt 三者
+	// 已实现且 SysAdminHandler.PromptMgr 早已注入（server_lifecycle.go）——依赖不是
+	// 缺口。唯一真实缺口是写入侧的三项加固，缺任一项都不该开这个口子：
+	//   1. 审计：HandleSetPrompt/HandleResetPrompt 改的是系统核心指令，必须写
+	//      audit_log（HE-1），当前只写文件不留审计轨迹；
+	//   2. 注入校验：req.Value 是外部输入且会进 system prompt，需过
+	//      security/guard 的 SystemPromptGuard，当前直接落盘并热更新
+	//      (*h.SoulMDContent) = req.Value，绕过内存态校验；
+	//   3. 鉴权分级：写入属 TierCritical 还是 TierAdmin 需与 killswitch 的
+	//      loopback 豁免口径统一（见 server_handlers_hitl.go 的 RequireAuth 讨论）。
+	// 三项补齐后按 handler 注释里已写好的路径接线：
+	//   GET/PUT/DELETE /v1/config/prompts/{name}
+	// 跟踪：docs/arch/ROADMAP.md「提示词 Layer 1 写入接口」。
+
+	// M12 评测 API — V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区）运维接口，
+	// 见 internal/gateway/server/sysadmin/evaladmin。均要求 meta_auditor 签名
+	// （GET 状态查询除外），签名由运维本地 `polaris eval sign` 离线生成。
+	mux.HandleFunc("POST /v1/eval/meta-holdout/cases", s.sysadminHandler.Eval.HandleAddMetaHoldoutCase)
+	mux.HandleFunc("POST /v1/eval/meta-audit", s.sysadminHandler.Eval.HandleRunMetaAudit)
+	mux.HandleFunc("GET /v1/eval/meta-audit", s.sysadminHandler.Eval.HandleGetMetaAuditStatus)
+	mux.HandleFunc("POST /v1/eval/benchmark", s.sysadminHandler.Eval.HandleBenchmark)
+	// handleEvalRun：boot_server.go 已通过 SetEvalRunner 注入 ab.EvalRunner，但此前
+	// 从未注册为路由（server_handlers.go 上带 //nolint:unused 标记），触发 M12
+	// 评测套件的 REST 入口一直不可达，只能靠内部代码直接调用 EvalRunner。
+	mux.HandleFunc("POST /v1/eval/run", s.handleEvalRun)
+
+	// 会话历史 API
+	mux.HandleFunc("GET /v1/sessions", s.chatHandler.HandleListSessions)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.chatHandler.HandleGetSession)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.chatHandler.HandleGetSessionContext)
+	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/turns/{turnID}/steps", s.chatHandler.HandleGetTurnSteps) // ADR-0118 懒加载步骤
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/stream", s.chatHandler.HandleSessionStream)              // ADR-0116 重订阅后台回合
+	mux.HandleFunc("POST /v1/sessions/{sessionID}/abort", s.chatHandler.HandleAbortSession)               // ADR-0116 显式中止
+	mux.HandleFunc("PUT /v1/sessions/{sessionID}/project", s.chatHandler.HandleMoveSession)
+
+	// 项目 API（ADR-0097）。读写均限本地可信客户端 / admin，见 chat/projects.go requireProjectAccess。
+	mux.HandleFunc("GET /v1/projects", s.chatHandler.HandleListProjects)
+	mux.HandleFunc("POST /v1/projects", s.chatHandler.HandleCreateProject)
+	mux.HandleFunc("GET /v1/projects/{id}", s.chatHandler.HandleGetProject)
+	mux.HandleFunc("PUT /v1/projects/{id}", s.chatHandler.HandleUpdateProject)
+	mux.HandleFunc("DELETE /v1/projects/{id}", s.chatHandler.HandleDeleteProject)
+	mux.HandleFunc("GET /v1/approval-rules", s.chatHandler.HandleListApprovalRules)
+	mux.HandleFunc("DELETE /v1/approval-rules/{id}", s.chatHandler.HandleDeleteApprovalRule)
+
+	// 语音识别与合成 API（ADR-0108）
+	mux.HandleFunc("GET /v1/audio/status", s.handleGetAudioStatus)
+	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)
+	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.AudioService.HandleAudioSpeech)
+	// 语音资产按需安装（ADR-0107 / ADR-0108）：首次点麦克风/朗读时由前端触发，进度经 capabilities 与 audio/status 轮询。
+	mux.HandleFunc("POST /v1/audio/stt/install", s.chatHandler.AudioService.HandleAudioInstall("stt"))
+	mux.HandleFunc("POST /v1/audio/tts/install", s.chatHandler.AudioService.HandleAudioInstall("tts"))
+
+	// 向量化重新评估 API（ADR-0109）
+	mux.HandleFunc("POST /v1/embedding/rebench", s.handleEmbeddingRebench)
+
+	// VFS 通用文件上传（对话附件）。
+	// 2026-08-12 接线：此前 handler 已实现但从未注册，而 web/src/js/store/chat.js
+	// 的 uploadFile() 一直在 POST /v1/workspace/upload——即前端上传功能长期 404。
+	// 落地前已确认三项防护均在 handler 内就位：MaxBytesReader 100MB 上限、
+	// 文件名由服务端 UUID 生成（不采信客户端路径）、扩展名白名单外一律归档为
+	// .blob（见 sysadmin/vfs.go sanitizeUploadExt）。
+	mux.HandleFunc("POST /v1/workspace/upload", s.sysadminHandler.HandleVFSUpload)
+
+	// 全文搜索 API（FTS5）
+	mux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch)
+
+	// 用量洞察 & 会话回顾
+	mux.HandleFunc("GET /v1/insights", s.sysadminHandler.HandleInsights)
+	// LLM 用量聚合（ADR-0105 决策八）：按 purpose/model/provider/day 汇总请求数、token、缓存命中率与估算费用。
+	mux.HandleFunc("GET /v1/usage", s.sysadminHandler.HandleGetUsage)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/usage", s.sysadminHandler.HandleGetSessionUsage)
+	mux.HandleFunc("POST /v1/sessions/{sessionID}/recap", s.chatHandler.HandleSessionRecap)
+
+	// Trajectory 导出（自演化训练数据）
+	mux.HandleFunc("GET /v1/export/trajectories", s.sysadminHandler.HandleExportTrajectories)
+
+	// 自动化 (Automations)
+	mux.HandleFunc("GET /v1/automations", s.sysadminHandler.Cron.HandleListAutomations)
+	mux.HandleFunc("POST /v1/automations", s.sysadminHandler.Cron.HandleCreateAutomation)
+	mux.HandleFunc("PUT /v1/automations/{id}", s.sysadminHandler.Cron.HandleUpdateAutomation)
+	mux.HandleFunc("DELETE /v1/automations/{id}", s.sysadminHandler.Cron.HandleDeleteAutomation)
+	mux.HandleFunc("GET /v1/automations/{id}/runs", s.sysadminHandler.Cron.HandleListAutomationRuns)
+	mux.HandleFunc("POST /v1/automations/{id}/trigger", s.sysadminHandler.Cron.HandleTriggerAutomation)
+	mux.HandleFunc("GET /v1/automation-templates", s.sysadminHandler.Cron.HandleListAutomationTemplates)
+
+	// 工作流 (Workflows)
+	mux.HandleFunc("GET /v1/workflows", s.sysadminHandler.Workflow.HandleListWorkflows)
+	mux.HandleFunc("POST /v1/workflows", s.sysadminHandler.Workflow.HandleCreateWorkflow)
+	mux.HandleFunc("GET /v1/workflows/{id}", s.sysadminHandler.Workflow.HandleGetWorkflow)
+	mux.HandleFunc("PUT /v1/workflows/{id}", s.sysadminHandler.Workflow.HandleUpdateWorkflow)
+	mux.HandleFunc("DELETE /v1/workflows/{id}", s.sysadminHandler.Workflow.HandleDeleteWorkflow)
+	mux.HandleFunc("GET /v1/workflows/{id}/runs", s.sysadminHandler.Workflow.HandleListWorkflowRuns)
+	mux.HandleFunc("POST /v1/workflows/{id}/trigger", s.sysadminHandler.Workflow.HandleTriggerWorkflow)
+	mux.HandleFunc("POST /v1/workflows/runs/{id}/resume", s.sysadminHandler.Workflow.HandleResumeWorkflowRun)
+	mux.HandleFunc("GET /v1/workflows/runs/{id}/data/{step_key}", s.sysadminHandler.Workflow.HandleGetRunStepData)
+
+	// 聊天平台集成 API
+	mux.HandleFunc("GET /v1/channels", s.sysadminHandler.Channels.HandleListChannels)
+	mux.HandleFunc("POST /v1/channels", s.sysadminHandler.Channels.HandleCreateChannel)
+	mux.HandleFunc("PUT /v1/channels/{channelID}", s.sysadminHandler.Channels.HandleUpdateChannel)
+	mux.HandleFunc("DELETE /v1/channels/{channelID}", s.sysadminHandler.Channels.HandleDeleteChannel)
+	// 2026-07-07 修复：webhook 接收路由此前从未注册（HandleWebhookReceive 是
+	// 完整实现但从未接线的死代码），导致 Slack/Discord/Telegram/LINE/WhatsApp/
+	// Teams/通用 HMAC 全部 webhook 集成在生产环境完全不可达。GET 用于 WhatsApp
+	// hub.challenge 握手（verifyWhatsAppWebhook 内部按 r.Method 分支），其余
+	// 平台走 POST。
+	mux.HandleFunc("POST /v1/webhooks/{channelType}/{channelID}", s.sysadminHandler.Channels.HandleWebhookReceive)
+	mux.HandleFunc("GET /v1/webhooks/{channelType}/{channelID}", s.sysadminHandler.Channels.HandleWebhookReceive)
+
+	// 工具 & Skill 管理 API
+	mux.HandleFunc("GET /v1/tools", s.sysadminHandler.HandleListTools)
+	mux.HandleFunc("POST /v1/tools/{name}/execute", s.sysadminHandler.HandleExecuteTool)
+	mux.HandleFunc("GET /v1/skills", s.sysadminHandler.HandleListSkills)
+	// 用户可调用技能命令（/plugin:skill、$skill 补全；ADR-0103 决策五）
+	mux.HandleFunc("GET /v1/skills/commands", s.chatHandler.HandleListSkillCommands)
+	// 技能动态注入（!`cmd`）审阅信任（ADR-0103 决策五）
+	mux.HandleFunc("GET /v1/skills/injections", s.pluginHandler.HandleListSkillInjections)
+	mux.HandleFunc("POST /v1/skills/injections/trust", s.pluginHandler.HandleTrustSkillInjection)
+	mux.HandleFunc("POST /v1/skills/install", s.sysadminHandler.HandleInstallSkill)
+	// 用户意图驱动的技能生成入口（P3-2 SkillCreator，2026-07-21 deadcode 审查补齐）
+	// GR-9.2-006：M13 接口清单与 Web UI（web/src/js/store/plugins.js submitCreation）
+	// 约定 /v1/{skills,plugins,mcp}/create 为"直接创建自定义记录"端点，
+	// 实现在 PluginHandler，但除 skills 外均未注册（生产 404）。skills/create 同一路径
+	// 承载两种语义：CLI 发 {"intent":...} 走 LLM 生成，UI 发 {"name",...} 走手工记录，
+	// 按请求体分派。
+	mux.HandleFunc("POST /v1/skills/create", s.handleSkillCreate)
+	mux.HandleFunc("POST /v1/plugins/create", s.pluginHandler.HandleCreatePlugin)
+	mux.HandleFunc("POST /v1/mcp/create", s.pluginHandler.HandleCreateMCP)
+
+	// MCP Server 管理 API
+	mux.HandleFunc("GET /v1/mcp-servers", s.sysadminHandler.MCP.HandleListMCPServers)
+	// 2026-07-07 修复：POST（创建）/DELETE（删除）此前只留了指向不存在方法名的
+	// 注释占位（HandleAddMCPServer/HandleRemoveMCPServer 从未存在，真正的
+	// handler 名为 HandleCreateMCPServer/HandleDeleteMCPServer），导致这两个
+	// 完整实现的 handler 从未被注册为路由——无法通过独立 REST API 新增/删除
+	// MCP Server（只能走插件安装流程间接创建，且完全无法删除非插件 MCP）。
+	mux.HandleFunc("POST /v1/mcp-servers", s.sysadminHandler.MCP.HandleCreateMCPServer)
+	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}", s.sysadminHandler.MCP.HandleUpdateMCPServer)
+	mux.HandleFunc("DELETE /v1/mcp-servers/{serverID}", s.sysadminHandler.MCP.HandleDeleteMCPServer)
+
+	// [W-6-A] csv_fanout 接入
+	mux.HandleFunc("POST /v1/admin/tasks/csv-fanout", s.sysadminHandler.HandleCSVFanout)
+	mux.HandleFunc("POST /v1/admin/tasks/pipeline", s.sysadminHandler.HandlePipelineRun)
+	mux.HandleFunc("POST /v1/admin/tasks/pattern-dag", s.sysadminHandler.HandlePatternDAGRun)
+	mux.HandleFunc("POST /v1/admin/tasks/pattern-mapreduce", s.sysadminHandler.HandleMapReduceRun)
+	mux.HandleFunc("POST /v1/admin/tasks/pattern-parallel", s.sysadminHandler.HandleParallelRun)
+	mux.HandleFunc("POST /v1/admin/tasks/pattern-sequential", s.sysadminHandler.HandleSequentialRun)
+	mux.HandleFunc("POST /v1/admin/tasks/pattern-swarm", s.sysadminHandler.HandleSwarmRun)
+	mux.HandleFunc("POST /v1/mcp-servers/{serverID}/test", s.sysadminHandler.MCP.HandleTestMCPServer)
+	// 网络访问审批：PUT /v1/mcp-servers/{id}/network-access  body: {"approved": true/false}
+	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}/network-access", s.sysadminHandler.MCP.HandleMCPNetworkApproval)
+
+	// MCP OAuth（8e-2，basic_authorization.md）：走 /v1/ 前缀正常鉴权（同源 Cookie 或令牌）。
+	mux.HandleFunc("POST /v1/mcp-servers/{serverID}/oauth/authorize", s.sysadminHandler.MCP.HandleAuthorizeMCPServer)
+	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}/oauth", s.sysadminHandler.MCP.HandlePutMCPServerOAuth)
+	mux.HandleFunc("DELETE /v1/mcp-servers/{serverID}/oauth/token", s.sysadminHandler.MCP.HandleDeleteMCPServerOAuthToken)
+	// 下面两条不带 /v1/ 前缀，鉴权中间件精确豁免（见 middleware_auth.go
+	// oauthPublicGetPathSet）：路径由 internal/extension/mcp/oauth_register.go
+	// gatewayCallbackURL / ClientMetadataDocument 硬编码约定，改动需两侧同步。
+	mux.HandleFunc("GET /oauth/mcp/callback", s.HandleMCPOAuthCallback)
+	mux.HandleFunc("GET /oauth/client-metadata.json", s.HandleMCPOAuthClientMetadata)
+
+	// 插件目录 API
+	mux.HandleFunc("GET /v1/plugins/catalog", s.pluginHandler.HandleListPluginCatalog)
+	mux.HandleFunc("POST /v1/plugins/install", s.pluginHandler.HandleInstallPlugin)
+	mux.HandleFunc("DELETE /v1/plugins/{catalogID}", s.pluginHandler.HandleUninstallPlugin)
+
+	// 已安装插件管理 API（对接 plugins 运行时表）
+	// Claude 插件 channels：安装 ≠ 启用（ADR-0103 决策三）；须注册在 /v1/plugins/{id} 通配之前可读。
+	mux.HandleFunc("GET /v1/plugins/channels", s.pluginHandler.HandleListPluginChannels)
+	mux.HandleFunc("PUT /v1/plugins/channels", s.pluginHandler.HandleSetPluginChannel)
+	mux.HandleFunc("POST /v1/plugins/prune", s.pluginHandler.HandlePrunePlugins)
+	mux.HandleFunc("GET /v1/plugins", s.pluginHandler.HandleListPlugins)
+	mux.HandleFunc("PUT /v1/plugins/{id}", s.pluginHandler.HandleUpdatePlugin)
+	mux.HandleFunc("POST /v1/plugins/{id}/mcp/{serverName}/toggle", s.pluginHandler.HandleTogglePluginMCP)
+	mux.HandleFunc("POST /v1/plugins/{id}/upgrade", s.pluginHandler.HandleUpgradePlugin)
+	// 插件 userConfig（ADR-0103 决策三；敏感值加密存储、只回报 is_set）
+	// Codex 应用绑定（ADR-0103 决策四）
+	mux.HandleFunc("GET /v1/plugins/{id}/apps", s.pluginHandler.HandleListPluginApps)
+	mux.HandleFunc("GET /v1/plugins/{id}/dependencies", s.pluginHandler.HandleListPluginDependencies)
+	mux.HandleFunc("POST /v1/plugins/{id}/setup", s.pluginHandler.HandlePluginSetup)
+	mux.HandleFunc("GET /v1/plugins/{id}/setup-status", s.pluginHandler.HandlePluginSetupStatus)
+	mux.HandleFunc("PUT /v1/plugins/{id}/apps/{alias}", s.pluginHandler.HandleBindPluginApp)
+	mux.HandleFunc("GET /v1/plugins/{id}/config", s.pluginHandler.HandleGetPluginConfig)
+	mux.HandleFunc("PUT /v1/plugins/{id}/config", s.pluginHandler.HandleUpdatePluginConfig)
+	// hooks.json 来源审阅与信任（安装 ≠ 信任；ADR-0103 决策六）
+	// 子 Agent 定义（插件 agents/ + 项目/用户 agents 目录，Claude .md / Codex .toml；ADR-0103 决策三）
+	mux.HandleFunc("GET /v1/agents", s.pluginHandler.HandleListAgents)
+	mux.HandleFunc("GET /v1/hooks", s.pluginHandler.HandleListHooks)
+	mux.HandleFunc("POST /v1/hooks/trust", s.pluginHandler.HandleTrustHook)
+	mux.HandleFunc("DELETE /v1/hooks/trust", s.pluginHandler.HandleRevokeHookTrust)
+
+	// 插件市场 API
+	mux.HandleFunc("GET /v1/plugins/marketplaces", s.pluginHandler.HandleListMarketplaces)
+	mux.HandleFunc("POST /v1/plugins/marketplaces", s.pluginHandler.HandleAddMarketplace)
+	mux.HandleFunc("DELETE /v1/plugins/marketplaces/{id}", s.pluginHandler.HandleDeleteMarketplace)
+	mux.HandleFunc("POST /v1/plugins/marketplaces/sync", s.pluginHandler.HandleSyncMarketplaces)
+	// /v1/plugins/sync 是 /v1/plugins/marketplaces/sync 的前端别名（Web UI plugins.js 硬编码路径）
+	mux.HandleFunc("POST /v1/plugins/sync", s.pluginHandler.HandleSyncMarketplaces)
+
+	// 预算管理
+	mux.HandleFunc("GET /v1/config/budget", s.sysadminHandler.HandleGetBudget)
+	mux.HandleFunc("PUT /v1/config/budget", s.sysadminHandler.HandleSetBudget)
+
+	// 系统备份 / 恢复
+	mux.HandleFunc("GET /v1/export/backup", s.sysadminHandler.HandleExportBackup)
+	mux.HandleFunc("POST /v1/import/backup", s.sysadminHandler.HandleImportBackup)
+
+	// 系统版本 & OTA 热更新（前端直接调 GitHub API 检查版本，后端只负责执行更新）
+	mux.HandleFunc("GET /v1/system/version", s.sysadminHandler.HandleGetVersion)
+	mux.HandleFunc("POST /v1/system/update", s.sysadminHandler.HandleTriggerUpdate)
+
+	// 写前快照与回滚（ADR-0115 WP1）
+	mux.HandleFunc("GET /v1/checkpoints", s.sysadminHandler.HandleListCheckpoints)
+	mux.HandleFunc("POST /v1/checkpoints/restore", s.sysadminHandler.HandleRestoreCheckpoint)
+
+	// 自改进 harness 覆盖层版本与回滚（ADR-0115 WP6）
+	mux.HandleFunc("GET /v1/harness/history", s.sysadminHandler.HandleHarnessHistory)
+	mux.HandleFunc("POST /v1/harness/rollback", s.sysadminHandler.HandleHarnessRollback)
+}
+
+// handleSkillCreate 按请求体分派 POST /v1/skills/create：含非空 intent 字段 →
+// SysAdminHandler（LLM 生成 SKILL.md，CLI `polaris skill create` 使用）；否则 →
+// PluginHandler（按 name/description/repo_url 手工创建记录，Web UI 使用）。
+func (s *Server) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body failed", http.StatusBadRequest)
+		return
+	}
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var probe struct {
+		Intent string `json:"intent"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if probe.Intent != "" {
+		s.sysadminHandler.HandleCreateSkill(w, r)
+		return
+	}
+	s.pluginHandler.HandleCreateSkill(w, r)
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "任务说明"
+          },
+          "role": {
+            "type": "string",
+            "description": "子智能体角色（如 researcher）"
+          },
+          "model": {
+            "type": "string",
+            "description": "模型，缺省继承"
+          },
+          "thinking": {
+            "type": "string",
+            "description": "none/low/medium/high"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "允许的工具名"
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "只读模式"
+          },
+          "max_result_chars": {
+            "type": "integer",
+            "description": "结果字符上限，默认 4000"
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "description": "并发任务"
+    },
+    "wait": {
+      "type": "string",
+      "enum": [
+        "all",
+        "none"
+      ],
+      "default": "all",
+      "description": "all=等全部完成；none=立即返回 ID"
+    }
+  },
+  "required": [
+    "tasks"
+  ]
+}

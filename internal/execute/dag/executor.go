@@ -1,0 +1,241 @@
+// Package dag 实现 M4 Agent Kernel 的 DAG 执行器与 Saga 补偿逻辑。
+// 架构文档: docs/arch/M04-Agent-Kernel.md §4.3, §4.4
+// 2026-07-12 随 internal/execute 模块化从 internal/execute/dag 物理迁出（原
+// 包注释误写"Package kernel"，与实际 `package dag` 不符，一并修正）。
+// 迁出后 internal/agent 不再直接 import 本包，改为通过 agent/provider.go
+// 声明的 DAGRunner/DAGValidator 消费端接口消费（见 internal/execute/dag/runner.go）。
+//
+// 核心流程：
+//  1. findReadyNodes: DependsOn ⊆ completedSet → 就绪节点（字典序排序）
+//  2. errgroup 并发执行就绪节点（Tier 0: 最大并发 4）
+//  3. 任意节点失败 → 逆序 Saga Compensation 补偿
+//  4. LeaseHeartbeat: 每 15s 续期防 M8 Reaper 误判
+//  5. SurpriseIndex > 0.7 → 触发 Dynamic Replanning（局部子图重规划）
+package dag
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// ─── DAG 数据模型 ────────────────────────────────────────────────────────────
+//
+// CompensationAction / NodeStatus / ExecNode / EdgePolarity / ExecEdge / DAGPlan
+// 权威定义均在 internal/protocol/dag_node.go（docs/specs/04-Module-Boundary.md §B2：跨模块共享类型须在
+// internal/protocol/ 定义，internal/swarm/planner、internal/agent/fsm 等消费方
+// 不再直接 import 本包）。此处仅保留别名。
+//
+// NodeResult 权威定义在 internal/protocol/dag_validation.go（2026-07-12 随
+// internal/execute 模块化补齐，此前 EdgePolarity/ExecEdge/DAGPlan 虽已在
+// protocol 定义却未被本包引用，属遗留死代码，本次一并修复）。
+
+type CompensationAction = protocol.CompensationAction
+type NodeStatus = protocol.NodeStatus
+type ExecNode = protocol.ExecNode
+type EdgePolarity = protocol.EdgePolarity
+type ExecEdge = protocol.ExecEdge
+type DAGPlan = protocol.DAGPlan
+type NodeResult = protocol.NodeResult
+
+const (
+	NodePending   = protocol.NodePending
+	NodeRunning   = protocol.NodeRunning
+	NodeCompleted = protocol.NodeCompleted
+	NodeFailed    = protocol.NodeFailed
+	NodeSkipped   = protocol.NodeSkipped // 因上游失败而跳过
+
+	EdgeData     = protocol.EdgeData     // 数据依赖：上游产出作为下游输入
+	EdgeSequence = protocol.EdgeSequence // 纯时序约束（无数据传递）
+)
+
+// ─── DAG Executor ───────────────────────────────────────────────────────────
+
+const (
+	tier0MaxConcurrency = 4 // Tier 0 硬限：最大 4 并发（docs/arch/M04 §4.3）
+	defaultNodeTimeout  = 60 * time.Second
+	leaseHeartbeatBase  = 15 * time.Second
+)
+
+// ToolExecutorFn 工具执行函数类型（由 InMemoryToolRegistry.ExecuteTool 提供）。
+type ToolExecutorFn func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error)
+
+// LeaseRenewFn 任务续期函数类型（由 SQLiteBlackboard.RenewLease 提供）。
+type LeaseRenewFn func(ctx context.Context, taskID, agentID string, ttl time.Duration) error
+
+// DAGExecutor 执行 M4 Micro-DAG。
+// 架构文档: docs/arch/M04-Agent-Kernel.md §4.3
+type DAGExecutor struct {
+	maxConcurrency int
+	toolExec       ToolExecutorFn
+	leaseRenew     LeaseRenewFn
+
+	// 运行时状态（每次 Execute 调用期间有效）
+	mu             sync.Mutex
+	completed      map[string][]byte    // nodeID → output（已成功完成节点）
+	executedUndo   []CompensationAction // 逆序 Saga 补偿队列（仅有 Compensation 的节点）
+	DegradedReplan bool                 // 是否降级重规划
+}
+
+// NewDAGExecutor 创建 DAG 执行器。
+func NewDAGExecutor(toolExec ToolExecutorFn, leaseRenew LeaseRenewFn) *DAGExecutor {
+	return &DAGExecutor{
+		maxConcurrency: tier0MaxConcurrency,
+		toolExec:       toolExec,
+		leaseRenew:     leaseRenew,
+		completed:      make(map[string][]byte),
+	}
+}
+
+// Execute 执行完整的 DAG 计划，失败时自动触发 Saga 逆序补偿。
+// taskID / agentID 用于 LeaseHeartbeat 续期。
+func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentID string) ([]NodeResult, error) {
+	if err := validateDAGTopology(plan); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "dag_executor: topology error", err)
+	}
+
+	if taskID != "" {
+		ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, taskID)
+	}
+	if agentID != "" {
+		ctx = context.WithValue(ctx, protocol.CtxAgentIDKey{}, agentID)
+	}
+
+	// 重置运行时状态
+	e.mu.Lock()
+	e.completed = make(map[string][]byte, len(plan.Nodes))
+	e.executedUndo = nil
+	// GD-13-009 崩溃恢复续跑：预置已完成节点集，使依赖它们的下游节点在
+	// findReadyNodes 中判定为就绪，跳过重新调度。这些节点不产生 NodeResult
+	// （其原始输出不在计划粒度可得），调用方（agent.runExecuteDAG）负责从
+	// 快照恢复的 ExecuteResult 与本次新产出结果合并，避免信息丢失。
+	for _, id := range plan.PreCompletedNodes {
+		e.completed[id] = []byte{} // 非 nil sentinel = 已完成（区别于 in-progress 的 nil）
+	}
+	e.mu.Unlock()
+
+	// 启动 LeaseHeartbeat 防止 M8 Reaper 误判
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	if e.leaseRenew != nil && taskID != "" {
+		concurrent.SafeGo(hbCtx, "dag_executor.lease_heartbeat", func(ctx context.Context) {
+			e.leaseHeartbeat(ctx, taskID, agentID)
+		})
+	}
+
+	return e.runScheduler(ctx, plan)
+}
+
+// classifyNodeError 对节点执行失败进行分类（从 runScheduler 拆出，nestif 治理，行为不变）：
+// ErrAllProvidersFailed 触发降级重规划裁剪下游；TOCTOU 冲突直接透传；其余包装为通用节点失败错误。
+func (e *DAGExecutor) classifyNodeError(ctx context.Context, nodeErr error, nodeID string, plan *DAGPlan) error {
+	if errors.Is(nodeErr, protocol.ErrAllProvidersFailed) {
+		e.pruneDownstream(ctx, nodeID, plan)
+		e.DegradedReplan = true
+		return protocol.ErrAllProvidersFailed
+	}
+	if apperr.IsCode(nodeErr, apperr.CodeConflict) {
+		return nodeErr
+	}
+	return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("node %s failed", nodeID), nodeErr)
+}
+
+func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeResult, error) {
+	sem := make(chan struct{}, e.maxConcurrency)
+	var (
+		allResults []NodeResult
+		resultsMu  sync.Mutex
+		failed     atomic.Bool
+		firstErr   error
+		errMu      sync.Mutex
+	)
+	nodeMap := buildNodeMap(plan.Nodes)
+
+	for {
+		// 获取所有就绪节点（DependsOn ⊆ completedSet）
+		ready := e.findReadyNodes(plan, nodeMap)
+		if len(ready) == 0 {
+			// 所有节点已调度完毕则正常退出；否则剩余节点永远无法就绪 → 运行时死锁。
+			// 注：validateDAGTopology 只排除拓扑环；当工具返回 nil Output 时会
+			// 与 in-progress sentinel 混淆，导致下游节点误判依赖未完成。
+			e.mu.Lock()
+			scheduled := len(e.completed)
+			e.mu.Unlock()
+			if scheduled < len(plan.Nodes) {
+				e.runCompensation(ctx)
+				return allResults, apperr.New(apperr.CodeInternal,
+					fmt.Sprintf("dag_executor: deadlock — %d/%d nodes stuck, no ready nodes",
+						scheduled, len(plan.Nodes)))
+			}
+			break
+		}
+
+		var wg sync.WaitGroup
+		for _, node := range ready {
+			// 标记为 in-flight（提前加入 completedSet 以防重复调度）
+			e.mu.Lock()
+			e.completed[node.ID] = nil // nil = in-progress sentinel
+			e.mu.Unlock()
+
+			wg.Add(1)
+			n := node // 捕获副本
+			concurrent.SafeGo(ctx, "dag_executor.execute_node", func(ctx context.Context) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				if failed.Load() {
+					return // 已有失败，跳过
+				}
+
+				start := time.Now()
+				result := e.executeNode(ctx, n)
+				result.LatencyMs = time.Since(start).Milliseconds()
+
+				resultsMu.Lock()
+				allResults = append(allResults, result)
+				resultsMu.Unlock()
+
+				if result.Err != nil {
+					failed.Store(true)
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = e.classifyNodeError(ctx, result.Err, n.ID, plan)
+					}
+					errMu.Unlock()
+					return
+				}
+
+				e.mu.Lock()
+				e.completed[n.ID] = result.Output
+				// 仅 write_local/write_network 节点有 Compensation
+				if n.Compensation != nil {
+					comp := *n.Compensation
+					comp.TaintLevel = n.TaintLevel
+					e.executedUndo = append([]CompensationAction{comp}, e.executedUndo...)
+				}
+				e.mu.Unlock()
+			})
+		}
+		wg.Wait()
+
+		if failed.Load() {
+			// Saga 逆序补偿
+			e.runCompensation(ctx)
+			return allResults, firstErr
+		}
+	}
+
+	return allResults, nil
+}
+
+// findReadyNodes / executeNode / runCompensation / leaseHeartbeat /
+// validateDAGTopology / buildNodeMap / pruneDownstream 见 executor_node.go（R7 拆分）。

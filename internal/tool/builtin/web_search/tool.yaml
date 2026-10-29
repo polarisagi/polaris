@@ -1,0 +1,6 @@
+name: web_search
+description: Search the web using the configured search engine to find information. 结果含 url，可继续用 web_fetch 阅读。
+capability: read-network
+side_effects:
+  - network-call
+risk_level: low

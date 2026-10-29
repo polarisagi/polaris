@@ -1,0 +1,4 @@
+name: grep
+description: "正则搜索文件内容（Go regexp）。output_mode：files_with_matches（默认，仅路径）、content（匹配行+上下文）、count。跳过二进制，路径受白名单约束。"
+capability: read-only
+risk_level: low

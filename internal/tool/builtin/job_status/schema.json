@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "job_status",
+  "description": "Get status of a specific background job, or list all jobs.",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "description": "Optional job ID to query. If omitted, lists all jobs."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Optional session ID to filter jobs."
+    }
+  }
+}

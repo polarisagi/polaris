@@ -1,0 +1,1 @@
+{"title": "glob", "type": "object", "properties": {"pattern": {"type": "string", "description": "The glob pattern to match against (e.g. src/**/*.go)"}}, "required": ["pattern"]}

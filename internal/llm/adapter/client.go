@@ -1,0 +1,390 @@
+package adapter
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+const (
+	defaultInferTimeout       = 90 * time.Second
+	defaultStreamInferTimeout = 180 * time.Second
+)
+
+// OpenAICompatibleClient 是一个基于原生 net/http 的通用 OpenAI 兼容协议客户端。
+type OpenAICompatibleClient struct {
+	BaseURL    string
+	APIKey     string
+	HTTPClient *http.Client
+}
+
+// OpenAIRequest 表示一个发往 OpenAI 兼容接口的请求载荷。
+type OpenAIRequest struct {
+	Model       string          `json:"model"`
+	Messages    []OpenAIMessage `json:"messages"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Temperature float64         `json:"temperature,omitempty"`
+	Stream      bool            `json:"stream"`
+	// 可选字段
+	ResponseFormat *OpenAIResponseFormat `json:"response_format,omitempty"`
+	Tools          []OpenAITool          `json:"tools,omitempty"`
+	StreamOptions  *OpenAIStreamOptions  `json:"stream_options,omitempty"`
+	// DeepSeek thinking mode 控制
+	// ReasoningEffort: "low" | "high" | "max"（ThinkingDisabled 时不发送）
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	Thinking        *ThinkingConfig `json:"thinking,omitempty"`
+	// ToolChoice "none"|"auto"|"required"，仅 Tools 非空时发送（ADR-0105 决策三）。
+	ToolChoice string `json:"tool_choice,omitempty"`
+	// PromptCacheKey / PromptCacheRetention 为 OpenAI 专有缓存路由字段，由 OpenAIAdapter
+	// 在 SupportsPromptCacheKey 为真时填充；其他兼容端点保持空（omitempty，不发送）。
+	PromptCacheKey       string `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
+}
+
+// ThinkingConfig DeepSeek extended thinking 控制体。
+// Type 为 "enabled" | "disabled"（后者仅 DeepSeek 适配器显式关闭时使用）；BudgetTokens 可选（0 = 不限制）。
+type ThinkingConfig struct {
+	Type         string `json:"type"` // "enabled" | "disabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+}
+
+// OpenAIStreamOptions 控制流式响应附加行为。
+// IncludeUsage=true 时，API 在最后一个 chunk 中返回完整 usage（prompt+completion tokens）。
+type OpenAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+type OpenAIMessage struct {
+	Role             string           `json:"role"`
+	Content          any              `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+}
+
+type OpenAIToolCall struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function OpenAIFunctionCall `json:"function"`
+}
+
+type OpenAIFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type OpenAIResponseFormat struct {
+	Type       string         `json:"type"`
+	JSONSchema map[string]any `json:"json_schema,omitempty"`
+}
+
+type OpenAITool struct {
+	Type     string               `json:"type"`
+	Function OpenAIToolDefinition `json:"function"`
+}
+
+type OpenAIToolDefinition struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+// OpenAIResponse 表示一个完整的非流式响应。
+type OpenAIResponse struct {
+	ID      string         `json:"id"`
+	Model   string         `json:"model"`
+	Choices []OpenAIChoice `json:"choices"`
+	Usage   OpenAIUsage    `json:"usage"`
+}
+
+type OpenAIChoice struct {
+	Index        int           `json:"index"`
+	Message      OpenAIMessage `json:"message"`
+	FinishReason string        `json:"finish_reason"`
+}
+
+type OpenAIUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+	// DeepSeek 在顶层报告缓存命中/未命中（api-docs guides/kv_cache），不填 prompt_tokens_details。
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+	// 推理 token（DeepSeek 思考模式 / OpenAI o 系列），已含在 completion_tokens 内。
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details,omitempty"`
+}
+
+// toUsage 把 OpenAI 兼容 usage 规范化为 types.Usage：InputTokens 为全部输入（含命中），
+// CacheHitTokens 取 OpenAI 的 prompt_tokens_details 或 DeepSeek 的顶层字段。
+// 此前只读前者，DeepSeek 的缓存命中与推理 token 一直记为 0。
+func (u *OpenAIUsage) toUsage() types.Usage {
+	out := types.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
+	if u.PromptTokensDetails != nil {
+		out.CacheHitTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if u.PromptCacheHitTokens > 0 {
+		out.CacheHitTokens = u.PromptCacheHitTokens
+	}
+	if u.CompletionTokensDetails != nil {
+		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	return out
+}
+
+// SendRequest 发送一个非流式的 HTTP 请求。
+func (c *OpenAICompatibleClient) SendRequest(ctx context.Context, apiKey []byte, req *OpenAIRequest) (*OpenAIResponse, error) {
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to marshal request", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to create request", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	cleanup := setAuthHeader(httpReq, apiKey)
+	defer cleanup()
+
+	httpResp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "http request failed", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("api error (status %d): %s", httpResp.StatusCode, strings.TrimSpace(string(body))))
+	}
+
+	var resp OpenAIResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to decode response", err)
+	}
+
+	return &resp, nil
+}
+
+// translateRequest 将内部的 types.InferRequest 转换为 OpenAI 兼容的载荷。
+func translateRequest(req *types.InferRequest, supportsVision bool) *OpenAIRequest {
+	out := &OpenAIRequest{
+		Model:     req.Model,
+		MaxTokens: req.MaxTokens,
+		Stream:    false,
+	}
+
+	// ThinkingMode 路由：enabled 时强制 Temperature=0，DeepSeek 要求
+	switch req.ThinkingMode {
+	case types.ThinkingLow:
+		out.ReasoningEffort = "low"
+		out.Thinking = &ThinkingConfig{Type: "enabled"}
+		out.Temperature = 0
+	case types.ThinkingHigh:
+		out.ReasoningEffort = "high"
+		out.Thinking = &ThinkingConfig{Type: "enabled"}
+		out.Temperature = 0 // thinking 模式不兼容 temperature/top_p
+	case types.ThinkingMax:
+		out.ReasoningEffort = "max"
+		out.Thinking = &ThinkingConfig{Type: "enabled"}
+		out.Temperature = 0
+	default:
+		// ThinkingDisabled：不发送 thinking 字段，透传用户 temperature
+		out.Temperature = req.Temperature
+	}
+
+	if req.ResponseFormat != nil {
+		if req.ResponseFormat.Type == "json_schema" {
+			out.ResponseFormat = &OpenAIResponseFormat{
+				Type:       "json_schema",
+				JSONSchema: map[string]any{"name": "structured_output", "strict": true, "schema": req.ResponseFormat.JSONSchema},
+			}
+		} else {
+			out.ResponseFormat = &OpenAIResponseFormat{Type: req.ResponseFormat.Type}
+		}
+	}
+
+	for _, msg := range req.Messages {
+		if len(msg.Parts) > 0 {
+			oaiMsgs := partsToOpenAIMessages(msg.Role, msg.Parts, supportsVision)
+			// DeepSeek thinking mode：assistant 消息必须携带 reasoning_content 回传
+			if msg.ReasoningContent != "" && len(oaiMsgs) > 0 && oaiMsgs[0].Role == "assistant" {
+				oaiMsgs[0].ReasoningContent = msg.ReasoningContent
+			}
+			out.Messages = append(out.Messages, oaiMsgs...)
+		} else {
+			// DeepSeek thinking mode：纯文本 assistant 消息也必须回传 reasoning_content
+			oaiMsg := OpenAIMessage{
+				Role:             msg.Role,
+				Content:          msg.Content,
+				ReasoningContent: msg.ReasoningContent, // 空字符串时 json omitempty 自动省略
+			}
+			out.Messages = append(out.Messages, oaiMsg)
+		}
+	}
+
+	for _, t := range req.Tools {
+		out.Tools = append(out.Tools, OpenAITool{
+			Type: "function",
+			Function: OpenAIToolDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			},
+		})
+	}
+
+	if len(out.Tools) > 0 && req.ToolChoice != "" {
+		out.ToolChoice = req.ToolChoice
+	}
+
+	return out
+}
+
+// partsToOpenAIMessages 将 types.Message.Parts（Anthropic 多块格式）转换为 OpenAI message 列表。
+// assistant Parts → 单条 assistant message（含 tool_calls）
+// user Parts     → 多条 role=tool message（每个 tool_result 一条）
+func partsToOpenAIMessages(role string, parts []any, supportsVision bool) []OpenAIMessage {
+	if role == "assistant" {
+		return parseAssistantParts(parts)
+	}
+	if role == "user" {
+		return parseUserParts(parts, supportsVision)
+	}
+	return nil
+}
+
+func parseAssistantParts(parts []any) []OpenAIMessage {
+	var textContent string
+	var toolCalls []OpenAIToolCall
+	for _, p := range parts {
+		m, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch m["type"] {
+		case "text":
+			textContent, _ = m["text"].(string)
+		case "tool_use":
+			toolCalls = append(toolCalls, parseToolUsePart(m))
+		}
+	}
+	return []OpenAIMessage{{Role: "assistant", Content: textContent, ToolCalls: toolCalls}}
+}
+
+func parseToolUsePart(m map[string]any) OpenAIToolCall {
+	id, _ := m["id"].(string)
+	name, _ := m["name"].(string)
+	var argsStr string
+	switch v := m["input"].(type) {
+	case json.RawMessage:
+		argsStr = string(v)
+	case string:
+		argsStr = v
+	default:
+		b, _ := json.Marshal(v)
+		argsStr = string(b)
+	}
+	if argsStr == "" {
+		argsStr = "{}"
+	}
+	return OpenAIToolCall{
+		ID:       id,
+		Type:     "function",
+		Function: OpenAIFunctionCall{Name: name, Arguments: argsStr},
+	}
+}
+
+func parseUserParts(parts []any, supportsVision bool) []OpenAIMessage {
+	var msgs []OpenAIMessage
+	var contentBlocks []any
+	for _, p := range parts {
+		if ip, ok := p.(types.ImagePart); ok {
+			if supportsVision {
+				contentBlocks = append(contentBlocks, parseImagePart(ip))
+			} else {
+				// Fallback text if vision not supported to prevent deserialization errors on the provider end
+				contentBlocks = append(contentBlocks, map[string]any{
+					"type": "text",
+					"text": "[Image Input: Model does not support vision]",
+				})
+			}
+			continue
+		}
+
+		m, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["type"] == "text" {
+			if txt, ok := m["text"].(string); ok {
+				contentBlocks = append(contentBlocks, map[string]any{
+					"type": "text",
+					"text": txt,
+				})
+			}
+		}
+		if m["type"] == "tool_result" {
+			toolCallID, _ := m["tool_use_id"].(string)
+			content, _ := m["content"].(string)
+			msgs = append(msgs, OpenAIMessage{
+				Role:       "tool",
+				ToolCallID: toolCallID,
+				Content:    content,
+			})
+		}
+	}
+	if len(contentBlocks) > 0 {
+		msgs = append(msgs, OpenAIMessage{
+			Role:    "user",
+			Content: contentBlocks,
+		})
+	}
+	return msgs
+}
+
+func parseImagePart(ip types.ImagePart) map[string]any {
+	if ip.URL != "" {
+		return map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]string{"url": ip.URL},
+		}
+	}
+	return map[string]any{
+		"type": "image_url",
+		"image_url": map[string]string{
+			"url": "data:" + ip.MediaType + ";base64," + base64.StdEncoding.EncodeToString(ip.Data),
+		},
+	}
+}
+
+// setAuthHeader 将 "Bearer <key>" 写入 Authorization header。
+// 改为使用 string(bearer) 普通拷贝，牺牲一次小内存分配换取语义正确性，避免 defer 中修改已赋值给 http.Header 的字符串底层内存。
+func setAuthHeader(req *http.Request, key []byte) func() {
+	const prefix = "Bearer "
+	bearer := make([]byte, len(prefix)+len(key))
+	copy(bearer, prefix)
+	copy(bearer[len(prefix):], key)
+	req.Header.Set("Authorization", string(bearer))
+	return func() {
+		req.Header.Del("Authorization") // 删除 Header map 引用（inv_M1_06）
+		for i := range bearer {
+			bearer[i] = 0
+		}
+	}
+}

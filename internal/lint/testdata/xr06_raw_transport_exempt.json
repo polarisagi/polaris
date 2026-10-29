@@ -1,0 +1,4 @@
+{
+  "_comment": "Test_inv_XR06_DownloaderNoRawTransport 豁免列表。每条豁免须有对应 ADR。",
+  "internal/downloader/proxy.go": true
+}

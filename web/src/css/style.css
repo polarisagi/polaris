@@ -1,0 +1,28 @@
+@import "tailwindcss";
+@plugin "daisyui";
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+}
+@plugin "daisyui/theme" {
+  name: "dark";
+}
+@plugin "daisyui/theme" {
+  name: "nord";
+}
+@plugin "daisyui/theme" {
+  name: "corporate";
+}
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-tool-prefix:    #5a4fd4;
+  --color-thinking:       #6b7280;
+  --color-compaction:     #374151;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+:root, [data-theme] {
+  --radius-box: 2.5rem !important;
+  --radius-field: 1.25rem !important;
+}

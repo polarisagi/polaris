@@ -1,0 +1,289 @@
+package fsm
+
+import (
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+
+	"errors"
+	"testing"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+func TestApplyPerceiveResult_Routing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fill      string
+		wantState types.State
+		wantGoal  string
+	}{
+		{"明确无需工具→直答", `{"Goal":"打招呼","NeedsTools":false}`, "S_PERCEIVE_DIRECT", "打招呼"},
+		{"需要工具→规划", `{"Goal":"读 README","NeedsTools":true}`, "S_PERCEIVE_DONE", "读 README"},
+		{"字段缺失→保守规划", `{"Goal":"做点什么"}`, "S_PERCEIVE_DONE", "做点什么"},
+		{"围栏包裹仍可解析", "```json\n{\"Goal\":\"g\",\"NeedsTools\":false}\n```", "S_PERCEIVE_DIRECT", "g"},
+		{"非 JSON→保守规划且不覆盖原 Goal", "我是 Polaris，你好", "S_PERCEIVE_DONE", "原始意图"},
+		{"类型错误→保守规划", `{"Goal":"g","NeedsTools":"no"}`, "S_PERCEIVE_DONE", "原始意图"},
+		{"Goal 为空→保守规划", `{"Goal":"  ","NeedsTools":false}`, "S_PERCEIVE_DONE", "原始意图"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := NewStateMachine(&dummyContextBuilder{})
+			sCtx := &StateContext{TaskModel: &TaskModel{Goal: "原始意图"}}
+			state, err := sm.applyPerceiveResult(sCtx, []byte(tc.fill))
+			if err != nil {
+				t.Fatalf("意外错误: %v", err)
+			}
+			if state != tc.wantState {
+				t.Fatalf("state = %q, want %q", state, tc.wantState)
+			}
+			if sCtx.TaskModel.Goal != tc.wantGoal {
+				t.Fatalf("Goal = %q, want %q", sCtx.TaskModel.Goal, tc.wantGoal)
+			}
+		})
+	}
+}
+
+func TestApplyPerceiveResult_EmptyIsFailure(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	state, err := sm.applyPerceiveResult(&StateContext{}, []byte("  "))
+	if err == nil || state != "S_PERCEIVE_FAILED" {
+		t.Fatalf("空输出必须走失败路径（A-01），got state=%q err=%v", state, err)
+	}
+}
+
+func TestApplyReflectResult_StoresReflection(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	state, err := sm.applyReflectResult(sCtx, protocol.StateContext{},
+		[]byte("```json\n{\"GoalAchieved\":false,\"Errors\":[\"文件不存在\"]}\n```"))
+	if err != nil || state != "S_REFLECT_DONE" {
+		t.Fatalf("state=%q err=%v", state, err)
+	}
+	if sCtx.Reflection == nil || sCtx.Reflection.GoalAchieved || len(sCtx.Reflection.Errors) != 1 {
+		t.Fatalf("反思结论未写入 sCtx，Respond 将无法如实报告失败: %+v", sCtx.Reflection)
+	}
+}
+
+func TestOnReflectFailure_ContinuesToRespond(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	state, err := sm.onReflectFailure(protocol.StateContext{}, errors.New("provider down"))
+	if err != nil || state != "S_REFLECT_DONE" {
+		t.Fatalf("反思尽力而为：失败应继续进入 S_RESPOND，got state=%q err=%v", state, err)
+	}
+}
+
+func TestOnRespondSuccess(t *testing.T) {
+	if state, err := onRespondSuccess(protocol.StateContext{}, []byte("你好！")); err != nil || state != "S_RESPOND_DONE" {
+		t.Fatalf("state=%q err=%v", state, err)
+	}
+	if state, err := onRespondSuccess(protocol.StateContext{}, []byte(" \n")); err == nil || state != "S_RESPOND_FAILED" {
+		t.Fatalf("空回复必须失败（A-01），got state=%q err=%v", state, err)
+	}
+}
+
+func TestParsePlanOnSuccess_EmptyPlanRoutesToRespond(t *testing.T) {
+	sCtx := &StateContext{}
+	state, err := parsePlanOnSuccess(sCtx, protocol.StateContext{}, []byte(`{"nodes":[],"edges":[]}`))
+	if err != nil || state != "S_PLAN_EMPTY" {
+		t.Fatalf("空 DAG 应转直答，got state=%q err=%v", state, err)
+	}
+}
+
+func TestRespondEffect_IsTheOnlyUserAudience(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	if eff := sm.respondEffect(sCtx); eff.Audience != protocol.AudienceUser {
+		t.Fatalf("S_RESPOND 必须是 AudienceUser")
+	}
+	// par_inv_06：其余带 LLMFillEffect 的转移一律 Internal。
+	for from, m := range sm.transitions {
+		for trig, tr := range m {
+			if tr.Effects == nil {
+				continue
+			}
+			effs, _ := tr.Effects(t.Context(), &StateContext{TaskModel: &TaskModel{}})
+			for _, e := range effs {
+				llm, ok := e.(protocol.LLMFillEffect)
+				if !ok {
+					continue
+				}
+				// R5-02 复核：agentic 循环（S_LOOP）的交互回合同样面向用户流式输出，
+				// 其受众由 LoopStreamsToUser 决定（见 loop_stream_test.go）。
+				isRespond := tr.To == types.AgentStateRespond
+				if tr.To == types.AgentStateLoop {
+					continue
+				}
+				if isRespond != (llm.Audience == protocol.AudienceUser) {
+					t.Errorf("转移 %d --%d--> %d：audience=%d，只有进入 S_RESPOND 的 Effect 可面向用户",
+						from, trig, tr.To, llm.Audience)
+				}
+			}
+		}
+	}
+}
+
+func TestCompleteOnlyReachableFromRespond(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	for from, m := range sm.transitions {
+		for _, tr := range m {
+			if tr.To == types.AgentStateComplete && from != types.AgentStateRespond {
+				t.Errorf("par_inv_07：S_COMPLETE 只能由 S_RESPOND 进入，发现来自 %d", from)
+			}
+		}
+	}
+}
+
+func TestRespondEffect_RetriesEmptyReplyOnce(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	eff := sm.respondEffect(sCtx)
+
+	if state, err := eff.OnSuccess(protocol.StateContext{}, []byte("  ")); err != nil || state != "S_RESPOND_RETRY" {
+		t.Fatalf("首次空回复应自环重试，got state=%q err=%v", state, err)
+	}
+	if state, err := eff.OnSuccess(protocol.StateContext{}, []byte("")); err == nil || state != "S_RESPOND_FAILED" {
+		t.Fatalf("超过 MaxRetry 后必须失败（A-01），got state=%q err=%v", state, err)
+	}
+	// 自环转移存在且重新挂 respond Effect
+	if _, err := sm.Dispatch(t.Context(), sCtx, types.TriggerIntentReceived); err != nil {
+		t.Fatal(err)
+	}
+	if tr, ok := sm.transitions[types.AgentStateRespond][types.TriggerFillRetry]; !ok || tr.To != types.AgentStateRespond {
+		t.Fatal("缺少 S_RESPOND 自环重试转移")
+	}
+}
+
+// TestReplanTransition_SingleReplanDone 复现 2026-09-25 实测：进入 S_REPLAN 时
+// 转移声明的占位 Effect 与 handleReplanTransition 追加的 Effect 各产出一次
+// S_REPLAN_DONE，第二次在 S_PLAN 命中 no transition，Run() 带错退出、流挂死。
+func TestReplanTransition_SingleReplanDone(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{MaxReplan: 3, TaskModel: &TaskModel{}}
+	for _, trig := range []types.AgentTrigger{types.TriggerIntentReceived, types.TriggerPerceiveDone, types.TriggerPlanDone} {
+		if _, err := sm.Dispatch(t.Context(), sCtx, trig); err != nil {
+			t.Fatalf("dispatch %d: %v", trig, err)
+		}
+	}
+	effects, err := sm.Dispatch(t.Context(), sCtx, types.TriggerValidateFail)
+	if err != nil {
+		t.Fatalf("S_VALIDATE → S_REPLAN: %v", err)
+	}
+	replanDone := 0
+	for _, e := range effects {
+		if det, ok := e.(protocol.DeterministicEffect); ok {
+			if st, _ := det.Fn(t.Context(), protocol.StateContext{}); st == "S_REPLAN_DONE" {
+				replanDone++
+			}
+		}
+	}
+	if replanDone != 1 {
+		t.Fatalf("进入 S_REPLAN 应恰好产出 1 次 S_REPLAN_DONE，实际 %d", replanDone)
+	}
+}
+
+// TestPlanEffect_RetriesEmptyOutputOnce ADR-0098 决策七：S_PLAN 既无正文也无工具调用
+// 时自环重试一次，仍为空则按既有语义失败（空输出不按能力不足升级，ADR-0102 决策六）。
+// 有内容但解析失败：升级档位重试一次（决策六），再失败才 S_PLAN_FAILED。
+func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
+	pinSurprise(t, 0.1)
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	eff := sm.planEffect(sCtx)
+	if st, err := eff.OnSuccess(protocol.StateContext{}, []byte("  ")); err != nil || st != "S_PLAN_RETRY" {
+		t.Fatalf("首次空输出应重试，got %q %v", st, err)
+	}
+	if st, _ := eff.OnSuccess(protocol.StateContext{}, []byte("")); st != "S_PLAN_FAILED" {
+		t.Fatalf("超过 MaxRetry 应失败，got %q", st)
+	}
+	if sCtx.Escalation != 0 {
+		t.Fatalf("空输出不应计入升级，got %d", sCtx.Escalation)
+	}
+
+	bad := &StateContext{}
+	if st, _ := sm.planEffect(bad).OnSuccess(protocol.StateContext{}, []byte("不是 JSON")); st != "S_PLAN_RETRY" {
+		t.Fatalf("有内容但不可用应升级重试一次，got %q", st)
+	}
+	if bad.Escalation != 1 {
+		t.Fatalf("计划不可用应升级一级，got %d", bad.Escalation)
+	}
+	if st, _ := sm.planEffect(bad).OnSuccess(protocol.StateContext{}, []byte("还是不是 JSON")); st != "S_PLAN_FAILED" {
+		t.Fatalf("每回合只升级重试一次，got %q", st)
+	}
+	if tr, ok := sm.transitions[types.AgentStatePlan][types.TriggerFillRetry]; !ok || tr.To != types.AgentStatePlan {
+		t.Fatal("缺少 S_PLAN 空输出自环")
+	}
+}
+
+// TestPlanEffect_RetryDisablesThinking 空输出重试须关闭思考：触发条件即"思考模式 +
+// 挂工具"，原样重试等于没有重试。
+func TestPlanEffect_RetryDisablesThinking(t *testing.T) {
+	pinSurprise(t, 0.1)
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{TaskModel: &TaskModel{Goal: "重构模块", Complexity: 0.9}}
+	eff := sm.planEffect(sCtx)
+	if eff.ThinkingMode == types.ThinkingDisabled {
+		t.Fatalf("高复杂度首轮规划应开启思考，got %q", eff.ThinkingMode)
+	}
+	if st, _ := eff.OnSuccess(protocol.StateContext{}, nil); st != "S_PLAN_RETRY" {
+		t.Fatalf("空输出应重试，got %q", st)
+	}
+	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingDisabled {
+		t.Fatalf("空输出重试应关闭思考，got %q", m)
+	}
+}
+
+// TestPlanEffect_CheapFirstCascade ADR-0102 决策六（阶梯两端取 ADR-0101 决策三/七阶段配置）：LLM 判难度（Complexity）+ 程序持策略。
+// 便宜池先行；只有能力类失败才沿阶梯升级，安全拒绝/瞬时故障/观察—再规划不升级；
+// 污点等级不驱动思考深度（用户输入恒 TaintHigh）。
+func TestPlanEffect_CheapFirstCascade(t *testing.T) {
+	pinSurprise(t, 0.1)
+	sm := NewStateMachine(&dummyContextBuilder{})
+	high := taint.NewTaintedString("列出目录", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
+	tier := func(s *StateContext) (string, types.ThinkingMode) {
+		e := sm.planEffect(s)
+		return e.ModelPool, e.ThinkingMode
+	}
+	expect := func(s *StateContext, pool types.ModelPool, mode types.ThinkingMode, msg string) {
+		t.Helper()
+		if p, m := tier(s); p != string(pool) || m != mode {
+			t.Fatalf("%s：want %s/%s, got %s/%s", msg, pool, mode, p, m)
+		}
+	}
+
+	simple := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "列出目录", Complexity: 0.2}}
+	// 默认配置：model_pool.plan_initial=default、thinking.plan_initial=high、plan_replan=reasoning
+	expect(simple, types.ModelPoolDefault, types.ThinkingHigh, "简单任务")
+
+	complexTask := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "迁移数据库", Complexity: 0.8}}
+	expect(complexTask, types.ModelPoolReasoning, types.ThinkingHigh, "LLM 判定复杂")
+
+	// 不升级的成因：安全拒绝 / 瞬时故障 / 观察—再规划 / 首次工具报错
+	sm.replanCount = 2
+	for _, k := range []FailureKind{FailurePolicy, FailureTransient, FailureGoalUnmet, FailureToolError} {
+		simple.RecordFailure(k)
+	}
+	expect(simple, types.ModelPoolDefault, types.ThinkingHigh, "非能力类失败不应升级（含重规划）")
+
+	// 能力类失败逐级升级
+	simple.RecordFailure(FailureToolError) // 第二次工具报错
+	expect(simple, types.ModelPoolDefault, types.ThinkingMax, "重复工具报错升一级：便宜池多想一档")
+	simple.RecordFailure(FailurePlanInvalid)
+	expect(simple, types.ModelPoolReasoning, types.ThinkingHigh, "再次能力失败升到 reasoning")
+	simple.RecordFailure(FailurePlanInvalid)
+	expect(simple, types.ModelPoolReasoning, types.ThinkingMax, "阶梯顶端")
+
+	// 规划模型自评超纲：直接到 reasoning
+	self := &StateContext{TaskModel: &TaskModel{Goal: "x", Complexity: 0.3}}
+	if st, _ := sm.planEffect(self).OnSuccess(protocol.StateContext{}, []byte(`{"escalate":true,"nodes":[],"edges":[]}`)); st != "S_PLAN_RETRY" {
+		t.Fatalf("自评超纲应升级重试，got %q", st)
+	}
+	expect(self, types.ModelPoolReasoning, types.ThinkingHigh, "自评超纲")
+}
+
+// pinSurprise 固定进程级 SurpriseIndex，测试结束恢复。
+func pinSurprise(t *testing.T, v float64) {
+	t.Helper()
+	prev := metrics.GlobalSurpriseIndex().Current()
+	metrics.GlobalSurpriseIndex().SetLastValue(v)
+	t.Cleanup(func() { metrics.GlobalSurpriseIndex().SetLastValue(prev) })
+}

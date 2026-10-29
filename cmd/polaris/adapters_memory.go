@@ -1,0 +1,78 @@
+package main
+
+import (
+	"context"
+	"time"
+
+	extskill "github.com/polarisagi/polaris/internal/extension/skill"
+	si "github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/memory/retrieval"
+	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+)
+
+// ─── memEmbedderAdapter ───────────────────────────────────────────────────────
+//
+// 将 search.Embedder 适配为 retrieval.Embedder。
+// search.Embedder 接口: Embed(text string) []float32（无 ctx，无 ModelVersion）。
+// retrieval.Embedder 接口: Embed(ctx, text) ([]float32, error) + ModelVersion() string。
+// 此适配器仅用于 OnlineReindexer 注入路径（cmd/polaris/main.go §4.10.5）。
+type memEmbedderAdapter struct {
+	e     search.Embedder
+	model string
+	// versionFn 非 nil 时为模型版本的唯一来源（取自 DynamicEmbedder 当前引擎，ADR-0109 P4）。
+	// ONNX 档位在启动后才由基准决定、远程/本地模型可热切换，静态 model 名（如 "auto"）
+	// 无法区分 Gemma 与 bge，会让 embed_model_version 永不变化、两种模型的向量混检。
+	// 返回 "" 表示引擎尚未就绪，OnlineReindexer 据此跳过本轮。
+	versionFn func() string
+}
+
+func (a *memEmbedderAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
+	v := a.e.Embed(ctx, text)
+	if len(v) == 0 {
+		// search.Embedder 无 error 返回；nil 向量唯一语义是 Embedder 暂不可用（如 Ollama 未启动）。
+		// 转换为 error 让 OnlineReindexer 可区分失败与正常空结果，避免写入零向量污染索引。
+		return nil, apperr.New(apperr.CodeInternal, "embedder returned empty vector")
+	}
+	return v, nil
+}
+
+func (a *memEmbedderAdapter) ModelVersion() string {
+	if a.versionFn != nil {
+		return a.versionFn()
+	}
+	return a.model
+}
+
+// newMemEmbedderAdapter 构造记忆侧嵌入适配器：有 DynamicEmbedder 时版本随当前引擎动态变化。
+func newMemEmbedderAdapter(e search.Embedder, sb *SubstrateBundle) *memEmbedderAdapter {
+	a := &memEmbedderAdapter{e: e, model: sb.EmbedChoice.Model}
+	if a.model == "" {
+		a.model = "embedding"
+	}
+	if sb.DynEmbedder != nil {
+		a.versionFn = sb.DynEmbedder.ModelVersion
+	}
+	return a
+}
+
+// ─── collapseRecorderAdapter ──────────────────────────────────────────────────
+//
+// 将 *si.LogicCollapseMonitor 适配为 agent.ToolCallRecorder。
+// 每次工具调用成功时以 toolName 作 SkillID 累积轨迹；
+// 同一工具 ≥ 阈值次成功 → LogicCollapseMonitor 异步触发 Skill 蒸馏（M9 §4）。
+type collapseRecorderAdapter struct{ m *si.LogicCollapseMonitor }
+
+func (a *collapseRecorderAdapter) RecordToolSuccess(ctx context.Context, toolName string) {
+	concurrent.SafeGo(context.WithoutCancel(ctx), "adapters_memory.RecordSuccess", func(ctx context.Context) {
+		a.m.RecordSuccess(ctx, &extskill.CollapseTrajectory{
+			SkillID:     toolName,
+			CompletedAt: time.Now().Unix(),
+			TaintLevel:  0,
+		}, nil)
+	})
+}
+
+// 确保 memory 包被引用（编译器 unused import 检查）
+var _ retrieval.Embedder = (*memEmbedderAdapter)(nil)

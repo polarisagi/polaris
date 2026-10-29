@@ -1,0 +1,220 @@
+package memory
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	memgraph "github.com/polarisagi/polaris/internal/memory/graph"
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// MemoryFacadeImpl 包装 MemorySystem 提供统一门面。
+type MemoryFacadeImpl struct {
+	sys *MemorySystemImpl
+	// edgeMgr 图谱边权重维护器，仅 NewMemoryFacadeWithStore 构造时非 nil。
+	// nil 时 PruneMemoryGraph 静默跳过（Tier0 无周期维护场景）。
+	edgeMgr *memgraph.EdgeWeightManager
+}
+
+// 编译期校验
+var _ protocol.MemoryFacade = (*MemoryFacadeImpl)(nil)
+
+// NewMemoryFacade 构造记忆门面。
+func NewMemoryFacade(sys *MemorySystemImpl) *MemoryFacadeImpl {
+	return &MemoryFacadeImpl{sys: sys}
+}
+
+// NewMemoryFacadeWithStore 构造带图谱周期维护能力的记忆门面。
+// 供需要驱动 PruneMemoryGraph 的调用方使用（如 swarm.MemoryAgent 常驻 goroutine），
+// 避免该调用方直接 import internal/memory/graph 构造 EdgeWeightManager（docs/specs/04-Module-Boundary.md §B2）。
+func NewMemoryFacadeWithStore(sys *MemorySystemImpl, store protocol.Store) *MemoryFacadeImpl {
+	f := &MemoryFacadeImpl{sys: sys}
+	if store != nil {
+		if dbProvider, ok := store.(interface{ DB() *sql.DB }); ok {
+			f.edgeMgr = memgraph.NewEdgeWeightManager(dbProvider.DB())
+		}
+	}
+	return f
+}
+
+// 基础控制
+func (f *MemoryFacadeImpl) StoreStats() (string, error) {
+	stats, err := f.sys.Mem().StoreStats()
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "memory_facade: StoreStats 失败", err)
+	}
+	return stats, nil
+}
+
+func (f *MemoryFacadeImpl) GetMemoryPressure() *budget.ResourceBudget {
+	return f.sys.Mem().GetMemoryPressure()
+}
+
+// SearchEntities 语义层实体检索，透传至 Mem().Semantic()。
+func (f *MemoryFacadeImpl) SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error) {
+	entities, err := f.sys.Mem().Semantic().SearchEntities(ctx, query, topK, 0)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: SearchEntities 失败", err)
+	}
+	// 污点门控：过滤高于调用方允许等级的实体（ADR-0007 只升不降，读侧按上限截断）
+	filtered := entities[:0]
+	for _, e := range entities {
+		if int(e.TaintLevel) <= maxTaint {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered, nil
+}
+
+func (f *MemoryFacadeImpl) GetUserProfile(ctx context.Context, userID string) (*types.UserProfile, error) {
+	profile, err := f.sys.Mem().Semantic().GetUserProfile(ctx, userID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: GetUserProfile 失败", err)
+	}
+	return profile, nil
+}
+
+// ListEpisodicEvents 情景层事件查询，透传至 Mem().Episodic()。
+func (f *MemoryFacadeImpl) ListEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
+	events, err := f.sys.Mem().Episodic().Query(ctx, query)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: ListEpisodicEvents 失败", err)
+	}
+	return events, nil
+}
+
+func (f *MemoryFacadeImpl) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
+	if err := f.sys.Mem().Episodic().Append(ctx, event, taintLevel); err != nil {
+		// 保留底层错误码：Agent.handleMemoryPersistenceFailure 以 CodeStorageUnavailable 判定熔断，
+		// apperr.IsCode 只看链上第一个 *Error，此前统一包成 CodeInternal 使熔断永不触发。
+		return apperr.Wrap(apperr.CodeOf(err), "memory_facade: AppendEpisodicEvent 失败", err)
+	}
+	return nil
+}
+
+// EpisodicProjectOf 见 protocol.MemoryFacade 同名方法。底层情景层不支持反查时按
+// "是情景事件、属默认项目"处理：fail-closed，不让无法判定归属的内容进入具名项目。
+func (f *MemoryFacadeImpl) EpisodicProjectOf(ctx context.Context, id string) (string, bool) {
+	if po, ok := f.sys.Mem().Episodic().(interface {
+		ProjectOf(ctx context.Context, eventID string) (string, bool)
+	}); ok {
+		return po.ProjectOf(ctx, id)
+	}
+	return types.DefaultProjectID, true
+}
+
+// ArchiveEpisodic 将会话的历史事件标记为冷数据（滑动窗口边界 = 当前时刻）。
+// 语义对齐 ConsolidationPipeline.MarkColdEpisodicEvents（M05 §3.2 Session Compaction）。
+func (f *MemoryFacadeImpl) ArchiveEpisodic(ctx context.Context, sessionID string) error {
+	if _, err := f.sys.Mem().Episodic().MarkCold(ctx, sessionID, time.Now()); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "memory_facade: ArchiveEpisodic 失败", err)
+	}
+	return nil
+}
+
+// AddWorkingContext 向 L0 工作记忆上下文窗口追加一条文本（热路径，不持久化）。
+func (f *MemoryFacadeImpl) AddWorkingContext(_ context.Context, text string) error {
+	wm := f.sys.Mem().Working()
+	if wm == nil || wm.Context() == nil {
+		return nil
+	}
+	wm.Context().Append(types.Message{Role: "assistant", Content: text})
+	return nil
+}
+
+func (f *MemoryFacadeImpl) ImmutableCore() protocol.ImmutableCore {
+	return f.sys.Mem().Working().Immutable()
+}
+
+// ListCoreMemory 读取核心工作记忆块（UP-03 ZoneCoreMemory 注入源）。
+// Working 层或 CoreMemory 存储未配置时静默返回空，调用方按无核心记忆处理。
+func (f *MemoryFacadeImpl) ListCoreMemory(ctx context.Context, agentID, sessionID string) ([]types.CoreMemoryBlock, error) {
+	wm := f.sys.Mem().Working()
+	if wm == nil || wm.CoreMemory() == nil {
+		return nil, nil
+	}
+	blocks, err := wm.CoreMemory().List(ctx, agentID, sessionID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: list core memory", err)
+	}
+	return blocks, nil
+}
+
+// ListReflections 列出反思条目（下沉到 Reflection 层调用）。
+func (f *MemoryFacadeImpl) ListReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error) {
+	if rm := f.sys.Mem().Reflection(); rm != nil {
+		entries, err := rm.ListReflections(ctx, q)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "list reflections failed", err)
+		}
+		return entries, nil
+	}
+	return nil, nil
+}
+
+func (f *MemoryFacadeImpl) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
+	if rm := f.sys.Mem().Reflection(); rm != nil {
+		if err := rm.AppendReflection(ctx, entry); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "memory_facade: AppendReflection 失败", err)
+		}
+	}
+	return nil
+}
+
+// 后台维护调用（swarm.MemoryAgent 等常驻 goroutine 通过本门面驱动，见 protocol.MemoryFacade）
+func (f *MemoryFacadeImpl) ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	ep := f.sys.Mem().Episodic()
+	if ep == nil {
+		return nil, nil
+	}
+	events, err := ep.ScanHighSalience(ctx, sinceID, minSalience, limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: ScanHighSalienceEvents 失败", err)
+	}
+	return events, nil
+}
+
+func (f *MemoryFacadeImpl) PruneMemoryGraph(ctx context.Context) error {
+	if f.edgeMgr == nil {
+		return nil
+	}
+	if err := f.edgeMgr.PeriodicPrune(ctx); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "memory_facade: PruneMemoryGraph 失败", err)
+	}
+	return nil
+}
+
+// HasPrunableGraphEdges 只读探测图中是否有可剪枝的边；无 edgeMgr 视为无活。
+func (f *MemoryFacadeImpl) HasPrunableGraphEdges(ctx context.Context) (bool, error) {
+	if f.edgeMgr == nil {
+		return false, nil
+	}
+	has, err := f.edgeMgr.HasPrunable(ctx)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeInternal, "memory_facade: HasPrunableGraphEdges 失败", err)
+	}
+	return has, nil
+}
+
+// RenderTaskCanvas 渲染指定会话的工具调用画布（M05 §11.3），委托给底层 MemorySystem。
+func (f *MemoryFacadeImpl) RenderTaskCanvas(ctx context.Context, sessionID string) string {
+	return f.sys.Mem().RenderTaskCanvas(ctx, sessionID)
+}
+
+// legacy (for memory system internals)
+func (f *MemoryFacadeImpl) Write(ctx context.Context, entry *MemoryEntry) error {
+	return f.sys.Write(ctx, entry)
+}
+func (f *MemoryFacadeImpl) List(ctx context.Context, query *RetrievalQuery) ([]MemoryEntry, error) {
+	return f.sys.List(ctx, query) //nolint:wrapcheck // 门面透传，语义与同段 Write/Consolidate/Forget 一致
+}
+func (f *MemoryFacadeImpl) Consolidate(ctx context.Context) error {
+	return f.sys.Consolidate(ctx)
+}
+
+// System 返回底层 MemorySystemImpl（高级入口）
+func (f *MemoryFacadeImpl) System() *MemorySystemImpl { return f.sys }

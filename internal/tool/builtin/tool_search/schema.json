@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Tool name or keywords (Chinese or English)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Max results, default 5, max 20."
+    }
+  },
+  "required": ["query"]
+}

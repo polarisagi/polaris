@@ -1,0 +1,202 @@
+package config
+
+import (
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+// DataLayout 定义运行时数据根目录下所有子目录与关键文件的规范布局。
+// 所有子系统必须从此结构取路径，禁止各自拼接 filepath.Join(dataDir, "xxx")。
+// 新增子目录或系统文件时同步更新常量与 MkdirAll 列表。
+type DataLayout struct {
+	Root string // 例：~/.polaris
+
+	// 顶层文件
+	ConfigFile     string // Root/config.toml
+	KillSwitchFile string // Root/KILLSWITCH
+	FullStopFile   string // Root/.fullstop
+	VaultKeyFile   string // Root/vault.key
+	CLISessionFile string // Root/cli_session.json
+
+	// 子目录
+	Data           string // Root/data        — SQLite + SurrealDB 数据库文件
+	Logs           string // Root/logs        — 所有日志文件
+	Config         string // Root/config      — Operator 配置覆盖、SOUL.md、prompts/
+	Extensions     string // Root/extensions  — 从 Marketplace 安装的插件（含内嵌 MCP）
+	Skills         string // Root/skills      — 用户安装的技能脚本 / Wasm
+	Models         string // Root/models      — AI 模型文件（SenseVoice 等）
+	Workspace      string // Root/workspace   — Agent 每任务沙箱 VFS
+	Sessions       string // Root/sessions    — 会话 transcript（旧名 transcripts）
+	Audit          string // Root/audit       — 审计档案根目录
+	Reports        string // Root/reports     — 月度成本报告
+	Cache          string // Root/cache       — HTTP / 推理缓存
+	Hooks          string // Root/hooks       — 用户事件 Hook 脚本
+	Tmp            string // Root/tmp         — 临时下载 / 解压暂存
+	Bin            string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist、桌面版的 polaris 本体）
+	Run            string // Root/run         — 运行时状态：端口/令牌/PID，仅本机有效，不随备份迁移
+	Secrets        string // Root/secrets         — 机密数据目录（Vault 密钥与敏感凭据保护区）
+	Eval           string // Root/eval            — 评测数据集根目录
+	HarnessOverlay string // Root/harness_overlay — 自改进 harness 覆盖层（WP6）
+
+	// 派生路径（从上方字段组合，避免调用方再次拼接）
+	SQLiteDB     string // Data/polaris.db
+	SurrealDB    string // Data/surreal.db
+	AuditArchive string // Audit/archive
+	ConfigPrompt string // Config/prompts
+	SkillSignKey string // Config/skill_signing.key
+	SoulMDFile   string // Config/SOUL.md
+	EvalHoldout  string // Eval/holdout     — Holdout Set，防 M9 过拟合
+	EvalTraining string // Eval/training    — Training Set
+
+	// run/ 下三个运行时文件。写入方是守护进程，读取方是 CLI 与桌面外壳
+	// （ADR-0096 决策六）；读写语义（原子写、0600 校验）在 internal/runtimeinfo，
+	// 路径只在本文件定义——本结构是路径 SSoT，见文件头约定。
+	RunPID   string // Run/polaris.pid
+	RunPort  string // Run/polaris.port
+	RunToken string // Run/polaris.token
+	RunLock  string // Run/polaris.lock — 单实例锁，判据是 flock 本身而非文件内容
+
+	// LocalOnlyAllowlistFile local_only 网络白名单配置文件（M11 §5.3）。
+	// 运营用 `polaris allowlist genkey/sign` 离线生成配套 <file>.sig 签名，
+	// 加载见 internal/security/network.ListSignedAllowlistEntries（Ed25519 验签，fail-closed）。
+	LocalOnlyAllowlistFile string // Config/local_only_network_allowlist.toml
+}
+
+// DefaultDataLayout 返回当前用户家目录下默认数据根目录的 DataLayout。
+func DefaultDataLayout() (DataLayout, error) {
+	root, err := DefaultDataDir()
+	if err != nil {
+		return DataLayout{}, err
+	}
+	return NewDataLayout(root, DirsConfig{}), nil
+}
+
+// NewDataLayout 返回以 root 为根的完整 DataLayout。
+// overrides 中非空字段会覆盖对应子目录的默认派生路径（来自 DirsConfig）。
+func NewDataLayout(root string, overrides DirsConfig) DataLayout {
+	pick := func(override, defaultVal string) string {
+		if override != "" {
+			return ExpandHome(override)
+		}
+		return defaultVal
+	}
+
+	d := DataLayout{
+		Root:           root,
+		ConfigFile:     filepath.Join(root, ConfigFileName),
+		KillSwitchFile: filepath.Join(root, KillSwitchFileName),
+		FullStopFile:   filepath.Join(root, FullStopFileName),
+		VaultKeyFile:   filepath.Join(root, VaultKeyFileName),
+		CLISessionFile: filepath.Join(root, CLISessionFileName),
+		Reports:        filepath.Join(root, SubdirReports),
+	}
+	// 支持所有子目录独立挂载/覆盖配置
+	d.Logs = pick(overrides.LogsDir, filepath.Join(root, SubdirLogs))
+	d.Data = pick(overrides.DBDir, filepath.Join(root, SubdirData))
+	d.Workspace = pick(overrides.WorkspaceDir, filepath.Join(root, SubdirWorkspace))
+	d.Models = pick(overrides.ModelsDir, filepath.Join(root, SubdirModels))
+	d.Bin = pick(overrides.BinDir, filepath.Join(root, SubdirBin))
+	d.Config = pick(overrides.ConfigDir, filepath.Join(root, SubdirConfig))
+	d.Extensions = pick(overrides.ExtensionsDir, filepath.Join(root, SubdirExtensions))
+	d.Skills = pick(overrides.SkillsDir, filepath.Join(root, SubdirSkills))
+	d.Sessions = pick(overrides.SessionsDir, filepath.Join(root, SubdirSessions))
+	d.Audit = pick(overrides.AuditDir, filepath.Join(root, SubdirAudit))
+	d.Cache = pick(overrides.CacheDir, filepath.Join(root, SubdirCache))
+	d.Hooks = pick(overrides.HooksDir, filepath.Join(root, SubdirHooks))
+	d.Tmp = pick(overrides.TmpDir, filepath.Join(root, SubdirTmp))
+	d.Run = pick(overrides.RunDir, filepath.Join(root, SubdirRun))
+	d.Secrets = pick(overrides.SecretsDir, filepath.Join(root, SubdirSecrets))
+	d.Eval = pick(overrides.EvalDir, filepath.Join(root, SubdirEval))
+	d.HarnessOverlay = filepath.Join(root, SubdirHarnessOverlay)
+
+	// 派生路径从各自父目录计算
+	d.SQLiteDB = filepath.Join(d.Data, SQLiteDBFileName)
+	d.SurrealDB = filepath.Join(d.Data, SurrealDBFileName)
+	d.AuditArchive = filepath.Join(d.Audit, SubdirArchive)
+	d.ConfigPrompt = filepath.Join(d.Config, SubdirPrompts)
+	d.SkillSignKey = filepath.Join(d.Config, SkillSignKeyFileName)
+	d.SoulMDFile = filepath.Join(d.Config, SoulMDFileName)
+	d.LocalOnlyAllowlistFile = filepath.Join(d.Config, AllowlistFileName)
+	d.EvalHoldout = filepath.Join(d.Eval, "holdout")
+	d.EvalTraining = filepath.Join(d.Eval, "training")
+	d.RunPID = filepath.Join(d.Run, PIDFileName)
+	d.RunPort = filepath.Join(d.Run, PortFileName)
+	d.RunToken = filepath.Join(d.Run, TokenFileName)
+	d.RunLock = filepath.Join(d.Run, LockFileName)
+	return d
+}
+
+// expandHome 展开路径中的 ~ 前缀（兼容老代码调用）。
+func expandHome(p string) string {
+	return ExpandHome(p)
+}
+
+// MkdirAll 创建所有运行时必要目录。启动时调用一次，幂等。
+func (l DataLayout) MkdirAll() error {
+	dirs := []string{
+		l.Root,
+		l.Data,
+		l.Logs,
+		l.Config,
+		l.ConfigPrompt,
+		l.Extensions,
+		l.Skills,
+		l.Models,
+		l.Workspace,
+		l.Sessions,
+		l.Audit,
+		l.AuditArchive,
+		l.Reports,
+		l.Cache,
+		l.Hooks,
+		l.Tmp,
+		l.Bin,
+		l.Run,
+		l.Secrets,
+		l.Eval,
+		l.HarnessOverlay,
+		filepath.Join(l.HarnessOverlay, "skills"),
+		filepath.Join(l.HarnessOverlay, "prompt_addenda"),
+		filepath.Join(l.HarnessOverlay, "tool_notes"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "DataLayout.MkdirAll", err)
+		}
+	}
+	return nil
+}
+
+// Migrate 将旧路径的文件/目录移动到规范位置。
+// 幂等：目标已存在或源不存在时静默跳过。
+// 上线前阶段调用即可；上线后存在生产数据时测试后再启用。
+func (l DataLayout) Migrate() {
+	type mv struct{ src, dst string }
+	migrations := []mv{
+		// 数据库：根目录 → data/
+		{filepath.Join(l.Root, SQLiteDBFileName), l.SQLiteDB},
+		{filepath.Join(l.Root, "surreal_rust.db"), l.SurrealDB},
+		// 日志：根目录 → logs/
+		{filepath.Join(l.Root, "polaris.log"), filepath.Join(l.Logs, "polaris.log")},
+		{filepath.Join(l.Root, "polaris.error.log"), filepath.Join(l.Logs, "polaris.error.log")},
+		// 会话记录：transcripts/ → sessions/
+		{filepath.Join(l.Root, "transcripts"), l.Sessions},
+	}
+	for _, m := range migrations {
+		if _, err := os.Stat(m.dst); err == nil {
+			continue // 目标已存在，跳过
+		}
+		if _, err := os.Stat(m.src); err != nil {
+			continue // 源不存在，跳过
+		}
+		// 迁移失败不中断启动（旧布局仍可读），但必须留痕：吞掉的话，后续所有
+		// 子系统都在一个"半迁移"的目录布局上跑，现象是数据莫名读不到而无任何线索。
+		if err := os.Rename(m.src, m.dst); err != nil {
+			slog.Warn("config/layout: 旧布局目录迁移失败，将继续使用旧路径",
+				"src", m.src, "dst", m.dst, "err", err)
+		}
+	}
+}

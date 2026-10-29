@@ -1,0 +1,63 @@
+# 敏感路径目录（ADR-0122 决策二）：跨平台共有部分。`~` 在 Windows 取 USERPROFILE。
+# 类别：credential 读写均需确认 / persistence、system 仅写需确认 / basename 可信根外读写均需确认。
+# 新增敏感软件只改本目录文件并补 pathcatalog_test.go 正例，不在代码里散写路径。
+# 参考：MITRE ATT&CK T1555 / T1552.001 / T1546.004 / T1543、LaZagne、Falco sensitive_files、
+# anthropic-ai/sandbox-runtime 强制拒写清单。
+
+# ───────────── credential ─────────────
+- class: credential
+  paths: ['~/.ssh', '~/.gnupg']
+  fragments: ['.ssh/id_', '.gnupg/private-keys', 'authorized_keys']
+  note: SSH/GPG 私钥与 authorized_keys（T1552.004）
+
+- class: credential
+  paths: ['~/.aws', '~/.azure', '~/.config/gcloud', '~/.config/doctl', '~/.config/hcloud', '~/.oci']
+  fragments: ['.aws/credentials', '.aws/config', '.azure/accessTokens', 'gcloud/credentials.db', 'application_default_credentials.json']
+  note: AWS/Azure/GCP/DigitalOcean/Hetzner/OCI 云 CLI 凭据与令牌缓存（T1552.001）
+
+- class: credential
+  paths: ['~/.kube/config', '~/.kube/cache', '~/.docker/config.json', '~/.config/helm']
+  fragments: ['.kube/config', '.docker/config.json']
+  note: kubeconfig 与容器仓库认证
+
+- class: credential
+  paths: ['~/.netrc', '~/.git-credentials', '~/.config/gh/hosts.yml', '~/.config/glab-cli', '~/.npmrc', '~/.yarnrc.yml', '~/.pypirc', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.m2/settings-security.xml', '~/.gradle/gradle.properties', '~/.config/pip/pip.conf', '~/.terraform.d/credentials.tfrc.json', '~/.vault-token', '~/.pgpass', '~/.my.cnf', '~/.mylogin.cnf', '~/.config/rclone', '~/.s3cfg', '~/.boto']
+  fragments: ['.git-credentials', '.netrc', '.npmrc', '.pypirc', 'credentials.tfrc.json', '.vault-token', '.pgpass', 'rclone.conf']
+  note: 包仓库/代码托管/数据库/Vault 的明文令牌文件（T1552.001，LaZagne）
+
+- class: credential
+  paths: ['~/.password-store', '~/.config/op', '~/.op', '~/.config/Bitwarden CLI', '~/.config/keepassxc']
+  fragments: ['.password-store', '.kdbx']
+  note: pass、1Password CLI、Bitwarden CLI、KeePassXC 配置（T1555.005）
+
+- class: credential
+  paths: ['~/.bash_history', '~/.zsh_history', '~/.zhistory', '~/.sh_history', '~/.history', '~/.python_history', '~/.psql_history', '~/.mysql_history', '~/.rediscli_history', '~/.node_repl_history', '~/.local/share/fish/fish_history', '~/.local/share/zsh/history']
+  fragments: ['.bash_history', '.zsh_history', 'fish_history']
+  note: shell 与交互式客户端历史常含内联口令/令牌（T1552.003）
+
+- class: credential
+  paths: ['~/.bitcoin', '~/.electrum', '~/.ethereum/keystore', '~/.electrum-ltc', '~/.litecoin', '~/.dogecoin', '~/.monero', '~/.zcash', '~/.config/Ledger Live']
+  fragments: ['wallet.dat', 'keystore', 'wallet_seed', 'default_wallet']
+  note: 加密货币钱包（LaZagne wallets）；Exodus/Atomic 等桌面钱包在平台文件
+
+# ───────────── persistence ─────────────
+- class: persistence
+  paths: ['~/.bashrc', '~/.bash_profile', '~/.bash_login', '~/.bash_logout', '~/.profile', '~/.zshrc', '~/.zprofile', '~/.zshenv', '~/.zlogin', '~/.zlogout', '~/.cshrc', '~/.tcshrc', '~/.kshrc', '~/.config/fish', '~/.inputrc', '~/.ssh/rc', '~/.xinitrc', '~/.xprofile', '~/.xsessionrc']
+  note: shell/登录脚本，改动即后门（T1546.004）
+
+- class: persistence
+  paths: ['~/.gitconfig', '~/.config/git', '~/.gitattributes', '~/.config/pip']
+  note: git 全局配置可设 core.hooksPath/core.sshCommand/alias 执行任意命令
+
+- class: persistence
+  paths: ['~/.claude', '~/.claude.json', '~/.codex', '~/.gemini', '~/.cursor', '~/.mcp.json', '~/.config/opencode', '~/.config/Claude', '~/.windsurf', '~/.continue', '~/.aider.conf.yml']
+  note: 其他 agent 的 hooks/MCP/权限配置，改动可让下次启动执行任意命令（sandbox-runtime 强制拒写 .mcp.json）
+
+- class: persistence
+  anchors: ['.git/hooks', '.git/config']
+  note: 任意位置的 git hooks 与仓库配置（T1546）；路径任一段序列匹配即命中
+
+# ───────────── basename（仅可信根外生效） ─────────────
+- class: basename
+  patterns: ['id_rsa*', 'id_dsa*', 'id_ecdsa*', 'id_ed25519*', '*.kdbx', '*.kdb', '*.keychain', '*.keychain-db', 'wallet.dat', '*.p12', '*.pfx', '*.ppk', '.env', '.env.*']
+  note: 私钥/密码库/钱包/dotenv 按文件名识别，覆盖散落在任意目录的副本（可信根内的 .env 由工作区边界管，不在此列）

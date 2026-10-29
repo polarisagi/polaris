@@ -1,0 +1,393 @@
+// Package tool 实现 M7 ToolRegistry（protocol.ToolRegistry 接口）。
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §3
+//
+// 执行路径: ExecuteTool → PolicyGate 五阶段校验 → Sandbox 分级 → ToolResult
+// Rate Limiter: builtin 100 QPS / MCP 10 QPS / shell 2 QPS（对应 state.yaml §m7_tool）
+package tool
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/security/token"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// InMemoryToolRegistry 实现 protocol.ToolRegistry。
+// 特性:
+//   - 并发安全的工具注册/查找/列举
+//   - PolicyGate 前置校验（每次 ExecuteTool 前执行）
+//   - 分源 Rate Limiter（builtin/mcp/shell 独立限速）
+//   - Taint 传播：ExecuteTool 结果继承输入 TaintLevel（max 传播规则）
+type InMemoryToolRegistry struct {
+	mu    sync.RWMutex
+	tools map[string]types.Tool
+	// appOnly MCP Apps 中 visibility 不含 "model" 的工具：不进 Lookup/List（模型既看不到也调不到，
+	// apps_spec.mdx §Visibility），只能经 ExecuteAppTool 由同服务器的 View 调用。
+	appOnly    map[string]types.Tool
+	envelope   *sandbox.ExecEnvelope
+	limiters   map[string]*rateLimiter
+	blackboard SideEffectChecker
+	// idempotencyCache 幂等缓存：LRU 上限 1000 条 + TTL 5min 双控。
+	// 上限 1000 是 state.yaml §m7_tool.idempotency_cache_max 的默认值。
+	idempotencyCache   *lruCache
+	tokenVault         *guard.PIITokenVault // 可选注入（M11 §5.1 PII 令牌化）；nil 时行为与改造前完全一致
+	hitl               protocol.HITL        // HITL 网关 (人工审批)
+	outcomeRecorder    ToolOutcomeRecorder
+	sessionEventWriter SessionEventWriter
+	taintEgressChecker TaintEgressChecker    // 可选注入（M04 §3 出口污点检查）
+	exemptionVault     *token.ExemptionVault // 可选注入（HITL 豁免令牌存储）
+	policy             *policy.Policy        // 信任档位安全策略（ADR-0115 WP1 / V1）
+	checkpointTrigger  CheckpointTrigger     // 写前快照触发器（ADR-0115 WP1）
+	auditLogger        protocol.AuditLogger  // 审计日志记录器（V9 / HE-1 用于 full 档 HITL 自动放行审计）
+}
+
+// TaintEgressChecker/WithTaintEgressChecker/WithExemptionVault/checkTaintEgress
+// 见 tool_taint_egress.go（R7 拆分）。
+
+// ToolOutcomeRecorder/WithOutcomeRecorder/reportOutcome 见 tool_outcome.go（R7 拆分）。
+
+// WithTokenVault 注入 PIITokenVault（可选，2026-07-04 审计修复：此前定义了完整
+// 的令牌化基础设施但从未接入任何执行路径，是纯死代码）。注入后，ExecuteTool
+// 在真正执行工具前会把 input 中出现的 ⟦PII:xxxx⟧ 令牌还原为真实值，仅用于本次
+// 调用，不写回 ToolResult / idempotencyCache，用后即焚。
+func (r *InMemoryToolRegistry) WithTokenVault(v *guard.PIITokenVault) *InMemoryToolRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tokenVault = v
+	return r
+}
+
+// SideEffectChecker 定义 TOCTOU 校验接口（consumer-side 定义，防包循环）。
+type SideEffectChecker interface {
+	SideEffectPreCheck(ctx context.Context, taskID, agentID string, claimedVersion int32) error
+}
+
+// WithSideEffectChecker 注入 Blackboard TOCTOU 校验器（可选）。
+func (r *InMemoryToolRegistry) WithSideEffectChecker(c SideEffectChecker) *InMemoryToolRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.blackboard = c
+	return r
+}
+
+// WithHITL 注入 HITL 人工审批网关。
+func (r *InMemoryToolRegistry) WithHITL(hitl protocol.HITL) *InMemoryToolRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.hitl = hitl
+	return r
+}
+
+// SandboxExecutor 是工具注册表最小执行器接口（速率限前需要工具元数据）。
+type SandboxExecutor interface {
+	Execute(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel) ([]byte, error)
+}
+
+var _ protocol.ToolRegistry = (*InMemoryToolRegistry)(nil)
+
+// NewInMemoryToolRegistry 创建工具注册表。
+func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope, cfg config.M7ToolThresholds) *InMemoryToolRegistry {
+	return &InMemoryToolRegistry{
+		tools:            make(map[string]types.Tool),
+		appOnly:          make(map[string]types.Tool),
+		envelope:         envelope,
+		blackboard:       nil,
+		idempotencyCache: newLRUCache(cfg.IdempotencyCacheSize, time.Duration(cfg.IdempotencyCacheTTLSeconds)*time.Second),
+		limiters: map[string]*rateLimiter{
+			string(types.ToolBuiltin): newRateLimiter(int64(cfg.RateLimitBuiltinQPS)),
+			string(types.ToolMCP):     newRateLimiter(int64(cfg.RateLimitMCPQPS)),
+			"shell":                   newRateLimiter(int64(cfg.RateLimitShellQPS)),
+		},
+		policy: defaultPolicyPtr(),
+	}
+}
+
+func defaultPolicyPtr() *policy.Policy {
+	p := policy.ProfilePolicy(policy.ProfileStandard)
+	return &p
+}
+
+// Register 注册工具；同名覆盖（热更新 MCP schema 时使用）。
+func (r *InMemoryToolRegistry) Register(tool types.Tool) error {
+	if tool.Name == "" {
+		return apperr.New(apperr.CodeInternal, "tool_registry: tool name is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[tool.Name] = tool
+	delete(r.appOnly, tool.Name) // 工具刷新后可见性可能改变，同名只保留一处
+	return nil
+}
+
+// RegisterAppOnly 注册仅供 MCP Apps View 调用的工具（不进模型工具目录）。
+func (r *InMemoryToolRegistry) RegisterAppOnly(tool types.Tool) error {
+	if tool.Name == "" {
+		return apperr.New(apperr.CodeInternal, "tool_registry: tool name is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appOnly[tool.Name] = tool
+	delete(r.tools, tool.Name)
+	return nil
+}
+
+// Unregister 从注册表移除指定工具（MCP Server 断开连接时调用）。
+// 工具不存在时静默忽略。
+func (r *InMemoryToolRegistry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+	delete(r.appOnly, name)
+}
+
+// Lookup 按名称查找工具。未找到返回 ErrToolNotFound。
+func (r *InMemoryToolRegistry) Lookup(name string) (types.Tool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t, ok := r.tools[name]
+	if !ok {
+		return types.Tool{}, apperr.Wrap(apperr.CodeNotFound, fmt.Sprintf("tool_registry: tool %q not found", name), ErrToolNotFound)
+	}
+	return t, nil
+}
+
+// List 返回所有已注册工具的快照，按名称升序。
+//
+// 为什么必须有序：工具名列表会渲染进系统提示词稳定层（L0）与 tools 数组，map 遍历序
+// 每次随机会让前缀字节逐请求变化，DeepSeek/OpenAI 前缀缓存永不命中（ADR-0105 决策一
+// 字节稳定规则 1）。
+func (r *InMemoryToolRegistry) List() []types.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]types.Tool, 0, len(r.tools))
+	for _, t := range r.tools {
+		result = append(result, t)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	tool, err := r.Lookup(name)
+	if err != nil {
+		// [2026-08-02 S-06 抽样复查] Lookup 对未注册工具返回 CodeNotFound，
+		// 此前恒被 CodeInternal 覆盖成 500，本应是 404。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "InMemoryToolRegistry.ExecuteTool", err)
+	}
+	return r.execute(ctx, tool, input, taintLevel, execOrigin{principal: sandbox.PrincipalAgent})
+}
+
+// ExecuteAppTool MCP Apps View 发起的工具调用。与 ExecuteTool 走同一执行体（污点出口、限流、
+// 幂等、PII 还原、异常检测、Envelope/PolicyGate、TOCTOU 复核，HE-3），仅来源标注不同；
+// 查找范围含 app-only 工具——可见性（visibility 含 "app"）由调用方按工具元数据校验。
+func (r *InMemoryToolRegistry) ExecuteAppTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel, viewID, sessionID string) (*types.ToolResult, error) {
+	r.mu.RLock()
+	tool, ok := r.tools[name]
+	if !ok {
+		tool, ok = r.appOnly[name]
+	}
+	r.mu.RUnlock()
+	if !ok {
+		return nil, apperr.Wrap(apperr.CodeNotFound, fmt.Sprintf("tool_registry: tool %q not found", name), ErrToolNotFound)
+	}
+	return r.execute(ctx, tool, input, taintLevel, execOrigin{principal: sandbox.PrincipalMCPApp, appViewID: viewID, appSessionID: sessionID})
+}
+
+// execOrigin 调用来源：供 PolicyGate 评估上下文与审计区分模型调用和 MCP Apps View 调用。
+type execOrigin struct {
+	principal               string
+	appViewID, appSessionID string
+}
+
+func (r *InMemoryToolRegistry) execute(ctx context.Context, tool types.Tool, input []byte, taintLevel types.TaintLevel, origin execOrigin) (*types.ToolResult, error) {
+	name := tool.Name
+	cached, ok, idempotencyKey := r.checkIdempotency(ctx, name)
+	if ok {
+		return cached, nil
+	}
+
+	// 预执行校验 (RateLimit, DryRun)
+	modifiedInput, res, err := r.checkPreExecution(ctx, tool, taintLevel, input)
+	if res != nil || err != nil {
+		if err != nil {
+			// [2026-08-02 S-06 抽样复查] checkTaintEgress 拦截时返回
+			// CodeForbidden（SSRF/污点出口拒绝），此前恒被 CodeInternal 覆盖。
+			return nil, apperr.Wrap(apperr.CodeOf(err), "InMemoryToolRegistry.ExecuteTool", err)
+		}
+		return res, nil
+	}
+	if modifiedInput != nil {
+		input = modifiedInput
+	}
+
+	if r.envelope == nil {
+		return nil, apperr.New(apperr.CodeInternal, "tool_registry: envelope is nil")
+	}
+
+	// PII 令牌还原（M11 §5.1）：input 里若含 ⟦PII:xxxx⟧ 令牌，在真正执行前原地
+	// 还原为真实值，仅用于本次调用栈。还原失败（未知/伪造 token）fail-closed
+	// 直接拒绝执行，不放行部分还原或原样透传。还原后的明文只存在于局部变量
+	// execInput 中，不会被写回 finalResult/idempotencyCache（两者均基于
+	// execRes.Output，即工具真实输出，不是我们注入的还原值）。
+	r.mu.RLock()
+	vault := r.tokenVault
+	r.mu.RUnlock()
+	execInput, err := r.restorePIIInput(ctx, vault, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Anomaly Distance Filter Check (M11 §2.2)
+	if err := r.checkAnomaly(ctx, name, execInput); err != nil {
+		return nil, err
+	}
+
+	var capTok *token.Token
+	if tok, ok := ctx.Value(protocol.CtxCapabilityTokenKey{}).(*token.Token); ok {
+		capTok = tok
+	}
+
+	// 写前快照（ADR-0115 WP1 full 档下写类/高风险/跨工作区写前自动打快照）
+	r.triggerPreExecutionCheckpoint(ctx, tool, execInput, taintLevel)
+
+	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
+	execRes, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
+		Principal:    origin.principal,
+		Kind:         sandbox.KindToolExecute,
+		Resource:     name,
+		TrustTier:    tool.TrustTier,
+		Tool:         tool,
+		Input:        execInput,
+		CapToken:     capTok,
+		TaintLevel:   taintLevel, // Envelope 将在执行后计算新的 TaintLevel
+		CPUQuotaMs:   int(tool.Timeout.Milliseconds()),
+		AppViewID:    origin.appViewID,
+		AppSessionID: origin.appSessionID,
+	})
+
+	// PostCheck: 防止 TOCTOU 导致已取消任务的副作用不被感知（重用 SideEffectPreCheck 接口）
+	if postRes, postErr := r.postCheckTOCTOU(ctx, taintLevel); postRes != nil {
+		return postRes, postErr
+	}
+
+	if result, handled := r.finalizeExecError(ctx, name, execErr, execRes, execInput, vault, taintLevel); handled {
+		return result, nil
+	}
+
+	finalResult := &types.ToolResult{
+		Success:    execRes.Success,
+		Output:     execRes.Output,
+		Error:      execRes.Error,
+		LatencyMs:  execRes.LatencyMs,
+		TaintLevel: execRes.TaintLevel,
+		ImageParts: execRes.ImageParts,
+		MCPRaw:     execRes.MCPRaw,
+	}
+
+	// 用成功执行的调用训练 AnomalyDistanceFilter 的正常分布基线（M11 §2.2）。
+	// 不训练就没有 checkAnomaly 赖以判断的历史分布——filter 会永远停留在
+	// "样本不足 bypass" 分支，Check() 恒返回 (TaintMedium, nil) 从不拦截
+	// （ADR-0062 关联接线：此前 Record 全仓库零调用点，即便注入了 filter 实例
+	// 也不会真正检测到任何异常）。只用成功样本训练，避免把失败/异常调用本身
+	// 污染进"正常"基线。
+	if finalResult.Success {
+		if f, ok := ctx.Value(protocol.CtxAnomalyFilterKey{}).(*guard.AnomalyDistanceFilter); ok {
+			f.Record(name, []float64{float64(len(execInput))})
+		}
+	}
+
+	r.reportOutcome(name, finalResult.Success, finalResult.LatencyMs, finalResult.Error, ctx, execInput, finalResult)
+	r.cacheIdempotencyResult(idempotencyKey, finalResult)
+
+	return finalResult, nil
+}
+
+func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel, input []byte) ([]byte, *types.ToolResult, error) {
+	if err := r.checkTaintEgress(ctx, tool, taintLevel, input); err != nil {
+		return input, nil, err
+	}
+
+	limiterKey := string(tool.Source)
+	if isShellTool(tool) {
+		limiterKey = "shell"
+	}
+	if lim, ok := r.limiters[limiterKey]; ok {
+		if !lim.Allow() {
+			return input, nil, apperr.New(apperr.CodeResourceExhausted, fmt.Sprintf("tool_registry: rate limit exceeded for source %s", limiterKey))
+		}
+	}
+
+	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+
+	if dryRun, ok := ctx.Value(protocol.CtxDryRun{}).(bool); ok && dryRun {
+		// DryRun 模式下，对于具备 FS 写入副作用的工具，将其工作目录重定向到 COW 后缀目录，允许其真实执行
+		// 通过简单的 JSON 字符串替换实现（假设参数包含路径）
+		if taskID != "" && isFileWriteTool(tool) {
+			cowTaskID := taskID + ".cow"
+			// 仅当入参路径确实位于 /taskID/ 工作区内、且已被重写到 COW 目录时才放行真实执行；
+			// 未命中（绝对路径在工作区外、相对路径等）必须 fail-closed 落到下方模拟结果，
+			// 否则 ReplaceAll 空操作后原样写穿真实文件系统（GR-5.2-007）。
+			modifiedInput := bytes.ReplaceAll(input, []byte("/"+taskID+"/"), []byte("/"+cowTaskID+"/"))
+			if !bytes.Equal(modifiedInput, input) {
+				slog.Debug("tool_registry: dry_run COW enabled, rewriting workspace path", "tool", tool.Name, "original_task", taskID)
+				return modifiedInput, nil, nil
+			}
+			slog.Debug("tool_registry: dry_run COW not applicable (path outside task workspace), simulating", "tool", tool.Name)
+		}
+
+		// 其他工具：拦截所有，返回模拟结果；不执行真实副作用
+		sideEffectSummary := "none"
+		if !isReversible(tool) {
+			sideEffectSummary = fmt.Sprintf("would execute %q with side effects: %v", tool.Name, tool.SideEffects)
+		}
+		out, _ := json.Marshal(map[string]any{
+			"status":              "dry_run_simulated",
+			"reversible":          isReversible(tool),
+			"side_effect_preview": sideEffectSummary,
+		})
+		return input, &types.ToolResult{
+			Success:    true,
+			Output:     out,
+			TaintLevel: taintLevel,
+		}, nil
+	}
+
+	// TOCTOU 校验：防止任务被 Reaper 回收后孤儿副作用继续执行（M8 §3.4）
+	r.mu.RLock()
+	checker := r.blackboard
+	r.mu.RUnlock()
+	if checker != nil {
+		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+		agentID, _ := ctx.Value(protocol.CtxAgentIDKey{}).(string)
+		claimedVersion, _ := ctx.Value(protocol.CtxVersionKey{}).(int32)
+		if taskID != "" {
+			if err := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); err != nil {
+				return input, &types.ToolResult{
+					Success:    false,
+					Error:      fmt.Sprintf("tool_registry: side-effect pre-check failed: %s", err.Error()),
+					TaintLevel: taintLevel,
+				}, nil
+			}
+		}
+	}
+
+	return input, nil, nil
+}
+
+// 拆分文件说明（R7 治理）：
+// - isFileWriteTool/isShellTool/isReversible、lruCache、rateLimiter、ErrToolNotFound 见 tool_helpers.go
+// - checkAnomaly、WithPolicy、EffectivePolicy、WithAuditLogger 见 tool_policy.go
+// - redactOutputsForPII 见 tool_pii.go

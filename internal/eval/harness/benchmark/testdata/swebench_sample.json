@@ -1,0 +1,22 @@
+[
+  {
+    "instance_id": "django__django-11099",
+    "repo": "django/django",
+    "base_commit": "abc123def456",
+    "patch": "diff --git a/django/db/models/query.py b/django/db/models/query.py\n--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -1,5 +1,6 @@\n class QuerySet:\n+    # Fix: handle empty queryset case\n     def count(self):\n-        return self._result_cache\n+        return len(self._result_cache) if self._result_cache is not None else 0\n",
+    "test_patch": "diff --git a/tests/test_query.py b/tests/test_query.py\n--- a/tests/test_query.py\n+++ b/tests/test_query.py\n@@ -0,0 +1,5 @@\n+def test_empty_queryset_count():\n+    qs = QuerySet()\n+    assert qs.count() == 0\n",
+    "problem_statement": "QuerySet.count() throws AttributeError on empty queryset because _result_cache is None.",
+    "FAIL_TO_PASS": ["tests.test_query.test_empty_queryset_count"],
+    "PASS_TO_PASS": ["tests.test_query.test_basic_count"]
+  },
+  {
+    "instance_id": "requests__requests-1234",
+    "repo": "psf/requests",
+    "base_commit": "deadbeef",
+    "patch": "diff --git a/requests/utils.py b/requests/utils.py\n--- a/requests/utils.py\n+++ b/requests/utils.py\n@@ -10,7 +10,7 @@\n def get_encoding_from_headers(headers):\n-    return headers.get('content-type')\n+    return headers.get('content-type', 'utf-8')\n",
+    "test_patch": "",
+    "problem_statement": "get_encoding_from_headers returns None when content-type header is missing.",
+    "FAIL_TO_PASS": ["tests.test_utils.test_get_encoding_fallback"],
+    "PASS_TO_PASS": []
+  }
+]

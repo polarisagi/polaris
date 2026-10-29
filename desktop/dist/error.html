@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Polaris</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px;
+    font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0f1115; color: #e6e8ee; box-sizing: border-box;
+  }
+  .card { max-width: 620px; width: 100%; }
+  h1 { font-size: 19px; margin: 0 0 14px; font-weight: 600; }
+  p { margin: 0 0 14px; color: #b9bfd0; }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+  }
+  pre {
+    background: #171a21; border: 1px solid #262a35; border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; margin: 0 0 14px; color: #d8dce7;
+  }
+  
+  .detail-box {
+    background: #171a21; border: 1px solid #262a35; border-radius: 8px;
+    padding: 10px 12px; color: #8a90a2; font-size: 13px; word-break: break-all;
+  }
+  button {
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 7px;
+    border: 1px solid #3a3f4d; background: #1d212a; color: #e6e8ee; cursor: pointer;
+  }
+  button:hover { background: #262b36; }
+  .ok { color: #6ee7a8; margin-left: 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">无法连接到 Polaris 核心</h1>
+    <div id="body"></div>
+    <div id="detail"></div>
+  </div>
+<script>
+  // 纯静态故障页：不调用任何 /v1 端点，不含业务 UI（ADR-0096 决策三的唯一例外）。
+  var params = new URLSearchParams(location.search);
+  var code = params.get('code') || 'runtime-broken';
+  var detail = params.get('detail') || '';
+  var install = 'curl -fsSL https://polarisagi.online/install.sh | sh';
+
+  var pages = {
+    'core-missing': {
+      title: '核心服务未安装',
+      html: '<p>这台机器上没有找到 Polaris 守护进程。桌面外壳只是界面，核心需要单独安装。</p>'
+          + '<p>在终端执行：</p><pre id="cmd">' + install + '</pre>'
+          + '<p><button id="copy">复制安装命令</button><span class="ok" id="copied"></span></p>'
+          + '<p>已经装过？可以用环境变量 <code>POLARIS_BIN</code> 指定二进制位置后重新打开。</p>'
+    },
+    'start-timeout': {
+      title: '核心启动超时',
+      html: '<p>守护进程已拉起，但在超时时间内没有就绪。首次启动要初始化数据库与模型，可能确实较慢；'
+          + '若反复如此，请查看日志定位卡在哪一步。</p>'
+          + '<p>也可以在终端直接前台启动，观察输出：</p><pre>polaris serve</pre>'
+    },
+    'credential-mismatch': {
+      title: '凭证不匹配',
+      html: '<p>守护进程正在运行，但本外壳的本地令牌调不通它的接口。</p>'
+          + '<p>常见原因：守护进程由另一个用户账号启动，或启动时设置了 <code>POLARIS_API_KEY</code>。</p>'
+          + '<p>本外壳<strong>不会</strong>再拉起第二个实例——那会被单实例锁拒绝，且可能掩盖真正的问题。</p>'
+    },
+    'version-mismatch': {
+      title: '版本不兼容',
+      html: '<p>桌面外壳与守护进程是分开安装、各自更新的，当前两端版本不兼容。</p>'
+          + '<p>重新运行安装脚本即可把两端更新到同一版本：</p><pre>' + install + ' -s -- --with-desktop</pre>'
+    },
+    'runtime-broken': {
+      title: '运行时状态异常',
+      html: '<p>找到了运行时状态文件，但读不出可用的端口或凭证。</p>'
+          + '<p>常见原因：上次异常退出留下了陈旧文件，或令牌文件权限被改宽（要求 <code>-rw-------</code>）。</p>'
+          + '<p>处置：确认没有 polaris 进程在跑之后，删除数据目录下的 <code>run/</code> 再重新启动。</p>'
+    }
+  };
+
+  var page = pages[code] || pages['runtime-broken'];
+  document.getElementById('title').textContent = page.title;
+  document.getElementById('body').innerHTML = page.html;
+  if (detail) {
+    document.getElementById('detail').innerHTML =
+      '<div class="detail-box">' + detail.replace(/[<>&]/g, function (c) {
+        return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c];
+      }) + '</div>';
+  }
+  var copy = document.getElementById('copy');
+  if (copy) {
+    copy.addEventListener('click', function () {
+      navigator.clipboard.writeText(install).then(function () {
+        document.getElementById('copied').textContent = '已复制';
+      });
+    });
+  }
+</script>
+</body>
+</html>

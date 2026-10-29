@@ -1,0 +1,78 @@
+# Linux 敏感路径（区分大小写）。含 snap/flatpak 沙箱化应用的落点。
+
+# ───────────── credential ─────────────
+- class: credential
+  paths:
+    - '~/.config/google-chrome'
+    - '~/.config/google-chrome-beta'
+    - '~/.config/google-chrome-unstable'
+    - '~/.config/chromium'
+    - '~/.config/microsoft-edge'
+    - '~/.config/BraveSoftware'
+    - '~/.config/opera'
+    - '~/.config/vivaldi'
+    - '~/.config/vivaldi-snapshot'
+    - '~/.mozilla/firefox'
+    - '~/.mozilla/icecat'
+    - '~/.librewolf'
+    - '~/.zen'
+    - '~/snap/firefox/common/.mozilla'
+    - '~/snap/chromium/common/chromium'
+    - '~/.var/app/org.mozilla.firefox'
+    - '~/.var/app/com.google.Chrome'
+    - '~/.var/app/org.chromium.Chromium'
+    - '~/.var/app/com.brave.Browser'
+    - '~/.var/app/com.microsoft.Edge'
+  fragments: ['Login Data', 'Cookies', 'Local State', 'Web Data', 'key4.db', 'logins.json', 'cookies.sqlite', 'Local Extension Settings']
+  note: 浏览器整目录（含 snap/flatpak 落点）（T1555.003）
+
+- class: credential
+  paths: ['~/.local/share/keyrings', '~/.gnome2/keyrings', '~/.local/share/kwalletd', '~/.kde/share/apps/kwallet', '~/.kde4/share/apps/kwallet']
+  fragments: ['keyrings', 'kwalletd', '.keyring']
+  note: GNOME Keyring / KWallet（T1555.001）
+
+- class: credential
+  paths:
+    - '~/.config/1Password'
+    - '~/.config/Bitwarden'
+    - '~/.var/app/com.bitwarden.desktop'
+    - '~/snap/bitwarden'
+    - '~/.cache/keepassxc'
+    - '~/.var/app/org.keepassxc.KeePassXC'
+    - '~/.config/Dashlane'
+    - '~/.config/Enpass'
+    - '~/.local/share/Enpass'
+  fragments: ['1Password', 'Bitwarden', 'Dashlane', 'Enpass']
+  note: 密码管理器本地库；Dashlane/Enpass 的 Linux 落点待核实
+
+- class: credential
+  paths: ['~/.config/Exodus', '~/.config/atomic', '~/.config/Electrum', '~/.config/Ledger Live']
+  fragments: ['exodus.wallet', 'wallet.dat']
+  note: 桌面钱包；Exodus/Atomic 的 Linux 落点待核实
+
+- class: credential
+  paths:
+    - '~/.local/share/TelegramDesktop'
+    - '~/.var/app/org.telegram.desktop'
+    - '~/snap/telegram-desktop'
+    - '~/.config/Signal'
+    - '~/.var/app/org.signal.Signal'
+    - '~/.config/discord'
+    - '~/.var/app/com.discordapp.Discord'
+    - '~/.config/Slack'
+    - '~/.var/app/com.slack.Slack'
+    - '~/.config/WhatsApp'
+    - '~/.config/Microsoft/Microsoft Teams'
+  fragments: ['tdata', 'TelegramDesktop']
+  note: IM 会话令牌；WhatsApp 桌面在 Linux 无官方客户端，路径待核实
+
+# ───────────── persistence ─────────────
+- class: persistence
+  paths: ['~/.config/autostart', '~/.config/systemd/user', '~/.local/share/systemd/user', '~/.config/environment.d', '~/.config/plasma-workspace/env', '/etc/systemd', '/etc/cron.d', '/etc/cron.daily', '/etc/cron.hourly', '/etc/cron.weekly', '/etc/cron.monthly', '/etc/crontab', '/etc/profile.d', '/etc/rc.local', '/var/spool/cron', '/var/spool/anacron']
+  fragments: ['.config/autostart', 'systemd/user', 'cron.d']
+  note: XDG autostart、systemd 用户/系统单元、cron（T1543.002 / T1053.003 / T1547.013）
+
+# ───────────── system ─────────────
+- class: system
+  paths: ['/etc', '/usr', '/bin', '/sbin', '/lib', '/lib64', '/boot']
+  note: 系统目录

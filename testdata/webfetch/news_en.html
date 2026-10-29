@@ -1,0 +1,1649 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+
+<link rel="preconnect" href="https://www.googletagmanager.com">
+<script >(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-W8MVQXG');</script>
+  
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#00add8">
+<link rel="canonical" href="https://go.dev/blog/race-detector">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Material+Icons">
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="icon" href="/images/favicon-gopher.png" sizes="any">
+<link rel="apple-touch-icon" href="/images/favicon-gopher-plain.png"/>
+<link rel="icon" href="/images/favicon-gopher.svg" type="image/svg+xml">
+<link rel="me" href="https://hachyderm.io/@golang">
+
+<link rel="alternate" title="The Go Blog" type="application/atom+xml" href="/blog/feed.atom">
+
+  
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-W8MVQXG');</script>
+  
+<script src="/js/site.js"></script>
+<meta name="og:url" content="https://go.dev/blog/race-detector">
+<meta name="og:title" content="Introducing the Go Race Detector - The Go Programming Language">
+<title>Introducing the Go Race Detector - The Go Programming Language</title>
+
+<meta name="og:description" content="How and why to use the Go race detector to improve your programs.">
+<meta name="description" content="How and why to use the Go race detector to improve your programs.">
+
+<meta name="og:image" content="https://go.dev/doc/gopher/gopher5logo.jpg">
+<meta name="twitter:image" content="https://go.dev/doc/gopher/runningsquare.jpg">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:site" content="@golang">
+</head>
+<body class="Site">
+  
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-W8MVQXG"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  
+
+
+<header class="Site-header js-siteHeader">
+  <div class="Header Header--dark">
+    <nav class="Header-nav">
+      <a href="/">
+        <img
+          class="js-headerLogo Header-logo"
+          src="/images/go-logo-white.svg"
+          alt="Go">
+      </a>
+      <div class="skip-navigation-wrapper">
+        <a class="skip-to-content-link" aria-label="Skip to main content" href="#main-content"> Skip to Main Content </a>
+      </div>
+      <div class="Header-rightContent">
+        <ul class="Header-menu">
+          <li class="Header-menuItem ">
+            <a href="#"  class="js-desktop-menu-hover" aria-label=Why&#32;Go aria-describedby="dropdown-description">
+              Why Go <i class="material-icons" aria-hidden="true">arrow_drop_down</i>
+            </a>
+            <div class="screen-reader-only" id="dropdown-description" hidden>
+              Press Enter to activate/deactivate dropdown
+            </div>
+              <ul class="Header-submenu js-desktop-submenu-hover" aria-label="submenu">
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/solutions/case-studies">
+                          Case Studies
+                          
+                        </a>
+                    </div>
+                    <p>Common problems companies solve with Go</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/solutions/use-cases">
+                          Use Cases
+                          
+                        </a>
+                    </div>
+                    <p>Stories about how and why companies use Go</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/security/">
+                          Security
+                          
+                        </a>
+                    </div>
+                    <p>How Go can help keep you secure by default</p>
+                  </li>
+              </ul>
+          </li>
+          <li class="Header-menuItem ">
+            <a href="/learn/"  aria-label=Learn aria-describedby="dropdown-description">
+              Learn 
+            </a>
+            <div class="screen-reader-only" id="dropdown-description" hidden>
+              Press Enter to activate/deactivate dropdown
+            </div>
+          </li>
+          <li class="Header-menuItem ">
+            <a href="#"  class="js-desktop-menu-hover" aria-label=Docs aria-describedby="dropdown-description">
+              Docs <i class="material-icons" aria-hidden="true">arrow_drop_down</i>
+            </a>
+            <div class="screen-reader-only" id="dropdown-description" hidden>
+              Press Enter to activate/deactivate dropdown
+            </div>
+              <ul class="Header-submenu js-desktop-submenu-hover" aria-label="submenu">
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/ref/spec">
+                          Go Spec
+                          
+                        </a>
+                    </div>
+                    <p>The official Go language specification</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/doc">
+                          Go User Manual
+                          
+                        </a>
+                    </div>
+                    <p>A complete introduction to building software with Go</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="https://pkg.go.dev/std">
+                          Standard library
+                          
+                        </a>
+                    </div>
+                    <p>Reference documentation for Go&#39;s standard library</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/doc/devel/release">
+                          Release Notes
+                          
+                        </a>
+                    </div>
+                    <p>Learn what&#39;s new in each Go release</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/doc/effective_go">
+                          Effective Go
+                          
+                        </a>
+                    </div>
+                    <p>Tips for writing clear, performant, and idiomatic Go code</p>
+                  </li>
+              </ul>
+          </li>
+          <li class="Header-menuItem ">
+            <a href="https://pkg.go.dev"  aria-label=Packages aria-describedby="dropdown-description">
+              Packages 
+            </a>
+            <div class="screen-reader-only" id="dropdown-description" hidden>
+              Press Enter to activate/deactivate dropdown
+            </div>
+          </li>
+          <li class="Header-menuItem ">
+            <a href="#"  class="js-desktop-menu-hover" aria-label=Community aria-describedby="dropdown-description">
+              Community <i class="material-icons" aria-hidden="true">arrow_drop_down</i>
+            </a>
+            <div class="screen-reader-only" id="dropdown-description" hidden>
+              Press Enter to activate/deactivate dropdown
+            </div>
+              <ul class="Header-submenu js-desktop-submenu-hover" aria-label="submenu">
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/talks/">
+                          Recorded Talks
+                          
+                        </a>
+                    </div>
+                    <p>Videos from prior events</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="https://www.meetup.com/pro/go">
+                          Meetups
+                           <i class="material-icons">open_in_new</i>
+                        </a>
+                    </div>
+                    <p>Meet other local Go developers</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/wiki/Conferences">
+                          Conferences
+                           <i class="material-icons">open_in_new</i>
+                        </a>
+                    </div>
+                    <p>Learn and network with Go developers from around the world</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/blog">
+                          Go blog
+                          
+                        </a>
+                    </div>
+                    <p>The Go project&#39;s official blog.</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        <a href="/help">
+                          Go project
+                          
+                        </a>
+                    </div>
+                    <p>Get help and stay informed from Go</p>
+                  </li>
+                  <li class="Header-submenuItem">
+                    <div>
+                        Get connected
+                    </div>
+                    <p></p>
+                      <div class="Header-socialIcons">
+                        
+                        <a class="Header-socialIcon" aria-label="Get connected with google-groups (Opens in new window)" href="https://groups.google.com/g/golang-nuts"><img src="/images/logos/social/google-groups.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with github (Opens in new window)" href="https://github.com/golang"><img src="/images/logos/social/github.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with bluesky (Opens in new window)" href="https://bsky.app/profile/golang.org"><img src="/images/logos/social/bluesky.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with mastodon (Opens in new window)" href="https://hachyderm.io/@golang"><img src="/images/logos/social/mastodon.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with twitter (Opens in new window)" href="https://twitter.com/golang"><img src="/images/logos/social/twitter.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with reddit (Opens in new window)" href="https://www.reddit.com/r/golang/"><img src="/images/logos/social/reddit.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with slack (Opens in new window)" href="https://invite.slack.golangbridge.org/"><img src="/images/logos/social/slack.svg" /></a>
+                        <a class="Header-socialIcon" aria-label="Get connected with stack-overflow (Opens in new window)" href="https://stackoverflow.com/tags/go"><img src="/images/logos/social/stack-overflow.svg" /></a>
+                      </div>
+                  </li>
+              </ul>
+          </li>
+        </ul>
+        <button class="Header-navOpen js-headerMenuButton Header-navOpen--white" aria-label="Open navigation.">
+        </button>
+      </div>
+    </nav>
+    
+  </div>
+</header>
+<aside class="NavigationDrawer js-header">
+  <nav class="NavigationDrawer-nav">
+    <div class="NavigationDrawer-header">
+      <a href="/">
+        <img class="NavigationDrawer-logo" src="/images/go-logo-blue.svg" alt="Go.">
+      </a>
+    </div>
+    <ul class="NavigationDrawer-list">
+        
+          <li class="NavigationDrawer-listItem js-mobile-subnav-trigger  NavigationDrawer-hasSubnav">
+            <a href="#"><span>Why Go</span> <i class="material-icons">navigate_next</i></a>
+
+            <div class="NavigationDrawer NavigationDrawer-submenuItem">
+              <nav class="NavigationDrawer-nav">
+                <div class="NavigationDrawer-header">
+                  <a href="#"><i class="material-icons">navigate_before</i>Why Go</a>
+                </div>
+                <ul class="NavigationDrawer-list">
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/solutions/case-studies">
+                          Case Studies
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/solutions/use-cases">
+                          Use Cases
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/security/">
+                          Security
+                          
+                        </a>
+                      
+                    </li>
+                </ul>
+              </div>
+            </div>
+          </li>
+
+        
+        
+          <li class="NavigationDrawer-listItem ">
+            <a href="/learn/">Learn</a>
+          </li>
+        
+        
+          <li class="NavigationDrawer-listItem js-mobile-subnav-trigger  NavigationDrawer-hasSubnav">
+            <a href="#"><span>Docs</span> <i class="material-icons">navigate_next</i></a>
+
+            <div class="NavigationDrawer NavigationDrawer-submenuItem">
+              <nav class="NavigationDrawer-nav">
+                <div class="NavigationDrawer-header">
+                  <a href="#"><i class="material-icons">navigate_before</i>Docs</a>
+                </div>
+                <ul class="NavigationDrawer-list">
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/ref/spec">
+                          Go Spec
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/doc">
+                          Go User Manual
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="https://pkg.go.dev/std">
+                          Standard library
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/doc/devel/release">
+                          Release Notes
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/doc/effective_go">
+                          Effective Go
+                          
+                        </a>
+                      
+                    </li>
+                </ul>
+              </div>
+            </div>
+          </li>
+
+        
+        
+          <li class="NavigationDrawer-listItem ">
+            <a href="https://pkg.go.dev">Packages</a>
+          </li>
+        
+        
+          <li class="NavigationDrawer-listItem js-mobile-subnav-trigger  NavigationDrawer-hasSubnav">
+            <a href="#"><span>Community</span> <i class="material-icons">navigate_next</i></a>
+
+            <div class="NavigationDrawer NavigationDrawer-submenuItem">
+              <nav class="NavigationDrawer-nav">
+                <div class="NavigationDrawer-header">
+                  <a href="#"><i class="material-icons">navigate_before</i>Community</a>
+                </div>
+                <ul class="NavigationDrawer-list">
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/talks/">
+                          Recorded Talks
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="https://www.meetup.com/pro/go">
+                          Meetups
+                           <i class="material-icons">open_in_new</i>
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/wiki/Conferences">
+                          Conferences
+                           <i class="material-icons">open_in_new</i>
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/blog">
+                          Go blog
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <a href="/help">
+                          Go project
+                          
+                        </a>
+                      
+                    </li>
+                    <li class="NavigationDrawer-listItem">
+                        <div>Get connected</div>
+                        <div class="Header-socialIcons">
+                          
+                            <a class="Header-socialIcon" href="https://groups.google.com/g/golang-nuts"><img src="/images/logos/social/google-groups.svg" /></a>
+                            <a class="Header-socialIcon" href="https://github.com/golang"><img src="/images/logos/social/github.svg" /></a>
+                            <a class="Header-socialIcon" href="https://bsky.app/profile/golang.org"><img src="/images/logos/social/bluesky.svg" /></a>
+                            <a class="Header-socialIcon" href="https://hachyderm.io/@golang"><img src="/images/logos/social/mastodon.svg" /></a>
+                            <a class="Header-socialIcon" href="https://twitter.com/golang"><img src="/images/logos/social/twitter.svg" /></a>
+                            <a class="Header-socialIcon" href="https://www.reddit.com/r/golang/"><img src="/images/logos/social/reddit.svg" /></a>
+                            <a class="Header-socialIcon" href="https://invite.slack.golangbridge.org/"><img src="/images/logos/social/slack.svg" /></a>
+                            <a class="Header-socialIcon" href="https://stackoverflow.com/tags/go"><img src="/images/logos/social/stack-overflow.svg" /></a>
+                        </div>
+                    </li>
+                </ul>
+              </div>
+            </div>
+          </li>
+
+        
+    </ul>
+  </nav>
+</aside>
+<div class="NavigationDrawer-scrim js-scrim" role="presentation"></div>
+<main class="SiteContent SiteContent--default" id="main-content">
+  
+<div id="blog"><div id="content">
+  <div id="content">
+
+    <div class="Article" data-slug="/blog/race-detector">
+    
+    <h1 class="small"><a href="/blog/">The Go Blog</a></h1>
+    
+
+    <h1>Introducing the Go Race Detector</h1>
+      
+      <p class="author">
+      Dmitry Vyukov and Andrew Gerrand<br>
+      26 June 2013
+      </p>
+      
+      <div class='markdown'>
+<h2 id="introduction">Introduction</h2>
+<p><a href="http://en.wikipedia.org/wiki/Race_condition" rel="noreferrer" target="_blank">Race conditions</a> are among the
+most insidious and elusive programming errors. They typically cause erratic and
+mysterious failures, often long after the code has been deployed to production.
+While Go&rsquo;s concurrency mechanisms make it easy to write clean concurrent code,
+they don&rsquo;t prevent race conditions. Care, diligence, and testing are required.
+And tools can help.</p>
+<p>We&rsquo;re happy to announce that Go 1.1 includes a
+<a href="/doc/articles/race_detector.html">race detector</a>,
+a new tool for finding race conditions in Go code.
+It is currently available for Linux, OS X, and Windows systems
+with 64-bit x86 processors.</p>
+<p>The race detector is based on the C/C++
+<a href="https://github.com/google/sanitizers" rel="noreferrer" target="_blank">ThreadSanitizer runtime library</a>,
+which has been used to detect many errors in Google&rsquo;s internal code base and in
+<a href="http://www.chromium.org/" rel="noreferrer" target="_blank">Chromium</a>.
+The technology was integrated with Go in September 2012; since then it has detected
+<a href="https://github.com/golang/go/issues?utf8=%E2%9C%93&amp;q=ThreadSanitizer" rel="noreferrer" target="_blank">42 races</a>
+in the standard library. It is now part of our continuous build process,
+where it continues to catch race conditions as they arise.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>The race detector is integrated with the go tool chain. When the
+<code>-race</code> command-line flag is set, the compiler instruments all memory accesses
+with code that records when and how the memory was accessed, while the runtime
+library watches for unsynchronized accesses to shared variables.
+When such &ldquo;racy&rdquo; behavior is detected, a warning is printed.
+(See <a href="https://github.com/google/sanitizers/wiki/ThreadSanitizerAlgorithm" rel="noreferrer" target="_blank">this article</a>
+for the details of the algorithm.)</p>
+<p>Because of its design, the race detector can detect race conditions only when
+they are actually triggered by running code, which means it&rsquo;s important to run
+race-enabled binaries under realistic workloads.
+However, race-enabled binaries can use ten times the CPU and memory, so it is
+impractical to enable the race detector all the time.
+One way out of this dilemma is to run some tests with the race detector
+enabled. Load tests and integration tests are good candidates, since they tend
+to exercise concurrent parts of the code.
+Another approach using production workloads is to deploy a single race-enabled
+instance within a pool of running servers.</p>
+<h2 id="using-the-race-detector">Using the race detector</h2>
+<p>The race detector is fully integrated with the Go tool chain.
+To build your code with the race detector enabled, just add the
+<code>-race</code> flag to the command line:</p>
+<pre><code>$ go test -race mypkg    // test the package
+$ go run -race mysrc.go  // compile and run the program
+$ go build -race mycmd   // build the command
+$ go install -race mypkg // install the package
+</code></pre>
+<p>To try out the race detector for yourself, copy this example program into <code>racy.go</code>:</p>
+<pre><code class="language-go">package main
+
+import &quot;fmt&quot;
+
+func main() {
+    done := make(chan bool)
+    m := make(map[string]string)
+    m[&quot;name&quot;] = &quot;world&quot;
+    go func() {
+        m[&quot;name&quot;] = &quot;data race&quot;
+        done &lt;- true
+    }()
+    fmt.Println(&quot;Hello,&quot;, m[&quot;name&quot;])
+    &lt;-done
+}
+</code></pre>
+<p>Then run it with the race detector enabled:</p>
+<pre><code>$ go run -race racy.go
+</code></pre>
+<h2 id="examples">Examples</h2>
+<p>Here are two examples of real issues caught by the race detector.</p>
+<h3 id="example-1-timerreset">Example 1: Timer.Reset</h3>
+<p>The first example is a simplified version of an actual bug found by the race
+detector. It uses a timer to print a message after a random duration between 0
+and 1 second. It does so repeatedly for five seconds.
+It uses <a href="/pkg/time/#AfterFunc"><code>time.AfterFunc</code></a> to create a
+<a href="/pkg/time/#Timer"><code>Timer</code></a> for the first message and then
+uses the <a href="/pkg/time/#Timer.Reset"><code>Reset</code></a> method to
+schedule the next message, re-using the <code>Timer</code> each time.</p>
+<div class="playground">
+<pre style="display: none"><span>
+package main
+
+import (
+    &#34;fmt&#34;
+    &#34;math/rand&#34;
+    &#34;time&#34;
+)
+
+</span>
+</pre>
+<pre contenteditable="true" spellcheck="false"><span class="number">10&nbsp;&nbsp;</span>func main() {
+<span class="number">11&nbsp;&nbsp;</span>    start := time.Now()
+<span class="number">12&nbsp;&nbsp;</span>    var t *time.Timer
+<span class="number">13&nbsp;&nbsp;</span>    t = time.AfterFunc(randomDuration(), func() {
+<span class="number">14&nbsp;&nbsp;</span>        fmt.Println(time.Now().Sub(start))
+<span class="number">15&nbsp;&nbsp;</span>        t.Reset(randomDuration())
+<span class="number">16&nbsp;&nbsp;</span>    })
+<span class="number">17&nbsp;&nbsp;</span>    time.Sleep(5 * time.Second)
+<span class="number">18&nbsp;&nbsp;</span>}
+<span class="number">19&nbsp;&nbsp;</span>
+<span class="number">20&nbsp;&nbsp;</span>func randomDuration() time.Duration {
+<span class="number">21&nbsp;&nbsp;</span>    return time.Duration(rand.Int63n(1e9))
+<span class="number">22&nbsp;&nbsp;</span>}
+<span class="number">23&nbsp;&nbsp;</span>
+</pre>
+</div>
+<p>This looks like reasonable code, but under certain circumstances it fails in a surprising way:</p>
+<pre><code>panic: runtime error: invalid memory address or nil pointer dereference
+[signal 0xb code=0x1 addr=0x8 pc=0x41e38a]
+
+goroutine 4 [running]:
+time.stopTimer(0x8, 0x12fe6b35d9472d96)
+    src/pkg/runtime/ztime_linux_amd64.c:35 +0x25
+time.(*Timer).Reset(0x0, 0x4e5904f, 0x1)
+    src/pkg/time/sleep.go:81 +0x42
+main.func·001()
+    race.go:14 +0xe3
+created by time.goFunc
+    src/pkg/time/sleep.go:122 +0x48
+</code></pre>
+<p>What&rsquo;s going on here? Running the program with the race detector enabled is more illuminating:</p>
+<pre><code>==================
+WARNING: DATA RACE
+Read by goroutine 5:
+  main.func·001()
+     race.go:16 +0x169
+
+Previous write by goroutine 1:
+  main.main()
+      race.go:14 +0x174
+
+Goroutine 5 (running) created at:
+  time.goFunc()
+      src/pkg/time/sleep.go:122 +0x56
+  timerproc()
+     src/pkg/runtime/ztime_linux_amd64.c:181 +0x189
+==================
+</code></pre>
+<p>The race detector shows the problem: an unsynchronized read and write of the
+variable <code>t</code> from different goroutines. If the initial timer duration is very
+small, the timer function may fire before the main goroutine has assigned a
+value to <code>t</code> and so the call to <code>t.Reset</code> is made with a nil <code>t</code>.</p>
+<p>To fix the race condition we change the code to read and write the variable
+<code>t</code> only from the main goroutine:</p>
+<div class="playground">
+<pre style="display: none"><span>
+package main
+
+import (
+    &#34;fmt&#34;
+    &#34;math/rand&#34;
+    &#34;time&#34;
+)
+
+</span>
+</pre>
+<pre contenteditable="true" spellcheck="false"><span class="number">10&nbsp;&nbsp;</span>func main() {
+<span class="number">11&nbsp;&nbsp;</span>    start := time.Now()
+<span class="number">12&nbsp;&nbsp;</span>    reset := make(chan bool)
+<span class="number">13&nbsp;&nbsp;</span>    var t *time.Timer
+<span class="number">14&nbsp;&nbsp;</span>    t = time.AfterFunc(randomDuration(), func() {
+<span class="number">15&nbsp;&nbsp;</span>        fmt.Println(time.Now().Sub(start))
+<span class="number">16&nbsp;&nbsp;</span>        reset &lt;- true
+<span class="number">17&nbsp;&nbsp;</span>    })
+<span class="number">18&nbsp;&nbsp;</span>    for time.Since(start) &lt; 5*time.Second {
+<span class="number">19&nbsp;&nbsp;</span>        &lt;-reset
+<span class="number">20&nbsp;&nbsp;</span>        t.Reset(randomDuration())
+<span class="number">21&nbsp;&nbsp;</span>    }
+<span class="number">22&nbsp;&nbsp;</span>}
+<span class="number">23&nbsp;&nbsp;</span>
+</pre>
+<pre style="display: none"><span>
+func randomDuration() time.Duration {
+    return time.Duration(rand.Int63n(1e9))
+}
+</span>
+</pre>
+</div>
+<p>Here the main goroutine is wholly responsible for setting and resetting the
+<code>Timer</code> <code>t</code> and a new reset channel communicates the need to reset the timer in
+a thread-safe way.</p>
+<p>A simpler but less efficient approach is to
+<a href="/play/p/kuWTrY0pS4">avoid reusing timers</a>.</p>
+<h3 id="example-2-ioutildiscard">Example 2: ioutil.Discard</h3>
+<p>The second example is more subtle.</p>
+<p>The <code>ioutil</code> package&rsquo;s
+<a href="/pkg/io/ioutil/#Discard"><code>Discard</code></a> object implements
+<a href="/pkg/io/#Writer"><code>io.Writer</code></a>,
+but discards all the data written to it.
+Think of it like <code>/dev/null</code>: a place to send data that you need to read but
+don&rsquo;t want to store.
+It is commonly used with <a href="/pkg/io/#Copy"><code>io.Copy</code></a>
+to drain a reader, like this:</p>
+<pre><code class="language-go">io.Copy(ioutil.Discard, reader)
+</code></pre>
+<p>Back in July 2011 the Go team noticed that using <code>Discard</code> in this way was
+inefficient: the <code>Copy</code> function allocates an internal 32 kB buffer each time it
+is called, but when used with <code>Discard</code> the buffer is unnecessary since we&rsquo;re
+just throwing the read data away.
+We thought that this idiomatic use of <code>Copy</code> and <code>Discard</code> should not be so costly.</p>
+<p>The fix was simple.
+If the given <code>Writer</code> implements a <code>ReadFrom</code> method, a <code>Copy</code> call like this:</p>
+<pre><code class="language-go">io.Copy(writer, reader)
+</code></pre>
+<p>is delegated to this potentially more efficient call:</p>
+<pre><code class="language-go">writer.ReadFrom(reader)
+</code></pre>
+<p>We
+<a href="/cl/4817041">added a ReadFrom method</a>
+to Discard&rsquo;s underlying type, which has an internal buffer that is shared
+between all its users.
+We knew this was theoretically a race condition, but since all writes to the
+buffer should be thrown away we didn&rsquo;t think it was important.</p>
+<p>When the race detector was implemented it immediately
+<a href="/issue/3970">flagged this code</a> as racy.
+Again, we considered that the code might be problematic, but decided that the
+race condition wasn&rsquo;t &ldquo;real&rdquo;.
+To avoid the &ldquo;false positive&rdquo; in our build we implemented
+<a href="/cl/6624059">a non-racy version</a>
+that is enabled only when the race detector is running.</p>
+<p>But a few months later <a href="https://bradfitz.com/" rel="noreferrer" target="_blank">Brad</a> encountered a
+<a href="/issue/4589">frustrating and strange bug</a>.
+After a few days of debugging, he narrowed it down to a real race condition
+caused by <code>ioutil.Discard</code>.</p>
+<p>Here is the known-racy code in <code>io/ioutil</code>, where <code>Discard</code> is a
+<code>devNull</code> that shares a single buffer between all of its users.</p>
+<div class="code">
+<pre>var blackHole [4096]byte <span class="comment">// shared buffer</span>
+
+func (devNull) ReadFrom(r io.Reader) (n int64, err error) {
+    readSize := 0
+    for {
+        readSize, err = r.Read(blackHole[:])
+        n += int64(readSize)
+        if err != nil {
+            if err == io.EOF {
+                return n, nil
+            }
+            return
+        }
+    }
+}
+</pre>
+</div>
+<p>Brad&rsquo;s program includes a <code>trackDigestReader</code> type, which wraps an <code>io.Reader</code>
+and records the hash digest of what it reads.</p>
+<pre><code class="language-go">type trackDigestReader struct {
+    r io.Reader
+    h hash.Hash
+}
+
+func (t trackDigestReader) Read(p []byte) (n int, err error) {
+    n, err = t.r.Read(p)
+    t.h.Write(p[:n])
+    return
+}
+</code></pre>
+<p>For example, it could be used to compute the SHA-1 hash of a file while reading it:</p>
+<pre><code class="language-go">tdr := trackDigestReader{r: file, h: sha1.New()}
+io.Copy(writer, tdr)
+fmt.Printf(&quot;File hash: %x&quot;, tdr.h.Sum(nil))
+</code></pre>
+<p>In some cases there would be nowhere to write the data—but still a need to hash
+the file—and so <code>Discard</code> would be used:</p>
+<pre><code class="language-go">io.Copy(ioutil.Discard, tdr)
+</code></pre>
+<p>But in this case the <code>blackHole</code> buffer isn&rsquo;t just a black hole; it is a
+legitimate place to store the data between reading it from the source
+<code>io.Reader</code> and writing it to the <code>hash.Hash</code>.
+With multiple goroutines hashing files simultaneously, each sharing the same
+<code>blackHole</code> buffer, the race condition manifested itself by corrupting the data
+between reading and hashing.
+No errors or panics occurred, but the hashes were wrong. Nasty!</p>
+<pre><code class="language-go">func (t trackDigestReader) Read(p []byte) (n int, err error) {
+    // the buffer p is blackHole
+    n, err = t.r.Read(p)
+    // p may be corrupted by another goroutine here,
+    // between the Read above and the Write below
+    t.h.Write(p[:n])
+    return
+}
+</code></pre>
+<p>The bug was finally
+<a href="/cl/7011047">fixed</a>
+by giving a unique buffer to each use of <code>ioutil.Discard</code>, eliminating the race
+condition on the shared buffer.</p>
+<h2 id="conclusions">Conclusions</h2>
+<p>The race detector is a powerful tool for checking the correctness of concurrent
+programs. It will not issue false positives, so take its warnings seriously.
+But it is only as good as your tests; you must make sure they thoroughly
+exercise the concurrent properties of your code so that the race detector can
+do its job.</p>
+<p>What are you waiting for? Run <code>&quot;go test -race&quot;</code> on your code today!</p>
+</div>
+
+    </div>
+
+    
+    <div class="Article prevnext">
+    
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+        <p>
+        
+          
+            <b>Next article: </b><a href="/blog/first-go-program">The first Go program</a><br>
+          
+        
+        
+          
+            <b>Previous article: </b><a href="/blog/io2013-talks-cloud">Go and the Google Cloud Platform</a><br>
+          
+        
+        <b><a href="/blog/all">Blog Index</a></b>
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+    </div>
+    
+
+  </div>
+</div>
+
+<script src="/js/play.js"></script>
+
+</main>
+<footer class="Site-footer">
+  <div class="Footer">
+    <div class="Container">
+      <div class="Footer-links">
+          <div class="Footer-linkColumn">
+            <a href="/solutions/" class="Footer-link Footer-link--primary" aria-describedby="footer-description">
+              Why Go
+            </a>
+              <a href="/solutions/use-cases" class="Footer-link" aria-describedby="footer-description">
+                Use Cases
+              </a>
+              <a href="/solutions/case-studies" class="Footer-link" aria-describedby="footer-description">
+                Case Studies
+              </a>
+          </div>
+          <div class="Footer-linkColumn">
+            <a href="/learn/" class="Footer-link Footer-link--primary" aria-describedby="footer-description">
+              Get Started
+            </a>
+              <a href="/play" class="Footer-link" aria-describedby="footer-description">
+                Playground
+              </a>
+              <a href="/tour/" class="Footer-link" aria-describedby="footer-description">
+                Tour
+              </a>
+              <a href="https://stackoverflow.com/questions/tagged/go?tab=Newest" class="Footer-link" aria-describedby="footer-description">
+                Stack Overflow
+              </a>
+              <a href="/help/" class="Footer-link" aria-describedby="footer-description">
+                Help
+              </a>
+          </div>
+          <div class="Footer-linkColumn">
+            <a href="https://pkg.go.dev" class="Footer-link Footer-link--primary" aria-describedby="footer-description">
+              Packages
+            </a>
+              <a href="/pkg/" class="Footer-link" aria-describedby="footer-description">
+                Standard Library
+              </a>
+              <a href="https://pkg.go.dev/about" class="Footer-link" aria-describedby="footer-description">
+                About Go Packages
+              </a>
+              <a href="https://pkg.go.dev/api" class="Footer-link" aria-describedby="footer-description">
+                pkg.go.dev API
+              </a>
+          </div>
+          <div class="Footer-linkColumn">
+            <a href="/project" class="Footer-link Footer-link--primary" aria-describedby="footer-description">
+              About
+            </a>
+              <a href="/dl/" class="Footer-link" aria-describedby="footer-description">
+                Download
+              </a>
+              <a href="/blog/" class="Footer-link" aria-describedby="footer-description">
+                Blog
+              </a>
+              <a href="https://github.com/golang/go/issues" class="Footer-link" aria-describedby="footer-description">
+                Issue Tracker
+              </a>
+              <a href="/doc/devel/release" class="Footer-link" aria-describedby="footer-description">
+                Release Notes
+              </a>
+              <a href="/brand" class="Footer-link" aria-describedby="footer-description">
+                Brand Guidelines
+              </a>
+              <a href="/conduct" class="Footer-link" aria-describedby="footer-description">
+                Code of Conduct
+              </a>
+          </div>
+          <div class="Footer-linkColumn">
+            <a href="/wiki/#the-go-community" class="Footer-link Footer-link--primary" aria-describedby="footer-description">
+              Connect
+            </a>
+              <a href="https://bsky.app/profile/golang.org" class="Footer-link" aria-describedby="footer-description">
+                Bluesky
+              </a>
+              <a href="https://hachyderm.io/@golang" class="Footer-link" aria-describedby="footer-description">
+                Mastodon
+              </a>
+              <a href="https://www.twitter.com/golang" class="Footer-link" aria-describedby="footer-description">
+                Twitter
+              </a>
+              <a href="https://github.com/golang" class="Footer-link" aria-describedby="footer-description">
+                GitHub
+              </a>
+              <a href="https://invite.slack.golangbridge.org/" class="Footer-link" aria-describedby="footer-description">
+                Slack
+              </a>
+              <a href="https://reddit.com/r/golang" class="Footer-link" aria-describedby="footer-description">
+                r/golang
+              </a>
+              <a href="https://www.meetup.com/pro/go" class="Footer-link" aria-describedby="footer-description">
+                Meetup
+              </a>
+              <a href="https://golangweekly.com/" class="Footer-link" aria-describedby="footer-description">
+                Golang Weekly
+              </a>
+          </div>
+      </div>
+    </div>
+  </div>
+  <div class="screen-reader-only" id="footer-description" hidden>
+          Opens in new window.
+  </div>
+  <div class="Footer">
+    <div class="Container Container--fullBleed">
+      <div class="Footer-bottom">
+        <img class="Footer-gopher" src="/images/gophers/pilot-bust.svg" alt="The Go Gopher">
+        <ul class="Footer-listRow">
+          <li class="Footer-listItem">
+            <a href="/copyright" aria-describedby="footer-description">Copyright</a>
+          </li>
+          <li class="Footer-listItem">
+            <a href="/tos" aria-describedby="footer-description">Terms of Service</a>
+          </li>
+          <li class="Footer-listItem">
+            <a href="http://www.google.com/intl/en/policies/privacy/" aria-describedby="footer-description"
+              target="_blank"
+              rel="noopener">
+              Privacy Policy
+            </a>
+            </li>
+          <li class="Footer-listItem">
+            <a
+              href="/s/website-issue" aria-describedby="footer-description"
+              target="_blank"
+              rel="noopener"
+              >
+              Report an Issue
+            </a>
+          </li>
+          <li class="Footer-listItem go-Footer-listItem">
+            <button class="go-Button go-Button--text go-Footer-toggleTheme js-toggleTheme" aria-label="Toggle theme">
+              <img
+                data-value="auto"
+                class="go-Icon go-Icon--inverted"
+                height="24"
+                width="24"
+                src="/images/icons/brightness_6_gm_grey_24dp.svg"
+                alt="System theme">
+              <img
+                data-value="dark"
+                class="go-Icon go-Icon--inverted"
+                height="24"
+                width="24"
+                src="/images/icons/brightness_2_gm_grey_24dp.svg"
+                alt="Dark theme">
+              <img
+                data-value="light"
+                class="go-Icon go-Icon--inverted"
+                height="24"
+                width="24"
+                src="/images/icons/light_mode_gm_grey_24dp.svg"
+                alt="Light theme">
+            </button>
+          </li>
+        </ul>
+        <a class="Footer-googleLogo" target="_blank" href="https://google.com" rel="noopener">
+          <img class="Footer-googleLogoImg" src="/images/google-white.png" alt="Google logo">
+        </a>
+      </div>
+    </div>
+  </div>
+  <script src="/js/jquery.js"></script>
+  <script src="/js/carousels.js"></script>
+  <script src="/js/searchBox.js"></script>
+  <script src="/js/misc.js"></script>
+  <script src="/js/hats.js"></script>
+  <script src="/js/playground.js"></script>
+  <script src="/js/godocs.js"></script>
+  <script async src="/js/copypaste.js"></script>
+</footer>
+<section class="Cookie-notice js-cookieNotice">
+  <div>go.dev uses cookies from Google to deliver and enhance the quality of its services and to
+  analyze traffic. <a target=_blank href="https://policies.google.com/technologies/cookies">Learn more.</a></div>
+  <div><button class="go-Button">Okay</button></div>
+</section>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

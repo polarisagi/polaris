@@ -1,0 +1,267 @@
+package protocol
+
+import (
+	"context"
+	"time"
+
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// detachedContext 实现了 context.Context，只继承 Values，不继承 Deadline/Cancel
+type detachedContext struct {
+	parent context.Context
+}
+
+func (d detachedContext) Deadline() (deadline time.Time, ok bool) {
+	return
+}
+
+func (d detachedContext) Done() <-chan struct{} {
+	return nil
+}
+
+func (d detachedContext) Err() error {
+	return nil
+}
+
+func (d detachedContext) Value(key any) any {
+	return d.parent.Value(key)
+}
+
+// Detach 创建一个脱离原生命周期（取消和超时）但继承上下文中所有值的 Context。
+// 常用于开启后台 Goroutine 时，保留原请求的 TraceID 等身份信息。
+func Detach(ctx context.Context) context.Context {
+	return detachedContext{parent: ctx}
+}
+
+// CtxCapabilityToken 已删除（2026-08-06，ADR-0088 决策二）：
+// 该键自定义以来从未被任何代码写入过，唯一读取点是 agent_execute_dag.go 里
+// 一段结构上不可达的 MaxCallsPerTask 配额校验。留着一个"看起来是能力令牌
+// 传递通道、实际没有任何东西经过"的键，只会让人误判系统里已有该防护。
+// 令牌使用次数的真实兑现点是 security/token.TokenManager.Consume。
+
+// CtxDryRun 用于在 context 中指示当前是否为 dry run 模式
+type CtxDryRun struct{}
+
+// CtxIdempotencyKey 用于在 context 中传递幂等键
+type CtxIdempotencyKey struct{}
+
+// CtxTaskIDKey 用于在 context 中传递任务 ID (防止 TOCTOU)
+type CtxTaskIDKey struct{}
+
+// CtxHooksSuppressedKey 标记本 context 下的动作不触发 hooks.json 处理器：agent 类型 hook 的
+// 评估子 Agent 自身的工具调用若再触发 hook，会无限递归（ADR-0103 决策六）。值为 true。
+type CtxHooksSuppressedKey struct{}
+
+// CtxSessionIDKey 用于在 context 中传递 Session ID
+type CtxSessionIDKey struct{}
+
+// CtxAgentIDKey 用于在 context 中传递 Agent ID (防止 TOCTOU)
+type CtxAgentIDKey struct{}
+
+// CtxVersionKey 用于在 context 中传递乐观锁版本 (防止 TOCTOU)
+type CtxVersionKey struct{}
+
+// CtxTaintLevelKey 用于在 context 中向进程内工具传递当前调用的污点等级
+// （UP-03：core_memory_edit 等需要按写入时污点落库的工具消费；只升不降由消费方保证）。
+type CtxTaintLevelKey struct{}
+
+// CtxAnomalyFilterKey 用于在 context 中传递 AnomalyDistanceFilter 实例 (按会话隔离)
+type CtxAnomalyFilterKey struct{}
+
+// CtxCapabilityTokenKey 用于在 context 中传递能力令牌 *token.Token (A-7/inv_M7_01)
+type CtxCapabilityTokenKey struct{}
+
+// PermissionGrant 本次工具调用的授权凭据（ADR-0121 决策二）：执行层的路径边界、宿主/沙箱
+// 与工具内 HITL 是否让位，都只由它派生，不得另设更窄的授权。
+type PermissionGrant int
+
+const (
+	GrantNone     PermissionGrant = iota // 未经 policy.Decide 的执行路径（fail-closed 兜底）
+	GrantAuto                            // 自动放行（读取类、workspace_write、safe_command…）
+	GrantExplicit                        // 完全访问、已记住的授权、用户在审批卡上允许
+)
+
+// CtxPermissionGrantKey 授权凭据在 ctx 中的键。
+type CtxPermissionGrantKey struct{}
+
+// WithPermissionGrant 写入授权凭据；GrantNone 也写入，用于覆盖外层 ctx 继承来的凭据。
+func WithPermissionGrant(ctx context.Context, g PermissionGrant) context.Context {
+	return context.WithValue(ctx, CtxPermissionGrantKey{}, g)
+}
+
+// PermissionGrantFrom 读取授权凭据；未写入为 GrantNone。
+func PermissionGrantFrom(ctx context.Context) PermissionGrant {
+	if ctx == nil {
+		return GrantNone
+	}
+	g, _ := ctx.Value(CtxPermissionGrantKey{}).(PermissionGrant)
+	return g
+}
+
+// WithPreApproved 标记本次调用已获显式授权（= GrantExplicit）。
+func WithPreApproved(ctx context.Context) context.Context {
+	return WithPermissionGrant(ctx, GrantExplicit)
+}
+
+// IsPreApproved 报告本次调用是否已获显式授权：工具内命令风险 HITL 据此让位，
+// 灾难性命令的硬拒绝不受影响。
+func IsPreApproved(ctx context.Context) bool {
+	return PermissionGrantFrom(ctx) == GrantExplicit
+}
+
+// CtxPermissionModeKey 本次调用实际生效的权限模式（已按 Policy 上限压制），hooks 据此取 permission_mode。
+type CtxPermissionModeKey struct{}
+
+// WithPermissionMode 写入实际权限模式；mode 为空时原样返回。
+func WithPermissionMode(ctx context.Context, mode types.PermissionMode) context.Context {
+	if mode == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxPermissionModeKey{}, mode)
+}
+
+// PermissionModeFrom 读取实际权限模式；未写入返回空串（调用方按 default 处理）。
+func PermissionModeFrom(ctx context.Context) types.PermissionMode {
+	if ctx == nil {
+		return ""
+	}
+	m, _ := ctx.Value(CtxPermissionModeKey{}).(types.PermissionMode)
+	return m
+}
+
+// CtxBackgroundWorkKey 标记当前调用链属于可降级的后台工作。InferenceRouter 据此以
+// priority=1 申请 LLM 额度（受水位线约束），且不刷新"用户活跃"时间（否则后台自己的
+// 推理会把空闲窗口顶掉）。值为 backgroundMode，决定被水位线拒绝时的处置。
+type CtxBackgroundWorkKey struct{}
+
+type backgroundMode int
+
+const (
+	backgroundSuspend backgroundMode = iota + 1 // 挂起重试至 ctx 到期
+	backgroundDefer                             // 立即返回 ErrBackgroundDeferred
+)
+
+// WithBackgroundWork 标记后台工作：被水位线拒绝时挂起，直到压力解除或 ctx 到期
+// （空闲自进化、headless 自动化）。
+func WithBackgroundWork(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CtxBackgroundWorkKey{}, backgroundSuspend)
+}
+
+// WithDeferrableBackgroundWork 标记可推迟的后台工作：被水位线拒绝时不挂起，立即返回
+// ErrBackgroundDeferred，由调用方择机重试。用于串行消费队列（outbox）——挂起一条会
+// 阻塞其后与用户相关的记录（Agent 中断、消息持久化重试）。
+func WithDeferrableBackgroundWork(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CtxBackgroundWorkKey{}, backgroundDefer)
+}
+
+func backgroundModeOf(ctx context.Context) backgroundMode {
+	if ctx == nil {
+		return 0
+	}
+	m, _ := ctx.Value(CtxBackgroundWorkKey{}).(backgroundMode)
+	return m
+}
+
+// IsBackgroundWork 未标记即视为用户可见请求。
+func IsBackgroundWork(ctx context.Context) bool { return backgroundModeOf(ctx) != 0 }
+
+// IsDeferrableBackgroundWork 是否为可推迟的后台工作。
+func IsDeferrableBackgroundWork(ctx context.Context) bool {
+	return backgroundModeOf(ctx) == backgroundDefer
+}
+
+// CtxConfinedRootKey 本次调用唯一可访问的文件根（AgentProfileSpec.FileRoot）。与项目目录不同，
+// 它替换而不是追加进程级白名单；由 agent 在执行 effect 前注入。
+type CtxConfinedRootKey struct{}
+
+// WithConfinedRoot 注入受限文件根；root 为空时原样返回。
+func WithConfinedRoot(ctx context.Context, root string) context.Context {
+	if root == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxConfinedRootKey{}, root)
+}
+
+// ConfinedRootFrom 读取受限文件根；ok=false 表示未受限。
+func ConfinedRootFrom(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	root, ok := ctx.Value(CtxConfinedRootKey{}).(string)
+	return root, ok && root != ""
+}
+
+// CtxProjectRootKey 会话所属项目的工作目录（规范路径，ADR-0097 决策五）。
+// 由 agent 在执行 effect 前注入（仅当项目绑定了目录且目录的规范路径未变），
+// 内置文件/命令工具据此把该目录追加为本次调用的可访问根——会话级收窄，
+// 不改动进程级 sandbox.allowed_paths。
+type CtxProjectRootKey struct{}
+
+// WithProjectRoot 注入项目工作目录；root 为空时原样返回。
+func WithProjectRoot(ctx context.Context, root string) context.Context {
+	if root == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxProjectRootKey{}, root)
+}
+
+// ProjectRootFrom 读取项目工作目录；未注入返回空串。
+func ProjectRootFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	root, _ := ctx.Value(CtxProjectRootKey{}).(string)
+	return root
+}
+
+// CtxProjectIDKey 会话所属项目 ID（ADR-0097 决策三修订）。由 agent 在执行 effect 前
+// 注入；EpisodicMem.Append 在事件未显式打标时以此兜底，memory_search 工具据此限定
+// 情景记忆检索范围。未注入视为默认项目（fail-closed：看不到带项目标记的记忆）。
+type CtxProjectIDKey struct{}
+
+// WithProjectID 注入项目 ID；id 为空时原样返回。
+func WithProjectID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxProjectIDKey{}, id)
+}
+
+// ProjectIDFrom 读取项目 ID；未注入返回空串。
+func ProjectIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(CtxProjectIDKey{}).(string)
+	return id
+}
+
+// TaskIDFrom 从 context 中读取任务/会话 ID（由 CtxTaskIDKey 注入）。
+func TaskIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(CtxTaskIDKey{}).(string)
+	return id
+}
+
+// CtxTurnIDKey 用于在 context 中传递回合 ID (TurnID)。
+type CtxTurnIDKey struct{}
+
+// WithTurnID 注入回合 ID；id 为空时原样返回。
+func WithTurnID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxTurnIDKey{}, id)
+}
+
+// TurnIDFrom 读取回合 ID；未注入返回空串。
+func TurnIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(CtxTurnIDKey{}).(string)
+	return id
+}

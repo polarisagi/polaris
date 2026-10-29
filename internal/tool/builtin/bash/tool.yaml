@@ -1,0 +1,13 @@
+name: bash
+description: "Run a shell command in the sandbox, restricted to the allowed working directories. background=true runs it as a job (see job_status/job_output); session_id keeps a persistent shell across calls."
+version: "1.0.0"
+capability: write-local
+risk_level: high
+sandbox: container
+side_effects:
+  - file-write
+  - process-spawn
+tags:
+  - shell
+  - exec
+  - cli

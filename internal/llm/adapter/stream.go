@@ -1,0 +1,402 @@
+package adapter
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"maps"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/polarisagi/polaris/internal/config"
+	llmparent "github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// toolCallState 跨 chunk 聚合单个 tool_call 的参数：index → 状态。
+// 2026-07-26 由 SendStreamRequest 局部类型上提为包级类型（gocyclo 治理，
+// 供 emitCollectedToolCalls 辅助方法的签名引用，行为不变）。
+type toolCallState struct {
+	id        string
+	name      string
+	arguments strings.Builder
+}
+
+// OpenAIStreamDelta 流式响应中的 delta 字段（支持文本和 tool_call 两类）。
+type OpenAIStreamDelta struct {
+	Content          string                `json:"content"`
+	ReasoningContent string                `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIToolCallDelta `json:"tool_calls,omitempty"`
+}
+
+type openAIFunctionDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+type openAIToolCallDelta struct {
+	Index    int                 `json:"index"`
+	ID       string              `json:"id,omitempty"`
+	Type     string              `json:"type,omitempty"`
+	Function openAIFunctionDelta `json:"function"`
+}
+
+// OpenAIStreamChunk 表示流式响应的每个增量数据块。
+type OpenAIStreamChunk struct {
+	ID      string `json:"id"`
+	Choices []struct {
+		Index        int               `json:"index"`
+		Delta        OpenAIStreamDelta `json:"delta"`
+		FinishReason string            `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *OpenAIUsage `json:"usage,omitempty"`
+}
+
+// flushPendingToolCalls 流结束（[DONE]/EOF）时补发已聚合但未发出的 tool_call。
+//
+// 此前只有 finish_reason == "tool_calls" 才发出：Provider 以其它 finish_reason
+// 收尾（或最后一块不带 finish_reason）时，已收齐的工具调用被静默丢弃，上游只看到
+// "有思考、无正文、无工具调用"的空响应（2026-09-25 实测 DeepSeek S_PLAN
+// content_bytes=0 reasoning_bytes=657）。
+func flushPendingToolCalls(ctx context.Context, ch chan<- types.StreamEvent, toolBuilders map[int]*toolCallState, finishReason string) {
+	if len(toolBuilders) == 0 {
+		return
+	}
+	slog.Warn("llm stream: flushing tool_calls not terminated by finish_reason=tool_calls",
+		"count", len(toolBuilders), "finish_reason", finishReason)
+	emitCollectedToolCalls(ctx, ch, toolBuilders)
+	clear(toolBuilders)
+}
+
+// emitCollectedToolCalls 在 finish_reason == "tool_calls" 到达时，把跨 chunk 聚合的所有
+// tool_call 参数拼装/修复后逐个 emit 出去（从 SendStreamRequest 拆出，nestif 治理，行为不变）。
+// 返回 ctxDone=true 时调用方应立即从 SendStreamRequest 的 goroutine return。
+func emitCollectedToolCalls(ctx context.Context, ch chan<- types.StreamEvent, toolBuilders map[int]*toolCallState) (ctxDone bool) {
+	// 按实际 index 排序遍历：此前 `for idx := range len(toolBuilders)` 只取 0..n-1，
+	// Provider 给出的 index 不从 0 开始或不连续时（DeepSeek 思考模式实测间歇出现），
+	// 已收齐的工具调用被静默跳过，上游只剩思考链与空正文。
+	for _, idx := range slices.Sorted(maps.Keys(toolBuilders)) {
+		s := toolBuilders[idx]
+		argsStr := s.arguments.String()
+		if argsStr == "" {
+			argsStr = "{}"
+		} else if !json.Valid([]byte(argsStr)) {
+			// 流被截断（如 finish_reason=length 提前收敛）导致 tool_call
+			// 参数 JSON 不完整：json.RawMessage 校验会使下方 json.Marshal
+			// 静默失败（payload=nil），整个 StreamToolCall 事件的内容凭空丢失，
+			// 上游拿到的是空字符串而非报错。用 JSONRepair 栈式修复尽力抢救
+			// 已收到的参数片段，而不是任由这条工具调用整体消失。
+			if repaired, repairErr := llmparent.JSONRepair([]byte(argsStr)); repairErr == nil && json.Valid(repaired.Repaired) {
+				argsStr = string(repaired.Repaired)
+			} else {
+				argsStr = "{}"
+			}
+		}
+		payload, err := json.Marshal(map[string]any{
+			"id":    s.id,
+			"name":  s.name,
+			"input": json.RawMessage(argsStr),
+		})
+		if err != nil {
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
+			case <-ctx.Done():
+				return true
+			}
+			continue
+		}
+		select {
+		case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+		case <-ctx.Done():
+			return true
+		}
+	}
+	return false
+}
+
+// SendStreamRequest 发送一个流式的 HTTP 请求并返回解析事件的 channel。
+// estimatedInputTokens 由调用方通过 MultimodalTokenizer.EstimateRequest 预估；
+// 当 ctx 被取消时，StreamCancelled 事件用该值作为 InputTokens 补偿计费。
+func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel context.CancelFunc, apiKey []byte, req *OpenAIRequest, estimatedInputTokens int) (<-chan types.StreamEvent, error) { //nolint:gocyclo
+	req.Stream = true
+	// 要求 API 在最后一个 chunk 附带完整 usage，供精确计费
+	req.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
+
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to marshal request", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to create request", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	cleanup := setAuthHeader(httpReq, apiKey)
+	defer cleanup()
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	httpResp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "http request failed", err)
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		if cancel != nil {
+			cancel()
+		}
+		body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
+		httpResp.Body.Close()
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("api error (status %d): %s", httpResp.StatusCode, strings.TrimSpace(string(body))))
+	}
+
+	ch := make(chan types.StreamEvent, 64)
+
+	// [SafeGo] SSE 解码：畸形/意外响应触发 panic 此前会直接崩进程，现 recover 后
+	// 记录日志；defer close(ch)/httpResp.Body.Close() 在 panic 展开时仍会执行。
+	concurrent.SafeGo(ctx, "llm.adapter.openai_compatible_stream_decode", func(ctx context.Context) {
+		defer httpResp.Body.Close()
+		defer close(ch)
+		if cancel != nil {
+			defer cancel()
+		}
+
+		// L-10：单行上限走 M1Router.MaxStreamBufferKB。该阀值早已存在（默认 256 KB，
+		// 由 observability/auto_config_tiers.go 按 Tier 放大到 512/1024 KB），
+		// 且 internal/llm/router_stream.go 就是这么用的——此处却硬编码 1 MiB，
+		// 于是运营侧调阀值与 Tier 自适应对真正解码 SSE 的这一段完全不起作用。
+		maxBufBytes := config.CurrentThresholds().M1Router.MaxStreamBufferKB * 1024
+		scanner := bufio.NewScanner(httpResp.Body)
+		buf := make([]byte, 4096)
+		scanner.Buffer(buf, maxBufBytes)
+
+		// 原始流转储（POLARIS_LLM_RAW_DUMP，默认关闭，nil 安全）：只写请求摘要与 SSE 行，不写鉴权信息。
+		dump := newRawDump(rawDumpDir(), req)
+		defer dump.Close()
+
+		// 跨 chunk 聚合 tool_call 参数：index → 状态
+		toolBuilders := map[int]*toolCallState{}
+		accumulatedOutputTokens := 0
+		// emittedAny 是否向 ch 发过任何有信号事件（文本/思考/工具调用/usage）。
+		// [DONE] 在循环内直接 return，故 EOF 处为 false 仅意味着整段 body 无合法帧。
+		emittedAny := false
+		lastFinishReason := ""
+		// 流级诊断（HE-1）：正文与工具调用双空时，上游只看到"模型没输出"，无从区分
+		// 截断（length）、内容过滤、只输出了思考链等根因。
+		var textBytes, reasoningBytes, completionTokens int
+		sawToolCall := false
+		toolCallsEmitted := 0
+		// usageLatest/usageDirty：usage 可能出现在任意块（OpenAI 末尾空 choices 块；DeepSeek 在带
+		// finish_reason 的块内，delta.content=""）。随事件发出即清 dirty；流结束时仍 dirty 则补发一次。
+		var usageLatest types.Usage
+		usageDirty := false
+		// 流结束 Debug 摘要（B1）：无论正常结束、取消还是出错都留一条，定位"空输出"时
+		// 可直接对照 text/reasoning/tool_calls/finish_reason/usage。
+		defer func() {
+			slog.Debug("llm stream: summary",
+				"text_bytes", textBytes, "reasoning_bytes", reasoningBytes,
+				"tool_calls", toolCallsEmitted, "finish_reason", lastFinishReason,
+				"input_tokens", usageLatest.InputTokens, "output_tokens", usageLatest.OutputTokens,
+				"cache_hit_tokens", usageLatest.CacheHitTokens)
+		}()
+		flushUsage := func() (ctxDone bool) {
+			if !usageDirty {
+				return false
+			}
+			usageDirty = false
+			emittedAny = true
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: usageLatest, FinishReason: lastFinishReason}:
+				return false
+			case <-ctx.Done():
+				return true
+			}
+		}
+		logIfEmpty := func() {
+			if textBytes == 0 && !sawToolCall {
+				slog.Warn("llm stream: ended without content or tool calls",
+					"finish_reason", lastFinishReason, "reasoning_bytes", reasoningBytes,
+					"completion_tokens", completionTokens)
+			}
+		}
+
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				// 用户主动取消：发出补偿计费事件后退出。
+				// InputTokens 用预估值（完整请求已发给 API），OutputTokens 为已收到的实际数量。
+				select {
+				case ch <- types.StreamEvent{
+					Type: types.StreamCancelled,
+					Usage: types.Usage{
+						InputTokens:  estimatedInputTokens,
+						OutputTokens: accumulatedOutputTokens,
+					},
+				}:
+				case <-ctx.Done():
+					return
+				}
+				return
+			default:
+			}
+
+			line := scanner.Text()
+			if len(strings.TrimSpace(line)) == 0 {
+				continue
+			}
+			dump.Line(line)
+
+			data, ok := strings.CutPrefix(line, "data: ")
+			if !ok {
+				continue
+			}
+			if data == "[DONE]" {
+				sawToolCall = sawToolCall || len(toolBuilders) > 0
+				toolCallsEmitted += len(toolBuilders)
+				flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
+				flushUsage()
+				logIfEmpty()
+				return
+			}
+
+			var chunk OpenAIStreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("parse chunk: %v", err)}:
+				case <-ctx.Done():
+					return
+				}
+				return
+			}
+
+			var currentUsage types.Usage
+			if chunk.Usage != nil {
+				currentUsage = chunk.Usage.toUsage()
+				usageLatest, usageDirty = currentUsage, true
+				// API 返回的精确值优先；更新累计输出 token，供后续 cancel 补偿用
+				accumulatedOutputTokens = chunk.Usage.CompletionTokens
+				completionTokens = chunk.Usage.CompletionTokens
+			}
+
+			if len(chunk.Choices) == 0 {
+				if chunk.Usage != nil {
+					select {
+					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage, FinishReason: lastFinishReason}:
+						emittedAny = true
+						usageDirty = false
+					case <-ctx.Done():
+						return
+					}
+				}
+				continue
+			}
+
+			choice := chunk.Choices[0]
+			delta := choice.Delta
+			if choice.FinishReason != "" {
+				lastFinishReason = choice.FinishReason
+			}
+
+			// 思考链 delta（DeepSeek thinking mode）
+			if delta.ReasoningContent != "" {
+				reasoningBytes += len(delta.ReasoningContent)
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamThinking, Content: delta.ReasoningContent}:
+					emittedAny = true
+				case <-ctx.Done():
+					return
+				}
+			}
+
+			// 文本 delta
+			if delta.Content != "" {
+				textBytes += len(delta.Content)
+				// 无精确 usage 时累计字符估算，供 cancel 补偿参考
+				if chunk.Usage == nil {
+					accumulatedOutputTokens += len([]rune(delta.Content)) / 3
+				}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage, FinishReason: lastFinishReason}:
+					emittedAny = true
+					if chunk.Usage != nil {
+						usageDirty = false
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+
+			// tool_call delta：拼接参数
+			for _, tc := range delta.ToolCalls {
+				s, exists := toolBuilders[tc.Index]
+				if !exists {
+					s = &toolCallState{}
+					toolBuilders[tc.Index] = s
+				}
+				if tc.ID != "" {
+					s.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					s.name = tc.Function.Name
+				}
+				s.arguments.WriteString(tc.Function.Arguments)
+			}
+
+			// finish_reason == "tool_calls" → 把所有已收集的 tool_call emit 出去
+			if choice.FinishReason == "tool_calls" {
+				if len(toolBuilders) > 0 {
+					emittedAny = true
+					sawToolCall = true
+					toolCallsEmitted += len(toolBuilders)
+				}
+				if ctxDone := emitCollectedToolCalls(ctx, ch, toolBuilders); ctxDone {
+					return
+				}
+				// 清空，支持同一流中多轮（理论上不会，但防御性清空）
+				toolBuilders = map[int]*toolCallState{}
+			}
+		}
+
+		if len(toolBuilders) > 0 {
+			// EOF 处补发的工具调用同样是有效信号：不置位会在补发之后再误报一条
+			// "no valid SSE data frame" 错误，上游同时收到工具调用与流错误。
+			sawToolCall = true
+			emittedAny = true
+			toolCallsEmitted += len(toolBuilders)
+		}
+		flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
+		flushUsage()
+		logIfEmpty()
+		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("stream read: %v", err)}:
+			case <-ctx.Done():
+				return
+			}
+			return
+		}
+
+		if !emittedAny {
+			// 真 EOF 却一帧合法 SSE 都没有（200 + HTML/文本错误页）：不报错则上游
+			// 与"模型生成 0 token"无从区分。
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamError, Content: "provider returned a 200 response with no valid SSE data frame (base_url 可能指向了错误的端点，或网关返回了非流式错误页)"}:
+			case <-ctx.Done():
+			}
+		}
+	})
+
+	return ch, nil
+}

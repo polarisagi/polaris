@@ -1,0 +1,12 @@
+name: secret_get
+description: "读取 polaris 凭据存储中的凭据值（仅 full 档可用）。凭据名必须已通过 polaris secret set 预先存储，不支持任意路径读取。每回合最多读取 SecretGetMaxPerTurn 条（默认 5），防止批量泄露。"
+version: "1.0.0"
+capability: read-only
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - credentials
+  - secrets
+  - full-profile-only

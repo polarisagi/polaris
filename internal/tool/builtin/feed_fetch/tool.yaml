@@ -1,0 +1,15 @@
+name: feed_fetch
+version: "1.0.0"
+capability: read-network
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - network-call
+tags:
+  - network
+  - feed
+  - rss
+description: |
+  读取 RSS / Atom / JSON Feed，返回结构化条目（标题、链接、时间、摘要）。能用订阅源就不要开浏览器。
+  since=上次时间 只取新条目。示例源：hnrss.org/newest?q=关键词&points=50、rss.arxiv.org/rss/cs.AI、
+  github.com/<owner>/<repo>/releases.atom、自建 RSSHub（如 <rsshub>/zhihu/hot）。

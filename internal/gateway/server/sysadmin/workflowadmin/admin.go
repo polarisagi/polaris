@@ -1,0 +1,138 @@
+// Package workflowadmin 承载 workflow（多步骤 Agent 任务编排）的 HTTP handler +
+// 执行引擎，从 sysadmin 包摊平的 workflow.go（原 730 行，R7 超标）拆出为组合式
+// 子包（2026-07-07），沿用 cronadmin/insightsadmin 已验证过的模式：独立结构体 +
+// 消费方定义的最小接口集 + 独立构造函数，父 SysAdminHandler 只持有子结构体指针
+// 并做单行转发。
+package workflowadmin
+
+import (
+	"context"
+	"sync"
+
+	"github.com/polarisagi/polaris/internal/automation/pipeline"
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// ChatDispatcher workflowadmin 消费方视角的最小会话接口
+// （sysadmin.ChatDispatcher 的子集，结构性满足，无需适配器）。
+type ChatDispatcher interface {
+	EnsureSession(ctx context.Context, sessionID string) error
+	InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message
+	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, toolCount int64) error
+	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
+	// SampleAndScoreReply 见 chat.ChatHandler 同名方法（M12 §9 连续采样监控
+	// 写侧，2026-07-14 补齐）。
+	SampleAndScoreReply(sessionID, query, response string)
+}
+
+// WorkflowAdmin 承载 workflow CRUD + cron 触发 + StateGraphExecutor 执行引擎
+// （2026-07-12：由顺序 for 循环改为图执行，见 workflow_graph.go/workflow_engine.go）。
+type WorkflowAdmin struct {
+	DB               protocol.SQLQuerier
+	WorkflowRepo     repo.WorkflowRepository
+	AgentPool        protocol.AgentPool
+	Chat             ChatDispatcher
+	TemplateCacheMap *sync.Map
+	// Blackboard StateGraphExecutor 的任务队列/事件总线，同时供 RunStepWorkerLoop
+	// 自订阅认领本包投递的 workflow_step 任务（workflow_step_worker.go）。
+	Blackboard *orchestrator.SQLiteBlackboard
+	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008），runWorkflowStep
+	// 经此驱动 Headless 轮次，收敛此前与 cronadmin/channelsadmin 三处几乎相同又
+	// 不完全一致的编排实现，见 workflow_engine.go runWorkflowStep 注释。
+	SessionOrch session.Orchestrator
+
+	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
+	BuildToolSchemas func() []types.ToolSchema
+
+	// ADR-0114: 管线步骤执行依赖注入
+	ToolExecutor protocol.AgentToolExecutor
+	LLMInfer     func(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error)
+	Admitter     BackgroundAdmitter
+	Deliverer    ResultDeliverer
+	// HITL 写入类管线工具步骤的人工审批网关；nil 时需审批的写工具 fail-closed 拒绝。
+	HITL        HITLPrompter
+	dedupStates sync.Map // runID -> *dedupState
+	// stepSessions 记录正在执行的步骤会话归属哪个运行（sessionID -> runID），供整体超时判定审批等待。
+	stepSessions sync.Map
+}
+
+// NewWorkflowAdmin 构造 WorkflowAdmin。
+func NewWorkflowAdmin(
+	db protocol.SQLQuerier,
+	r repo.WorkflowRepository,
+	agentPool protocol.AgentPool,
+	chat ChatDispatcher,
+	bb *orchestrator.SQLiteBlackboard,
+	sessionOrch session.Orchestrator,
+	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
+	buildToolSchemas func() []types.ToolSchema,
+) *WorkflowAdmin {
+	return &WorkflowAdmin{
+		DB:               db,
+		WorkflowRepo:     r,
+		AgentPool:        agentPool,
+		Chat:             chat,
+		TemplateCacheMap: &sync.Map{},
+		Blackboard:       bb,
+		SessionOrch:      sessionOrch,
+		ToolExec:         toolExec,
+		BuildToolSchemas: buildToolSchemas,
+	}
+}
+
+// pipelineRunner 构造步骤执行器实例。
+func (h *WorkflowAdmin) pipelineRunner() *pipeline.Runner {
+	return &pipeline.Runner{
+		Tools:    toolCallerAdapter{exec: h.ToolExecutor},
+		LLM:      llmCallerAdapter{infer: h.LLMInfer},
+		Data:     runDataAdapter{repo: h.WorkflowRepo},
+		Limits:   pipelineLimitsFromConfig(),
+		Deps:     newToolMetaAdapter(h.ToolExecutor),
+		Approver: hitlApprover{gw: h.HITL},
+	}
+}
+
+// getOrCreateDedupState 跨步骤共享同一个 run 的去重状态。
+func (h *WorkflowAdmin) getOrCreateDedupState(runID, wfID string) *dedupState {
+	val, ok := h.dedupStates.Load(runID)
+	if ok {
+		return val.(*dedupState)
+	}
+	st := &dedupState{repo: h.WorkflowRepo, wfID: wfID}
+	actual, _ := h.dedupStates.LoadOrStore(runID, st)
+	return actual.(*dedupState)
+}
+
+// positiveOr 配置值非正（未配置/误配）时回落到编译期默认值，避免 0 值把限制变成"无限制"。
+func positiveOr(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+// pipelineLimitsFromConfig 从阈值配置读取管线限制，是 workflowadmin 内唯一的取值点。
+func pipelineLimitsFromConfig() pipeline.Limits {
+	cur := config.CurrentThresholds().M13Interface
+	def := config.DefaultThresholds().M13Interface
+	return pipeline.Limits{
+		MaxSteps:           positiveOr(cur.PipelineMaxSteps, def.PipelineMaxSteps),
+		MinIntervalMin:     positiveOr(cur.PipelineMinIntervalMin, def.PipelineMinIntervalMin),
+		LLMMaxInputChars:   positiveOr(cur.PipelineLLMMaxInputChars, def.PipelineLLMMaxInputChars),
+		LLMMaxOutputTokens: positiveOr(cur.PipelineLLMMaxOutputTokens, def.PipelineLLMMaxOutputTokens),
+		StepDataMaxBytes:   positiveOr(cur.PipelineStepDataMaxBytes, def.PipelineStepDataMaxBytes),
+	}
+}
+
+// pipelineRetentionFromConfig 返回运行数据保留份数与去重记录 TTL（天）。
+func pipelineRetentionFromConfig() (keepRuns, seenTTLDays int) {
+	cur := config.CurrentThresholds().M13Interface
+	def := config.DefaultThresholds().M13Interface
+	return positiveOr(cur.PipelineRunDataKeepRuns, def.PipelineRunDataKeepRuns),
+		positiveOr(cur.PipelineSeenItemsTTLDays, def.PipelineSeenItemsTTLDays)
+}

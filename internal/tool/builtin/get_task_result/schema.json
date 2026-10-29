@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "get_task_result",
+  "description": "Poll the status/result of an async MCP tool task.",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "The task_id returned by an async MCP tool call (mcp__<server>__<tool>_async)."
+    }
+  },
+  "required": ["task_id"]
+}

@@ -1,0 +1,230 @@
+package adapter
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+
+	"github.com/gorilla/websocket"
+)
+
+const (
+	slackConnectionsOpen = "https://slack.com/api/apps.connections.open"
+	slackPostMessage     = "https://slack.com/api/chat.postMessage"
+)
+
+func RunSlackPoller(ctx context.Context, host PollerHost, channelID, botToken, appToken string, cfg map[string]any) {
+	slog.Info("slack: socket mode started", "channel", channelID)
+	defer slog.Info("slack: socket mode stopped", "channel", channelID)
+
+	backoff := 2 * time.Second
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := slackSocketConnect(ctx, host, channelID, botToken, appToken, cfg); err != nil {
+			slog.Warn("slack: socket error", "channel", channelID, "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 60*time.Second)
+	}
+}
+
+func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToken, appToken string, cfg map[string]any) error { //nolint:gocyclo
+	wsURL, err := slackGetSocketURL(ctx, host.HTTPClient(), appToken)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("apps.connections.open: %v", err), err)
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	if host != nil && host.SafeDialer() != nil {
+		dialer.NetDialContext = host.SafeDialer().DialContext // A-2：注入 SafeDialer，防 SSRF（inv_safe_dialer_01）
+	}
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dial: %v", err), err)
+	}
+	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
+
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("read: %v", err), err)
+		}
+		var envelope map[string]json.RawMessage
+		if json.Unmarshal(raw, &envelope) != nil {
+			continue
+		}
+		msgType := jsonStr(envelope, "type")
+		envelopeID := jsonStr(envelope, "envelope_id")
+
+		switch msgType {
+		case "disconnect":
+			return apperr.New(apperr.CodeInternal, fmt.Sprintf("server disconnect: %s", jsonStr(envelope, "reason")))
+		case "events_api":
+			if envelopeID != "" {
+				conn.WriteJSON(map[string]string{"envelope_id": envelopeID}) //nolint:errcheck
+			}
+			var payload struct {
+				Event struct {
+					Type    string `json:"type"`
+					Text    string `json:"text"`
+					Channel string `json:"channel"`
+					User    string `json:"user"`
+					BotID   string `json:"bot_id"`
+				} `json:"event"`
+			}
+			if payloadRaw, ok := envelope["payload"]; ok {
+				// 解析失败 → payload 保持零值 → 下面的空字段检查会 continue 丢弃本条。
+				// 行为正确，但 Slack 改事件结构时应当有人知道，否则表现为
+				// "某类消息突然不再触发"且无任何日志。
+				if err := json.Unmarshal(payloadRaw, &payload); err != nil {
+					slog.Warn("slack: event payload 解析失败，本条事件被丢弃", "err", err)
+				}
+			}
+			if payload.Event.BotID != "" || payload.Event.Text == "" || payload.Event.Channel == "" {
+				continue
+			}
+			if payload.Event.Type != "message" && payload.Event.Type != "app_mention" {
+				continue
+			}
+			localCfg := make(map[string]any, len(cfg)+1)
+			for k, v := range cfg {
+				localCfg[k] = v
+			}
+			localCfg["bot_token"] = botToken
+			concurrent.SafeGo(ctx, "channel_adapter.slack.on_message", func(context.Context) {
+				host.OnMessage("slack", channelID, localCfg, protocol.ChannelMessage{
+					Text: payload.Event.Text, ChatID: payload.Event.Channel, UserID: payload.Event.User,
+
+					TaintLevel: types.TaintHigh,
+				})
+			})
+		case "interactive":
+			if envelopeID != "" {
+				conn.WriteJSON(map[string]string{"envelope_id": envelopeID}) //nolint:errcheck
+			}
+		}
+	}
+}
+
+func slackGetSocketURL(ctx context.Context, client *http.Client, appToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackConnectionsOpen, bytes.NewReader([]byte{}))
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "slackGetSocketURL", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+appToken)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "slackGetSocketURL", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	var result struct {
+		OK  bool   `json:"ok"`
+		URL string `json:"url"`
+	}
+	if json.Unmarshal(body, &result) != nil {
+		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("parse: %s", body))
+	}
+	if !result.OK {
+		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("slack api: %s", body))
+	}
+	return result.URL, nil
+}
+
+func SlackSendMessage(ctx context.Context, client *http.Client, botToken, channel, text string) error {
+	body, _ := json.Marshal(map[string]string{"channel": channel, "text": text})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackPostMessage, bytes.NewReader(body))
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SlackSendMessage", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+botToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SlackSendMessage", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("slack postMessage %d: %s", resp.StatusCode, b))
+	}
+	return nil
+}
+
+func jsonStr(m map[string]json.RawMessage, key string) string {
+	if v, ok := m[key]; ok {
+		var s string
+		_ = json.Unmarshal(v, &s)
+		return s
+	}
+	return ""
+}
+
+type SlackAdapter struct{}
+
+func (a *SlackAdapter) Type() string { return "slack" }
+
+func (a *SlackAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw map[string]any
+	if json.Unmarshal(body, &raw) != nil {
+		return protocol.ChannelMessage{}
+	}
+	if ev, ok := raw["event"].(map[string]any); ok {
+		text, _ := ev["text"].(string)
+		chatID, _ := ev["channel"].(string)
+		userID, _ := ev["user"].(string)
+		botID, _ := ev["bot_id"].(string)
+		if botID != "" {
+			return protocol.ChannelMessage{}
+		}
+		return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
+	}
+	return protocol.ChannelMessage{}
+}
+
+func (a *SlackAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	botToken, _ := cfg["bot_token"].(string)
+	if botToken == "" {
+		return apperr.New(apperr.CodeInvalidInput, "slack: bot_token missing")
+	}
+	if err := SlackSendMessage(ctx, host.HTTPClient(), botToken, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "slack", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "slack: send message", err)
+	}
+	return nil
+}
+
+func (a *SlackAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	botToken, _ := cfg["bot_token"].(string)
+	appToken, _ := cfg["app_token"].(string)
+	if botToken == "" || appToken == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.slack."+channelID, func(ctx context.Context) {
+		RunSlackPoller(ctx, host, channelID, botToken, appToken, cfg)
+	})
+	return true
+}

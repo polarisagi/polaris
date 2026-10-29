@@ -1,0 +1,6 @@
+name: multi_edit
+description: Perform multiple atomic string replacements in a single file.
+capability: write-local
+side_effects:
+  - file-write
+risk_level: medium

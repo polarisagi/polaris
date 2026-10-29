@@ -1,0 +1,9 @@
+name: automation_delete
+description: |
+  删除指定的自动化任务及其历史执行记录。
+  删除后调度器不再执行该任务。
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - state-mutate

@@ -1,0 +1,383 @@
+package session
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// runInteractive 交互式路径（SSE 入口，per-session 长驻 Agent 实例）。
+//
+// [A-03 Step2] 原 chat/sse.go HandleAgentStream + handleAgentStreamFSM +
+// chat/sse_stream_helpers.go acquireStreamAgent/handleStreamFSMEvent 逐段
+// 搬入本函数（纯搬运，行为等价），w/flusher 写入统一替换为 sink.Emit。
+// HTTP 特有部分（请求解码/响应头设置/Flusher 校验/S-07 早期白名单）保留在
+// HTTP 边界层（chat/sse.go 瘦身后的 HandleAgentStream，见 A-03 Step4）。
+//
+//nolint:gocyclo,funlen // 原 HandleAgentStream 整体 nolint:gocyclo 覆盖范围内的既有复杂度，迁移未新增分支
+func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sink) (*Result, error) {
+	// @file/@url/git: 引用展开（消息预处理入口）：ContextRefExpander 未注入时
+	// 原样返回 input；单条引用展开失败记入 skipped（已在 PromptAssembler 适配
+	// 方法内 slog.Warn）但不阻断请求。
+	req.Input, _ = o.prompt.ExpandContextRefs(ctx, req.Input)
+
+	sessionID, isNewSession, err := o.resolveSessionID(req)
+	if err != nil {
+		return nil, err
+	}
+	req.SessionID = sessionID
+
+	if err := o.persistence.EnsureSessionInProject(ctx, sessionID, req.ProjectID); err != nil {
+		o.emitError(sink, "session_error", err.Error(), sessionID, err)
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
+	// 会话 ID 此刻才对客户端可见：新会话前端须据此重连（ADR-0116）。
+	_ = sink.Emit(Event{Kind: KindSession, Payload: map[string]any{"session_id": sessionID}})
+	// SessionStart / UserPromptSubmit（hooks.json，ADR-0103 决策六）：阻断即拒绝本条消息，
+	// 附加上下文随本轮任务意图进入内核（污点内容，不进系统提示词）。
+	hookContext, blocked := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
+	if blocked != "" {
+		o.emitError(sink, "hook_blocked", blocked, sessionID, nil)
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
+
+	// 加载历史消息（多轮上下文）
+	history, err := o.persistence.ListMessages(ctx, sessionID)
+	if err != nil {
+		o.emitError(sink, "history_error", err.Error(), sessionID, err)
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
+	isFirstTurn := len(history) == 0
+
+	// 插话（Steer）：若会话内已有正在运行的循环（AgentStateLoop / AgentStateLoopExec），直接入队并退出本轮编排
+	if o.trySteerPool(sessionID, req) {
+		finalInput, _ := o.buildUserMessage(req)
+		if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+			slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
+		}
+		_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
+			"session_id": sessionID,
+			"message":    "插话已入队，将于下一轮次生效",
+		}})
+		_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
+			"session_id": sessionID,
+			"steered":    true,
+		}})
+		return &Result{SessionID: sessionID, Reply: ""}, nil
+	}
+
+	var agentCtrl protocol.AgentController
+	var release func()
+	if o.agentPool != nil {
+		var acquireOK bool
+		agentCtrl, release, acquireOK = o.acquireInteractiveAgent(ctx, sink, req, sessionID)
+		if !acquireOK {
+			return &Result{SessionID: sessionID, Aborted: true}, nil
+		}
+		defer release()
+
+		st := agentCtrl.CurrentState()
+		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec || st == types.AgentStateLoopAwait || st == types.AgentStateLoopRecall) && steerAgent(agentCtrl, req) {
+			finalInput, _ := o.buildUserMessage(req)
+			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
+			}
+			_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
+				"session_id": sessionID,
+				"message":    "插话已入队，将于下一轮次生效",
+			}})
+			_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{
+				"session_id": sessionID,
+				"steered":    true,
+			}})
+			return &Result{SessionID: sessionID, Reply: ""}, nil
+		}
+	}
+
+	history = o.prompt.InjectSystemPrompt(ctx, agentCtrl, history, req.Input)
+	// 注意：FSM 触发（SetTaskIntent/SendIntent）在 runFSMTurn 中——在订阅事件流
+	// 之后执行——先订阅后触发消除早期 token 丢失竞态；且触发点位于斜杠命令
+	// 短路之后，/compact 等命令不再空耗一次 FSM 推理。
+
+	// ── Transcript ────────────────────────────────────────────────────────
+	tw, twErr := openTranscript(o.transcriptDir, sessionID, isFirstTurn)
+	if twErr != nil {
+		slog.Warn("session: transcript open failed", "session", sessionID, "err", twErr)
+	}
+	if tw != nil {
+		defer tw.Close()
+	}
+
+	// 追加本轮用户消息（含图片 Parts）
+	finalInput, userMsg := o.buildUserMessage(req)
+
+	history = append(history, userMsg)
+	userMsgID, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0)
+	if err != nil {
+		slog.Error("session: saveMessage user", "session", sessionID, "err", err)
+	}
+	if tw != nil {
+		tw.WriteTurn("user", req.Input, 0, 0)
+	}
+
+	// ── 选取最优 Provider ─────────────────────────────────────────────────
+	var p protocol.Provider
+	if req.ModelID != "" {
+		p = o.registry.PickProviderByRecordID(req.ModelID)
+	}
+	if p == nil {
+		p = o.registry.PickProvider("default")
+		if p == nil {
+			p = o.registry.PickProvider("general")
+		}
+	}
+	if p == nil {
+		if tw != nil {
+			tw.WriteError("no_provider", "未配置任何启用的 LLM 厂商")
+		}
+		o.emitError(sink, "no_provider", "未配置任何启用的 LLM 厂商，请在「模型」页添加并启用厂商", sessionID, nil)
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
+
+	// ── 斜线命令拦截（短路 LLM 推理）────────────────────────────────────────
+	var slashMem MemoryFacade
+	if agentCtrl != nil {
+		if mf := agentCtrl.Memory(); mf != nil {
+			slashMem = mf
+		}
+	}
+	res, handled, taskInput := o.tryDispatchSlash(ctx, sink, sessionID, finalInput, history, p, slashMem)
+	if handled {
+		return res, nil
+	}
+	if taskInput == "" {
+		taskInput = req.Input
+	}
+	taskInput = withHookContext(taskInput, hookContext)
+	// M8f-1：View 经 PUT /v1/mcp-apps/views/{id}/model-context 发起的模型
+	// 上下文更新注入——ConsumeSessionModelContext 读取即清空
+	// （规范：只把最后一次更新送给模型），随 taskInput 整体经下方 runFSMTurn 内
+	// taint.NewTaintedString 打 TaintHigh，与工具输出注入用户消息同一污点处理
+	// 路径（HE-2），不单独二次标注。
+	if mcpAppCtx, mcErr := o.persistence.ConsumeSessionModelContext(ctx, sessionID); mcErr != nil {
+		slog.Warn("session: consume mcp app model context failed", "session", sessionID, "err", mcErr)
+	} else {
+		taskInput = withMCPAppContext(taskInput, mcpAppCtx)
+	}
+
+	// ── 上下文使用率评估（警告 + 防抖动告警 + 自动压缩）────────────────────────
+	ctxStats := o.compression.Stats(history)
+
+	if ctxStats.UsagePercent >= o.compression.WarnPct() {
+		msg := fmt.Sprintf("上下文使用量已达 %d%%，可使用 /compact 手动压缩", int(ctxStats.UsagePercent))
+		if ctxStats.Thrashing {
+			msg = fmt.Sprintf("⚠ 自动压缩抖动：上下文 %d%% 使用量居高不下，请手动 /compact 并缩减单次工具输出规模", int(ctxStats.UsagePercent))
+		}
+		_ = sink.Emit(Event{Kind: KindContextWarning, Payload: map[string]any{
+			"usage_percent": int(ctxStats.UsagePercent),
+			"token_count":   ctxStats.TokenCount,
+			"threshold":     ctxStats.Threshold,
+			"thrashing":     ctxStats.Thrashing,
+			"message":       msg,
+		}})
+	}
+
+	// 自动压缩：非 thrashing 状态 + 超过 autoCompactPct 阈值 → 静默压缩后继续推理
+	if !ctxStats.Thrashing && o.compression.NeedsCompact(history) {
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "compacting", "message": "正在压缩上下文..."}})
+
+		var mem MemoryFacade
+		if agentCtrl != nil {
+			mem = agentCtrl.Memory()
+		}
+
+		if _, res, err := o.compression.Compact(ctx, sessionID, history, p, mem); err == nil && !res.Skipped {
+			_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{
+				"type":          "compacted",
+				"tokens_before": res.TokensBefore,
+				"tokens_after":  res.TokensAfter,
+				"message":       fmt.Sprintf("上下文已压缩：%d → %d tokens", res.TokensBefore, res.TokensAfter),
+			}})
+		}
+	}
+
+	inferStart := time.Now()
+
+	var reply string
+	var inferErr string
+	var aborted bool
+	var viewIDs []string
+
+	if agentCtrl == nil {
+		o.emitError(sink, "no_agent", "系统错误：未找到当前会话的 Agent 控制器", sessionID, nil)
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
+	// 内核按回合新建 Agent，对上文一无所知；历史须随每轮显式注入（ADR-0098 决策四）。
+	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
+	agentCtrl.SetConversationHistory(o.withTurnDigests(ctx, sessionID, history[:len(history)-1]))
+	agentCtrl.SetModelLock(req.ModelID)
+	// 步骤时间线与回合元数据（ADR-0118）：回合 ID 先交给内核，之后该回合的 llm_calls 才带得上 turn_id。
+	ctx, turnID, stepRec := o.beginTurnSteps(ctx, sink, sessionID, agentCtrl)
+	turnFinished := false
+	defer func() {
+		if !turnFinished { // 任何提前返回路径（推理错误、空回复……）也要收口步骤并落库
+			stepRec.finalize(true)
+		}
+	}()
+	reply, inferErr, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput, inputTaintLevel(req))
+	if !aborted && inferErr == "" && reply != "" {
+		var stopViewIDs []string
+		reply, inferErr, aborted, stopViewIDs = o.continueOnStopHooks(ctx, sink, sessionID, agentCtrl, history, reply)
+		// M8f-1：Stop hook 续跑轮次产生的视图与初次推理产生的视图一并关联到
+		// 本轮最终落库的 assistant 消息（continueOnStopHooks 内部对续跑之前的
+		// 中间回复各自 SaveMessage，那些中间消息的视图关联不在本次范围内，
+		// 是可接受的降级——见该函数注释）。
+		viewIDs = append(viewIDs, stopViewIDs...)
+	}
+	if !aborted && inferErr == "" && reply != "" {
+		var goalViewIDs []string
+		reply, inferErr, aborted, goalViewIDs = o.continueOnGoal(ctx, sink, sessionID, agentCtrl, history, reply, stepRec)
+		viewIDs = append(viewIDs, goalViewIDs...)
+	}
+	if aborted {
+		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。
+		if reply != "" {
+			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0)
+			if err != nil {
+				slog.Error("session: saveMessage assistant (aborted turn)", "session", sessionID, "err", err)
+			}
+			o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
+			turnFinished = true
+			o.finishTurnMeta(saveCtx, stepRec, turnID, messageID, 0, true)
+			saveCancel()
+		}
+		return &Result{SessionID: sessionID, Reply: reply, Aborted: true}, nil
+	}
+	inferLatencyMs := time.Since(inferStart).Milliseconds()
+
+	// 推理成功返回但无内容（超时/内容过滤/空响应）
+	if reply == "" && inferErr == "" {
+		inferErr = "推理返回空内容，请检查模型配置或重试"
+	}
+	if inferErr != "" {
+		if tw != nil {
+			tw.WriteError("empty_response", inferErr)
+		}
+		o.failTurn(ctx, stepRec, turnID, userMsgID, "empty_response", inferErr)
+		o.emitError(sink, "empty_response", inferErr, sessionID, apperr.New(apperr.CodeInternal, inferErr))
+		o.hooks.StopFailure(ctx, sessionID, "empty_response")
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
+
+	// ── 持久化 assistant 回复 ─────────────────────────────────────────────
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer saveCancel()
+
+	var turnExtra map[string]any
+	if reply != "" {
+		messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs)
+		if err != nil {
+			slog.Error("session: saveMessage assistant", "session", sessionID, "err", err)
+		}
+		o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
+		turnFinished = true
+		turnExtra = o.finishTurnMeta(saveCtx, stepRec, turnID, messageID, inferLatencyMs, false)
+		o.persistence.SampleAndScoreReply(sessionID, req.Input, reply)
+		if tw != nil {
+			tw.WriteTurn("assistant", reply, inferLatencyMs, 0)
+		}
+	}
+	if isFirstTurn {
+		titleHint := req.TitleHint
+		if titleHint == "" {
+			titleHint = req.Input
+		}
+		if err := o.persistence.UpdateSessionTitle(saveCtx, sessionID, titleHint); err != nil {
+			slog.Warn("session: update session title failed", "session", sessionID, "err", err)
+		}
+	}
+	if err := o.persistence.TouchSession(saveCtx, sessionID); err != nil {
+		slog.Warn("session: touch session failed", "session", sessionID, "err", err)
+	}
+
+	slog.Info("session: turn complete",
+		"session", sessionID,
+		"latency_ms", inferLatencyMs,
+		"reply_bytes", len(reply),
+		"client_cancelled", ctx.Err() != nil,
+	)
+
+	complete := map[string]any{
+		"session_id":  sessionID,
+		"duration_ms": inferLatencyMs,
+	}
+	for k, v := range turnExtra { // turn_id / usage / steps（ADR-0118）
+		complete[k] = v
+	}
+	_ = sink.Emit(Event{Kind: KindComplete, Payload: complete})
+
+	return &Result{SessionID: sessionID, Reply: reply, LatencyMs: inferLatencyMs}, nil
+}
+
+// tryDispatchSlash 斜线命令短路子步骤（从 runInteractive 拆出，nestif 治理）。
+// handled=true 时调用方应直接 return res, nil；o.slash 为 nil（未注入路由器）或命令
+// 未被处理时 handled=false。用户调用技能时 handled=false 且 taskInput 为渲染后的技能内容。
+func (o *orchestrator) tryDispatchSlash(
+	ctx context.Context,
+	sink Sink,
+	sessionID, finalInput string,
+	history []types.Message,
+	p protocol.Provider,
+	slashMem MemoryFacade,
+) (res *Result, handled bool, taskInput string) {
+	if o.slash == nil {
+		return nil, false, ""
+	}
+	cmdResult := o.slash.Dispatch(ctx, finalInput, sessionID, history, p, sink, slashMem)
+	if !cmdResult.Handled {
+		return nil, false, cmdResult.RewrittenInput
+	}
+	if cmdResult.Response != "" {
+		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if _, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
+			slog.Error("session: saveMessage slash response", "session", sessionID, "err", err)
+		}
+		cancel()
+	}
+	if err := o.persistence.TouchSession(context.WithoutCancel(ctx), sessionID); err != nil {
+		slog.Warn("session: touch session failed (slash command path)", "session", sessionID, "err", err)
+	}
+	_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{"session_id": sessionID, "session_title": ""}})
+	return &Result{SessionID: sessionID, SlashHandled: true}, true, ""
+}
+
+// acquireInteractiveAgent 从 AgentPool 获取本次流式对话的 AgentController，
+// 处理资源耗尽降级（原 chat/sse_stream_helpers.go acquireStreamAgent 迁入，
+// 行为不变）。ok=false 表示已经推送错误/降级提示，调用方应立即 return；
+// release 仅在 ok=true 时有效。
+func (o *orchestrator) acquireInteractiveAgent(ctx context.Context, sink Sink, req Request, sessionID string) (protocol.AgentController, func(), bool) {
+	agentCtrl, release, err := o.agentPool.Acquire(ctx, sessionID)
+	if err == nil {
+		return agentCtrl, release, true
+	}
+
+	var aerr *apperr.Error
+	if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
+		// 本函数只服务交互路径（后台任务恒走 AcquireHeadless），走到这里的都是前台
+		// 对话：给可重试降级提示。独立 wire 事件名 "system_notice"，不经 emitError。
+		_ = sink.Emit(Event{Kind: KindSystemNotice, Payload: map[string]any{
+			"message": "系统当前负载较高，已为您转入沙箱保护模式，稍等片刻",
+			"retry":   true,
+		}})
+		return nil, nil, false
+	}
+	o.emitError(sink, "agent_pool_error", "failed to acquire agent: "+err.Error(), sessionID, err)
+	return nil, nil, false
+}

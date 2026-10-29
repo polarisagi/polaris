@@ -1,0 +1,4 @@
+name: job_status
+description: Get status of a background job or list all background jobs.
+capability: read-only
+risk_level: low

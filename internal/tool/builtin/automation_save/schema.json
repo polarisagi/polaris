@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "prompt",
+        "pipeline"
+      ],
+      "description": "prompt 或 pipeline"
+    },
+    "id": {
+      "type": "string",
+      "description": "已有任务 ID（更新时传）"
+    },
+    "name": {
+      "type": "string",
+      "description": "任务名称"
+    },
+    "prompt": {
+      "type": "string",
+      "description": "kind=prompt 必填：到点发给 Agent 的提示词"
+    },
+    "cron": {
+      "type": "string",
+      "description": "5 字段 Cron，如 \"0 * * * *\""
+    },
+    "trigger": {
+      "type": "object",
+      "description": "pipeline 触发器，如 {\"type\":\"cron\",\"cron\":\"0 8 * * *\"}"
+    },
+    "steps": {
+      "type": "array",
+      "description": "pipeline 必填：步骤",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "步骤标识"
+          },
+          "kind": {
+            "type": "string",
+            "description": "tool/transform/llm/agent/sink"
+          }
+        },
+        "required": [
+          "key",
+          "kind"
+        ]
+      }
+    },
+    "sink": {
+      "type": "object",
+      "description": "输出目标（可选）"
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "low",
+      "description": "low/medium/high"
+    },
+    "result_action": {
+      "type": "string",
+      "default": "session",
+      "description": "session（默认）/silent/channel:<id>"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否启用"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "试运行预览，不落库、不执行外部写，返回步骤与预计 token"
+    }
+  },
+  "required": [
+    "kind"
+  ]
+}

@@ -1,0 +1,729 @@
+<div x-show="$store.nav.page === 'automation'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100"
+  x-data="{ tab: 'routine', _cronLoaded: false, _approvalsLoaded: false, _wfLoaded: false }">
+  <div class="max-w-5xl mx-auto w-full flex flex-col">
+    <div class="mb-8 border-b border-base-300 pb-4">
+      <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_automation')"></h2>
+
+      <!-- Tabs -->
+      <div role="tablist" class="tabs tabs-boxed">
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'routine' }" @click="tab = 'routine'; if (!_cronLoaded) { $store.cron.load(); _cronLoaded = true }" x-text="$store.i18n.t('automation_tab_routine')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'workflow' }"
+           @click="tab = 'workflow'; if (!_wfLoaded) { $store.workflow.load(); _wfLoaded = true }"
+           x-text="$store.i18n.t('automation_tab_workflow')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'triggers' }" @click="tab = 'triggers'" x-text="$store.i18n.t('automation_tab_triggers')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'approvals' }" @click="tab = 'approvals'; if (!_approvalsLoaded) { _approvalsLoaded = true }">
+          <span x-text="$store.i18n.t('automation_tab_approvals')"></span>
+          <div class="badge badge-sm badge-error ml-2" x-show="$store.approvals.list.length > 0" x-text="$store.approvals.list.length"></div>
+        </a>
+      </div>
+    </div>
+
+    <!-- 无人值守审批提示：自动化运行卡在“等待批准”时，任何标签页都能看到入口 -->
+    <div class="alert alert-warning shadow-sm mb-6 cursor-pointer" x-show="$store.approvals.unattendedCount() > 0 && tab !== 'approvals'" x-cloak
+         @click="tab = 'approvals'; $store.approvals.requestNotifyPermission()">
+      <span x-text="$store.i18n.t('approvals_waiting_banner')"></span>
+    </div>
+
+    <!-- Routine Tab -->
+    <div x-show="tab === 'routine'" class="space-y-6">
+      <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('automation_tasks_title')"></h3>
+          <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('automation_tasks_desc')"></p>
+        </div>
+        <button class="btn btn-primary shadow-sm" @click="$store.cron.openCreate()" x-text="'+ ' + $store.i18n.t('automation_btn_new')"></button>
+      </div>
+
+      <div x-show="$store.cron.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <!-- Empty State -->
+      <div class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300" x-show="!$store.cron.loading && $store.cron.list.length === 0">
+        <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+        <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('automation_empty_title')"></h3>
+        <p class="text-sm mb-6" x-text="$store.i18n.t('automation_empty_desc')"></p>
+        <div class="flex gap-3 flex-wrap justify-center">
+          <template x-for="t in $store.cron.templates.slice(0,3)" :key="t.name">
+            <button class="btn btn-outline btn-sm bg-base-100" @click="$store.cron.openCreate(); $nextTick(()=>$store.cron.applyTemplate(t))">
+              <span x-text="t.icon"></span><span x-text="t.name"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Job Cards Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4" x-show="!$store.cron.loading && $store.cron.list.length > 0">
+        <template x-for="job in $store.cron.list" :key="job.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm transition-all" :class="job.enabled ? 'hover:border-primary' : 'opacity-60'">
+            <div class="card-body p-5">
+              <div class="flex justify-between items-start mb-2">
+                <div class="flex items-center gap-2">
+                  <div class="text-2xl">🤖</div>
+                  <div class="badge badge-sm"
+                    :class="job.source === 'agent' ? 'badge-info badge-outline' : job.source === 'plugin' ? 'badge-accent badge-outline' : 'badge-ghost'"
+                    x-text="$store.i18n.t('source_' + (job.source || 'user'))">
+                  </div>
+                </div>
+                <input id="form-field-2" name="form-field-2" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="job.enabled" @change="$store.cron.toggle(job)" @click.stop>
+              </div>
+              <h3 class="card-title text-base" x-text="job.name || job.id.slice(0,12)"></h3>
+              <p class="text-xs text-base-content/60 line-clamp-2 min-h-[2rem]" x-text="job.prompt"></p>
+              
+              <div class="flex flex-wrap gap-2 mt-4">
+                <div class="badge badge-ghost badge-sm font-mono" x-text="$store.cron.cronLabel(job.cron_schedule) || job.trigger_type"></div>
+                <div class="badge badge-ghost badge-sm" x-text="$store.i18n.t('automation_label_reasoning')+($store.cron.reasoningLevels.find(r=>r.value===job.reasoning_effort)||{label:'中'}).label"></div>
+                <div class="badge badge-ghost badge-sm" x-show="job.project_id" :title="$store.i18n.t('auto_field_project')"
+                     x-text="'📁 ' + (($store.projects.byID(job.project_id) || {}).name || job.project_id)"></div>
+              </div>
+
+              <div class="mt-4 pt-4 border-t border-base-300 text-xs text-base-content/70 flex items-center gap-2">
+                <template x-if="job.last_run_at">
+                  <div class="flex items-center gap-1.5 w-full">
+                    <div class="w-2 h-2 rounded-full" :class="job.last_run_status === 'ok' ? 'bg-success' : job.last_run_status === 'error' ? 'bg-error' : job.last_run_status === 'suspended' ? 'bg-warning animate-pulse' : 'bg-warning'"></div>
+                    <span class="text-warning font-medium" x-show="job.last_run_status === 'suspended'" x-text="$store.i18n.t('automation_status_waiting_approval')"></span>
+                    <span x-text="new Date(job.last_run_at).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})"></span>
+                    <span class="ml-auto" x-show="job.run_count > 0" x-text="`${$store.i18n.t('automation_run_count').replace('{0}', job.run_count)}`"></span>
+                  </div>
+                </template>
+                <span x-show="!job.last_run_at" x-text="$store.i18n.t('automation_never_run')"></span>
+              </div>
+
+              <div class="card-actions justify-between mt-4">
+                <button class="btn btn-xs btn-ghost" @click="$store.cron.openRuns(job)" x-text="$store.i18n.t('automation_btn_history')"></button>
+                <div class="flex gap-2">
+                  <button class="btn btn-xs btn-primary btn-outline" @click="$store.cron.trigger(job)" :disabled="!job.enabled" x-text="$store.i18n.t('automation_btn_run')"></button>
+                  <button class="btn btn-xs btn-ghost" @click="$store.cron.openEdit(job)" x-text="$store.i18n.t('automation_btn_edit')"></button>
+                  <button class="btn btn-xs btn-ghost text-error hover:bg-error/10" @click="$store.cron.del(job.id)" x-text="$store.i18n.t('automation_btn_delete')"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Triggers Tab -->
+    <div x-show="tab === 'triggers'" class="space-y-6">
+      <div class="alert shadow-sm bg-base-200 border border-base-300">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <div>
+          <h3 class="font-bold" x-text="$store.i18n.t('automation_webhook_title')"></h3>
+          <div class="text-xs text-base-content/70 mt-1" x-text="$store.i18n.t('automation_webhook_desc')"></div>
+        </div>
+        <button class="btn btn-sm btn-ghost" @click="$store.nav.goto('settings')" x-text="$store.i18n.t('automation_webhook_goto')"></button>
+      </div>
+
+      <div class="space-y-3 mt-6">
+        <h3 class="text-sm font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('automation_webhook_list_title')"></h3>
+        <template x-for="job in $store.cron.list.filter(j=>j.trigger_type==='webhook'||j.trigger_type==='both')" :key="job.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm">
+            <div class="card-body p-4 flex-row items-center justify-between">
+              <div>
+                <h4 class="font-bold text-sm" x-text="job.name || job.id.slice(0,12)"></h4>
+                <p class="text-xs text-base-content/70 mt-1 font-mono" x-text="$store.i18n.t('automation_webhook_channel_id') + (job.channel_id || $store.i18n.t('automation_webhook_unbound'))"></p>
+              </div>
+              <button class="btn btn-sm btn-ghost" @click="$store.cron.openEdit(job)" x-text="$store.i18n.t('automation_btn_edit')"></button>
+            </div>
+          </div>
+        </template>
+        <div class="text-center py-10 text-sm text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300" x-show="!$store.cron.list.some(j=>j.trigger_type==='webhook'||j.trigger_type==='both')">
+          <span x-text="$store.i18n.t('automation_webhook_empty')"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Approvals Tab -->
+    <div x-show="tab === 'approvals'" class="space-y-6">
+      <div class="alert alert-error shadow-sm mb-6" x-show="$store.approvals.pollFailures >= 3" x-cloak>
+        <span x-text="$store.i18n.t('approvals_unreachable')"></span>
+      </div>
+
+      <div class="flex flex-col items-center justify-center py-20 text-base-content/60" x-show="$store.approvals.list.length === 0 && $store.approvals.pollFailures < 3">
+        <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"/></svg>
+        <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('approvals_empty_title', '暂无待审批操作')"></h3>
+        <p class="text-sm" x-text="$store.i18n.t('approvals_empty_hint', '所有操作均已处理')"></p>
+      </div>
+
+      <div class="space-y-4">
+        <template x-for="req in $store.approvals.list" :key="req.id">
+          <div class="card bg-base-200 border-l-4 shadow-sm"
+               x-data="{ remaining: 0, _ti: null, comment: '', remember: false, bucket: '', init() { this.bucket = $store.approvals.riskBucket(req.risk_level); const tick = () => { this.remaining = req._remainingMs() }; tick(); this._ti = setInterval(tick, 1000); this.$cleanup = () => clearInterval(this._ti) } }"
+               :class="bucket === 'critical' ? 'border-error bg-error/10' : bucket === 'high' ? 'border-error' : bucket === 'medium' ? 'border-warning' : 'border-success'">
+            <div class="card-body p-5">
+              <div class="flex justify-between items-start mb-2">
+                <div>
+                  <h3 class="font-bold text-base" x-text="req.checkpoint_type"></h3>
+                  <p class="text-xs text-base-content/70 font-mono mt-1" x-text="(req.agent_id ? `Agent: ${req.agent_id}  ·  ` : '') + req.id?.slice(0,12)"></p>
+                </div>
+                <div class="badge font-bold uppercase text-[10px]" :class="bucket === 'critical' ? 'badge-error animate-pulse' : bucket === 'high' ? 'badge-error badge-outline' : bucket === 'medium' ? 'badge-warning badge-outline' : 'badge-success badge-outline'" x-text="bucket"></div>
+              </div>
+
+              <div class="text-xs text-warning mt-1" x-show="req.unattended" x-text="$store.i18n.t('approvals_unattended_hint')"></div>
+              <div class="bg-base-100 rounded-box p-3 my-3 text-sm text-base-content/70 whitespace-pre-wrap border border-base-300" x-show="!(req.items && req.items.length)" x-text="req.prompt_text"></div>
+              <!-- 与对话内审批卡同形：逐项展示工具与入参 -->
+              <div class="space-y-2 my-3" x-show="req.items && req.items.length">
+                <div class="text-xs text-base-content/70" x-show="req.reason" x-text="req.reason"></div>
+                <template x-for="(it, idx) in (req.items || [])" :key="idx">
+                  <div>
+                    <div class="text-xs"><span class="text-base-content/60" x-text="$store.i18n.t('chat_approval_tool')"></span> <code x-text="it.tool"></code> <span class="text-base-content/50" x-text="'· ' + it.reason"></span></div>
+                    <pre class="text-xs bg-base-200 rounded p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all" x-show="it.input" x-text="it.input"></pre>
+                  </div>
+                </template>
+              </div>
+              <div class="text-xs text-warning" x-show="req.hard_limit" x-text="$store.i18n.t('chat_approval_hard_limit')"></div>
+              <label class="flex items-center gap-2 text-xs mt-2 cursor-pointer" x-show="req.remember_label && !req.hard_limit">
+                <input type="checkbox" class="checkbox checkbox-xs" :id="'ap-remember-' + req.id" :name="'ap-remember-' + req.id" x-model="remember">
+                <span x-text="$store.i18n.t('chat_approval_remember').replace('{0}', req.remember_label)"></span>
+              </label>
+
+              <input id="comment" name="comment" type="text" class="input input-sm input-bordered w-full text-xs mt-2" :placeholder="$store.i18n.t('tasks_note_optional')" x-model="comment" />
+
+              <div class="card-actions justify-between items-center mt-4 pt-4 border-t border-base-300">
+                <div class="font-mono text-sm font-bold" :class="remaining > 60000 ? 'text-success' : remaining > 0 ? 'text-warning' : 'text-error'" x-text="remaining > 0 ? (remaining >= 3600000 ? `⏱ ${Math.floor(remaining/3600000)}h ${String(Math.floor((remaining%3600000)/60000)).padStart(2,'0')}m` : `⏱ ${Math.floor(remaining/60000)}:${String(Math.floor((remaining%60000)/1000)).padStart(2,'0')}`) : '⌛ ' + $store.i18n.t('automation_approvals_timeout')"></div>
+                <div class="flex gap-2">
+                  <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="$store.approvals.resolve(req.id, 'deny', comment, false)" x-text="$store.i18n.t('approvals_deny')"></button>
+                  <button class="btn btn-sm btn-primary" :disabled="remaining <= 0" @click="$store.approvals.resolve(req.id, 'approve', comment, remember)" x-text="$store.i18n.t('approvals_approve')"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ Workflow Tab -->
+  <div x-show="tab === 'workflow'" class="space-y-6">
+
+    <!-- 头部：标题 + 新建按钮 -->
+    <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+      <div>
+        <h3 class="font-bold text-lg" x-text="$store.i18n.t('wf_title')"></h3>
+        <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('wf_desc')"></p>
+      </div>
+      <button class="btn btn-primary shadow-sm" @click="$store.workflow.openCreate()"
+        x-text="'+ ' + $store.i18n.t('wf_btn_new')"></button>
+    </div>
+
+    <!-- 加载中 -->
+    <div x-show="$store.workflow.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+      <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+      <p x-text="$store.i18n.t('loading')"></p>
+    </div>
+
+    <!-- 空状态 -->
+    <div x-show="!$store.workflow.loading && $store.workflow.list.length === 0"
+      class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+      <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z"/>
+      </svg>
+      <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('wf_empty_title')"></h3>
+      <p class="text-sm mb-6" x-text="$store.i18n.t('wf_empty_desc')"></p>
+    </div>
+
+    <!-- 工作流卡片列表 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4"
+      x-show="!$store.workflow.loading && $store.workflow.list.length > 0">
+      <template x-for="wf in $store.workflow.list" :key="wf.id">
+        <div class="card bg-base-200 border border-base-300 shadow-sm transition-all"
+          :class="wf.enabled ? 'hover:border-primary' : 'opacity-60'">
+          <div class="card-body p-5">
+            <div class="flex justify-between items-start mb-2">
+              <div class="flex items-center gap-2">
+                <div class="text-2xl">⛓</div>
+                <div class="badge badge-sm"
+                  :class="wf.source === 'agent' ? 'badge-info badge-outline' : wf.source === 'plugin' ? 'badge-accent badge-outline' : 'badge-ghost'"
+                  x-text="$store.i18n.t('source_' + (wf.source || 'user'))">
+                </div>
+                <div class="badge badge-sm badge-outline font-mono uppercase"
+                  x-text="wf.type || 'chain'">
+                </div>
+              </div>
+              <input :name="'wf-enabled-toggle-' + wf.id" type="checkbox" class="toggle toggle-primary toggle-sm"
+                :checked="wf.enabled" @change="$store.workflow.toggle(wf)" @click.stop>
+            </div>
+            <h3 class="card-title text-base" x-text="wf.name"></h3>
+            <p class="text-xs text-base-content/60 line-clamp-2 min-h-[2rem]" x-text="wf.description || ''"></p>
+
+            <div class="flex flex-wrap gap-2 mt-3 items-center">
+              <div class="badge badge-ghost badge-sm font-mono"
+                x-text="$store.workflow.cronLabel(wf.cron_schedule) || (wf.trigger_type === 'manual' ? $store.i18n.t('wf_trigger_manual') : wf.trigger_type)">
+              </div>
+              <div class="badge badge-outline badge-sm"
+                x-text="`${wf.steps_count} ${$store.i18n.t('wf_steps_count')}`"></div>
+              <template x-if="wf.last_run_tokens || wf.last_run_cost">
+                <div class="flex items-center gap-1.5 text-xs text-base-content/60 font-mono">
+                  <span class="badge badge-xs badge-ghost" x-text="`${wf.last_run_tokens || 0} tok`"></span>
+                  <span x-show="wf.last_run_cost > 0" class="badge badge-xs badge-ghost" x-text="`$${(wf.last_run_cost || 0).toFixed(4)}`"></span>
+                </div>
+              </template>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-base-300 text-xs text-base-content/70 flex items-center gap-2">
+              <template x-if="wf.last_run_at">
+                <div class="flex items-center gap-1.5 w-full">
+                  <div class="w-2 h-2 rounded-full"
+                    :class="wf.last_run_skipped ? 'bg-info' : wf.last_run_status === 'ok' ? 'bg-success' : wf.last_run_status === 'error' ? 'bg-error' : 'bg-warning'">
+                  </div>
+                  <span x-text="wf.last_run_skipped ? $store.i18n.t('wf_status_skipped') : $store.i18n.t('wf_status_' + (wf.last_run_status || 'ok'))"></span>
+                  <span class="text-base-content/40">·</span>
+                  <span x-text="new Date(wf.last_run_at).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})"></span>
+                  <span class="ml-auto" x-show="wf.run_count > 0"
+                    x-text="`${$store.i18n.t('automation_run_count').replace('{0}', wf.run_count)}`"></span>
+                </div>
+              </template>
+              <span x-show="!wf.last_run_at" x-text="$store.i18n.t('automation_never_run')"></span>
+            </div>
+
+            <div class="card-actions justify-between mt-4">
+              <button class="btn btn-xs btn-ghost" @click="$store.workflow.openRuns(wf)"
+                x-text="$store.i18n.t('automation_btn_history')"></button>
+              <div class="flex gap-2">
+                <button class="btn btn-xs btn-primary btn-outline" @click="$store.workflow.trigger(wf)"
+                  :disabled="!wf.enabled" x-text="$store.i18n.t('automation_btn_run')"></button>
+                <button class="btn btn-xs btn-ghost" @click="$store.workflow.openEdit(wf)"
+                  x-text="$store.i18n.t('automation_btn_edit')"></button>
+                <button class="btn btn-xs btn-ghost text-error hover:bg-error/10"
+                  @click="$store.workflow.del(wf.id)"
+                  x-text="$store.i18n.t('automation_btn_delete')"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ 例行任务 创建/编辑 Modal -->
+  <dialog id="cron_modal" class="modal" x-effect="$store.cron.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.cron.showModal = false" x-cloak>
+    <div class="modal-box w-11/12 max-w-2xl max-h-[90vh] overflow-y-auto">
+      <h3 class="font-bold text-lg mb-4" x-text="$store.cron.editMode === 'create' ? $store.i18n.t('auto_modal_create') : $store.i18n.t('auto_modal_edit')"></h3>
+      <div class="space-y-4">
+        <div class="form-control">
+          <label for="cron-f-name" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_name')"></span></label>
+          <input id="cron-f-name" name="cron-f-name" type="text" class="input input-bordered" x-model="$store.cron.form.name">
+        </div>
+        <div class="form-control">
+          <label for="cron-f-prompt" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_prompt')"></span></label>
+          <textarea id="cron-f-prompt" name="cron-f-prompt" rows="4" class="textarea textarea-bordered" x-model="$store.cron.form.prompt"></textarea>
+        </div>
+        <div class="form-control">
+          <label for="cron-f-trigger" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
+          <select id="cron-f-trigger" name="cron-f-trigger" class="select select-bordered" x-model="$store.cron.form.trigger_type">
+            <option value="cron" x-text="$store.i18n.t('wf_trigger_cron')"></option>
+            <option value="webhook" x-text="$store.i18n.t('auto_trigger_webhook')"></option>
+            <option value="both" x-text="$store.i18n.t('auto_trigger_both')"></option>
+            <option value="manual" x-text="$store.i18n.t('wf_trigger_manual')"></option>
+          </select>
+        </div>
+        <div class="form-control" x-show="['cron','both'].includes($store.cron.form.trigger_type)">
+          <label for="cron-f-presets" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
+          <select id="cron-f-presets" name="cron-f-presets" class="select select-bordered mb-2" @change="$store.cron.form.cron_schedule = $event.target.value">
+            <template x-for="p in $store.cron.schedulePresets" :key="p.value">
+              <option :value="p.value" :selected="$store.cron.form.cron_schedule === p.value" x-text="p.label"></option>
+            </template>
+          </select>
+          <input name="cron-f-schedule" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.cron_schedule" placeholder="0 9 * * 1-5">
+        </div>
+        <div class="form-control" x-show="['webhook','both'].includes($store.cron.form.trigger_type)">
+          <label for="cron-f-channel" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_channel')"></span></label>
+          <input id="cron-f-channel" name="cron-f-channel" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.channel_id">
+        </div>
+        <div class="form-control">
+          <label for="cron-f-workdir" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_workdir')"></span></label>
+          <input id="cron-f-workdir" name="cron-f-workdir" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.working_dir">
+        </div>
+        <!-- 所属项目：运行产生的会话归入该项目；无人值守审批的「以后不再询问」按它记忆 -->
+        <div class="form-control">
+          <label for="cron-f-project" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_project')"></span></label>
+          <select id="cron-f-project" name="cron-f-project" class="select select-bordered" x-model="$store.cron.form.project_id">
+            <template x-for="p in $store.projects.active" :key="p.id">
+              <option :value="p.id" :selected="p.id === $store.cron.form.project_id" x-text="p.name"></option>
+            </template>
+          </select>
+          <p class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('auto_project_hint')"></p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="form-control">
+            <label for="cron-f-effort" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_effort')"></span></label>
+            <select id="cron-f-effort" name="cron-f-effort" class="select select-bordered" x-model="$store.cron.form.reasoning_effort">
+              <template x-for="r in $store.cron.reasoningLevels" :key="r.value">
+                <option :value="r.value" :selected="r.value === $store.cron.form.reasoning_effort" x-text="r.label + ' · ' + r.desc"></option>
+              </template>
+            </select>
+          </div>
+          <div class="form-control">
+            <label for="cron-f-result" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_result')"></span></label>
+            <select id="cron-f-result" name="cron-f-result" class="select select-bordered" x-model="$store.cron.form.result_action">
+              <template x-for="r in $store.cron.resultActions" :key="r.value">
+                <option :value="r.value" :selected="r.value === $store.cron.form.result_action" x-text="r.label"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+        <div class="form-control flex-row items-center gap-3">
+          <input type="checkbox" name="cron-f-enabled" class="toggle toggle-primary" x-model="$store.cron.form.enabled">
+          <span class="label-text" x-text="$store.i18n.t('wf_field_enabled')"></span>
+        </div>
+      </div>
+      <div class="modal-action mt-6">
+        <button type="button" class="btn btn-ghost" @click="$store.cron.showModal = false" x-text="$store.i18n.t('cancel')"></button>
+        <button type="button" class="btn btn-primary" @click="$store.cron.save()" x-text="$store.i18n.t('save')"></button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
+
+  <!-- ═══════════════════════════════════════════════ Workflow 创建/编辑 Modal -->
+  <dialog id="workflow_modal" class="modal" x-effect="$store.workflow.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.workflow.showModal = false" x-cloak>
+    <div class="modal-box w-11/12 max-w-3xl max-h-[90vh] overflow-y-auto">
+      <h3 class="font-bold text-lg mb-4"
+        x-text="$store.workflow.editMode === 'create' ? $store.i18n.t('wf_modal_create') : $store.i18n.t('wf_modal_edit')">
+      </h3>
+
+      <div class="space-y-4">
+        <!-- 基础信息 -->
+        <div class="form-control">
+          <label for="auto-id-automation-1" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_name')"></span></label>
+          <input id="auto-id-automation-1" type="text" class="input input-bordered" x-model="$store.workflow.form.name"
+            :placeholder="$store.i18n.t('wf_ph_name')">
+        </div>
+
+        <div class="form-control">
+          <label for="auto-id-automation-2" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_desc')"></span></label>
+          <input id="auto-id-automation-2" type="text" class="input input-bordered" x-model="$store.workflow.form.description"
+            :placeholder="$store.i18n.t('wf_ph_desc')">
+        </div>
+
+        <!-- 触发类型 -->
+        <div class="form-control">
+          <label for="auto-id-automation-3" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
+          <select id="auto-id-automation-3" class="select select-bordered" x-model="$store.workflow.form.trigger_type">
+            <option value="manual" x-text="$store.i18n.t('wf_trigger_manual')"></option>
+            <option value="cron" x-text="$store.i18n.t('wf_trigger_cron')"></option>
+          </select>
+        </div>
+
+        <div class="form-control" x-show="$store.workflow.form.trigger_type === 'cron'">
+          <label for="auto-id-automation-4" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
+          <select id="auto-id-automation-4" class="select select-bordered mb-2" @change="$store.workflow.form.cron_schedule = $event.target.value">
+            <template x-for="p in $store.workflow.schedulePresets" :key="p.value">
+              <option :value="p.value" :selected="$store.workflow.form.cron_schedule === p.value" x-text="p.label"></option>
+            </template>
+          </select>
+          <input name="wf-cron-schedule" type="text" class="input input-bordered font-mono text-sm" x-model="$store.workflow.form.cron_schedule"
+            placeholder="0 9 * * 1-5">
+        </div>
+
+        <!-- 启用开关 -->
+        <div class="form-control flex-row items-center gap-3">
+          <input type="checkbox" name="wf-form-enabled" class="toggle toggle-primary" x-model="$store.workflow.form.enabled">
+          <span class="label-text" x-text="$store.i18n.t('wf_field_enabled')"></span>
+        </div>
+
+        <!-- 执行模式：chain（顺序）| dag（并行，支持依赖 + 失败重试） -->
+        <div class="form-control">
+          <label for="auto-id-automation-wftype" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_type')"></span></label>
+          <select id="auto-id-automation-wftype" class="select select-bordered" x-model="$store.workflow.form.type">
+            <option value="chain" x-text="$store.i18n.t('wf_type_chain')"></option>
+            <option value="dag" x-text="$store.i18n.t('wf_type_dag')"></option>
+          </select>
+          <p class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('wf_type_hint')"></p>
+        </div>
+
+        <!-- 步骤编辑器 -->
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <h4 class="font-bold" x-text="$store.i18n.t('wf_steps_title')"></h4>
+            <button class="btn btn-xs btn-outline" @click="$store.workflow.addStep()"
+              x-text="'+ ' + $store.i18n.t('wf_step_add')"></button>
+          </div>
+
+          <div class="space-y-3">
+            <template x-for="(step, idx) in $store.workflow.form.steps" :key="idx">
+              <div class="bg-base-200 border border-base-300 rounded-box p-4">
+                <div class="flex justify-between items-center mb-3">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="badge badge-neutral badge-sm font-mono" x-text="`步骤 ${idx + 1}`"></span>
+                    <span class="badge badge-sm font-bold uppercase font-mono"
+                      :class="$store.workflow.kindBadgeClass(step.kind)"
+                      x-text="step.kind || 'agent'"></span>
+                    <select class="select select-xs select-bordered font-mono" x-model="step.kind">
+                      <template x-for="k in $store.workflow.stepKinds" :key="k.value">
+                        <option :value="k.value" :selected="step.kind === k.value" x-text="k.label"></option>
+                      </template>
+                    </select>
+                    <input type="text" class="input input-xs input-bordered font-mono w-28"
+                      x-model="step.step_key" :placeholder="$store.i18n.t('wf_step_key')">
+                    <div class="flex gap-1">
+                      <button class="btn btn-xs btn-ghost" @click="$store.workflow.moveStep(idx, -1)"
+                        :disabled="idx === 0" title="上移">↑</button>
+                      <button class="btn btn-xs btn-ghost"
+                        @click="$store.workflow.moveStep(idx, 1)"
+                        :disabled="idx === $store.workflow.form.steps.length - 1" title="下移">↓</button>
+                    </div>
+                  </div>
+                  <button class="btn btn-xs btn-ghost text-error"
+                    @click="$store.workflow.removeStep(idx)"
+                    :disabled="$store.workflow.form.steps.length <= 1">✕</button>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                  <div class="form-control">
+                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_name')"></span></label>
+                    <input type="text" class="input input-sm input-bordered" x-model="step.name"
+                      :placeholder="$store.i18n.t('wf_step_ph_name')">
+                  </div>
+                  <div class="form-control" x-show="step.kind === 'agent' || step.kind === 'llm'">
+                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_reasoning')"></span></label>
+                    <select class="select select-sm select-bordered" x-model="step.reasoning_effort">
+                      <template x-for="r in $store.workflow.reasoningLevels" :key="r.value">
+                        <option :value="r.value" x-text="r.label"></option>
+                      </template>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-control mb-3" x-show="step.kind === 'agent' || step.kind === 'llm'">
+                  <label class="label pb-1">
+                    <span class="label-text text-xs" x-text="$store.i18n.t('wf_step_prompt')"></span>
+                  </label>
+                  <textarea class="textarea textarea-bordered text-sm min-h-[80px]"
+                    x-model="step.prompt"
+                    :placeholder="$store.i18n.t('wf_step_ph_prompt')"></textarea>
+                </div>
+
+                <!-- Config JSON 编辑器 (针对非 agent 步骤) -->
+                <div class="form-control mb-3" x-show="step.kind !== 'agent'">
+                  <label class="label pb-1 flex justify-between">
+                    <span class="label-text text-xs font-mono font-medium" x-text="$store.i18n.t('wf_step_config_json')"></span>
+                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'tool'">{"tool":"feed_fetch","args":{...}}</span>
+                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'transform'">{"needs":["..."],"ops":[...]}</span>
+                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'llm'">{"needs":["..."],"input":"...","fields":[...]}</span>
+                  </label>
+                  <textarea class="textarea textarea-bordered font-mono text-xs min-h-[100px] leading-relaxed"
+                    x-model="step.config_text"
+                    :placeholder="$store.i18n.t('wf_step_config_json')"></textarea>
+                  <div class="text-xs text-error mt-1 font-mono" x-show="step.config_error" x-text="step.config_error"></div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" x-show="step.kind === 'agent'">
+                  <div class="form-control">
+                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_workdir')"></span></label>
+                    <input type="text" class="input input-sm input-bordered font-mono" x-model="step.working_dir"
+                      placeholder="/Users/me/project">
+                  </div>
+                  <div class="form-control flex-row items-end gap-2 pb-1">
+                    <input type="checkbox" name="step-input-prev" class="checkbox checkbox-sm checkbox-primary" x-model="step.input_from_prev">
+                    <span class="label-text text-xs" x-text="$store.i18n.t('wf_step_input_prev')"></span>
+                  </div>
+                </div>
+
+                <!-- 失败重试次数：chain/dag 均生效（附加自环条件边） -->
+                <div class="form-control mt-3 max-w-[200px]">
+                  <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_max_retries')"></span></label>
+                  <input type="number" min="0" max="10" class="input input-sm input-bordered" x-model.number="step.max_retries">
+                </div>
+
+                <!-- 依赖步骤：仅并行 DAG 模式生效 -->
+                <div class="form-control mt-3" x-show="$store.workflow.form.type === 'dag'">
+                  <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_depends_on')"></span></label>
+                  <div class="flex flex-wrap gap-2">
+                    <template x-for="(other, oIdx) in $store.workflow.form.steps" :key="oIdx">
+                      <label class="btn btn-xs" :class="(step.depends_on || []).includes(String(oIdx)) ? 'btn-primary' : 'btn-outline'"
+                        x-show="oIdx !== idx">
+                        <input type="checkbox" class="hidden"
+                          :checked="(step.depends_on || []).includes(String(oIdx))"
+                          @change="$store.workflow.toggleDepend(step, oIdx)">
+                        <span x-text="other.step_key || other.name || ('步骤 ' + (oIdx + 1))"></span>
+                      </label>
+                    </template>
+                    <span class="text-xs text-base-content/50 self-center" x-show="!(step.depends_on || []).length" x-text="$store.i18n.t('wf_step_depends_on_none')"></span>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- 步骤数据流说明 -->
+        <div class="alert bg-base-200 border border-base-300 text-xs py-2">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-4 h-4">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <span x-text="$store.i18n.t('wf_data_flow_hint')"></span>
+        </div>
+      </div>
+
+      <div class="modal-action mt-6">
+        <button type="button" class="btn btn-ghost" @click="$store.workflow.showModal = false"
+          x-text="$store.i18n.t('cancel')"></button>
+        <button type="button" class="btn btn-primary" @click="$store.workflow.save()"
+          x-text="$store.i18n.t('save')"></button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>close</button>
+    </form>
+  </dialog>
+
+  <!-- ═══════════════════════════════════════════════ Workflow 执行历史侧栏 -->
+  <div class="fixed inset-0 bg-base-300/30 backdrop-blur-sm z-40" x-show="$store.workflow.showRuns" x-transition.opacity @click="$store.workflow.showRuns = false" x-cloak></div>
+  <div class="fixed inset-y-0 right-0 w-full max-w-lg bg-base-100 shadow-2xl border-l border-base-300 flex flex-col z-50 transition-transform"
+    :class="$store.workflow.showRuns ? 'translate-x-0' : 'translate-x-full'" x-cloak>
+    <div class="p-4 border-b border-base-300 flex justify-between items-center">
+      <div>
+        <h3 class="font-bold" x-text="$store.i18n.t('wf_runs_title')"></h3>
+        <p class="text-xs text-base-content/60 mt-0.5" x-text="$store.workflow.runsWfName"></p>
+      </div>
+      <button class="btn btn-sm btn-ghost" @click="$store.workflow.showRuns = false">✕</button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-4 space-y-3">
+      <div x-show="$store.workflow.runsLoading" class="flex justify-center py-10">
+        <span class="loading loading-spinner loading-md text-primary"></span>
+      </div>
+
+      <div x-show="!$store.workflow.runsLoading && $store.workflow.runs.length === 0"
+        class="text-center py-10 text-sm text-base-content/60">
+        <span x-text="$store.i18n.t('wf_runs_empty')"></span>
+      </div>
+
+      <template x-for="run in $store.workflow.runs" :key="run.id">
+        <div class="card bg-base-200 border border-base-300">
+          <div class="card-body p-4">
+            <div class="flex justify-between items-start">
+              <div>
+                <div class="flex items-center gap-2">
+                  <div class="w-2.5 h-2.5 rounded-full"
+                    :class="run.skipped ? 'bg-info' : run.status === 'ok' ? 'bg-success' : run.status === 'error' ? 'bg-error' : run.status === 'running' ? 'bg-warning animate-pulse' : 'bg-base-content/30'">
+                  </div>
+                  <span class="text-sm font-medium capitalize" x-text="run.skipped ? $store.i18n.t('wf_status_skipped') : run.status"></span>
+                </div>
+                <div class="flex items-center gap-1.5 mt-1 text-xs text-base-content/60 font-mono">
+                  <span class="badge badge-xs badge-ghost" x-text="$store.workflow.formatDuration(run.started_at, run.finished_at)"></span>
+                  <span class="badge badge-xs badge-ghost" x-show="(run.llm_tokens_in || 0) + (run.llm_tokens_out || 0) > 0"
+                    x-text="`${(run.llm_tokens_in || 0) + (run.llm_tokens_out || 0)} tok`"></span>
+                  <span class="badge badge-xs badge-ghost" x-show="run.cost_usd > 0"
+                    x-text="`$${(run.cost_usd || 0).toFixed(4)}`"></span>
+                </div>
+              </div>
+              <div class="text-xs text-base-content/50 font-mono"
+                x-text="new Date(run.started_at).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})">
+              </div>
+            </div>
+
+            <!-- 步骤进度 -->
+            <div class="mt-3 space-y-1.5">
+              <template x-for="so in run.stepOutputs" :key="so.seq">
+                <div class="flex items-center justify-between gap-2 text-xs py-1 px-1.5 rounded hover:bg-base-300/40 transition-colors">
+                  <div class="flex items-center gap-1.5 min-w-0">
+                    <span class="font-mono font-bold w-4 shrink-0"
+                      :class="$store.workflow.stepStatusClass(so.status)"
+                      x-text="$store.workflow.stepStatusIcon(so.status)"></span>
+                    <span class="badge badge-xs uppercase font-mono shrink-0"
+                      :class="$store.workflow.kindBadgeClass(so.kind)"
+                      x-show="so.kind" x-text="so.kind"></span>
+                    <span class="font-mono text-base-content/70 shrink-0" x-text="(so.step_key || `步骤 ${so.seq + 1}`) + ':'"></span>
+                    <span class="text-base-content/80 truncate" x-text="so.output_preview || (so.status === 'skipped' ? $store.i18n.t('wf_status_skipped') : '（无输出）')"></span>
+                  </div>
+                  <button class="btn btn-xs btn-ghost btn-outline shrink-0 ml-auto"
+                    @click="$store.workflow.openStepData(run.id, so.step_key || `step_${so.seq}`, so.name || so.step_key || `步骤 ${so.seq + 1}`)">
+                    <span x-text="$store.i18n.t('wf_btn_view_data')"></span>
+                  </button>
+                </div>
+              </template>
+              <div x-show="run.status === 'running'" class="flex items-center gap-2 text-xs text-warning">
+                <span class="loading loading-xs loading-spinner"></span>
+                <span x-text="`步骤 ${run.current_step + 1} / ${run.total_steps} 执行中…`"></span>
+              </div>
+            </div>
+
+            <div x-show="run.error_msg" class="text-xs text-error mt-2 line-clamp-2" x-text="run.error_msg"></div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ Step Data Preview Modal -->
+  <dialog id="step_data_modal" class="modal"
+    x-effect="$store.workflow.showStepDataModal ? (!$el.open && $el.showModal()) : $el.close()"
+    @close="$store.workflow.showStepDataModal = false" x-cloak>
+    <div class="modal-box w-11/12 max-w-4xl max-h-[85vh] overflow-y-auto">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('wf_run_step_data_title') + ': ' + $store.workflow.stepDataTitle"></h3>
+          <template x-if="$store.workflow.stepData">
+            <div class="flex items-center gap-2 mt-1">
+              <div class="badge badge-sm" :class="$store.workflow.stepData.status === 'ok' ? 'badge-success' : 'badge-ghost'" x-text="$store.workflow.stepData.status"></div>
+              <div class="badge badge-sm badge-outline font-mono" x-text="`${$store.workflow.stepData.count || 0} 条`"></div>
+              <div class="badge badge-sm badge-warning" x-show="$store.workflow.stepData.truncated" x-text="$store.i18n.t('wf_run_data_truncated')"></div>
+            </div>
+          </template>
+        </div>
+        <button class="btn btn-sm btn-ghost" @click="$store.workflow.showStepDataModal = false">✕</button>
+      </div>
+
+      <!-- Loading -->
+      <div x-show="$store.workflow.stepDataLoading" class="flex justify-center py-12">
+        <span class="loading loading-spinner loading-md text-primary"></span>
+      </div>
+
+      <!-- Content -->
+      <div x-show="!$store.workflow.stepDataLoading && $store.workflow.stepData">
+        <!-- Items Table -->
+        <template x-if="$store.workflow.stepData?.items && $store.workflow.stepData.items.length > 0">
+          <div class="overflow-x-auto border border-base-300 rounded-box">
+            <table class="table table-xs table-zebra w-full">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th x-text="$store.i18n.t('wf_table_title')"></th>
+                  <th x-text="$store.i18n.t('wf_table_url')"></th>
+                  <th x-text="$store.i18n.t('wf_table_published_at')"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(item, i) in $store.workflow.stepData.items" :key="i">
+                  <tr>
+                    <td class="font-mono text-xs" x-text="i + 1"></td>
+                    <td class="max-w-xs truncate" :title="item.title || item.name || ''" x-text="item.title || item.name || '-'"></td>
+                    <td class="max-w-xs truncate font-mono text-[11px]">
+                      <a x-show="item.url" :href="item.url" target="_blank" rel="noopener noreferrer" class="link link-primary" x-text="item.url"></a>
+                      <span x-show="!item.url">-</span>
+                    </td>
+                    <td class="text-xs text-base-content/60" x-text="item.published_at || item.pub_date || item.date || '-'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <!-- Text Output -->
+        <template x-if="$store.workflow.stepData?.text">
+          <div class="mt-4">
+            <h4 class="text-xs font-bold text-base-content/70 mb-1" x-text="$store.i18n.t('wf_run_data_text')"></h4>
+            <div class="bg-base-200 p-3 rounded-box text-xs font-mono whitespace-pre-wrap max-h-60 overflow-y-auto border border-base-300" x-text="$store.workflow.stepData.text"></div>
+          </div>
+        </template>
+
+        <!-- Empty State -->
+        <div class="py-12 text-center text-sm text-base-content/50"
+          x-show="(!$store.workflow.stepData?.items || $store.workflow.stepData.items.length === 0) && !$store.workflow.stepData?.text">
+          <span x-text="$store.i18n.t('wf_run_data_empty')"></span>
+        </div>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm btn-ghost" @click="$store.workflow.showStepDataModal = false" x-text="$store.i18n.t('close')"></button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>close</button>
+    </form>
+  </dialog>
+</div>

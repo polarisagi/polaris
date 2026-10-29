@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Tauri 2 会把本文件合并进 macOS 包的 Info.plist。
+	     缺少该键时 WKWebView 的 getUserMedia 会被系统静默拒绝，语音输入无法开麦（ADR-0107）。 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Polaris 需要使用麦克风进行语音输入，录音仅在本机离线识别，不会上传云端。</string>
+</dict>
+</plist>

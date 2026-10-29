@@ -1,0 +1,12 @@
+name: list_models
+description: "列出当前所有已启用厂商下的模型列表（支持 query 过滤与 refresh 触发实时探测刷新）。返回模型引用、显示名称、角色池、上下文窗口、是否支持思考/多模态/工具、已知价格、是否本地以及当前会话锁定状态。"
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - model
+  - agentic
+  - catalog

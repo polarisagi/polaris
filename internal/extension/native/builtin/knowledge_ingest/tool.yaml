@@ -1,0 +1,13 @@
+name: knowledge_ingest
+description: "批量将文档摄入本地知识库，支持多格式内容与元数据索引。自动进行哈希去重与分块，触发向量重建与知识图谱构建。"
+version: "1.0.0"
+capability: write-local
+risk_level: low
+sandbox: in-process
+side_effects:
+  - state-mutate
+tags:
+  - knowledge
+  - rag
+  - ingest
+  - documents

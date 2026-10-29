@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "csv_parse",
+  "description": "Parse CSV text and return a JSON array where each row is an object keyed by the header row.",
+  "type": "object",
+  "properties": {
+    "csv": {
+      "type": "string",
+      "description": "Raw CSV text. The first row is treated as the header and becomes the object keys."
+    }
+  },
+  "required": ["csv"]
+}

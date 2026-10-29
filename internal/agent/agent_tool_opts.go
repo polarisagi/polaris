@@ -1,0 +1,122 @@
+package agent
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// stateWantsTools 决定某 FSM 状态的 LLM 调用是否下发 tools 定义，以及是否同时禁止调用。
+//
+// 现状：仅 S_PLAN 下发 tools（原生 function-calling 通路，行为不变）。
+// 实验开关 m4_kernel.cache.uniform_tools=true（ADR-0105 决策三）：Perceive/Reflect/Respond
+// 也下发与 Plan 相同的 tools，并以 tool_choice=none 禁止调用——四阶段 tools 前缀字节一致，
+// 让 tools（缓存前缀最靠前的部分）不再因阶段而失配。Validate 等其余状态从不携带 tools。
+func stateWantsTools(state types.AgentState, uniform bool) (attach, forbidCall bool) {
+	switch state {
+	case types.AgentStatePlan, types.AgentStateLoop:
+		return true, false
+	case types.AgentStatePerceive, types.AgentStateReflect, types.AgentStateRespond:
+		return uniform, uniform
+	}
+	return false, false
+}
+
+// toolOptionsFor 把 schema 列表转换为 InferOption。schemas 为空返回 nil（不发空 tools）；
+// forbidCall 时追加 tool_choice=none，适配器负责映射（不支持的适配器忽略该选项）。
+func toolOptionsFor(schemas []types.ToolSchema, forbidCall bool) []types.InferOption {
+	if len(schemas) == 0 {
+		return nil
+	}
+	opts := []types.InferOption{types.WithTools(schemas)}
+	if forbidCall {
+		opts = append(opts, types.WithToolChoice("none"))
+	}
+	return opts
+}
+
+// toolInferOptions 返回本次 LLM 调用应附加的 tools 相关选项。
+//
+// TaskID 注入方式与 promptPlan 里 BuildToolListSection 保持一致：懒加载工具激活作用域需要
+// 同一个 TaskID，否则上一轮 tool_search 激活的工具在本轮 Schemas() 重建时对不上
+// （见 catalog/composite.go）。非 Plan 阶段读到的激活集合与 Plan 相同，故 tools 数组一致。
+//
+// 非 Plan 阶段即便模型仍返回 tool_calls：调用点只在 S_PLAN 才把 ToolCalls 转 DAG，
+// 其余阶段沿用 resp.Content——tool_calls 被忽略，不会驱动执行。
+func (a *Agent) toolInferOptions(ctx context.Context, state types.AgentState, uniform bool) []types.InferOption {
+	attach, forbid := stateWantsTools(state, uniform)
+	if !attach {
+		return nil
+	}
+	cata := a.visibleCatalog()
+	if cata == nil {
+		return nil
+	}
+	toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+	schemas := cata.Schemas(toolCtx, types.TrustCommunity)
+	if state == types.AgentStateLoop {
+		filtered := make([]types.ToolSchema, 0, len(schemas)+2)
+		for _, s := range schemas {
+			if s.Name != "spawn_planner" {
+				filtered = append(filtered, s)
+			}
+		}
+		filtered = append(filtered, codeActToolSchema())
+		var completion string
+		if a.sCtx != nil {
+			a.sCtx.Mu.RLock()
+			completion = a.sCtx.LoopCompletion
+			a.sCtx.Mu.RUnlock()
+		}
+		if completion == "" {
+			completion = config.CurrentThresholds().M4Kernel.LoopCompletion
+		}
+		if completion == "explicit" {
+			filtered = append(filtered, finishToolSchema())
+		}
+		schemas = filtered
+	}
+	return toolOptionsFor(schemas, forbid)
+}
+
+// finishToolSchema 返回下发给模型的 finish 工具定义（R3-07 / WP2）。
+func finishToolSchema() types.ToolSchema {
+	return types.ToolSchema{
+		Name:        "finish",
+		Description: "显式完成任务并向用户或父智能体提交最终总结。仅在任务目标已达成或无法继续时调用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary": map[string]any{
+					"type":        "string",
+					"description": "任务执行结果总结与最终产物说明",
+				},
+			},
+			"required": []string{"summary"},
+		},
+	}
+}
+
+// candidateToolOptions 返回 PRM 候选请求的 tools 选项。候选要求模型输出 JSON DAG（不是原生 tool_calls），
+// 因此形态与"非 Plan 阶段"一致：uniform 开启时 tools + tool_choice=none，关闭时无 tools。
+// 此前候选路径完全不带 tools，uniform 开启时 PRM 回合的候选请求与同回合其它阶段的 tools 前缀失配。
+func (a *Agent) candidateToolOptions(ctx context.Context, uniform bool) []types.InferOption {
+	return a.toolInferOptions(ctx, types.AgentStateReflect, uniform)
+}
+
+// loopEmptyRecoveryOpts 空输出恢复链第 2 档的调用选项（B3.2）：
+// 已有工具结果 → tool_choice=none 强制基于现有结果收尾；尚无 → 关闭思考模式再试一次。
+// tool_choice 仅在同时下发 tools 时生效（保留 tools 也使缓存前缀不失配）。
+func (a *Agent) loopEmptyRecoveryOpts() []types.InferOption {
+	plan := a.sCtx.LoopEmptyRecoveryPlan()
+	var opts []types.InferOption
+	if plan.ForbidTools {
+		opts = append(opts, types.WithToolChoice("none"))
+	}
+	if plan.DisableThinking {
+		opts = append(opts, types.WithThinkingMode(types.ThinkingDisabled))
+	}
+	return opts
+}

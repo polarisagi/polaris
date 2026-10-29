@@ -1,0 +1,4 @@
+name: job_output
+description: Get recent output (tail) of a background job.
+capability: read-only
+risk_level: low

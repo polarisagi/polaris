@@ -1,0 +1,498 @@
+package codeact
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// ── mock 桩 ────────────────────────────────────────────────────────────────
+
+type mockSandbox struct {
+	level  int
+	result *types.ToolResult
+	err    error
+	calls  int
+}
+
+func (m *mockSandbox) Run(_ context.Context, _ sandbox.SandboxSpec) (*types.ToolResult, error) {
+	m.calls++
+	return m.result, m.err
+}
+
+func (m *mockSandbox) Level() int { return m.level }
+
+type mockPolicyGate struct {
+	allowed bool
+	err     error
+}
+
+func (m *mockPolicyGate) IsAuthorized(_ context.Context, _, _, _ string, _ map[string]any) (bool, error) {
+	return m.allowed, m.err
+}
+
+func (m *mockPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
+	return types.PolicyReviewResult{}, nil
+}
+
+type mockGovAgent struct {
+	err error
+}
+
+func (m *mockGovAgent) ValidateCode(_ string, _ []byte, _ map[string]bool) error {
+	return m.err
+}
+
+// mockTokenManager satisfies the tokenManager interface used by CodeAct.
+type mockTokenManager struct {
+	tok *token.Token
+	err error
+	// consumeErr 非 nil 时模拟"令牌配额已耗尽"（MaxCallsPerTask 用完）。
+	consumeErr error
+	// consumeCalls 记录 Consume 被调用次数，用于断言每次执行都真正消费一次配额。
+	consumeCalls int
+}
+
+func (m *mockTokenManager) Lookup(_ string) (*token.Token, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.tok != nil {
+		return m.tok, nil
+	}
+	return &token.Token{}, nil
+}
+
+func (m *mockTokenManager) Verify(_ *token.Token) error { return m.err }
+
+func (m *mockTokenManager) Consume(_ string) error {
+	m.consumeCalls++
+	return m.consumeErr
+}
+
+// defaultMockTokenManager returns a token manager that always succeeds.
+func defaultMockTokenManager() *mockTokenManager { return &mockTokenManager{} }
+
+type mockToolExecutor struct{}
+
+func (m *mockToolExecutor) Execute(_ context.Context, _ types.ToolCallRequest) (*types.ToolResult, error) {
+	return nil, nil
+}
+
+func (m *mockToolExecutor) ExecuteDryRun(_ context.Context, _ types.ToolCallRequest) (*types.ToolResult, error) {
+	return nil, nil
+}
+
+func (m *mockToolExecutor) RecordAudit(_ context.Context, _ string, _ []byte) error { return nil }
+func (m *mockToolExecutor) Cancel(_ context.Context, _ string) error                { return nil }
+
+// ── writeTempScript ────────────────────────────────────────────────────────
+
+func TestWriteTempScript_Python(t *testing.T) {
+	code := "print('hello')"
+	path, err := writeTempScript("python", code)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer os.Remove(path)
+
+	if !strings.HasSuffix(path, ".py") {
+		t.Errorf("expected .py suffix, got %q", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read temp file: %v", err)
+	}
+	if string(data) != code {
+		t.Errorf("file content mismatch: got %q", string(data))
+	}
+}
+
+func TestWriteTempScript_Bash(t *testing.T) {
+	code := "echo hello"
+	path, err := writeTempScript("bash", code)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer os.Remove(path)
+
+	if !strings.HasSuffix(path, ".sh") {
+		t.Errorf("expected .sh suffix, got %q", path)
+	}
+	// bash 脚本必须有执行权限（0700）
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat temp file: %v", err)
+	}
+	if fi.Mode()&0o100 == 0 {
+		t.Errorf("bash script not executable: mode=%o", fi.Mode())
+	}
+}
+
+// ── DefaultASTChecker.CheckPython ──────────────────────────────────────────
+
+func TestASTChecker_CheckPython_Safe(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`
+x = 1 + 2
+print(x)
+`)
+	if err := checker.CheckPython(code); err != nil {
+		t.Errorf("expected no error for safe code, got: %v", err)
+	}
+}
+
+func TestASTChecker_CheckPython_EvalBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`eval("1+1")`)
+	if err := checker.CheckPython(code); err == nil {
+		t.Error("expected error for eval(), got nil")
+	}
+}
+
+func TestASTChecker_CheckPython_ExecBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`exec("import os")`)
+	if err := checker.CheckPython(code); err == nil {
+		t.Error("expected error for exec(), got nil")
+	}
+}
+
+func TestASTChecker_CheckPython_OsSystemBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`import os; os.system("ls")`)
+	if err := checker.CheckPython(code); err == nil {
+		t.Error("expected error for os.system(), got nil")
+	}
+}
+
+func TestASTChecker_CheckPython_SubprocessPopenBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`import subprocess; subprocess.Popen(["ls"])`)
+	if err := checker.CheckPython(code); err == nil {
+		t.Error("expected error for subprocess.Popen(), got nil")
+	}
+}
+
+func TestASTChecker_CheckPython_InvalidSyntax(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`def broken(`)
+	if err := checker.CheckPython(code); err == nil {
+		t.Error("expected parse error for invalid python, got nil")
+	}
+}
+
+// ── DefaultASTChecker.CheckBash ────────────────────────────────────────────
+
+func TestASTChecker_CheckBash_Safe(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`echo "hello world"`)
+	if err := checker.CheckBash(code); err != nil {
+		t.Errorf("expected no error for safe bash, got: %v", err)
+	}
+}
+
+func TestASTChecker_CheckBash_EvalBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`eval "rm -rf /"`)
+	if err := checker.CheckBash(code); err == nil {
+		t.Error("expected error for eval, got nil")
+	}
+}
+
+func TestASTChecker_CheckBash_ExecBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`exec bash`)
+	if err := checker.CheckBash(code); err == nil {
+		t.Error("expected error for exec, got nil")
+	}
+}
+
+func TestASTChecker_CheckBash_RmRfBlocked(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte(`rm -rf /tmp/test`)
+	if err := checker.CheckBash(code); err == nil {
+		t.Error("expected error for rm -rf, got nil")
+	}
+}
+
+func TestASTChecker_CheckBash_InvalidSyntax(t *testing.T) {
+	checker := &DefaultASTChecker{}
+	code := []byte("if [[") // 不完整的 if 语句
+	if err := checker.CheckBash(code); err == nil {
+		t.Error("expected parse error for invalid bash, got nil")
+	}
+}
+
+// ── validateBasic（通过 Execute 覆盖） ─────────────────────────────────────
+
+func TestExecute_EmptyCode(t *testing.T) {
+	ca := NewCodeAct(nil, nil)
+	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language:     "python",
+		Code:         "",
+		CapabilityID: "cap-1",
+	})
+	if err == nil {
+		t.Error("expected error for empty code, got nil")
+	}
+}
+
+func TestExecute_UnsupportedLanguage(t *testing.T) {
+	ca := NewCodeAct(nil, nil)
+	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language:     "ruby",
+		Code:         "puts 'hi'",
+		CapabilityID: "cap-1",
+	})
+	if err == nil {
+		t.Error("expected error for unsupported language, got nil")
+	}
+}
+
+func TestExecute_MissingCapabilityID(t *testing.T) {
+	ca := NewCodeAct(nil, nil)
+	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language:     "python",
+		Code:         "x=1",
+		CapabilityID: "",
+	})
+	if err == nil {
+		t.Error("expected error for empty capability_id, got nil")
+	}
+}
+
+func TestExecute_PolicyDenied(t *testing.T) {
+	gate := &mockPolicyGate{allowed: false}
+	ca := NewCodeAct(sandbox.NewExecEnvelope(gate, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
+	res, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language:     "python",
+		Code:         "x=1",
+		CapabilityID: "cap-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 1 || !strings.Contains(res.Output.UnsafeContent(), "policy denied") {
+		t.Errorf("expected policy denied in output, got exit=%d output=%q", res.ExitCode, res.Output)
+	}
+}
+
+func TestExecute_NilPolicyGate_FailClosed(t *testing.T) {
+	// policy gate 为 nil → fail-closed (envelope 中的 gate 为 nil)
+	// token manager 照常注入（只测 policy gate 缺失路径）
+	ca := NewCodeAct(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
+	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language:     "python",
+		Code:         "x=1",
+		CapabilityID: "cap-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "policy gate not initialized") {
+		t.Errorf("expected fail-closed error, got %v", err)
+	}
+}
+
+// fakeCmdRunner 替代 Rust bwrap/Seatbelt：记录调用并返回固定输出。
+type fakeCmdRunner struct {
+	out   []byte
+	calls int
+}
+
+func (f *fakeCmdRunner) RunCmd(_ context.Context, _ sandbox.CmdRunnerCfg) ([]byte, int, string, error) {
+	f.calls++
+	return f.out, 0, "fake", nil
+}
+
+// inv_global_07：CodeAct 必须落在 Sbx-L3，L3 不可用时拒绝，禁止降级到 Wasm（GR-4.2-001）。
+func TestExecute_SandboxLevelTooLow(t *testing.T) {
+	gate := &mockPolicyGate{allowed: true}
+	wasm := &mockSandbox{level: 2, result: &types.ToolResult{Output: []byte("wasm"), Success: true}}
+	run := func(hwTier int) error {
+		router := sandbox.NewSandboxRouter(nil, nil, wasm, "linux", hwTier) // 只有 Wasm 可用
+		envelope := sandbox.NewExecEnvelope(gate, router, hwTier, "linux", nil)
+		ca := NewCodeAct(envelope, &mockToolExecutor{},
+			WithGovernanceAgent(&mockGovAgent{}),
+			WithTokenManager(defaultMockTokenManager()),
+		)
+		_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+			Language: "python", Code: "x=1", CapabilityID: "cap-1",
+		})
+		return err
+	}
+	if err := run(1); err == nil || !strings.Contains(err.Error(), "L3/Container required") {
+		t.Errorf("tier1 without container: expected L3 refusal, got %v", err)
+	}
+	if err := run(0); err == nil || !strings.Contains(err.Error(), "NativeOS required") {
+		t.Errorf("tier0: expected NativeOS required, got %v", err)
+	}
+	if wasm.calls != 0 {
+		t.Errorf("CodeAct must never reach the Wasm backend, got %d calls", wasm.calls)
+	}
+}
+
+func TestExecute_Success(t *testing.T) {
+	gate := &mockPolicyGate{allowed: true}
+	runner := &fakeCmdRunner{out: []byte("hello")}
+	container := sandbox.NewContainerSandbox("", "linux", 1, runner, config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(nil, container, nil, "linux", 1)
+	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil)
+	exec := &mockToolExecutor{}
+	ca := NewCodeAct(envelope, exec,
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
+	res, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language:     "python",
+		Code:         "print('hello')",
+		CapabilityID: "cap-1",
+		SessionID:    "s1",
+		AgentID:      "a1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if res.Output.UnsafeContent() != "hello" {
+		t.Errorf("output: got %q, want %q", res.Output, "hello")
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("exit code: got %d, want 0", res.ExitCode)
+	}
+	if runner.calls != 1 {
+		t.Errorf("expected exactly one L3 container execution, got %d", runner.calls)
+	}
+}
+
+// ── D4/ADR-0008：L4 长驻会话端到端集成 ──────────────────────────────────────
+
+// bareArgvWrapper 测试替身：绕过 Rust FFI/bwrap/Seatbelt，直接透传 argv/env，
+// 与 internal/sandbox 包自己的同名测试替身用途一致（不能跨包复用未导出类型，
+// 各自维护一份，逻辑很薄，不构成重复维护负担）。
+type bareArgvWrapper struct{}
+
+func (bareArgvWrapper) WrapArgv(_ context.Context, sctx protocol.SandboxContext) (*protocol.WrapArgvResult, error) {
+	return &protocol.WrapArgvResult{
+		Executable: sctx.ExecPath,
+		Argv:       sctx.ExecArgs,
+		EnvInArgv:  false,
+		Env:        append([]string{"PATH=/usr/bin:/bin:/usr/local/bin"}, sctx.EnvExtra...),
+	}, nil
+}
+
+func TestExecute_L4PersistentSession_StatePersistsAcrossCalls(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found on PATH, skipping")
+	}
+
+	gate := &mockPolicyGate{allowed: true}
+	inProc := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(inProc, nil, nil, "linux", 2)
+	persistent := sandbox.NewPersistentSandbox(bareArgvWrapper{}, sandbox.PersistentSandboxConfig{
+		IdleTTL: time.Minute, MaxSessions: 4, ExecTimeout: 5 * time.Second, ReapInterval: time.Minute,
+	})
+	defer persistent.Shutdown()
+	router.WithPersistent(persistent)
+	envelope := sandbox.NewExecEnvelope(gate, router, 2, "linux", nil)
+	ca := NewCodeAct(envelope, &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
+
+	const sessionID = "codeact-l4-session-1"
+
+	res1, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language: "bash", Code: "export FOO=bar", CapabilityID: "cap-1",
+		SessionID: sessionID, AgentID: "a1", StatefulSession: true,
+	})
+	if err != nil {
+		t.Fatalf("call1 unexpected error: %v", err)
+	}
+	if res1.ExitCode != 0 {
+		t.Fatalf("call1 unexpected exit code %d, output=%q", res1.ExitCode, res1.Output)
+	}
+
+	res2, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language: "bash", Code: "echo $FOO", CapabilityID: "cap-1",
+		SessionID: sessionID, AgentID: "a1", StatefulSession: true,
+	})
+	if err != nil {
+		t.Fatalf("call2 unexpected error: %v", err)
+	}
+	if res2.ExitCode != 0 {
+		t.Fatalf("call2 unexpected exit code %d, output=%q", res2.ExitCode, res2.Output)
+	}
+	if !strings.Contains(res2.Output.UnsafeContent(), "bar") {
+		t.Fatalf("expected call2 to observe FOO=bar exported by call1 through a real persisted shell process, got output=%q", res2.Output)
+	}
+}
+
+// TestExecute_StatefulSessionWithoutL4_FallsBackToPickleWrap 验证 L4 不可用
+// （未注入 persistent sandbox）时，StatefulSession 请求仍走既有 GD-4-002
+// pickle/env 包装路径——D4 集成不能让"申请了 StatefulSession 但 L4 不可用"
+// 的请求退化为无状态一次性执行（零回归要求）。用 mockSandbox 直接断言执行
+// 到达的 tier 仍是 buildExecutableScript 产生的普通路径（mockSandbox 对
+// SandboxTier 不敏感，这里主要验证不会因为 StatefulSession=true 而报错或
+// 路由失败）。
+func TestExecute_StatefulSessionWithoutL4_FallsBackToPickleWrap(t *testing.T) {
+	gate := &mockPolicyGate{allowed: true}
+	container := sandbox.NewContainerSandbox("", "linux", 1, &fakeCmdRunner{out: []byte("ok")}, config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(nil, container, nil, "linux", 1) // 未 WithPersistent：L4 不可用 → 回落 Container
+	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil)
+	tmpDir := t.TempDir()
+	ca := NewCodeAct(envelope, &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+		WithStateDir(tmpDir),
+	)
+
+	res, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language: "bash", Code: "echo hi", CapabilityID: "cap-1",
+		SessionID: "no-l4-session", StatefulSession: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("unexpected exit code %d", res.ExitCode)
+	}
+}
+
+func TestExecute_MaxCodeSizeLimit(t *testing.T) {
+	// 50 bytes limit
+	ca := NewCodeAct(nil, nil, WithMaxCodeSize(50))
+	req := protocol.CodeActRequest{
+		Language:     "python",
+		Code:         strings.Repeat("a", 51),
+		CapabilityID: "cap-1",
+	}
+
+	err := ca.validateBasic(req)
+	if err == nil {
+		t.Fatal("expected error for exceeding max code size, got nil")
+	}
+	appErr, ok := err.(*apperr.Error)
+	if !ok || appErr.Code != apperr.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum limit") {
+		t.Fatalf("expected error message to mention size limit, got %v", err)
+	}
+}

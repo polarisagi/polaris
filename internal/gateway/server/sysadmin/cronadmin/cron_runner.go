@@ -1,0 +1,364 @@
+package cronadmin
+
+import (
+	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
+
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+func finalizeWorktreeChanges(ctx context.Context, ca *CronAdmin, a *automation, runID, wtDir, branchName string, wtManager WorktreeManager, status, errMsg *string) {
+	hasChanges, diffSummary, err := wtManager.CommitChanges(ctx, wtDir, branchName)
+	if err != nil {
+		slog.Error("automation: commit worktree changes failed", "err", err)
+		*status = "error"
+		*errMsg = "commit worktree changes failed: " + err.Error()
+		return
+	}
+	if !hasChanges {
+		return
+	}
+
+	approved := true
+	if ca.HITLGateway != nil {
+		resp, hitlErr := ca.HITLGateway.Prompt(ctx, types.HITLPrompt{
+			ID:             "worktree-push:" + runID,
+			CheckpointType: "worktree_auto_push",
+			PromptText: fmt.Sprintf("自动化任务 [%s] 生成了代码改动，请审核后批准推送到远端分支 %s：\n\n%s",
+				a.Name, branchName, diffSummary),
+			RiskLevel:  3,
+			TaintLevel: types.TaintHigh,
+			DeadlineNs: time.Now().Add(24 * time.Hour).UnixNano(),
+		})
+		approved = hitlErr == nil && resp != nil && resp.Approved
+		if !approved {
+			reason := "HITL 超时或拒绝"
+			if resp != nil {
+				reason = resp.Reason
+			}
+			slog.Warn("automation: worktree push withheld", "branch", branchName, "reason", reason)
+		}
+	}
+	if !approved {
+		return
+	}
+
+	if err := wtManager.PushBranch(ctx, wtDir, branchName); err != nil {
+		slog.Error("automation: push worktree branch failed", "err", err)
+		*status = "error"
+		*errMsg = "push worktree branch failed: " + err.Error()
+		return
+	}
+	slog.Info("automation: worktree changes committed and pushed", "branch", branchName)
+
+	prTitle := fmt.Sprintf("automation: %s (%s)", a.Name, runID)
+	prBody := fmt.Sprintf("由自动化任务 [%s] 生成，触发 run_id=%s。\n\n%s", a.Name, runID, diffSummary)
+	if err := wtManager.CreatePullRequest(ctx, branchName, prTitle, prBody); err != nil {
+		// PR 创建失败不影响本次自动化的成功状态（push 已完成，属于非致命的便利性增强失败）。
+		slog.Warn("automation: create pull request failed (non-fatal)", "branch", branchName, "err", err)
+	}
+}
+
+// executeAutomation 创建 run 记录、调用 Agent 执行、更新状态。
+// 返回 runID，异步执行不阻塞调用方。
+//
+//nolint:gocyclo,funlen,nestif
+func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigger string) string {
+	runID := newRunID()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// 1. 生成 session ID
+	sessionID := NewSessionID()
+
+	// 2. 写 run 记录（running 状态）
+	// trigger 列有 CHECK(cron/webhook/manual/event)，漏传即空串违反约束、整条插入失败；
+	// status 取 DDL 注释所列的 running（原 "pending" 不在其中，启动期孤儿对账只扫
+	// running，崩溃的 run 会永远不被标记 interrupted）。
+	if err := ca.AutomationRepo.CreateRun(ctx, repo.AutomationRunRow{
+		ID:           runID,
+		AutomationID: a.ID,
+		Trigger:      trigger,
+		Status:       "running",
+		// session_id 关联本次执行产生的会话，prompt_snapshot 固化执行时 prompt
+		// （automation 的 prompt 之后可能被修改），均为 DDL 定义的 run 记录字段。
+		SessionID:      sessionID,
+		PromptSnapshot: a.Prompt,
+		StartedAt:      time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		slog.Warn("automation: insert run failed", "run", runID, "err", err)
+	}
+
+	// 3. 更新 automations 执行状态
+	nextRun := CalcNextRun(a.CronSchedule, now)
+	if err := ca.AutomationRepo.UpdateAutomationStatusAndSchedule(ctx, a.ID, "running", now, nextRun); err != nil {
+		slog.Warn("automation: update status failed", "id", a.ID, "err", err)
+	}
+
+	// 2026-07-08 系统最优加固：此前是裸 `go func(){}()`，任一 panic（ca.Chat/
+	// ca.Registry 等硬依赖为 nil、Provider 流式推理异常、worktree 操作异常等）
+	// 会直接终止整个进程；HTTP 路径有 withMiddleware 的 PanicRecovery 兜底
+	// （server_lifecycle.go:190），但本 goroutine 无论从 cron/event/webhook
+	// 后台触发还是从 manual HTTP 触发都会脱离调用方 goroutine 独立执行，均不
+	// 受 HTTP 中间件保护。改用 pkg/concurrent.SafeGo 统一接入（ADR-0025 §H
+	// "SafeGo 全量迁移"未覆盖到本文件，是覆盖遗漏而非有意延后）。
+	concurrent.SafeGo(context.Background(), "cronadmin.executeAutomation.worker", func(context.Context) {
+		// 动态映射超时
+		timeout := 15 * time.Minute
+		switch a.ReasoningEffort {
+		case "low":
+			timeout = 5 * time.Minute
+		case "medium":
+			timeout = 15 * time.Minute
+		case "high":
+			timeout = 30 * time.Minute
+		case "ultra":
+			timeout = 60 * time.Minute
+		}
+
+		// 运行预算可暂停：等待用户审批（无人值守审批，ADR-0117 追记）期间不计时，并把运行/自动化切到
+		// suspended（UI 显示“等待批准”），批准后恢复 running。
+		bgCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		budgetCtx := bgCtx // bgCtx 之后会被 WithValue 重新赋值，监督协程只持有不再变化的副本
+		concurrent.SafeGo(context.Background(), "cronadmin.executeAutomation.budget", func(context.Context) {
+			SuperviseBudget(budgetCtx, cancel, timeout, ApprovalPollInterval,
+				sessionWaitingForApproval(ca.HITLGateway, sessionID),
+				func(waiting bool) {
+					st := "running"
+					if waiting {
+						st = "suspended"
+					}
+					uctx := context.WithoutCancel(budgetCtx)
+					if err := ca.AutomationRepo.UpdateRunStatus(uctx, runID, st, "", ""); err != nil {
+						slog.Warn("automation: update run status failed", "run", runID, "status", st, "err", err)
+					}
+					if err := ca.AutomationRepo.UpdateAutomationStatus(uctx, a.ID, st); err != nil {
+						slog.Warn("automation: update automation status failed", "id", a.ID, "status", st, "err", err)
+					}
+				})
+		})
+
+		// 注入上下文（Sandbox Level / Cedar Rules）
+		bgCtx = context.WithValue(bgCtx, ctxKeySandboxLevel, a.SandboxLevel)
+		bgCtx = context.WithValue(bgCtx, ctxKeyCedarRules, a.CedarRulesJSON)
+
+		status := "ok"
+		errMsg := ""
+		finishedAt := ""
+
+		var wtManager WorktreeManager
+		var wtDir, branchName string
+		if a.EnvType == "worktree" {
+			wtManager = ca.NewWorktreeManager(a.WorkingDir, filepath.Join(os.TempDir(), "polaris-worktrees"))
+			var wtErr error
+			wtDir, branchName, wtErr = wtManager.PrepareWorktree(bgCtx, runID)
+			if wtErr != nil {
+				status = "error"
+				errMsg = "worktree setup failed: " + wtErr.Error()
+				slog.Error("automation: worktree setup failed", "err", wtErr)
+				return
+			}
+			a.WorkingDir = wtDir // Temporarily override WorkingDir for this execution
+		}
+
+		defer func() {
+			if wtManager != nil {
+				if status == "ok" {
+					finalizeWorktreeChanges(context.Background(), ca, a, runID, wtDir, branchName, wtManager, &status, &errMsg)
+				}
+				wtManager.Cleanup(wtDir)
+			}
+
+			finishedAt = time.Now().UTC().Format(time.RFC3339)
+			// 更新 run 记录
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, status, errMsg, time.Now().UTC().Format(time.RFC3339)); err != nil {
+
+				slog.Warn("automation: update run failed", "run", runID, "err", err)
+			}
+
+			// 更新 automations 统计（含电路断路器，见 updateAutomationStats）
+			ca.updateAutomationStats(a.ID, status, errMsg, finishedAt)
+		}()
+
+		// 放在 defer 注册之后：run 记录与 automation 统计仍按 error 收尾，
+		// 否则 nil 依赖在 RunTurn 处 panic，被 SafeGo 吞掉后状态永远停在 running。
+		if ca.SessionOrch == nil {
+			status = "error"
+			errMsg = "session orchestrator not configured"
+			return
+		}
+
+		if ca.HITLGateway != nil && a.RequiresHITL {
+			// 更新状态为 suspended，等待审批
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", ""); err != nil {
+				slog.Warn("automation: update run status to suspended failed", "run", runID, "err", err)
+			}
+			if err := ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "suspended"); err != nil {
+				slog.Warn("automation: update automation status to suspended failed", "id", a.ID, "err", err)
+			}
+
+			var taintLevel types.TaintLevel
+			switch trigger {
+			case "webhook":
+				taintLevel = types.TaintHigh
+			default:
+				taintLevel = types.TaintLow
+			}
+
+			prompt := types.HITLPrompt{
+				ID:             "automation:" + runID,
+				CheckpointType: "automation_pre_run",
+				PromptText:     fmt.Sprintf("自动化任务 [%s] 即将执行，触发方式: %s", a.Name, trigger),
+				RiskLevel:      a.RiskLevel,
+				DeadlineNs:     time.Now().Add(10 * time.Minute).UnixNano(),
+				TaintLevel:     taintLevel,
+			}
+
+			resp, hitlErr := ca.HITLGateway.Prompt(bgCtx, prompt)
+			if hitlErr != nil || (resp != nil && !resp.Approved) {
+				reason := "HITL 超时或拒绝"
+				if resp != nil {
+					reason = resp.Reason
+				}
+				status = "error"
+				errMsg = "HITL 拒绝: " + reason
+				return
+			}
+			// 审批通过，继续执行
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "running", "", ""); err != nil {
+				slog.Warn("automation: update run status to running failed", "run", runID, "err", err)
+			}
+			if err := ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "running"); err != nil {
+				slog.Warn("automation: update automation status to running failed", "id", a.ID, "err", err)
+			}
+		}
+
+		// [A-03 Step5] 原内联 AcquireHeadless + SaveMessage(assistant) +
+		// SampleAndScoreReply + UpdateSessionTitle 序列（此前从不 EnsureSession/
+		// 不存 user 消息/不触发 UserPromptSubmit hook/不 TouchSession——workflowadmin
+		// 分支同款缺口），收敛至 session.Orchestrator.RunTurn(Headless:true)
+		// 统一实现，见 internal/gateway/session/orchestrator_headless.go 顶部
+		// 注释。WorkingDir 前缀拼接由 RunTurn 内部处理，此处传原始 a.Prompt。
+		result, runErr := ca.SessionOrch.RunTurn(bgCtx, session.Request{
+			SessionID:      sessionID,
+			ProjectID:      a.ProjectID,
+			Input:          a.Prompt,
+			Channel:        "cron",
+			Headless:       true,
+			WorkingDir:     a.WorkingDir,
+			TitleHint:      a.Name,
+			LoopCompletion: "explicit",
+		}, session.NewBufferSink())
+		if runErr != nil {
+			status = "error"
+			errMsg = "agent headless execution failed: " + runErr.Error()
+			return
+		}
+		if result.Aborted {
+			status = "error"
+			errMsg = "automation blocked (hook rejection or session error)"
+			return
+		}
+
+		reply := result.Reply
+
+		// 处理 result_action 投递
+		if err := ca.DeliverResult(bgCtx, a.ResultAction, sessionID, a.Name, reply); err != nil {
+			slog.Warn("automation: deliver result failed", "automation_id", a.ID, "err", err)
+		}
+	})
+
+	return runID
+}
+
+// DeliverResult 统一结果投递入口（支持 channel:xxx 投递与 session 模式会话消息保存）。
+func (ca *CronAdmin) DeliverResult(ctx context.Context, resultAction, sessionID, title, text string) error {
+	act := strings.TrimSpace(resultAction)
+	if act == "" || act == "silent" || act == "none" {
+		return nil
+	}
+
+	if chID, ok := strings.CutPrefix(act, "channel:"); ok {
+		return ca.deliverToChannel(ctx, chID, text)
+	}
+
+	if act == "session" {
+		return ca.deliverToSession(ctx, sessionID, title, text)
+	}
+
+	return nil
+}
+
+func (ca *CronAdmin) deliverToChannel(ctx context.Context, chID, text string) error {
+	if ca.ChannelRepo == nil || ca.ChannelMgr == nil {
+		return nil
+	}
+	chRow, qErr := ca.ChannelRepo.GetChannel(ctx, chID)
+	if qErr != nil {
+		slog.Warn("automation: channel not found for result_action", "channel_id", chID, "err", qErr)
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("get channel %s", chID), qErr)
+	}
+	if chRow == nil {
+		slog.Warn("automation: channel row is nil for result_action", "channel_id", chID)
+		return apperr.New(apperr.CodeNotFound, fmt.Sprintf("channel %s not found", chID))
+	}
+	var cfg map[string]any
+	if cfgErr := json.Unmarshal([]byte(chRow.ConfigJSON), &cfg); cfgErr != nil {
+		slog.Warn("automation: channel config_json 解析失败，result_action 可能因缺少配置而投递失败",
+			"channel_id", chID, "err", cfgErr)
+	}
+	if err := ca.ChannelMgr.SendReply(ctx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, text); err != nil {
+		slog.Warn("automation: result_action send reply failed", "channel_id", chID, "err", err)
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("send reply to channel %s", chID), err)
+	}
+	return nil
+}
+
+func (ca *CronAdmin) deliverToSession(ctx context.Context, sessionID, title, text string) error {
+	if ca.Chat == nil {
+		return nil
+	}
+	if sessionID == "" {
+		sessionID = NewSessionID()
+	}
+	if err := ca.Chat.EnsureSession(ctx, sessionID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("ensure session %s", sessionID), err)
+	}
+	if title != "" {
+		if err := ca.Chat.UpdateSessionTitle(ctx, sessionID, title); err != nil {
+			slog.DebugContext(ctx, "cron: update session title failed", "session_id", sessionID, "err", err)
+		}
+	}
+	if err := ca.Chat.SaveMessage(ctx, sessionID, "assistant", text, "", "", 0); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("save assistant message to session %s", sessionID), err)
+	}
+	return nil
+}
+
+// updateAutomationStats 更新 automations 表统计字段，含 Gap-C 电路断路器逻辑。
+// 连续 CircuitBreakThreshold 次 error → 置 circuit_open=1，cronTick 跳过该任务。
+// status=ok 时清零 failure_count 和 circuit_open（断路自愈）。
+func (ca *CronAdmin) updateAutomationStats(automationID, status, errMsg, finishedAt string) {
+	bg := context.Background()
+	circuitOpen, err := ca.AutomationRepo.UpdateAutomationStats(bg, automationID, status, errMsg, finishedAt, CircuitBreakThreshold)
+	if err != nil {
+		slog.Warn("automation: update stats failed", "id", automationID, "err", err)
+		return
+	}
+	if circuitOpen == 1 {
+		slog.Warn("automation: circuit opened — consecutive failures exceeded threshold",
+			"id", automationID, "threshold", CircuitBreakThreshold)
+	}
+}

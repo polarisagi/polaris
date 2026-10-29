@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "write_file",
+  "description": "Write or append content to a file. Creates the file if it does not exist. Restricted to allowed directories.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path of the file to write. Must be within the allowed directories."
+    },
+    "content": {
+      "type": "string",
+      "description": "Text content to write into the file."
+    },
+    "append": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, append to the file instead of overwriting it."
+    }
+  },
+  "required": ["path", "content"]
+}

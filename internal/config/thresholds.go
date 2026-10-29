@@ -1,0 +1,624 @@
+package config
+
+import (
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/offpeak"
+)
+
+// Thresholds 汇总全模块硬编码阈值的参数化配置。
+// 架构文档: ROADMAP.md §3 (P2-06 待对齐工程边界)
+// SSoT: docs/arch/spec/state.yaml §thresholds
+// 加载优先级: 内置默认值 < config/m*.toml < 环境变量 POLARIS_THRESHOLDS_*
+type Thresholds struct {
+	M1Router        M1RouterThresholds        `toml:"m1_router"`
+	M2Storage       M2StorageThresholds       `toml:"m2_storage"`
+	M3Observability M3ObservabilityThresholds `toml:"m3_observability"`
+	M4Kernel        M4KernelThresholds        `toml:"m4_kernel"`
+	M5Memory        M5MemoryThresholds        `toml:"m5_memory"`
+	M6Skill         M6SkillThresholds         `toml:"m6_skill"`
+	M7Tool          M7ToolThresholds          `toml:"m7_tool"`
+	M8Orchestrator  M8OrchestratorThresholds  `toml:"m8_orchestrator"`
+	M9SelfImprove   M9SelfImproveThresholds   `toml:"m9_self_improve"`
+	M10Knowledge    M10KnowledgeThresholds    `toml:"m10_knowledge"`
+	M11Policy       M11PolicyThresholds       `toml:"m11_policy"`
+	M12Eval         M12EvalThresholds         `toml:"m12_eval"`
+	M13Interface    M13InterfaceThresholds    `toml:"m13_interface"`
+	Session         SessionThresholds         `toml:"session"`
+}
+
+type SessionThresholds struct {
+	LeakScanWindowBytes int `toml:"leak_scan_window_bytes"` // 系统提示词最长特征串长度 × 2
+}
+
+type M1RouterThresholds struct {
+	CircuitBreakerFailureCount    int     `toml:"circuit_breaker.failure_count"`        // 5
+	CircuitBreakerCooldownSeconds int     `toml:"circuit_breaker.cooldown_seconds"`     // 10
+	CircuitBreakerHalfOpenMax     int     `toml:"circuit_breaker.half_open_max"`        // 1
+	SafecallInferTimeoutSeconds   int     `toml:"safecall_infer_timeout_seconds"`       // 15
+	SafecallStreamIdleTimeoutSec  int     `toml:"safecall_stream_idle_timeout_seconds"` // 60
+	PreFlightCostTolerancePct     int     `toml:"pre_flight.cost_tolerance_pct"`        // 15
+	TimeoutDialSeconds            int     `toml:"timeout.dial_seconds"`                 // 3
+	TimeoutTLSSeconds             int     `toml:"timeout.tls_seconds"`                  // 5
+	TimeoutResponseHeaderSeconds  int     `toml:"timeout.response_header_seconds"`      // 30
+	TimeoutTotalSeconds           int     `toml:"timeout.total_seconds"`                // 120
+	MaxStreamBufferKB             int     `toml:"stream.max_buffer_kb"`                 // 256
+	L1TargetHitRate               float64 `toml:"l1.target_hit_rate"`                   // 0.90
+	SemanticCacheMaxEntries       int     `toml:"semantic_cache.max_entries"`           // 10000
+	SemanticCacheSimilarity       float64 `toml:"semantic_cache.similarity_threshold"`  // 0.95
+	SemanticCacheTTLHours         int     `toml:"semantic_cache.ttl_hours"`             // 24
+
+	// 确定性后台调用的精确匹配响应缓存（ADR-0105 决策六）。仅对 ResponseCachePurposes 白名单内、
+	// Temperature==0 且 ThinkingDisabled 且无 Tools 的调用生效；内核阶段 purpose 即使误配也被
+	// 硬性排除（types.IsKernelPurpose）。默认开启：命中要求 provider/模型/purpose/全部消息逐字节一致，
+	// 白名单用途均为「同输入同输出」的抽取/摘要/过滤，且条目有 TTL 与条数上限。
+	ResponseCacheEnabled     bool     `toml:"response_cache.enabled"`     // true
+	ResponseCacheTTLHours    int      `toml:"response_cache.ttl_hours"`   // 168
+	ResponseCacheMaxEntries  int      `toml:"response_cache.max_entries"` // 20000
+	ResponseCachePurposes    []string `toml:"response_cache.purposes"`
+	WindowBreakerWindowSecs  int      `toml:"window_breaker_window_secs"`
+	WindowBreakerMinSamples  int      `toml:"window_breaker_min_samples"`
+	WindowBreakerThreshold   float64  `toml:"window_breaker_threshold"`
+	WindowBreakerCooldownSec int      `toml:"window_breaker_cooldown_sec"`
+
+	// EmbeddingBatcher 调度（ADR-0099）：High/Low 独立 flush；Low 单批上限约束其在
+	// 串行后端上的占用；每次下游调用独立超时，后端挂起不冻结队列。
+	EmbedBatchWindowMs      int `toml:"embed.batch_window_ms"`     // 10
+	EmbedHighMaxBatchSize   int `toml:"embed.high_max_batch_size"` // 100
+	EmbedLowMaxBatchSize    int `toml:"embed.low_max_batch_size"`  // 8
+	EmbedCallTimeoutSeconds int `toml:"embed.call_timeout_s"`      // 30
+
+	// 错峰调度（ADR-0105 决策七）：可延迟后台任务（GraphRAG 建图/社区摘要、合成评测/技能、课程生成、
+	// prompt 优化器、rag_summary_tree）只在这些 UTC 窗口内执行，窗口外推迟到下一个窗口起点。
+	// 格式 "HH:MM-HH:MM"（可跨零点，终点可写 24:00），空 = 不错峰。窗口来自配置，不硬编码任何厂商时刻表。
+	OffpeakWindows []string `toml:"offpeak.windows"` // 默认空
+
+	// llm_calls 保留期（ADR-0105 决策八）：按 created_at 随既有 6h 周期清理，0 = 不清理。
+	UsageRetentionDays int `toml:"usage.retention_days"` // 90
+
+	// Provider 缓存接线（ADR-0105 决策三）。
+	// AnthropicCacheTTL: cache_control.ttl，"5m"|"1h"；"5m" 为 API 默认，不显式下发。
+	AnthropicCacheTTL string `toml:"anthropic.cache_ttl"` // "5m"
+	// OpenAIPromptCacheRetention: prompt_cache_retention，""=不发送，"in_memory"|"24h"。
+	OpenAIPromptCacheRetention string `toml:"openai.prompt_cache_retention"` // ""
+	// 非首部 system 消息内联（ADR-0105 决策一）：true=只有开头连续的 system 进 system/systemInstruction 参数，
+	// 其后的 system（L3 阶段层）原位转 user 角色 <system_instruction> 块，使阶段模板落在 L2 历史之后。
+	AnthropicInlineNonLeadingSystem bool `toml:"anthropic.inline_nonleading_system"` // true
+	GoogleInlineNonLeadingSystem    bool `toml:"google.inline_nonleading_system"`    // true
+
+	// 实时模型目录与模型自选（ADR-0115 WP3）。
+	ModelCatalogRefreshHours         int     `toml:"model_catalog.refresh_hours"`            // 24
+	ModelDynamicCacheSize            int     `toml:"model_dynamic_cache_size"`               // 32
+	ModelSelectMaxOutputPricePerMtok float64 `toml:"model_select.max_output_price_per_mtok"` // 0 = 不限
+}
+
+// Validate 校验 M1 中的缓存枚举字段，错误在加载时失败而非运行时被上游拒绝。
+func (t M1RouterThresholds) Validate() error {
+	switch t.AnthropicCacheTTL {
+	case "", "5m", "1h":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.anthropic.cache_ttl: invalid "+t.AnthropicCacheTTL+" (want 5m|1h)")
+	}
+	switch t.OpenAIPromptCacheRetention {
+	case "", "in_memory", "24h":
+	default:
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.openai.prompt_cache_retention: invalid "+t.OpenAIPromptCacheRetention+" (want in_memory|24h or empty)")
+	}
+	if err := offpeak.Validate(t.OffpeakWindows); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "m1_router.offpeak.windows", err)
+	}
+	if t.UsageRetentionDays < 0 {
+		return apperr.New(apperr.CodeInvalidInput, "m1_router.usage.retention_days: must be >= 0 (0 = keep forever)")
+	}
+	return nil
+}
+
+type M2StorageThresholds struct {
+	SQLiteBusyTimeoutMs      int     `toml:"sqlite.busy_timeout_ms"`         // 5000
+	SurrealBufferPoolMB      int     `toml:"surreal.buffer_pool_mb"`         // 64 — SurrealDB-Core FFI 内存池上限
+	EventlogHotDays          int     `toml:"eventlog.hot_days"`              // 7
+	EventlogWarmDays         int     `toml:"eventlog.warm_days"`             // 30
+	EventlogDiskWatermarkPct float64 `toml:"eventlog.disk_watermark_pct"`    // 20 — 空闲磁盘占比低于此值才触发归档（Tier-0 磁盘水位门控，P1-3）；<=0 禁用门控
+	EventlogHotRowLimit      int64   `toml:"eventlog.hot_row_limit"`         // 1000000 — Hot 表行数超过此值也触发归档（Task 12）
+	EventlogHotSizeMB        int64   `toml:"eventlog.hot_size_mb"`           // 500 — Hot 表占用空间超过此值就触发归档（Task 12）
+	MaxBatchSize             int     `toml:"transaction.max_batch_size"`     // 64
+	MaxRowsPerTx             int     `toml:"transaction.max_rows_per_tx"`    // 50
+	OutboxMaxAttempts        int     `toml:"outbox.max_attempts"`            // 5
+	OutboxBackoffInitialMs   int64   `toml:"outbox.backoff_initial_ms"`      // 100
+	OutboxBackoffMaxMs       int64   `toml:"outbox.backoff_max_ms"`          // 8000
+	MutationBusChannelCap    int     `toml:"mutation_bus.channel_cap"`       // 4096
+	TickerIntervalMs         int     `toml:"transaction.ticker_interval_ms"` // 10
+	WALCheckpointPages       int     `toml:"wal.checkpoint_pages"`           // 1000
+}
+
+type M3ObservabilityThresholds struct {
+	MemCautionMB  int64 `toml:"memory.caution_mb"`  // 1536 (1.5GB)
+	MemWarningMB  int64 `toml:"memory.warning_mb"`  // 1024 (1.0GB)
+	MemCriticalMB int64 `toml:"memory.critical_mb"` // 512
+	BaselineP95   int64 `toml:"baseline.p95"`       // 200
+	// ThrottleBaselineTPS 是 KillSwitch Stage1 判据的基线底线（tok/s，非缓存输入+输出）：EMA_30s > 2×max(学习值, 本值) 才进入 Throttle。
+	// 4000 由 Eval 选定（internal/eval/harness/burnrate_eval_test.go），依据见 state.yaml token_burn_rate。
+	ThrottleBaselineTPS int64 `toml:"throttle.baseline_tps"` // 4000
+	TraceExport         struct {
+		Enabled  bool   `toml:"enabled"`
+		Endpoint string `toml:"endpoint"`
+	} `toml:"trace_export"`
+}
+
+type M5MemoryThresholds struct {
+	EpisodicTTLDays       int `toml:"episodic.ttl_days"`         // 30
+	ConsolidationInterval int `toml:"consolidation.interval_ms"` // 60000
+	ImmutableCoreMax      int `toml:"core.immutable_max"`        // 100
+	CoreMemoryBlockMaxKB  int `toml:"core.memory_block_max_kb"`  // 2
+	CoreMemoryTotalMaxKB  int `toml:"core.memory_total_max_kb"`  // 8
+	// CoreMemoryMaxBlocks 单会话核心记忆块数上限（ADR-0082 MemFS）。达到上限后
+	// core_memory_edit 拒绝创建新块（已存在块的 set/append/replace 不受此限）。
+	CoreMemoryMaxBlocks int `toml:"core.memory_max_blocks"` // 16
+	RRFK                int `toml:"rrf.k"`                  // 60 — M5/M10 共享
+	GraphMaxDepth       int `toml:"graph.max_depth"`        // 2
+	// RelationWeightDeltaThreshold 关系边权重变化超此值判为"实质变化"，触发信念
+	// 修正（旧边 superseded + 新建活跃边）；未超阈值原地 UPDATE（ADR-0083）。
+	RelationWeightDeltaThreshold float64 `toml:"graph.relation_weight_delta_threshold"` // 0.2
+	// ReflectionTaskTypeWhitelist/ReflectionMinReplanCount — §3.4 ReflectionWorker
+	// 触发策略（2026-07-21 deadcode 审查补齐，此前 reflexion.NewReflectionWorkerWithConfig
+	// 有完整实现+测试但生产侧无配置来源，一直只能走硬编码默认值）。
+	ReflectionTaskTypeWhitelist []string `toml:"reflection.task_type_whitelist"` // ["complex_reasoning","coding","research","debug","analysis"]
+	ReflectionMinReplanCount    int      `toml:"reflection.min_replan_count"`    // 2
+	// DriftCheckIntervalHours/DriftThreshold/DriftAnchorSampleRate — §12.3
+	// DriftDetector 漂移响应编排器配置（2026-07-21 deadcode 审查补齐，此前
+	// DriftDetector/EmbeddingVersionTracker 全套实现完整但零生产调用点，缺整条
+	// "周期性喂 anchor → Detect() → 按 task_type 降级 BM25 → Blue-Green 重嵌"编排链）。
+	DriftCheckIntervalHours int     `toml:"drift.check_interval_hours"` // 168 (7d)
+	DriftThreshold          float64 `toml:"drift.threshold"`            // 0.05
+	// DriftAnchorSampleRate 每次 HybridRetriever.Search 命中后采样为新 anchor 的概率
+	// （自参照基线：Expected 取采样当下的 Top-5 结果，而非外部标注的绝对真值——
+	// 漂移定义为"当前检索结果相对历史自身基线的显著偏离"）。
+	DriftAnchorSampleRate float64 `toml:"drift.anchor_sample_rate"` // 0.02
+}
+
+type M6SkillThresholds struct {
+	GoldCacheSize                  int     `toml:"cache_size.gold"`                        // 5
+	SilverCacheSize                int     `toml:"cache_size.silver"`                      // 20
+	BronzeCacheSize                int     `toml:"cache_size.bronze"`                      // 25
+	BronzeCacheTTLMin              int     `toml:"cache_ttl.bronze_min"`                   // 30
+	SkillExecTimeoutLowSeconds     int     `toml:"skill_exec.timeout_low_s"`               // 30
+	SkillExecTimeoutMedHighSeconds int     `toml:"skill_exec.timeout_mh_s"`                // 120
+	EvolutionSuccessThreshold      float64 `toml:"skill_exec.evolution_success_threshold"` // 0.6
+	EvolutionMinUsage              int     `toml:"skill_exec.evolution_min_usage"`         // 10
+}
+
+type M7ToolThresholds struct {
+	DefaultSandboxLevel          int    `toml:"sandbox.default_level"` // 3 (L3 Container；macOS 降级至 L2 Wasmtime)
+	DryRunEnabled                bool   `toml:"sandbox.dry_run_enabled"`
+	MaxScriptMemoryMB            int    `toml:"script.max_memory_mb"`               // 256
+	MaxScriptWallclockS          int    `toml:"script.max_wallclock_s"`             // 60
+	DryRunProtectWindowSeconds   int    `toml:"dryrun.protect_window_seconds"`      // 60
+	MaxCodeSizeBytes             int    `toml:"max_code_size_bytes"`                // 16384
+	IdempotencyCacheSize         int    `toml:"idempotency_cache.size"`             // 1000
+	IdempotencyCacheTTLSeconds   int    `toml:"idempotency_cache.ttl_seconds"`      // 300
+	RateLimitBuiltinQPS          int    `toml:"rate_limit.builtin_qps"`             // 100
+	RateLimitMCPQPS              int    `toml:"rate_limit.mcp_qps"`                 // 10
+	RateLimitShellQPS            int    `toml:"rate_limit.shell_qps"`               // 2
+	SandboxQuotaMs               int    `toml:"sandbox.quota_ms"`                   // 30000
+	WorkspaceMaxAgeSeconds       int    `toml:"workspace.max_age_seconds"`          // 604800
+	ExtUninstallHookTimeoutS     int    `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
+	MCPStdioMaxScanBytes         int    `toml:"mcp.stdio_max_scan_bytes"`           // 16777216
+	MCPSSEMaxScanBytes           int    `toml:"mcp.sse_max_scan_bytes"`             // 1048576（L-10：SSE/HTTP 两条 MCP 传输路径的单行上限，此前硬编码 1 MiB）
+	SandboxL4Enabled             bool   `toml:"sandbox.l4_enabled"`                 // false（D4/ADR-0008：Tier2+ 长驻会话沙箱，默认关闭，需运营者显式开启）
+	SandboxL4Backend             string `toml:"sandbox.l4_backend"`                 // "live_process_pool"（D4：诊断标签，实际后端固定为长驻进程池，非可插拔选项）
+	SandboxL4IdleTTLSeconds      int    `toml:"sandbox.l4_idle_ttl_seconds"`        // 600（D4：会话空闲超过此时长被后台回收）
+	SandboxL4MaxSessions         int    `toml:"sandbox.l4_max_sessions"`            // 8（D4：单进程内并发存活会话上限，超限淘汰最久未用）
+	SandboxL4ExecTimeoutSeconds  int    `toml:"sandbox.l4_exec_timeout_seconds"`    // 30（D4：单次调用超时，超时判定会话协议不可信并终止）
+	SandboxL4ReapIntervalSeconds int    `toml:"sandbox.l4_reap_interval_seconds"`   // 30（D4：空闲回收扫描周期）
+	WebFetchDefaultMaxChars      int    `toml:"web_fetch.default_max_chars"`        // 12000
+	WebFetchCacheMaxRows         int    `toml:"web_fetch.cache_max_rows"`           // 5000
+	WebFetchHostMinIntervalMs    int    `toml:"web_fetch.host_min_interval_ms"`     // 1000
+	// LazyActivation 延迟工具激活方式（ADR-0120 决策三）："in_history"（默认，经 call_tool）| "tools_array"（旧行为，断缓存）。
+	LazyActivation string `toml:"lazy_activation"` // "in_history"
+}
+
+type M8OrchestratorThresholds struct {
+	LeaseTTLSeconds    int `toml:"lease.ttl_seconds"`       // 60
+	HeartbeatSeconds   int `toml:"heartbeat.seconds"`       // 15
+	HeartbeatJitter    int `toml:"heartbeat.jitter"`        // 5
+	ReaperScanInterval int `toml:"reaper.scan_interval_ms"` // 1000
+	MaxAgentsDesktop   int `toml:"agents.max_desktop"`      // 2
+	MaxAgentsServer    int `toml:"agents.max_server"`       // 3
+	// AgentsInteractiveReserved AgentPool 为交互会话保留的槽位（ADR-0025 §E 2026-09-25 追记）。
+	AgentsInteractiveReserved   int `toml:"agents.interactive_reserved"`       // 1
+	AgentRestartMaxInWindow     int `toml:"supervisor.restart_max_in_window"`  // 3
+	AgentRestartWindowSeconds   int `toml:"supervisor.restart_window_seconds"` // 60
+	SupervisorBackoffInitialMs  int `toml:"supervisor.backoff_initial_ms"`     // 200
+	SupervisorBackoffMaxSeconds int `toml:"supervisor.backoff_max_seconds"`    // 60
+	CompensationTimeoutSeconds  int `toml:"compensation.timeout_seconds"`      // 300
+	CompensationPollSeconds     int `toml:"compensation.poll_seconds"`         // 5
+	// A2AHandoffTimeoutSeconds MCPA2AWorker 对单次跨框架委派调用施加的超时上限
+	// （ADR-0084 A4）。委派链深度上限复用既有 SpawnDepth/resolveMaxDepth
+	// （inv_M8_06，state.yaml delegation_chain_max_depth），不在此重复登记。
+	A2AHandoffTimeoutSeconds int `toml:"a2a.handoff_timeout_seconds"` // 600 (10min)
+}
+
+// M9SelfImproveThresholds — 后台自演化 worker 调度 + Canary rollout 参数。
+// SSoT: docs/arch/spec/state.yaml §thresholds.m9_self_improve
+type M9SelfImproveThresholds struct {
+	WorkerCPUPctUserActive         float64   `toml:"worker.cpu_pct_user_active"`         // 0.05
+	WorkerCPUPctIdle               float64   `toml:"worker.cpu_pct_idle"`                // 0.50
+	WorkerHeartbeatSeconds         int       `toml:"worker.heartbeat_seconds"`           // 30
+	WorkerRestartBackoffInitialMs  int       `toml:"worker.restart_backoff_initial_ms"`  // 200
+	WorkerRestartBackoffMaxSeconds int       `toml:"worker.restart_backoff_max_seconds"` // 60
+	CanarySteps                    []float64 `toml:"canary.steps"`                       // [0.01, 0.10, 0.50, 1.00]
+	CanaryDwellPerStepHoursHT0     int       `toml:"canary.dwell_per_step_hours_ht0"`    // 1
+	// SurpriseIndex 双通道路由阈值（System 1 / 混合 / System 2）
+	SurpriseRouteLowThreshold  float64 `toml:"surprise_route.low_threshold"`  // 0.30
+	SurpriseRouteHighThreshold float64 `toml:"surprise_route.high_threshold"` // 0.60
+
+	// QLoRATrainBatchSize/PRMTrainBatchSize — 条件梯度训练批次触发阈值
+	// （M09-Self-Improvement-Engine.md §4；2026-07-21 deadcode 审查补齐上游
+	// 样本采集+触发流水线）。累积样本数达到该值时异步触发一次
+	// QLoRAAdapter.Train/PRMAdapter.Train，随后清空缓冲区重新累积。文档本身
+	// 未给出具体数值（§4 只定义了 Tier 门控与请求体形状），此处为提议的默认值：
+	// 64 是 LoRA/PRM 小批次微调的常见量级下限，同时不会让样本在真实使用频率下
+	// 长期不触发（QLoRA 样本来自 replaySuccess 的"经 replan 后成功"轨迹，属低频
+	// 事件；PRM 样本来自 M12 §9 的 1% 生产流量抽样评分，属更低频事件——两者
+	// 都可能需要相当长时间才累积到批次量，这是"后台慢速自演化"特性本身的一部分，
+	// 非本实现的缺陷）。
+	QLoRATrainBatchSize int `toml:"qlora.train_batch_size"` // 64
+	PRMTrainBatchSize   int `toml:"prm.train_batch_size"`   // 64
+}
+
+type M10KnowledgeThresholds struct {
+	RAGFinalTopK         int `toml:"rag.final_top_k"`         // 5
+	RAGRerankTopM        int `toml:"rag.rerank_top_m"`        // 50
+	ChunkSize            int `toml:"chunk.size"`              // 256
+	SingleRouteTimeoutMs int `toml:"single_route_timeout_ms"` // 800
+}
+
+type M11PolicyThresholds struct {
+	CapDefaultTTLSeconds         int `toml:"capability.default_ttl_seconds"`    // 300
+	AuditRetentionDays           int `toml:"audit.retention_days"`              // 730
+	EscalationTimeoutMinutes     int `toml:"escalation.timeout_minutes"`        // 30
+	L3ImprovementCooldownSeconds int `toml:"l3_improvement_cooldown_seconds"`   // 600 - Task 21: mandatory cooldown for L3 hitl
+	SafeDialerDNSCacheTTLSecond  int `toml:"safe_dialer.dns_cache_ttl_seconds"` // 30
+	SafeDialerTOCTOUDelayMs      int `toml:"safe_dialer.toctou_delay_ms"`       // 50
+	SafeDialerMaxIPsThreshold    int `toml:"safe_dialer.max_ips_threshold"`     // 20
+	SafeDialerDNSCacheSize       int `toml:"safe_dialer.dns_cache_size"`        // 1024
+}
+
+// M12EvalThresholds — LLM-as-Judge + 抽样核验阈值。
+// SSoT: docs/arch/spec/state.yaml §thresholds.m12_eval
+type M12EvalThresholds struct {
+	JudgeSingleConfidence   float64 `toml:"judge.single_confidence"`    // 0.90
+	ShadowSampleRate        float64 `toml:"shadow.sample_rate"`         // 0.01
+	ShadowPassRateThreshold float64 `toml:"shadow.pass_rate_threshold"` // 0.95
+	ShadowMinSamples        int     `toml:"shadow.min_samples"`         // 10
+	EvalLLMJudgeTimeoutSec  int     `toml:"eval_llm_judge_timeout_sec"` // 15
+	ShadowInferTimeoutSec   int     `toml:"shadow_infer_timeout_sec"`   // 30
+
+	// V8-S2 Meta-Eval Sentinel（meta_holdout 审计，见 internal/eval/analysis/meta_eval.go）。
+	// MetaAuditGateEnabled 默认 false：这是新功能，需要运维先生成 meta_auditor 密钥对
+	// 并至少成功运行过一次 `polaris eval meta-audit run` 才有意义；默认开启会让所有
+	// 既有部署（从未跑过 meta_audit）永久卡在 Gate2 无法推进 Canary，属于不必要的破坏性变更。
+	MetaAuditGateEnabled bool `toml:"meta_audit.gate_enabled"`  // false
+	MetaAuditMaxAgeHours int  `toml:"meta_audit.max_age_hours"` // 168 (7天)——超过此新鲜度 AdvanceGate 视为 stale，fail-closed 停在当前 Gate
+}
+
+type M13InterfaceThresholds struct {
+	ReadTimeoutSeconds             int `toml:"timeout.read_seconds"`              // 10
+	WriteTimeoutSeconds            int `toml:"timeout.write_seconds"`             // 60
+	IdleTimeoutSeconds             int `toml:"timeout.idle_seconds"`              // 120
+	GracefulShutdownTimeoutSeconds int `toml:"timeout.graceful_shutdown_seconds"` // 30
+	HITLDefaultDeadlineMinUrgent   int `toml:"hitl.default_deadline_min_urgent"`  // 5
+	HITLDefaultDeadlineMinNormal   int `toml:"hitl.default_deadline_min_normal"`  // 60
+	HITLDefaultDeadlineMinLong     int `toml:"hitl.default_deadline_min_long"`    // 1440
+	WorkerIntentHandler            int `toml:"worker.intent_handler"`             // 4
+	WorkerIngest                   int `toml:"worker.ingest"`                     // 2
+	WorkerBackground               int `toml:"worker.background"`                 // 2
+	WorkerEval                     int `toml:"worker.eval"`                       // 1
+	WorkerCron                     int `toml:"worker.cron"`                       // 1
+	MaxConcurrentLLMCalls          int `toml:"max_concurrent_llm_calls"`          // 4
+	LazyLoadToolThreshold          int `toml:"lazy_load_tool_threshold"`          // 40
+	// AmbientSkillMaxChars ambient skill instructions 全文注入的总字符预算
+	// （M13-bis §3：不得占用超过 ~10% 上下文窗口）。超预算的 skill 降级为 index-only。
+	// 大上下文模型可调高；<=0 时回落到 DefaultThresholds 的 4000。
+	AmbientSkillMaxChars           int `toml:"ambient_skill_max_chars"`            // 4000
+	PromptAutomationMinIntervalMin int `toml:"automation.prompt_min_interval_min"` // 60
+	AgentAutomationMax             int `toml:"automation.agent_max"`               // 20
+	PipelineMinIntervalMin         int `toml:"pipeline.min_interval_min"`          // 15
+	PipelineMaxSteps               int `toml:"pipeline.max_steps"`                 // 20
+	PipelineStepDataMaxBytes       int `toml:"pipeline.step_data_max_bytes"`       // 1048576
+	PipelineRunDataKeepRuns        int `toml:"pipeline.run_data_keep_runs"`        // 20
+	PipelineSeenItemsTTLDays       int `toml:"pipeline.seen_items_ttl_days"`       // 90
+	PipelineLLMMaxInputChars       int `toml:"pipeline.llm_max_input_chars"`       // 24000
+	PipelineLLMMaxOutputTokens     int `toml:"pipeline.llm_max_output_tokens"`     // 2000
+	// PipelineWriteAllowlist 管线免审批写工具白名单（ADR-0114 决策八）；空列表表示所有写工具都需 hitl 审批。
+	PipelineWriteAllowlist []string `toml:"pipeline.write_allowlist"` // [knowledge_ingest, mcp__polaris-knowledge-base__kb_save]
+	// TurnStepsRetentionDays 会话步骤时间线（chat_turn_steps，ADR-0118）保留天数；0 = 永久保留。
+	// 步骤只供用户回看，从不进模型上下文，到期清理只删步骤，不动消息与用量账本。
+	TurnStepsRetentionDays int `toml:"turn_steps.retention_days"` // 0
+}
+
+// DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
+// 数值与 docs/arch/spec/state.yaml §thresholds 手工同步（ADR-0006 spec_consistency_test 守护核心 SSoT）。
+func DefaultThresholds() Thresholds {
+	return Thresholds{
+		M1Router: M1RouterThresholds{
+			CircuitBreakerFailureCount:    5,
+			CircuitBreakerCooldownSeconds: 10,
+			CircuitBreakerHalfOpenMax:     1,
+			SafecallInferTimeoutSeconds:   15,
+			SafecallStreamIdleTimeoutSec:  60,
+			PreFlightCostTolerancePct:     15,
+			TimeoutDialSeconds:            3,
+			TimeoutTLSSeconds:             5,
+			TimeoutResponseHeaderSeconds:  30,
+			TimeoutTotalSeconds:           120,
+			MaxStreamBufferKB:             256,
+			L1TargetHitRate:               0.90,
+			SemanticCacheMaxEntries:       10000,
+			SemanticCacheSimilarity:       0.95,
+			SemanticCacheTTLHours:         24,
+			UsageRetentionDays:            90,
+			ResponseCacheEnabled:          true,
+			ResponseCacheTTLHours:         168,
+			ResponseCacheMaxEntries:       20000,
+			ResponseCachePurposes: []string{
+				"graphrag_extract", "graphrag_summary", "graphrag_community", "graphrag_concept",
+				"rag_summary_tree", "rag_query_rewrite", "memory_write_filter",
+			},
+			WindowBreakerWindowSecs:  60,
+			WindowBreakerMinSamples:  20,
+			WindowBreakerThreshold:   0.5,
+			WindowBreakerCooldownSec: 30,
+			EmbedBatchWindowMs:       10,
+			EmbedHighMaxBatchSize:    100,
+			EmbedLowMaxBatchSize:     8,
+			EmbedCallTimeoutSeconds:  30,
+			AnthropicCacheTTL:        "5m",
+
+			AnthropicInlineNonLeadingSystem: true,
+			GoogleInlineNonLeadingSystem:    true,
+
+			ModelCatalogRefreshHours:         24,
+			ModelDynamicCacheSize:            32,
+			ModelSelectMaxOutputPricePerMtok: 0,
+		},
+		M2Storage: M2StorageThresholds{
+			SQLiteBusyTimeoutMs:      5000,
+			SurrealBufferPoolMB:      64,
+			EventlogHotDays:          7,
+			EventlogWarmDays:         30,
+			EventlogDiskWatermarkPct: 20,
+			EventlogHotRowLimit:      1000000,
+			EventlogHotSizeMB:        500,
+			MaxBatchSize:             64,
+			MaxRowsPerTx:             50,
+			OutboxMaxAttempts:        5,
+			OutboxBackoffInitialMs:   100,
+			OutboxBackoffMaxMs:       8000,
+			MutationBusChannelCap:    4096,
+			TickerIntervalMs:         10,
+			WALCheckpointPages:       1000,
+		},
+		M3Observability: M3ObservabilityThresholds{
+			MemCautionMB:        1536,
+			MemWarningMB:        1024,
+			MemCriticalMB:       512,
+			BaselineP95:         200,
+			ThrottleBaselineTPS: 4000,
+			TraceExport: struct {
+				Enabled  bool   `toml:"enabled"`
+				Endpoint string `toml:"endpoint"`
+			}{
+				Enabled:  false,
+				Endpoint: "",
+			},
+		},
+		M4Kernel: M4KernelThresholds{
+			MaxReplanAttempts:             3,
+			DefaultBudget:                 50000,
+			MaxSteps:                      24, // ADR-0098 决策七/八：7 + 观察循环 2×5 + 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1
+			Tier0MaxConcurrent:            4,
+			SuspendIdleThresholdMin:       5,
+			PlanDAGMaxNodes:               50,
+			PlanDAGMaxDepth:               10,
+			L3WatchdogMaxPerHour:          10,
+			WorldModelSkipThreshold:       0.8,
+			SnapshotIntervalSteps:         1000,
+			SnapshotRetentionCount:        5,
+			ReplanExtensionActivationSecs: 3,
+			SurpriseHintThreshold:         0.6,
+			PRMEnabled:                    false,
+			PRMComplexityGate:             0.5,
+			PRMMaxCandidates:              3,
+			PRMMinThreshold:               0.4,
+			PRMScorerModel:                "",
+			ConversationHistoryMaxTokens:  48000,
+			PromptPhaseContractsInCore:    true,
+			ThinkingPerceive:              "low",
+			ThinkingPlanInitial:           "high",
+			ThinkingReflect:               "low",
+			ModelPoolPerceive:             "default",
+			ModelPoolPlanInitial:          "default",
+			ModelPoolPlanReplan:           "reasoning",
+			ModelPoolReflect:              "default",
+			ModelPoolRespond:              "default",
+			ModelPoolLoop:                 "default",
+			ModelPoolValidate:             "default",
+			PlanReasoningComplexity:       0.7,
+			ReflectSkipComplexity:         0.4,
+			RecallItemMaxChars:            400,
+			RecallMaxTokens:               1200,
+			RecallMinScore:                0,
+			RecallMinScoreRatio:           0,
+			RecallWeightReflection:        1.2,
+			RecallWeightEpisodic:          1.1,
+			RecallWeightSemantic:          1.0,
+			RecallWeightRAG:               1.0,
+			RecallRerankTopN:              12,
+			RecallRerankMinProb:           0.5,
+			RecallRAGMinSurprise:          0.3,
+			// WP1 信任档位与快照阈值默认值
+			CheckpointThrottleMaxPerTurn: 20,
+			CheckpointRetentionCount:     10,
+			AgentsMaxConcurrent:          4,
+			SecretGetMaxPerTurn:          5,
+			// WP2 agentic 循环内核阈值默认值
+			LoopMode:                       defaultLoopMode(),
+			LoopRunawayGuardRounds:         200,
+			LoopTurnBudgetUSD:              0,
+			LoopTurnBudgetTokens:           0,
+			LoopTurnWallSeconds:            0,
+			LoopObservationMaskAfterRounds: 6,
+			LoopObservationMaskBatch:       4,
+			LoopObservationMaskMinTokens:   1024,
+			LoopRecallMaxChars:             2000,
+			LoopRepeatWarnAt:               3,
+			LoopRepeatStopAt:               8,
+			LoopCompletion:                 "auto",
+			JobsKillOnSessionEnd:           true,
+			SleepTimeIdleMinutes:           10,
+			SleepTimeEnabled:               nil,
+		},
+		M5Memory: M5MemoryThresholds{
+			EpisodicTTLDays:              30,
+			ConsolidationInterval:        60000,
+			ImmutableCoreMax:             100,
+			CoreMemoryBlockMaxKB:         2,
+			CoreMemoryTotalMaxKB:         8,
+			CoreMemoryMaxBlocks:          16,
+			RelationWeightDeltaThreshold: 0.2,
+			RRFK:                         60,
+			GraphMaxDepth:                2,
+			ReflectionTaskTypeWhitelist: []string{
+				"complex_reasoning", "coding", "research", "debug", "analysis",
+			},
+			ReflectionMinReplanCount: 2,
+			DriftCheckIntervalHours:  168,
+			DriftThreshold:           0.05,
+			DriftAnchorSampleRate:    0.02,
+		},
+		M6Skill: M6SkillThresholds{
+			GoldCacheSize:                  5,
+			SilverCacheSize:                20,
+			BronzeCacheSize:                25,
+			BronzeCacheTTLMin:              30,
+			SkillExecTimeoutLowSeconds:     30,
+			SkillExecTimeoutMedHighSeconds: 120,
+			EvolutionSuccessThreshold:      0.6,
+			EvolutionMinUsage:              10,
+		},
+		M7Tool: M7ToolThresholds{
+			DefaultSandboxLevel:          3,
+			DryRunEnabled:                true,
+			MaxScriptMemoryMB:            256,
+			MaxScriptWallclockS:          60,
+			DryRunProtectWindowSeconds:   60,
+			MaxCodeSizeBytes:             16384,
+			IdempotencyCacheSize:         1000,
+			IdempotencyCacheTTLSeconds:   300,
+			RateLimitBuiltinQPS:          100,
+			RateLimitMCPQPS:              10,
+			RateLimitShellQPS:            2,
+			SandboxQuotaMs:               30000,
+			WorkspaceMaxAgeSeconds:       604800,
+			ExtUninstallHookTimeoutS:     180,
+			MCPStdioMaxScanBytes:         16777216,
+			MCPSSEMaxScanBytes:           1048576,
+			SandboxL4Enabled:             false,
+			SandboxL4Backend:             "live_process_pool",
+			SandboxL4IdleTTLSeconds:      600,
+			SandboxL4MaxSessions:         8,
+			SandboxL4ExecTimeoutSeconds:  30,
+			SandboxL4ReapIntervalSeconds: 30,
+			WebFetchDefaultMaxChars:      12000,
+			WebFetchCacheMaxRows:         5000,
+			WebFetchHostMinIntervalMs:    1000,
+			LazyActivation:               "in_history",
+		},
+		M8Orchestrator: M8OrchestratorThresholds{
+			LeaseTTLSeconds:             60,
+			HeartbeatSeconds:            15,
+			HeartbeatJitter:             5,
+			ReaperScanInterval:          1000,
+			MaxAgentsDesktop:            2,
+			MaxAgentsServer:             3,
+			AgentsInteractiveReserved:   1,
+			AgentRestartMaxInWindow:     3,
+			AgentRestartWindowSeconds:   60,
+			SupervisorBackoffInitialMs:  200,
+			SupervisorBackoffMaxSeconds: 60,
+			CompensationTimeoutSeconds:  300,
+			CompensationPollSeconds:     5,
+			A2AHandoffTimeoutSeconds:    600,
+		},
+		M9SelfImprove: M9SelfImproveThresholds{
+			WorkerCPUPctUserActive:         0.05,
+			WorkerCPUPctIdle:               0.50,
+			WorkerHeartbeatSeconds:         30,
+			WorkerRestartBackoffInitialMs:  200,
+			WorkerRestartBackoffMaxSeconds: 60,
+			CanarySteps:                    []float64{0.01, 0.10, 0.50, 1.00},
+			CanaryDwellPerStepHoursHT0:     1,
+			SurpriseRouteLowThreshold:      0.30,
+			SurpriseRouteHighThreshold:     0.60,
+			QLoRATrainBatchSize:            64,
+			PRMTrainBatchSize:              64,
+		},
+		M10Knowledge: M10KnowledgeThresholds{
+			RAGFinalTopK:         5,
+			RAGRerankTopM:        50,
+			ChunkSize:            256,
+			SingleRouteTimeoutMs: 800,
+		},
+		M11Policy: M11PolicyThresholds{
+			CapDefaultTTLSeconds:         300,
+			AuditRetentionDays:           730,
+			EscalationTimeoutMinutes:     30,
+			L3ImprovementCooldownSeconds: 600,
+			SafeDialerDNSCacheTTLSecond:  30,
+			SafeDialerTOCTOUDelayMs:      50,
+			SafeDialerMaxIPsThreshold:    20,
+			SafeDialerDNSCacheSize:       1024,
+		},
+		M12Eval: M12EvalThresholds{
+			JudgeSingleConfidence:   0.90,
+			ShadowSampleRate:        0.01,
+			ShadowPassRateThreshold: 0.95,
+			ShadowMinSamples:        10,
+			EvalLLMJudgeTimeoutSec:  15,
+			ShadowInferTimeoutSec:   30,
+			MetaAuditGateEnabled:    false,
+			MetaAuditMaxAgeHours:    168,
+		},
+		M13Interface: M13InterfaceThresholds{
+			ReadTimeoutSeconds:             10,
+			WriteTimeoutSeconds:            60,
+			IdleTimeoutSeconds:             120,
+			GracefulShutdownTimeoutSeconds: 30,
+			HITLDefaultDeadlineMinUrgent:   5,
+			HITLDefaultDeadlineMinNormal:   60,
+			HITLDefaultDeadlineMinLong:     1440,
+			WorkerIntentHandler:            4,
+			WorkerIngest:                   2,
+			WorkerBackground:               2,
+			WorkerEval:                     1,
+			WorkerCron:                     1,
+			MaxConcurrentLLMCalls:          4,
+			LazyLoadToolThreshold:          40,
+			AmbientSkillMaxChars:           4000,
+			PromptAutomationMinIntervalMin: 60,
+			AgentAutomationMax:             20,
+			PipelineMinIntervalMin:         15,
+			PipelineMaxSteps:               20,
+			PipelineStepDataMaxBytes:       1048576,
+			PipelineRunDataKeepRuns:        20,
+			PipelineSeenItemsTTLDays:       90,
+			PipelineLLMMaxInputChars:       24000,
+			PipelineLLMMaxOutputTokens:     2000,
+			PipelineWriteAllowlist:         []string{"knowledge_ingest", "mcp__polaris-knowledge-base__kb_save"},
+		},
+		Session: SessionThresholds{
+			// 取系统提示词中通常的最长特征串长度（例如 "PolarisAGI" 10 字节），并 ×2 留作冗余
+			LeakScanWindowBytes: 20,
+		},
+	}
+}

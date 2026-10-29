@@ -1,0 +1,7 @@
+name: automation_save
+description: "创建/修改定时自动化。kind=prompt：到点跑一轮完整 Agent（需判断/多步推理，最小间隔 60 分钟）；kind=pipeline：确定性管线（抓取→过滤去重→一次 LLM 汇总），来源确定时优先用，token 低得多。保存前向用户复述做什么/多久一次/结果去哪；先 dry_run=true 预览并给出预计 token，同意后再保存。pipeline 示例：{\"kind\":\"pipeline\",\"name\":\"HN AI 日报\",\"trigger\":{\"type\":\"cron\",\"cron\":\"0 8 * * *\"},\"steps\":[{\"key\":\"hn\",\"kind\":\"tool\",\"tool\":\"feed_fetch\",\"args\":{\"url\":\"https://hnrss.org/newest?q=AI\"}},{\"key\":\"new\",\"kind\":\"transform\",\"needs\":[\"hn\"],\"ops\":[{\"op\":\"dedup\",\"by\":\"url\",\"scope\":\"workflow\"},{\"op\":\"limit\",\"n\":20}],\"skip_if_empty\":true},{\"key\":\"digest\",\"kind\":\"llm\",\"needs\":[\"new\"],\"input\":\"new\",\"fields\":[\"title\",\"url\"],\"prompt\":\"列出 5 条要点并附链接\"}]}"
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - state-mutate

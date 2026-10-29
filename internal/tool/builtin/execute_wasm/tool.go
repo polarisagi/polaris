@@ -1,0 +1,74 @@
+package execute_wasm
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+
+	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/tool/builtin/guard"
+	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
+	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
+		var args struct {
+			Code      string `json:"code"`
+			Input     string `json:"input"`
+			MaxPages  int    `json:"max_pages"`
+			Workspace string `json:"workspace"`
+			// TimeoutMs 墙钟超时预算（毫秒）；<=0 时 WasmtimeExecute 使用默认值 5000ms。
+			TimeoutMs int `json:"timeout_ms"`
+		}
+		if err := json.Unmarshal(spec.Input, &args); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid json", err)
+		}
+
+		cleanWorkspace := filepath.Clean(args.Workspace)
+		// Wasm 挂载目录不随授权凭据放宽（ADR-0121 决策六：模型生成的模块代码按白名单隔离），
+		// 但仍须避开自保护路径（可信根外的软链也在此被拦）。
+		if !guard.IsPathAllowed(cleanWorkspace, paths) {
+			return nil, apperr.New(apperr.CodeInternal, "workspace path not allowed")
+		}
+		if err := guard.CheckSelfProtected(cleanWorkspace); err != nil {
+			return nil, apperr.Wrap(apperr.CodeForbidden, "execute_wasm", err)
+		}
+
+		quota := toolsb.CalculateWasmQuota(spec.SystemTier, spec.TaintLevel)
+		if args.MaxPages > 0 && args.MaxPages < quota.MemoryPages {
+			quota.MemoryPages = args.MaxPages
+		}
+
+		// 这里实际依赖 toolsb.WasmtimeExecute FFI，如果是在纯 Go 层我们假设其内部处理了隔离
+		outJSON, err := toolsb.WasmtimeExecute(
+			ctx,
+			[]byte(args.Code),
+			args.Input,
+			cleanWorkspace,
+			quota.MemoryPages,
+			// 网络权限只由工具声明的 Capability 决定，不接受调用方入参（GR-5.2-002：
+			// 此前 network_allowed 由 LLM 入参直接接管，write_local 工具可自行开启任意出站）。
+			spec.Capability.AllowsNetwork(),
+			quota.Fuel,
+			10*1024*1024,
+			args.TimeoutMs,
+		)
+
+		if err != nil {
+			//nolint:nilerr
+			return &types.ToolResult{
+				Success: false,
+				Error:   err.Error(),
+			}, nil
+		}
+
+		return &types.ToolResult{
+			Success: true,
+			Output:  []byte(outJSON),
+		}, nil
+	}
+}

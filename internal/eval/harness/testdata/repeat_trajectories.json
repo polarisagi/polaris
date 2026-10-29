@@ -1,0 +1,1522 @@
+{
+ "description": "无进展检测 Eval 轨迹（ADR-0020 重提条件）。real_session 取自 sess_ee5b995b407b351f9759c3789219d96e 的 16 次真实工具调用（chat_turn_steps，参数/结果以摘要占位，仅保留工具名与'各不相同'这一事实），作负向对照。repeat_* 为按失效形态构造的合成复现样本：本机 polaris.db 尚无已落库的同参数重复调用回合（chat_turn_steps 仅 1 个会话含工具步骤），故不是线上抓取。",
+ "trajectories": [
+  {
+   "id": "real_session",
+   "kind": "legit",
+   "source": "real",
+   "calls": [
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-0"
+     },
+     "result": "real-result-0"
+    },
+    {
+     "tool": "call_tool",
+     "args": {
+      "digest": "real-call-1"
+     },
+     "result": "real-result-1"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-2"
+     },
+     "result": "real-result-2"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-3"
+     },
+     "result": "real-result-3"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-4"
+     },
+     "result": "real-result-4"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-5"
+     },
+     "result": "real-result-5"
+    },
+    {
+     "tool": "tool_search",
+     "args": {
+      "digest": "real-call-6"
+     },
+     "result": "real-result-6"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-7"
+     },
+     "result": "real-result-7"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-8"
+     },
+     "result": "real-result-8"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-9"
+     },
+     "result": "real-result-9"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-10"
+     },
+     "result": "real-result-10"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-11"
+     },
+     "result": "real-result-11"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-12"
+     },
+     "result": "real-result-12"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-13"
+     },
+     "result": "real-result-13"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-14"
+     },
+     "result": "real-result-14"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "digest": "real-call-15"
+     },
+     "result": "real-result-15"
+    }
+   ]
+  },
+  {
+   "id": "repeat_failing_command",
+   "kind": "stuck",
+   "source": "synthetic",
+   "calls": [
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "npm test",
+      "cwd": "/w"
+     },
+     "result": "Error: exit 1 ENOENT package.json"
+    }
+   ]
+  },
+  {
+   "id": "repeat_pingpong",
+   "kind": "stuck",
+   "source": "synthetic",
+   "calls": [
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "package a"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "b.go"
+     },
+     "result": "package b"
+    }
+   ]
+  },
+  {
+   "id": "edit_then_reread",
+   "kind": "legit",
+   "source": "synthetic",
+   "calls": [
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v0"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 0
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v1"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 1
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v2"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 2
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v3"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 3
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v4"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 4
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v5"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 5
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v6"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 6
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v7"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 7
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v8"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 8
+     },
+     "result": "ok"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "a.go"
+     },
+     "result": "v9"
+    },
+    {
+     "tool": "edit_file",
+     "args": {
+      "path": "a.go",
+      "n": 9
+     },
+     "result": "ok"
+    }
+   ]
+  },
+  {
+   "id": "poll_until_done",
+   "kind": "legit",
+   "source": "synthetic",
+   "calls": [
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "running"
+    },
+    {
+     "tool": "job_status",
+     "args": {
+      "id": "j1"
+     },
+     "result": "done"
+    }
+   ]
+  },
+  {
+   "id": "poll_via_bash_slow_job",
+   "kind": "legit",
+   "source": "synthetic",
+   "calls": [
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "starting"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "starting"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "starting"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "starting"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "starting"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "starting"
+    },
+    {
+     "tool": "bash",
+     "args": {
+      "command": "curl -s localhost:8080/health"
+     },
+     "result": "ok"
+    }
+   ]
+  },
+  {
+   "id": "same_tool_different_args",
+   "kind": "legit",
+   "source": "synthetic",
+   "calls": [
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f0.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f1.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f2.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f3.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f4.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f5.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f6.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f7.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f8.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f9.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f10.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f11.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f12.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f13.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f14.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f15.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f16.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f17.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f18.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f19.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f20.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f21.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f22.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f23.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f24.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f25.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f26.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f27.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f28.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f29.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f30.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f31.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f32.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f33.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f34.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f35.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f36.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f37.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f38.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f39.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f40.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f41.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f42.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f43.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f44.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f45.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f46.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f47.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f48.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f49.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f50.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f51.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f52.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f53.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f54.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f55.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f56.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f57.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f58.go"
+     },
+     "result": "package x"
+    },
+    {
+     "tool": "read_file",
+     "args": {
+      "path": "f59.go"
+     },
+     "result": "package x"
+    }
+   ]
+  }
+ ]
+}

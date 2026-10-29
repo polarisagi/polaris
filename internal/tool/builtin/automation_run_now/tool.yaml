@@ -1,0 +1,9 @@
+name: automation_run_now
+description: |
+  立即触发执行一次指定的自动化任务。
+  调度器将立即把该任务投入执行队列并返回本次执行 ID。
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - state-mutate

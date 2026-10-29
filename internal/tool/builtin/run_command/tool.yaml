@@ -1,0 +1,13 @@
+name: run_command
+description: "Run restricted build, test, and formatting commands in a secure sandbox."
+version: "1.0.0"
+capability: write-local
+risk_level: medium
+sandbox: container
+side_effects:
+  - file-write
+  - process-spawn
+tags:
+  - shell
+  - exec
+  - test

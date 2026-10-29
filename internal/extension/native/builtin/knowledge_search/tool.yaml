@@ -1,0 +1,13 @@
+name: knowledge_search
+description: "三阶段 RAG 文档检索工具。对知识库执行语义检索（BM25 + 向量 KNN + GraphRAG）并返回带上下文扩展的相关段落。支持全局检索和按文档范围检索（doc_scope）。Tier-0+（≥8GB）自动启用 QueryPlanner 分解子查询 + StructuredNavigator 定位文档。"
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - knowledge
+  - rag
+  - search
+  - documents

@@ -1,0 +1,239 @@
+package agentctx
+
+import (
+	"context"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// recallLimits 单次召回的渲染/过滤上限，来自 m4_kernel.recall.*（ADR-0105 决策四）。
+type recallLimits struct {
+	itemMaxChars  int
+	minScore      float64
+	minScoreRatio float64
+}
+
+// recallSpec 一次记忆召回的全部输入，只含调用前从 sCtx 捕获的值：recall 跑在独立
+// goroutine 里，预算到期被放弃后可能仍在运行，绝不能再读写 sCtx（否则与主路径数据竞争）。
+type recallSpec struct {
+	episodic      bool
+	episodicQuery string
+	episodicK     int
+	goal          string // 反思 / L2 语义 / RAG 的查询词；空则三者跳过
+	projectID     string
+	knowledge     fsm.KnowledgeSearcher
+	// knowledgeTopK RAG 检索条数；0 = 本回合不查 RAG（SurpriseIndex 低于 recall.rag_min_surprise）。
+	knowledgeTopK int
+	// maxTaint 召回项污点上限：高于它的命中一律丢弃（fail-closed）。取自本轮意图的来源污点，
+	// 未标注（TaintNone）按 TaintHigh——与原 Assembler 旁路同口径（ADR-0105 决策十）。
+	maxTaint types.TaintLevel
+	limits   recallLimits
+}
+
+// degradeOnRecallTimeout 召回超时按"无召回"降级（召回是增益，不是阶段的前置条件）；
+// 其他错误照旧上抛，由 fsm 回退到无记忆 prompt。
+func degradeOnRecallTimeout(phase string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if apperr.IsCode(err, apperr.CodeTimeout) {
+		slog.Warn("agentctx: memory recall exceeded budget, continuing without recalled memory", "phase", phase, "err", err)
+		return nil
+	}
+	return apperr.Wrap(apperr.CodeInternal, phase, err)
+}
+
+// recallWithin 在 ctx 截止前等待召回完成，到期返回 CodeTimeout 由调用方降级。
+//
+// 只给下游传带截止的 ctx 不够：search.Embedder 接口不收 ctx，SyncBatcherAdapter
+// 内部固定 Background+30s，截止时间传不下去（2026-09-25 实测 Perceive 因此卡 30s）。
+// 故在边界处放弃等待；后台 goroutine 受下游 30s 上限约束必然退出（A-13）。
+func recallWithin(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) (*fsm.TurnRecall, error) {
+	done := make(chan *fsm.TurnRecall, 1)
+	concurrent.SafeGo(ctx, "agentctx.recall", func(gctx context.Context) {
+		done <- recall(gctx, memory, cognitive, spec)
+	})
+	select {
+	case r := <-done:
+		return r, nil
+	case <-ctx.Done():
+		return nil, apperr.Wrap(apperr.CodeTimeout, "agentctx: memory recall exceeded budget", ctx.Err())
+	}
+}
+
+// recall 逐来源检索（反思、情景、L2、RAG），只返回渲染好的条目，各来源内按原生分降序。
+// 来源间的取舍（RRF 融合）、预算截断与去重留给 fuseRecall/packRecall（它们依赖检索完成后的 L2 历史与总预算）。
+// 用户画像不在此召回：它与 L0 稳定核的 UserProfile 是同一数据（见 ADR-0105 决策十 WP11 追记）。
+// 各来源失败一律按"该来源无结果"降级，不阻断回合。
+func recall(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) *fsm.TurnRecall {
+	out := &fsm.TurnRecall{}
+	if spec.goal != "" {
+		out.Items[fsm.RecallReflection] = collectReflections(ctx, memory, spec)
+	}
+	if spec.episodic {
+		out.Items[fsm.RecallEpisodic] = collectEpisodic(ctx, memory, cognitive, spec)
+	}
+	if cognitive != nil && spec.goal != "" {
+		out.Items[fsm.RecallSemantic] = collectSemantic(ctx, memory, cognitive, spec)
+	}
+	if spec.knowledge != nil && spec.goal != "" && spec.knowledgeTopK > 0 {
+		out.Items[fsm.RecallRAG] = collectKnowledge(ctx, spec)
+	}
+	return out
+}
+
+// withMeta 给召回条目补上污点与来源原生分。
+func withMeta(it fsm.RecallItem, taint types.TaintLevel, score float64) fsm.RecallItem {
+	it.Taint = taint
+	it.Score = score
+	return it
+}
+
+// sortByScoreDesc 来源内按原生分降序（稳定：同分保持检索返回序，保证同输入字节一致）。
+func sortByScoreDesc(items []fsm.RecallItem) {
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Score > items[j].Score })
+}
+
+// episodicCandidates FTS 选出项目内、过相关度下限的情景事件 ID（BM25 降序）及各自的 BM25 分（键为去掉
+// "episodic:" 前缀的 ID）。任何失败/无命中返回空（降级）。
+func episodicCandidates(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) ([]string, map[string]float64) {
+	es, ok := cognitive.(fsm.EpisodicSearcher)
+	if !ok || es == nil || spec.episodicK <= 0 || spec.episodicQuery == "" {
+		return nil, nil
+	}
+	// 项目隔离（ADR-0097 决策三修订）：共享索引里只保留"确为情景事件且属当前项目"的命中。
+	hits, err := projectScopedEpisodicFTS(ctx, memory, es, spec.episodicQuery, spec.episodicK, spec.projectID)
+	if err != nil {
+		slog.Debug("agentctx: episodic FTS failed, continuing without episodic recall", "err", err)
+		return nil, nil
+	}
+	scores := make([]float64, len(hits))
+	for i, h := range hits {
+		scores[i] = float64(h.Score)
+	}
+	ids := make([]string, 0, len(hits))
+	byID := make(map[string]float64, len(hits))
+	for i, keep := range scoreFilter(scores, spec.limits) {
+		if keep {
+			ids = append(ids, hits[i].DocID)
+			byID[strings.TrimPrefix(hits[i].DocID, "episodic:")] = scores[i]
+		}
+	}
+	return ids, byID
+}
+
+// collectEpisodic 情景事件按相关度召回：SurrealDB 共享 FTS（BM25）选 ID → 项目隔离 → 取正文 → 污点再判。
+//
+// 此前走 ListEpisodicEvents 的整句子串匹配，分数恒 1.0、几乎总空，情景召回形同虚设（WP8 实测）。
+// 降级（均按"情景无结果"，不阻断回合）：cognitive 不支持 EpisodicSearcher（Tier0 / 无 SurrealDB）、
+// FTS 失败、取正文失败。只走 FTS 一路：情景向量由 OnlineReindexer 异步回填、查询侧还要多一次 embedding
+// （Perceive 曾因此卡 30s），而 BM25 已能按词面相关度选出候选，后续还有本地重排门把关。
+func collectEpisodic(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) []fsm.RecallItem {
+	ids, byID := episodicCandidates(ctx, memory, cognitive, spec)
+	if len(ids) == 0 {
+		return nil
+	}
+	events, err := memory.ListEpisodicEvents(ctx, types.EpisodicQuery{
+		IDs:           ids,
+		ProjectID:     spec.projectID, // 取正文时再按项目过滤一次，不信任上游已筛过
+		K:             spec.episodicK,
+		MaxTaintLevel: spec.maxTaint,
+	})
+	if err != nil {
+		slog.Debug("agentctx: episodic fetch failed, continuing without episodic recall", "err", err)
+		return nil
+	}
+	var items []fsm.RecallItem
+	for _, e := range events {
+		pbEv := e.EventPtr()
+		if pbEv == nil {
+			continue
+		}
+		// 底层已按 MaxTaintLevel 过滤；此处再判一次，不依赖各存储实现都遵守该参数（fail-closed）。
+		if pbEv.TaintLevel > spec.maxTaint {
+			continue
+		}
+		// 不输出 payload 原始 JSON：payload 形态不一（工具输出/结构化 JSON/纯文本，最长 8KB），
+		// 取描述性字段或压成单行后按单条上限截断；时间戳只要日期，秒级时间在提示词里无信息量。
+		items = append(items, withMeta(newRecallItem(datePrefix(pbEv.CreatedAt)+string(pbEv.Type)+": ",
+			episodicSummary(pbEv.Payload), spec.limits.itemMaxChars), pbEv.TaintLevel, byID[strings.TrimPrefix(pbEv.ID, "episodic:")]))
+	}
+	sortByScoreDesc(items)
+	return items
+}
+
+func collectReflections(ctx context.Context, memory protocol.MemoryFacade, spec recallSpec) []fsm.RecallItem {
+	reflections, err := memory.ListReflections(ctx, types.ReflectionQuery{Topic: spec.goal, K: 3})
+	if err != nil {
+		return nil
+	}
+	items := make([]fsm.RecallItem, 0, len(reflections))
+	for i, r := range reflections {
+		// 反思无相关度分：保持存储层返回序，用递减序号分占位，使来源内排序语义与其它来源一致。
+		items = append(items, withMeta(newRecallItem(datePrefix(r.CreatedAt), r.Strategy+": "+r.Decision, spec.limits.itemMaxChars),
+			types.TaintNone, float64(len(reflections)-i)))
+	}
+	return items
+}
+
+func collectSemantic(ctx context.Context, memory protocol.MemoryFacade, cognitive fsm.CognitiveSearcher, spec recallSpec) []fsm.RecallItem {
+	hits, err := projectScopedFTS(ctx, memory, cognitive, spec.goal, 5, spec.projectID)
+	if err != nil || len(hits) == 0 {
+		return nil
+	}
+	scores := make([]float64, len(hits))
+	for i, h := range hits {
+		scores[i] = float64(h.Score)
+	}
+	var items []fsm.RecallItem
+	for i, keep := range scoreFilter(scores, spec.limits) {
+		// 分数只用于过滤/排序，不再写进提示词（BM25 原始分对模型无意义，还白占 token）。
+		if !keep || hits[i].Taint > spec.maxTaint {
+			continue
+		}
+		items = append(items, withMeta(newRecallItem("", hits[i].Snippet, spec.limits.itemMaxChars), hits[i].Taint, scores[i]))
+	}
+	sortByScoreDesc(items)
+	return items
+}
+
+func collectKnowledge(ctx context.Context, spec recallSpec) []fsm.RecallItem {
+	hits, err := spec.knowledge.SearchRAG(ctx, spec.goal, spec.knowledgeTopK)
+	if err != nil || len(hits) == 0 {
+		return nil
+	}
+	scores := make([]float64, len(hits))
+	for i, h := range hits {
+		scores[i] = float64(h.Score)
+	}
+	var items []fsm.RecallItem
+	for i, keep := range scoreFilter(scores, spec.limits) {
+		if !keep || hits[i].Taint > spec.maxTaint {
+			continue
+		}
+		// 来源 URI 可能很长，单独限长后再作前缀，避免它吃光单条上限而正文只剩一截。
+		prefix := ""
+		if src := truncateRunes(collapseSpace(hits[i].Source), sourceMaxChars); src != "" {
+			prefix = src + ": "
+		}
+		items = append(items, withMeta(newRecallItem(prefix, hits[i].Content, spec.limits.itemMaxChars), hits[i].Taint, scores[i]))
+	}
+	sortByScoreDesc(items)
+	return items
+}
+
+// datePrefix 日期前缀（UTC，确定性）；零值时间不输出（0001-01-01 只是噪声）。
+func datePrefix(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return "[" + t.UTC().Format("2006-01-02") + "] "
+}

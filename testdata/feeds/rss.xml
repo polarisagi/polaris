@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Go News</title>
+    <link>https://go.dev/blog</link>
+    <description>The Go Programming Language Blog</description>
+    <item>
+      <title>Go 1.23 Released</title>
+      <link>/blog/go1.23</link>
+      <guid>https://go.dev/blog/go1.23</guid>
+      <pubDate>Wed, 14 Aug 2024 10:00:00 GMT</pubDate>
+      <description>&lt;p&gt;Today the Go team is thrilled to release &lt;b&gt;Go 1.23&lt;/b&gt;. &amp;amp; more details.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>Go 1.22 Released</title>
+      <link>https://go.dev/blog/go1.22</link>
+      <guid>https://go.dev/blog/go1.22</guid>
+      <pubDate>Tue, 06 Feb 2024 10:00:00 GMT</pubDate>
+      <description>Go 1.22 is released with loop variable scoping changes.</description>
+    </item>
+  </channel>
+</rss>

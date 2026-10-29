@@ -1,0 +1,6 @@
+name: agent_status
+description: 查询指定或全部子智能体的运行状态。
+capability: read-only
+read_only: true
+idempotent: true
+risk_level: low

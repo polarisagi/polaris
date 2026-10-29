@@ -1,0 +1,387 @@
+package network
+
+import (
+	"context"
+	"crypto/tls"
+	"log/slog"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// getParsedCIDRs 返回预编译的内网 CIDR 阻断列表（惰性初始化，只读，无需加锁）。
+// 架构文档: docs/arch/M11-Policy-Safety.md §6
+// 使用 sync.OnceValue 而非包级 var + init()：避免包初始化顺序依赖，并消除全局可变状态。
+var getParsedCIDRs = sync.OnceValue(func() []*net.IPNet {
+	cidrs := []string{
+		"0.0.0.0/8",      // This Network（RFC 1122）
+		"127.0.0.0/8",    // Loopback
+		"10.0.0.0/8",     // RFC 1918 私有
+		"172.16.0.0/12",  // RFC 1918 私有
+		"192.168.0.0/16", // RFC 1918 私有
+		"100.64.0.0/10",  // CGNAT 共享地址（RFC 6598）：云平台内部 LB/元数据常见范围
+		"169.254.0.0/16", // Link-local（AWS/GCP/Azure 实例元数据 169.254.169.254）
+		"::1/128",        // IPv6 Loopback
+		"fc00::/7",       // IPv6 唯一本地地址
+		"fe80::/10",      // IPv6 Link-local
+	}
+	blocks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, block, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic("safe_dialer: invalid built-in CIDR " + cidr + ": " + err.Error())
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+})
+
+// SafeDialer 统一安全拨号器 —— SSRFGuard 五阶段校验的唯一实现。
+// 实现 internal/protocol/ 下按域拆分的 interfaces_*.go (SafeDialer)。
+// 所有出站网络连接必须通过此入口，CI safe_dialer_lint 扫描裸 net.Dial/grpc.Dial/http.Get → ERROR。
+type SafeDialer struct {
+	dnsCache    map[string][]net.IP // hostname → resolved IPs
+	dnsCacheTTL time.Duration       // 从 config 注入
+	dnsCacheMu  sync.RWMutex
+	dnsCacheTs  map[string]time.Time
+	dnsCacheMax int // 缓存容量上限
+
+	// QUIC/HTTP3 已禁用 — 禁止 UDP 绕过 DialContext。
+	// Go net/http 默认不启用 QUIC；quic-go 通过 dialer.Control 在 SafeDialer 中显式拒绝 UDP。
+	quicDisabled bool
+
+	// localOnlyIPFilter local_only 模式下的 IP 过滤函数。
+	// nil = 未启用；非 nil = 仅允许 filter(ip)==true 的 IP。
+	localOnlyIPFilter func(net.IP) bool
+
+	// localOnlyAllowlistCheck local_only 模式下按 domain+port 的白名单豁免检查
+	// （2026-07-21 deadcode 审查补齐，M11 §5.3）。nil = 未启用（未开 local_only
+	// 或白名单为空）。非 nil 且 check(host, port)==true 时，DialContext 跳过
+	// localOnlyIPFilter（本次连接不受"仅 loopback"限制），但仍完整执行 Phase
+	// 1-3.5 的 SSRF/TOCTOU 检查——白名单只豁免"local_only 非 loopback 拒绝"这
+	// 一条规则，不豁免其余任何安全检查。由 NetworkSandbox.Enable() 注入
+	// ns.allowlist.IsAllowed（domain+port 精确匹配，Ed25519 签名 + Tier3 上限 5 条）。
+	localOnlyAllowlistCheck func(host string, port int) bool
+
+	// peerAllowlist 跨节点委派登记过的对端（ADR-0111 决策六第 2 条）：只对 [mesh.peers] 中
+	// 显式登记的 host:port 精确放行私网 / CGNAT 拦截。刻意不提供「放行 100.64.0.0/10」这类
+	// 按网段的开关——Tailscale 网段里同样可能有别人的机器与云厂商内部服务。
+	peerAllowlist func(host string, port int) bool
+
+	// allowLoopback 允许连接 loopback 地址（127.0.0.0/8 与 ::1）。
+	// 仅用于系统级受控本地服务（如 Ollama），跳过该 CIDR 段的 SSRF 阻断。
+	// 不影响其余私有 CIDR（10.x / 172.16.x / 192.168.x 等）仍被拦截。
+	allowLoopback bool
+
+	taintLevel     int
+	allowedDomains []string
+
+	toctouDelayMs   int
+	maxIPsThreshold int
+
+	// auditOnly full 信任档位（ADR-0115 WP1）：放行公网与内网连接，只保留审计日志，不阻断 SSRF。
+	auditOnly bool
+}
+
+var _ protocol.SafeDialer = (*SafeDialer)(nil)
+
+// NewSafeDialer 初始化安全拨号器。
+func NewSafeDialer(taintLevel int, allowedDomains []string, m11 config.M11PolicyThresholds) *SafeDialer {
+	ttl := 30 * time.Second
+	cacheSize := 1024
+	if m11.SafeDialerDNSCacheSize > 0 {
+		cacheSize = m11.SafeDialerDNSCacheSize
+	}
+	if m11.SafeDialerDNSCacheTTLSecond > 0 {
+		ttl = time.Duration(m11.SafeDialerDNSCacheTTLSecond) * time.Second
+	}
+	delay := 50
+	if m11.SafeDialerTOCTOUDelayMs > 0 {
+		delay = m11.SafeDialerTOCTOUDelayMs
+	}
+	maxIPs := 20
+	if m11.SafeDialerMaxIPsThreshold > 0 {
+		maxIPs = m11.SafeDialerMaxIPsThreshold
+	}
+
+	return &SafeDialer{
+		dnsCache:        make(map[string][]net.IP),
+		dnsCacheTTL:     ttl,
+		dnsCacheTs:      make(map[string]time.Time),
+		dnsCacheMax:     cacheSize,
+		quicDisabled:    true, // 禁用 QUIC/HTTP3 — 防止 UDP 绕过 DialContext
+		taintLevel:      taintLevel,
+		allowedDomains:  allowedDomains,
+		toctouDelayMs:   delay,
+		maxIPsThreshold: maxIPs,
+	}
+}
+
+// WithAuditOnly 配置 SafeDialer 为仅审计模式（ADR-0115 WP1 full 信任档位使用）。
+// 在此模式下，内网/私网 IP 和受限域名不会被阻断，但会输出 Warn 级别的审计日志。
+func (sd *SafeDialer) WithAuditOnly(auditOnly bool) *SafeDialer {
+	sd.auditOnly = auditOnly
+	return sd
+}
+
+// DialContext 执行 SSRFGuard 五阶段校验后建立连接。
+// Phase 0: Capability Token 出口强制（调用方在调用前通过 Caller Capability 校验）
+// Phase 1: DNS 解析 hostname → ips1
+// Phase 2: 遍历 ips1，命中 blockedCIDRs → 拒绝
+// Phase 3: 50ms TOCTOU 延迟后二次 DNS 解析 → ips2，重新 blockedCIDRs 校验
+// Phase 3.5: len(ips2) > 20 → 拒绝
+// Phase 4: 验证通过后锁定 ips2 中首个非阻塞 IP 建立连接
+func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) { //nolint:gocyclo,nestif
+	// QUIC/HTTP3 阻断: 拒绝 UDP 连接
+	if sd.quicDisabled && strings.EqualFold(network, "udp") {
+		return nil, &ErrQUICDisabled{}
+	}
+
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+		port = "443"
+	}
+
+	// 污点等级 → 施加限制：语义为"只增不减"，故用 >=，禁止用 ==（否则更高污点等级绕过白名单）。
+	// 注意：此处 >= TaintMedium 是「白名单域名收紧」语义（越脏越收紧），
+	// TaintUserReviewed 落入白名单限制是合理的，不同于 TaintEgressCheck 的「拦截」语义，
+	// 故此处不加 != TaintUserReviewed 排除（2026-08-12 A-3 取证确认）。
+	//
+	// 刻意只看实例级 taintLevel、不读 ctx 污点（GR-2.1-002 复核 2026-09-19）：gateway 中间件
+	// 把"请求来源"污点（本地 Medium / 外部 API High）注入每个请求 ctx，经 ctx 传到拨号层的
+	// 是全部 LLM Provider 调用——按 ctx 收紧会把默认空白名单下的所有推理出站一并拒绝。
+	// 数据外发的污点拦截由 Gate4 / TaintEgressCheck 在工具层按"载荷"污点执行（M11 §6）；
+	// 本分支仅服务于显式以 taintLevel>=Medium 构造的专用 Dialer（当前生产无此实例）。
+	peerOK := false
+	if sd.peerAllowlist != nil {
+		if portInt, convErr := strconv.Atoi(port); convErr == nil {
+			peerOK = sd.peerAllowlist(host, portInt)
+		}
+	}
+
+	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium && !peerOK {
+		if !matchAllowedDomain(host, sd.allowedDomains) {
+			if sd.auditOnly {
+				slog.Warn("safe_dialer: taint>=Medium requests domain restriction bypassed (audit only, full profile)", "host", host)
+			} else {
+				return nil, apperr.New(apperr.CodeForbidden, "safe_dialer: taint>=Medium requests are restricted to allowed domains")
+			}
+		}
+	}
+
+	// Phase 1: DNS 解析
+	ips1, err := sd.resolveDNS(ctx, host)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "safe_dialer phase1 dns", err)
+	}
+
+	// Phase 2: blockedCIDRs 校验
+	if !peerOK && sd.containsBlockedCIDR(ips1) {
+		if sd.auditOnly {
+			slog.Warn("safe_dialer: SSRFGuard phase2 blocked CIDR bypassed (audit only, full profile)", "host", host, "ips", ips1)
+		} else {
+			return nil, &SSRFBlockedError{Host: host, IPs: ips1}
+		}
+	}
+
+	// Phase 3: 50ms TOCTOU 延迟 + 二次 DNS 解析（强制绕过缓存，TOCTOU 保护）
+	if err := sleepCtx(ctx, time.Duration(sd.toctouDelayMs)*time.Millisecond); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SafeDialer.DialContext", err)
+	}
+	ips2, err := sd.resolveDNSBypass(ctx, host) // 绕过缓存，防止 DNS rebinding 漏过 TOCTOU
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "safe_dialer phase3 dns", err)
+	}
+	if !peerOK && sd.containsBlockedCIDR(ips2) {
+		if sd.auditOnly {
+			slog.Warn("safe_dialer: SSRFGuard phase3 blocked CIDR bypassed (audit only, full profile)", "host", host, "ips", ips2)
+		} else {
+			return nil, &SSRFBlockedError{Host: host, IPs: ips2}
+		}
+	}
+
+	// Phase 3.5: 响应 IP >20 拒绝
+	if len(ips2) > sd.maxIPsThreshold {
+		if sd.auditOnly {
+			slog.Warn("safe_dialer: DNS response size check bypassed (audit only, full profile)", "host", host, "count", len(ips2))
+		} else {
+			return nil, &ErrDNSResponseTooLarge{Host: host, Count: len(ips2)}
+		}
+	}
+
+	// Phase 4: 依次尝试 ips2 中的 IP，实现类似标准库的 Happy Eyeballs 故障回退
+	//
+	// local_only 白名单豁免必须在这里（DialContext 层）判断，而不是 dialerControl
+	// 里：dialerControl 只拿得到 Phase 1-3 已解析完的 IP，做不了 domain+port 匹配；
+	// 这里仍持有本次调用最原始的 host/port。命中白名单时把 Control 设为 nil，
+	// 只豁免"local_only 非 loopback 拒绝"这一条规则，上面 Phase 1-3.5 的 SSRF/
+	// TOCTOU 检查对白名单条目同样完整生效，不受影响。
+	control := sd.dialerControl
+	if peerOK {
+		control = nil
+	} else if sd.localOnlyAllowlistCheck != nil {
+		portInt, convErr := strconv.Atoi(port)
+		if convErr == nil && sd.localOnlyAllowlistCheck(host, portInt) {
+			control = nil
+		}
+	}
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: control,
+	}
+	var lastErr error
+	for _, ip := range ips2 {
+		target := net.JoinHostPort(ip.String(), port)
+		conn, err := dialer.DialContext(ctx, network, target)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "safe_dialer: all ips failed", lastErr)
+	}
+	return nil, apperr.New(apperr.CodeInternal, "safe_dialer: no ips to dial")
+}
+
+// dialerControl 在底层 socket 创建时调用。
+// local_only 模式下由 NetworkSandbox 注入非 loopback 拒绝逻辑。
+func (sd *SafeDialer) dialerControl(network, address string, c syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// fail-closed：本函数是 socket 级最后闸门，无法判定即拒绝。
+		// 原实现 return nil 依赖"后续 Dial 会报错"，但 net.Dialer 能处理
+		// ParseIP 处理不了的形式（如 IPv6 Zone Index），依赖不成立（A-1）。
+		return apperr.New(apperr.CodeForbidden, "safe_dialer: unparseable address in dialer control, blocked (fail-closed)")
+	}
+
+	// local_only 非 loopback 拒绝由 NetworkSandbox 通过 SetDialerControl 注入
+	if sd.localOnlyIPFilter != nil {
+		if !sd.localOnlyIPFilter(ip) {
+			return &ErrNonLoopbackBlocked{IP: ip}
+		}
+	}
+
+	return nil
+}
+
+// InjectHTTPTransport 返回一个配置了 SafeDialer 的新 *http.Transport。
+// 覆盖 REST/SSE 调用。
+func (sd *SafeDialer) InjectHTTPTransport() *http.Transport {
+	return &http.Transport{
+		DialContext:           sd.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		TLSClientConfig: &tls.Config{
+			NextProtos: []string{"h2", "http/1.1"},
+		},
+	}
+}
+
+// InjectWebSocketDialer 将 SafeDialer 注入 WebSocket 连接。
+func (sd *SafeDialer) InjectWebSocketDialer(wsDialer interface {
+	SetNetDialContext(func(context.Context, string, string) (net.Conn, error))
+}) {
+	wsDialer.SetNetDialContext(sd.DialContext)
+}
+
+// SetLocalOnlyFilter 注入 local_only IP 过滤回调。
+// 由 NetworkSandbox.Enable() 调用。
+func (sd *SafeDialer) SetLocalOnlyFilter(filter func(net.IP) bool) {
+	sd.localOnlyIPFilter = filter
+}
+
+// SetLocalOnlyAllowlistCheck 注入 local_only 白名单豁免检查（domain+port 精确
+// 匹配）。由 NetworkSandbox.Enable() 调用，见该方法文档说明作用范围与边界。
+func (sd *SafeDialer) SetLocalOnlyAllowlistCheck(check func(host string, port int) bool) {
+	sd.localOnlyAllowlistCheck = check
+}
+
+// SetPeerAllowlist 注入跨节点委派对端的精确 host:port 放行检查（ADR-0111 决策六第 2 条）。
+// 只应在装配期调用一次（与 SetLocalOnlyAllowlistCheck 同一约定）。
+func (sd *SafeDialer) SetPeerAllowlist(check func(host string, port int) bool) {
+	sd.peerAllowlist = check
+}
+
+// resolveDNS 解析 DNS（缓存 + TTL）。
+func (sd *SafeDialer) resolveDNS(ctx context.Context, host string) ([]net.IP, error) {
+	sd.dnsCacheMu.RLock()
+	if ips, ok := sd.dnsCache[host]; ok {
+		if time.Since(sd.dnsCacheTs[host]) < sd.dnsCacheTTL {
+			sd.dnsCacheMu.RUnlock()
+			return ips, nil
+		}
+	}
+	sd.dnsCacheMu.RUnlock()
+	return sd.resolveDNSBypass(ctx, host)
+}
+
+// resolveDNSBypass 强制绕过缓存执行真实 DNS 解析。
+// Phase 3 TOCTOU 检查必须调用此方法，防止 DNS rebinding 漏过二次校验。
+func (sd *SafeDialer) resolveDNSBypass(ctx context.Context, host string) ([]net.IP, error) {
+	var r net.Resolver
+	ips, err := r.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SafeDialer.resolveDNSBypass", err)
+	}
+
+	result := make([]net.IP, len(ips))
+	for i, ip := range ips {
+		result[i] = ip.IP
+	}
+
+	// 写回缓存（更新时间戳）
+	sd.dnsCacheMu.Lock()
+	sd.evictDNSCacheLocked(host)
+	sd.dnsCache[host] = result
+	sd.dnsCacheTs[host] = time.Now()
+	sd.dnsCacheMu.Unlock()
+
+	return result, nil
+}
+
+// containsBlockedCIDR 检查 IP 列表是否命中内网 CIDR 阻断列表。
+// getParsedCIDRs() 内部通过 sync.OnceValue 保证只初始化一次，调用后只读无锁。
+// 当 sd.allowLoopback=true 时，loopback IP（127.x.x.x / ::1）跳过 CIDR 检查——
+// 仅适用于系统级受控本地服务（Ollama），不影响其余私有 CIDR 的拦截。
+func (sd *SafeDialer) containsBlockedCIDR(ips []net.IP) bool {
+	for _, ip := range ips {
+		if sd.allowLoopback && ip.IsLoopback() {
+			continue // 系统级本地服务豁免，跳过此 IP
+		}
+		for _, block := range getParsedCIDRs() {
+			if block.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchAllowedDomain(host string, allowedDomains []string) bool {
+	hostLower := strings.ToLower(host)
+	for _, d := range allowedDomains {
+		if strings.EqualFold(host, d) || strings.HasSuffix(hostLower, "."+strings.ToLower(d)) {
+			return true
+		}
+	}
+	return false
+}

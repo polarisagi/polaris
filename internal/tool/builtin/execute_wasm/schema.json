@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "code": { "type": "string", "description": "WebAssembly module bytes (wasm binary or WAT text)" },
+    "input": { "type": "string", "description": "stdin payload passed to the module" },
+    "workspace": { "type": "string", "description": "workspace directory mounted for the module (must be inside allowed paths)" },
+    "max_pages": { "type": "integer", "minimum": 1, "description": "memory page cap (cannot exceed the tier quota)" },
+    "timeout_ms": { "type": "integer", "minimum": 1, "description": "wall-clock budget in milliseconds" }
+  },
+  "required": ["code", "workspace"],
+  "additionalProperties": false
+}

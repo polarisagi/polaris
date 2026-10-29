@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "git_commit",
+  "description": "Stage files and create a git commit (git add + git commit).",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Git repository root directory (must be within the allowed path whitelist)."
+    },
+    "message": {
+      "type": "string",
+      "description": "Commit message."
+    },
+    "files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Files to stage. Empty means 'git add -A' (stage everything)."
+    },
+    "allow_empty": {
+      "type": "boolean",
+      "description": "Whether to allow an empty commit (git commit --allow-empty)."
+    }
+  },
+  "required": ["path", "message"]
+}

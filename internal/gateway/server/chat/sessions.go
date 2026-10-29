@@ -1,0 +1,240 @@
+package chat
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	apptypes "github.com/polarisagi/polaris/pkg/types"
+)
+
+// ─── 会话 CRUD HTTP 处理器 ──────────────────────────────────────────────────
+
+// GET /v1/sessions
+func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
+	// 先查 channels
+	channelTypes := map[string]string{}
+	if chRows, err := h.ChannelRepo.ListChannels(r.Context()); err == nil {
+		for _, ch := range chRows {
+			channelTypes[ch.ID] = ch.Type
+		}
+	}
+
+	// ?limit= 1~200 限制返回条数（缺省 200，保持既有行为）；非法值按缺省处理。
+	limit := 200
+	if n, perr := strconv.Atoi(r.URL.Query().Get("limit")); perr == nil && n >= 1 && n <= 200 {
+		limit = n
+	}
+	// ?project_id= 按项目过滤（ADR-0097）；缺省 = 全部项目，保持既有客户端行为。
+	var (
+		sessions []apptypes.ChatSessionRow
+		err      error
+	)
+	if pid := strings.TrimSpace(r.URL.Query().Get("project_id")); pid != "" {
+		sessions, err = h.PersistenceService.ChatRepo.ListProjectSessions(r.Context(), pid, limit)
+	} else {
+		sessions, err = h.PersistenceService.ChatRepo.ListSessions(r.Context(), limit)
+	}
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+
+	type sessionRow struct {
+		ID             string  `json:"id"`
+		Title          string  `json:"title"`
+		ProjectID      string  `json:"project_id"`
+		ThrashingIndex float64 `json:"thrashing_index"`
+		CreatedAt      string  `json:"created_at"`
+		UpdatedAt      string  `json:"updated_at"`
+		MessageCount   int     `json:"message_count"`
+		Source         string  `json:"source"`  // "web" | "telegram" | "discord" | ...
+		Running        bool    `json:"running"` // 有后台运行中的回合（ADR-0116）
+	}
+	running := h.turns().RunningSet()
+	list := make([]sessionRow, 0, len(sessions))
+	for _, row := range sessions {
+		sr := sessionRow{
+			ID:             row.ID,
+			Title:          row.Title,
+			ProjectID:      row.ProjectID,
+			ThrashingIndex: row.ThrashingIndex,
+			CreatedAt:      row.CreatedAt,
+			UpdatedAt:      row.UpdatedAt,
+			MessageCount:   row.MessageCount,
+			Source:         "web",
+			Running:        running[row.ID],
+		}
+		if strings.HasPrefix(sr.ID, "ch_") {
+			// session key 格式: ch_<channelID>_<chatID>，channelID 本身以 ch_ 开头
+			rest := sr.ID[3:] // 去掉前缀 "ch_"
+			for chID, chType := range channelTypes {
+				if strings.HasPrefix(rest, chID+"_") {
+					sr.Source = chType
+					break
+				}
+			}
+			if sr.Source == "web" {
+				sr.Source = "channel" // 未知平台兜底
+			}
+		}
+		list = append(list, sr)
+	}
+	if list == nil {
+		list = []sessionRow{}
+	}
+	httputil.WriteJSON(w, map[string]any{"sessions": list})
+}
+
+// GET /v1/sessions/{sessionID}
+func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionID")
+	maxChars := 50000
+	if v := r.URL.Query().Get("max_chars"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxChars = n
+		}
+	}
+
+	messages, err := h.PersistenceService.ChatRepo.ListMessages(r.Context(), sessionID, 100000)
+	if err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+
+	type msgRow struct {
+		Role             string          `json:"role"`
+		Content          string          `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+		TaskDuration     int64           `json:"task_duration,omitempty"` // in ms
+		// Views 本条助手消息关联的 MCP Apps UI 视图（M8f-1），刷新页面后前端
+		// 据此重新渲染。只有 role="assistant" 且本轮产生过 tool_ui 事件的消息非空。
+		Views []mcpAppViewDTO `json:"views,omitempty"`
+		// TurnID/Usage/Steps（ADR-0118）：产生本条助手消息的回合、用量摘要、步骤摘要（步数/工具数/用时/token）。
+		// 步骤本体不随历史返回，展开时按 TurnID 走 GET /v1/sessions/{id}/turns/{turn_id}/steps 懒加载。
+		TurnID string          `json:"turn_id,omitempty"`
+		Usage  json.RawMessage `json:"usage,omitempty"`
+		Steps  json.RawMessage `json:"steps,omitempty"`
+		// TurnError 仅用户消息携带：该消息触发的回合失败（没有助手回复）。前端据此在其后显示"本轮失败"占位。
+		// 来自回合步骤摘要，只用于展示；不属于 chat_messages 内容，永远不进入模型历史。
+		TurnError json.RawMessage `json:"turn_error,omitempty"`
+	}
+	viewsByMessage := h.appViewsByMessageID(r.Context(), messages)
+	stepSummaries := h.turnSummaries(r.Context(), sessionID)
+	msgs := make([]msgRow, 0, len(messages))
+	total := 0
+	for _, row := range messages {
+		m := msgRow{
+			Role:             row.Role,
+			Content:          row.Content,
+			ReasoningContent: row.ReasoningContent,
+			TaskDuration:     parseTaskDuration(row.CreatedAt, row.UpdatedAt),
+			Views:            viewsByMessage[row.ID],
+		}
+		if row.ToolCalls != "" {
+			m.ToolCalls = json.RawMessage(row.ToolCalls)
+		}
+		m.TurnID, m.Steps, m.TurnError = turnMeta(row.Role, row.TurnID, stepSummaries)
+		if row.Usage != "" && json.Valid([]byte(row.Usage)) {
+			m.Usage = json.RawMessage(row.Usage)
+		}
+
+		total += len(m.Content)
+		if total > maxChars {
+			break
+		}
+		msgs = append(msgs, m)
+	}
+	if msgs == nil {
+		msgs = []msgRow{}
+	}
+	// project_id 供前端恢复会话时同步"当前项目"（ADR-0097）；会话行不存在时省略。
+	resp := map[string]any{"session_id": sessionID, "messages": msgs, "running": h.turns().Running(sessionID)}
+	if row, gerr := h.PersistenceService.ChatRepo.GetSession(r.Context(), sessionID); gerr == nil && row != nil {
+		resp["project_id"] = row.ProjectID
+	}
+	httputil.WriteJSON(w, resp)
+}
+
+// mcpAppViewDTO 会话历史接口暴露的 MCP Apps UI 视图快照（M8f-1）。
+type mcpAppViewDTO struct {
+	ViewID      string          `json:"view_id"`
+	ServerID    string          `json:"server_id"`
+	ResourceURI string          `json:"resource_uri"`
+	ToolName    string          `json:"tool_name"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult  json.RawMessage `json:"tool_result,omitempty"`
+	WidgetState json.RawMessage `json:"widget_state,omitempty"`
+}
+
+// appViewsByMessageID 批量查询本次返回的消息集合关联的全部视图，按
+// chat_messages.id 分组（M8f-1）。查询失败按无视图处理（记 Warn，不阻断历史加载——
+// 会话历史的核心是文本消息本身，视图渲染是增强能力）。
+func (h *ChatHandler) appViewsByMessageID(ctx context.Context, messages []apptypes.ChatMessageRow) map[int64][]mcpAppViewDTO {
+	ids := make([]int64, 0, len(messages))
+	for _, m := range messages {
+		ids = append(ids, m.ID)
+	}
+	views, err := h.PersistenceService.ChatRepo.ListAppViewsByMessageIDs(ctx, ids)
+	if err != nil {
+		slog.Warn("chat: list app views by message ids failed", "err", err)
+		return nil
+	}
+	byMsg := make(map[int64][]mcpAppViewDTO, len(views))
+	for _, v := range views {
+		if v.MessageID == nil {
+			continue
+		}
+		byMsg[*v.MessageID] = append(byMsg[*v.MessageID], mcpAppViewDTO{
+			ViewID: v.ViewID, ServerID: v.ServerID, ResourceURI: v.ResourceURI, ToolName: v.ToolName,
+			ToolInput: json.RawMessage(v.ToolInput), ToolResult: json.RawMessage(v.ToolResult),
+			WidgetState: json.RawMessage(v.WidgetState),
+		})
+	}
+	return byMsg
+}
+
+func parseTaskDuration(createdStr, updatedStr string) int64 {
+	if createdStr == "" || updatedStr == "" {
+		return 0
+	}
+	parseDBTime := func(s string) time.Time {
+		if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+		return time.Time{}
+	}
+	tC := parseDBTime(createdStr)
+	tU := parseDBTime(updatedStr)
+	if !tU.IsZero() && !tC.IsZero() {
+		return tU.Sub(tC).Milliseconds()
+	}
+	return 0
+}
+
+// DELETE /v1/sessions/{sessionID}
+func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionID")
+	if err := h.PersistenceService.ChatRepo.DeleteSession(r.Context(), sessionID); err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
+	}
+	if h.Hooks != nil {
+		h.Hooks.SessionEnd(r.Context(), sessionID, "other")
+	}
+	httputil.WriteJSON(w, map[string]string{"status": "deleted"})
+}
+
+// 会话辅助方法（EnsureSession/ListMessages/SaveMessage/UpdateSessionTitle/
+// TouchSession/truncate）见 sessions_helpers.go；全文搜索与会话上下文统计
+// 处理器见 sessions_search.go（均为 R7 拆分）。newSessionID 已随 A-03 Step2
+// 迁入 internal/gateway/session/ids.go（会话 ID 生成收口至 session 包）。

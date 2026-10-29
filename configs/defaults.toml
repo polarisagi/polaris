@@ -1,0 +1,349 @@
+# polaris default configuration
+# Tier: 0 (8GB RAM) - all remote API, no local model
+# 系统参数与全局路径单一事实源: internal/config/system_params.go
+
+[system]
+tier = 0
+max_agents = 3
+go_memlimit_mb = 150
+data_dir = "~/.polaris"
+data_encryption_key = "" # 留空或配置外部 KMS，不要硬编码明文密钥
+egress_allowed_domains = [] # 出站域名白名单（仅开启网络隔离时生效，空 = 允许所有）
+
+[system.resource_governor]
+# 资源控制阈值，低于指定阈值时触发对应降级保护
+mem_l1_free_mb = 1536 # L1 警告：停止拉起新 Agent
+mem_l2_free_mb = 1024 # L2 阻塞：挂起所有后台任务
+mem_l3_free_mb = 512  # L3 濒死：强杀耗存最大的子进程
+cpu_l1_pct = 80.0     # CPU 阈值：降低后台任务优先级
+cpu_l2_pct = 95.0     # CPU 阈值：限制并发请求
+
+# 运行时目录布局（默认均从 data_dir 自动派生，各目录均支持独立挂载到其他磁盘/分区）：
+# 空字符串 = 使用默认派生路径
+[system.dirs]
+db_dir         = ""   # 数据库文件目录（默认 data_dir/data，存放 polaris.db, surreal.db）
+logs_dir       = ""   # 系统运行日志目录（默认 data_dir/logs；示例："/var/log/polaris"）
+models_dir     = ""   # 本地 AI 模型资产目录（默认 data_dir/models；示例："/mnt/data/models"）
+workspace_dir  = ""   # Agent 任务沙箱隔离目录（默认 data_dir/workspace；示例："/tmp/polaris/workspace"）
+bin_dir        = ""   # 外部可执行依赖目录（默认 data_dir/bin；示例："/opt/polaris/bin"）
+config_dir     = ""   # 配置覆盖与提示词目录（默认 data_dir/config）
+extensions_dir = ""   # 插件与 Marketplace 安装目录（默认 data_dir/extensions）
+skills_dir     = ""   # 用户技能脚本目录（默认 data_dir/skills）
+sessions_dir   = ""   # 会话历史转录记录（默认 data_dir/sessions）
+audit_dir      = ""   # 审计轨迹与归档目录（默认 data_dir/audit）
+cache_dir      = ""   # HTTP 与推理缓存目录（默认 data_dir/cache）
+hooks_dir      = ""   # 用户事件 Hook 脚本目录（默认 data_dir/hooks）
+tmp_dir        = ""   # 临时下载解压暂存目录（默认 data_dir/tmp）
+run_dir        = ""   # 运行时状态目录（默认 data_dir/run，存放 pid/port/token/lock）
+secrets_dir    = ""   # 机密凭据保护区（默认 data_dir/secrets）
+eval_dir       = ""   # 离线评测数据集目录（默认 data_dir/eval）
+
+# ── 下载配置 ────────────────────────────────────────────────────────────────
+[download]
+# GitHub 下载代理（仅中国大陆有意义；海外用户 auto 模式会自动跳过代理）
+# "auto"                          → 自动探测：500ms 内可达 github.com 则直连（海外/VPN），
+#                                   否则判定为中国大陆网络，按优先级切换镜像（默认）
+# "off"                           → 始终直连，禁用代理
+# "https://ghproxy.net"           → 强制使用主镜像（中国区推荐）
+# "https://mirror.ghproxy.com"    → 强制使用备用镜像
+# auto 模式下降级顺序：ghproxy.net → mirror.ghproxy.com → 直连
+# 亦可通过环境变量设置（优先级更高）：export POLARIS_GITHUB_PROXY=https://ghproxy.net
+github_proxy = "auto"
+
+[inference]
+default_provider = "deepseek-flash"
+reasoning_provider = "deepseek-v4-pro"
+structured_output = "grammar"
+# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION，ADR-0109）。
+# 远程 API 默认路径（如 OpenAI / DeepSeek）：1536 维。
+# 进程内 ONNX 嵌入器（默认后端）：统一 512 维（EmbeddingGemma 截断至 512，bge-small-zh 原生 512）。
+# 显式启用本地服务（ollama / llama_server）时，由下方 [embedding].dim 指定。
+embedder_dim = 1536
+
+[inference.cache]
+enabled = true
+backend = "pebble"
+
+# ── 语音（STT/TTS）：按需下载/后台预置、懒加载、空闲卸载（ADR-0107 / ADR-0108）──────
+# 资产（动态库/模型）的 URL 与 sha256 由代码内清单 internal/llm/audioassets 钉死，不开放配置。
+# 最低配置（按稳定硬件画像判定，空闲内存只决定"此刻能否加载"）：
+#   STT  2GB 总内存 + 2 逻辑核（SenseVoice int8）
+#   硬件三档（ADR-0110）：
+#     A 极低配（总内存 <1800MB 或 <2 逻辑核）：STT/TTS 都关，不预置任何资产，朗读用浏览器/WebView 系统语音
+#     B 低配（非 A 且总内存 <3600MB）：只开 STT（最低 2GB/2 核），只预置 STT，朗读用系统语音
+#     C 标准（总内存 ≥3600MB 且 ≥2 核）：STT + MeloTTS（167MB），后台串行预置 STT→Melo；
+#       服务端朗读最低 4GB/2 核，且首次启用基准 RTF≤0.8，否则回退系统语音
+#       下载 Melo 前先用 SenseVoice 代理测速（predicted=sttRTF×11.2>1.0 则不下载，手动启用可无视）；
+#       真实基准定论过慢则删除 models/tts/melo 回收磁盘（ADR-0110 修订三）
+[inference.audio]
+idle_unload_minutes = 10   # 引擎空闲多久卸载释放内存；0 = 不卸载
+auto_install = true   # 守护进程启动后在后台串行下载语音模型（STT→TTS），仅预置本机硬件支持的能力；false = 首次使用时再下载
+
+[inference.stt]
+# 留空 = 代码内钉死的 ABI 版本（1.13.8）。填其他值会让 STT/TTS 资产初始化报错：
+# FFI 结构体偏移按 1.13.8 的 c-api.h 实测手写（与 1.13.2 逐项一致），换版本会内存破坏。
+sherpa_version = "1.13.8"
+language = "zh"
+# 实测 use_itn=1 会丢首字、错词（"开放时间"→"放时间"），官方二进制同参数输出一致，属模型缺陷。
+use_itn = false
+
+# provider 二选一：
+#   "sherpa" - 本地 sherpa-onnx MeloTTS（离线；单模型单说话人；首次启用跑基准）
+#   "http"   - 外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理，高级可选）
+# Edge TTS 已删除（ADR-0107）；旧配置里的 "edge" 加载时自动迁移为 "sherpa"。
+[inference.tts]
+provider = "sherpa"
+# 前端朗读引擎偏好：auto（服务端就绪用服务端，否则系统语音）| server | system
+engine = "auto"
+sherpa_version = ""  # 留空复用 inference.stt.sherpa_version
+speed = 1.0
+http_endpoint = ""   # provider="http" 时填 "http://127.0.0.1:8000/tts"
+
+[storage]
+# Tier0 SQLite 内存余弦向量扫描的最大行数上限，防止全表扫描导致 OOM（见 docs/specs/09-LLM-Agent-Production.md A-14）。
+# <=0 时代码内回退默认值 500（internal/config/config.go），此处显式声明保持配置可发现性。
+tier0_vector_scan_limit = 500
+# SQLite 关系型与向量核心数据库主文件名（存放于 system.dirs.db_dir 下，默认 polaris.db）
+sqlite_db_filename = "polaris.db"
+# SurrealDB 认知图谱与文档数据库文件名（存放于 system.dirs.db_dir 下，默认 surreal.db）
+surreal_db_filename = "surreal.db"
+
+[storage.engines]
+relational = "sqlite"
+vector = "sqlite-vec"
+graph = "loradb"
+kv = "pebble"
+fulltext = "sqlite-fts5"
+eventlog = "wal"
+
+[observability.traces]
+enabled = true
+sampler = 1.0
+
+[observability.metrics]
+enabled = true
+
+[observability.logs]
+level = "info"
+format = "json"
+
+[agent]
+# 用户显式声明信任的工作区绝对路径前缀（GD-14-005）。
+# 命中的工作区，其 AGENTS.md / CLAUDE.md / .polaris_context.md 会作为项目级
+# 系统指令写入 ZoneImmutable；未命中则按 TaintHigh 进 ZoneExternalCatalog 加围栏。
+#
+# 默认必须为空——Agent 处理 clone 来的仓库时，其中的 AGENTS.md 完全是攻击者
+# 可控的，无条件信任等于开一条直通系统提示词的注入通路。只把你自己的项目
+# 目录加进来，例："/home/me/myproject"。相对路径会被忽略。
+trusted_workspace_roots = []
+
+# HITL 自适应降级（GD-14-004）。0 = 关闭（默认）。
+# 开启前请先看 polaris.hitl.decisions_total 指标，确认某类 checkpoint 的
+# human 批准率确实长期接近 100%（已退化为习惯性点击）再按需调高。
+# 即使开启也只降级为"通知"，且污点/高风险/设备操控/L4 晋升一律不参与降级。
+hitl_trust_min_approvals = 0
+hitl_trust_window_hours = 24
+
+[agent.kernel]
+state_machine = "dual_route"
+default_surprise_threshold = 0.5
+
+[agent.memory]
+layers = ["working", "episodic", "semantic", "procedural"]
+consolidation = "manual"
+
+[agent.skill]
+builtin_path = "skills/"
+max_logic_collapse_concurrent = 1
+# web_search 引擎：duckduckgo（默认，免 key）| searxng（需 web_search_base_url，如 http://127.0.0.1:8888）| brave（需 web_search_api_key）
+web_search_engine = "duckduckgo"
+web_search_api_key = ""
+web_search_base_url = ""
+
+[orchestrator]
+mode = "blackboard"
+protocol = "structured_event"
+# 终态任务保留秒数（86400 = 24h）。到期由 Blackboard Reaper 归档进 decision_log
+# 后物理删除（GD-13-004）。0 = 用代码默认 24h；低于 300 秒的取值会被拒绝。
+task_retention_ttl_sec = 86400
+
+[self_improve]
+gradient = false
+auto_curriculum = false
+
+[self_improve.logic_collapse]
+enabled = true
+min_success_for_trigger = 50
+
+[knowledge]
+# 额外同步进 RAG 的 Markdown 目录（Obsidian 兼容；~ 展开，目录不存在则跳过）。
+# ~/Polaris/Vault 是 Polaris 资料库插件的默认落盘目录，Obsidian 可直接打开同一目录。
+vault_dirs = ["~/Polaris/Vault"]
+
+[knowledge.rag]
+mode = "hybrid"
+graphrag = "microsoft"
+
+[policy]
+engine = "cedar"
+default_block = true
+# Cedar 裁决生效模式："shadow"（默认，仅记录不裁决）/ "deny"（Cedar 明确拒绝强制生效，Go 规则仅兜底 allow）/
+# "full"（完全生效）。Cedar 实体存储尚未完整实现前，"deny" 是推荐的生产配置——既杜绝 Cedar 拒绝被静默旁路，
+# 又不会因实体存储不完整而误伤合法 allow 请求。
+cedar_enforce_mode = "shadow"
+# Cedar 策略文件路径覆盖（空 = 使用二进制内置 embed 默认策略，无需修改）。
+# 运营商如需自定义策略，将 Cedar 文件放到指定路径后重启进程即可，无需重新编译。
+# 示例：hard_constraints_path = "/etc/polaris/policy/hard_constraints.cedar"
+hard_constraints_path = ""
+soft_constraints_path = ""
+
+[eval]
+ci_gate = true
+shadow_deploy = false
+safety_keywords = ["DROP TABLE", "DELETE FROM", "rm -rf", "curl http://169.254", "eval(", "__import__", "os.system"]
+
+[interface]
+host = "127.0.0.1"
+port = 28888
+cli = true
+http = true
+grpc = false
+websocket = false
+# MCP Apps（io.modelcontextprotocol/ui）沙箱代理监听器（M8f-1）。0 = port+1；
+# apps_sandbox_origin / apps_host_origin 仅反向代理部署需要显式配置（沙箱与 Web UI 的对外源）。
+apps_sandbox_port = 0
+apps_sandbox_origin = ""
+apps_host_origin = ""
+apps_enabled = true
+# 额外监听地址，供其他电脑访问（ADR-0111）。写本机的 Tailscale 地址（100.x.y.z）或局域网地址，
+# 不要写 0.0.0.0——那会暴露到所有网卡；确需如此须同时设 allow_wildcard_listen = true。
+extra_listen = []
+allow_wildcard_listen = false
+
+[security]
+# Tier 3（≥64GB）本地大模型专用的出站网络彻底隔离模式：为真时启用 NetworkSandbox
+# （loopback-only + LocalProvider 内存预算守卫），fail-closed，任一环节失败阻止启动。
+# 见 docs/arch/M11-Policy-Safety.md §5 local_only 模式。Tier 0/1/2 不应开启（无本地模型）。
+local_only_mode = false
+# 信任档位（ADR-0115 WP1）："standard"（默认）/ "full" / "hardened"
+trust_profile = "standard"
+
+[sandbox]
+# 是否启用平台原生进程隔离（macOS Seatbelt / Linux bubblewrap / Windows WSL2）。
+# false = 仅 env 清理 + workDir，用于调试或受信任环境。
+enabled        = true
+# 网络访问策略："block"（默认，对齐 Claude Code）或 "allow"。
+network_policy = "block"
+# Linux bubblewrap 可执行路径，空 = 自动从 PATH 查找。
+bwrap_path = ""
+# Agent 可访问的额外文件系统路径白名单。
+# DataDir（~/.polaris）始终自动包含，无需重复填写。
+# 加入后，read_file / list_dir / glob / grep / bash / git_diff 等所有文件工具均可访问该路径。
+# 示例（取消注释并按需修改）：
+# allowed_paths = ["/home/user/projects", "/tmp"]
+allowed_paths = []
+# 可信来源（TrustOfficial 及以上）在 Wasm/Container/Remote 均不可用时，是否
+# 允许降级到 InProcess 执行。默认 false（fail-closed）：可信 ≠ 稳定，可信来源
+# 的代码仍可能死循环/内存爆炸/panic，InProcess 执行会直接拖垮宿主进程——这是
+# 稳定性维度的风险，与"可信"这一安全维度判断是两回事（阶段03 R-05）。
+# 仅开发环境未编译 Wasm 引擎、或明确接受该风险时置 true。
+allow_trusted_inprocess_fallback = false
+
+[sandbox.remote]
+# 远端云沙箱（Sbx-L4）：Tier-0 本地无法启动 L3 容器沙箱或需要更高计算力/隔离度时
+# （如 Python 数据科学类 Skill），将工具执行委托给远端 HTTP 执行器（自托管 VPS、
+# E2B、Modal、Daytona 等任意兼容端点）。涉及代码/数据离开本机发往第三方服务，
+# 默认关闭，需显式配置 endpoint 后启用（[Tier-0-Limit]：可选能力，非硬依赖）。
+enabled = false
+# 远端执行器根 URL，如 "https://executor.example.com"。enabled=true 时必填。
+endpoint = ""
+# Bearer 认证令牌。留空则读取 POLARIS_REMOTE_SANDBOX_TOKEN 环境变量（避免密钥明文落盘）。
+auth_token = ""
+# 单次调用超时秒数。0 = 默认 300s（对应重计算场景）。
+timeout_sec = 0
+
+[cognition]
+# SurrealDB 认知存储后端（运行时选择，不影响编译）。
+# "rocksdb" = kv-rocksdb 持久化（默认），数据落盘 data/surreal.db，RSS ~200MB。
+#             系统自动根据内存降级：
+#               TotalRAM < 2GB  → SurrealDB 完全跳过，cognitive axis → SQLite
+#               2GB ≤ RAM < 4GB → 强制降级为 "mem"（进程重启数据丢失）
+#               TotalRAM ≥ 4GB  → 使用本配置值（默认 "rocksdb"，持久化）
+# "mem"     = kv-mem 进程内存，重启丢失，可手动设置强制 mem 模式（如低配 VPS）。
+surreal_backend = "rocksdb"
+surreal_db_path = ""
+# Tokio 运行时工作线程数（影响 SurrealDB 并发写入吞吐与内存占用）。
+# 0  = auto（min(CPU 核心数, 4)）—— ≥8GB 机器自动选择。
+# 2  = 4GB 内存机器推荐，节省约 30-50MB RSS。
+surreal_worker_threads = 2
+
+[compressor]
+# 模型上下文窗口大小（token 数）。自动压缩阈值 = context_window × auto_compact_pct / 100。
+# Tier-0 默认 32768（DeepSeek V3 实际窗口远大于此，可按需调高）。
+context_window   = 32768
+# 自动压缩触发百分比，对齐 Claude Code 默认值 95%。
+auto_compact_pct = 95.0
+# 上下文使用率警告触发百分比（黄色 Banner 提示用户）。
+warn_pct         = 80.0
+# 连续自动压缩但仍超阈值的最大次数；超出后停止自动压缩并显示抖动告警。
+max_thrash_count = 3
+
+# ── 向量化服务（ADR-0109：本地推理默认关闭，选择顺序唯一事实源）─────────────
+# 向量化后端选择顺序：
+#   1. base_url 非空 → 远程 OpenAI 兼容 API（最高优先级，绝不再拉起本地子进程）
+#   2. backend = "ollama" | "llama_server" 且 model 非空 → 显式本地服务（需显式配置）
+#   3. backend = "auto" | "onnx" → 进程内 ONNX 嵌入器（默认，平衡档 EmbeddingGemma / 轻量档 bge-small-zh）
+#   4. 都不满足或不可用 → 不挂载嵌入器，检索降级到关键词 FTS 搜索
+#
+# backend 取值: "auto" | "onnx" | "ollama" | "llama_server" | "none"（默认 "auto"，"none" 显式关闭向量化）
+# onnx_model 取值: "auto" | "embeddinggemma" | "bge-small-zh"（默认 "auto"，由启动基准自动决定档位）
+# dim: 向量维度（显式使用 ollama/llama_server 本地服务时必填；ONNX 固定 512；远程默认读 inference.embedder_dim）
+[embedding]
+base_url             = ""
+model                = ""
+# api_key 留空时读 POLARIS_EMBEDDING_API_KEY 环境变量
+api_key              = ""
+# 余弦相似度阈值，低于此值的技能/扩展不注入
+similarity_threshold = 0.60
+backend              = "auto"
+onnx_model           = "auto"
+dim                  = 0
+
+# 跨节点委派对外接口（ADR-0111）：Agent Card + A2A 1.0（/a2a/v1）+ MCP（/mcp）。
+# 默认只监听本机；要让其他电脑访问，在 [interface] extra_listen 里写本机的 Tailscale 或局域网地址。
+[a2a]
+enabled = true
+name = "polaris-agent-0"
+description = ""
+advertised_url = ""
+legacy_endpoint = false
+# skills = ["general"] 为旧格式（字符串数组），仍兼容；新配置用下面的 [[a2a.skill]]。
+skills = []
+
+[[a2a.skill]]
+id = "general"
+name = "General assistant"
+description = "Answer questions and carry out multi-step tasks"
+tags = ["general"]
+
+[[a2a.skill]]
+id = "coding"
+name = "Coding"
+description = "Read, explain and write code"
+tags = ["coding"]
+
+[[a2a.skill]]
+id = "planning"
+name = "Planning"
+description = "Break down goals into executable plans"
+tags = ["planning"]
+
+# 入站委派的执行边界（ADR-0111 决策三 / 决策七）。
+[mesh]
+peer_read_only = true          # 对端任务只读执行：写文件/起进程/改状态的工具一律拒绝
+allow_relay = false            # 对端任务不能再委派（从源头杜绝成环）
+result_retention_hours = 168   # 结果留存 7 天，对端休眠醒来后仍可取回
+max_input_bytes = 65536
+blocking_wait_seconds = 60
+peer_file_root = ""            # 对端任务唯一可读目录；空 = <data_dir>/workspace/peer-shared（自动创建）
+# 已登记的对端存放在数据库（mesh_peers），用 `polaris peer invite` / `polaris peer accept` 配对，不在本文件里。

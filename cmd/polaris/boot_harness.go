@@ -1,0 +1,119 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/polarisagi/polaris/internal/eval/harness"
+	"github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// harnessAuditAdapter 把 sb.AuditTrail (RecordAudit) 桥接为
+// harness_rollback.AuditTrail 和 sleeptime.AuditTrail 所需的接口签名：
+// Record(ctx context.Context, actor, action, target string, metadata map[string]any) error。
+type harnessAuditAdapter struct {
+	at interface {
+		RecordAudit(ctx context.Context, toolName string, payload []byte) error
+	}
+}
+
+func (a *harnessAuditAdapter) Record(ctx context.Context, actor, action, target string, metadata map[string]any) error {
+	if a == nil || a.at == nil {
+		return nil
+	}
+	m := map[string]any{
+		"actor":    actor,
+		"target":   target,
+		"metadata": metadata,
+	}
+	payload, err := json.Marshal(m)
+	if err != nil {
+		payload = []byte("{}")
+	}
+	if err := a.at.RecordAudit(ctx, action, payload); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "harnessAuditAdapter.Record: record audit", err)
+	}
+	return nil
+}
+
+// routerInferCallerAdapter 桥接 *llm.InferenceRouter 至 sleeptime.RouterInferCaller 接口。
+type routerInferCallerAdapter struct {
+	router *llm.InferenceRouter
+	vault  *guard.PIITokenVault
+	policy policy.Policy
+}
+
+func (a *routerInferCallerAdapter) CallInfer(ctx context.Context, req types.InferRequest, opts types.InferOptions) (types.InferResponse, error) {
+	if a == nil || a.router == nil {
+		return types.InferResponse{}, apperr.New(apperr.CodeInternal, "routerInferCallerAdapter: nil router")
+	}
+	inferOpts := []types.InferOption{
+		types.WithPurpose(types.PurposeBackgroundLLMInfer),
+		types.WithThinkingMode(types.ThinkingDisabled),
+	}
+	if opts.ModelPool != "" {
+		inferOpts = append(inferOpts, types.WithModelPool(opts.ModelPool))
+	}
+	if opts.ThinkingMode != "" {
+		inferOpts = append(inferOpts, types.WithThinkingMode(opts.ThinkingMode))
+	}
+	if opts.Purpose != "" {
+		inferOpts = append(inferOpts, types.WithPurpose(opts.Purpose))
+	}
+
+	msgs := req.Messages
+	if a.vault != nil && a.policy.PIITokenizeEnabled {
+		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+		if taskID == "" {
+			taskID = "sleeptime"
+		}
+		tokMsgs := make([]types.Message, len(msgs))
+		for i, m := range msgs {
+			tokMsgs[i] = m
+			if m.Content != "" {
+				tokMsgs[i].Content = a.vault.TokenizeForTask(taskID, m.Content)
+			}
+		}
+		msgs = tokMsgs
+	}
+
+	//llmopts:exempt 转发上游 InferOptions，默认 purpose 与 thinking 已在 inferOpts 中声明
+	resp, err := a.router.Infer(ctx, msgs, inferOpts...)
+	if err != nil {
+		return types.InferResponse{}, apperr.Wrap(apperr.CodeInternal, "routerInferCallerAdapter.Infer", err)
+	}
+	return types.InferResponse{
+		Content: resp.Content,
+	}, nil
+}
+
+// harnessEvaluatorAdapter 桥接 *harness.RunnerImpl 至 sleeptime.Evaluator 接口。
+type harnessEvaluatorAdapter struct {
+	runner *harness.RunnerImpl
+}
+
+func (a *harnessEvaluatorAdapter) Evaluate(ctx context.Context, overlayFiles map[string][]byte) (heldInScore, heldOutScore float64, err error) {
+	if a == nil || a.runner == nil {
+		return 0.5, 0.5, nil
+	}
+	trainRep, err := a.runner.RunSuite(ctx, "training", "")
+	if err != nil {
+		return 0, 0, apperr.Wrap(apperr.CodeInternal, "harnessEvaluatorAdapter.Evaluate: train suite", err)
+	}
+	valRep, err := a.runner.RunSuite(ctx, "validation", "")
+	if err != nil {
+		return 0, 0, apperr.Wrap(apperr.CodeInternal, "harnessEvaluatorAdapter.Evaluate: val suite", err)
+	}
+	if trainRep != nil && trainRep.TotalCases > 0 {
+		heldInScore = float64(trainRep.PassCount) / float64(trainRep.TotalCases)
+	}
+	if valRep != nil && valRep.TotalCases > 0 {
+		heldOutScore = float64(valRep.PassCount) / float64(valRep.TotalCases)
+	}
+	return heldInScore, heldOutScore, nil
+}

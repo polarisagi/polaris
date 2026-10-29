@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "str_replace_editor",
+  "description": "Precise file editing tool. Supports create, str_replace, view, and undo_edit operations.",
+  "type": "object",
+  "properties": {
+    "command": {
+      "type": "string",
+      "enum": ["create", "str_replace", "view", "undo_edit"],
+      "description": "The editing command to perform."
+    },
+    "path": {
+      "type": "string",
+      "description": "Absolute path to the target file."
+    },
+    "old_str": {
+      "type": "string",
+      "description": "The exact string to be replaced. Required for 'str_replace' command."
+    },
+    "new_str": {
+      "type": "string",
+      "description": "The string to replace old_str with. Required for 'str_replace' and 'create' commands."
+    }
+  },
+  "required": ["command", "path"]
+}

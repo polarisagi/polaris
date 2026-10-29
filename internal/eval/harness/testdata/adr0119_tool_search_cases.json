@@ -1,0 +1,278 @@
+[
+  {
+    "id": "adr0119_case_01_switch_model",
+    "name": "非核心工具先 tool_search 再调用：switch_model",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "把当前会话换成推理模型来回答",
+      "search_query": "切换模型"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "switch_model"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_02_tts",
+    "name": "非核心工具先 tool_search 再调用：tts",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "把这段文字转成语音念出来",
+      "search_query": "语音 朗读"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "tts"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_03_video_analysis",
+    "name": "非核心工具先 tool_search 再调用：video_analysis",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "分析一下这个视频讲了什么",
+      "search_query": "视频 分析"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "video_analysis"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_04_git_commit",
+    "name": "非核心工具先 tool_search 再调用：git_commit",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "提交我刚才改的代码，写好 commit message",
+      "search_query": "git 提交"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "git_commit"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_05_feed_fetch",
+    "name": "非核心工具先 tool_search 再调用：feed_fetch",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "订阅这个 RSS 看看最新文章",
+      "search_query": "RSS 订阅"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "feed_fetch"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_06_search_extension",
+    "name": "非核心工具先 tool_search 再调用：search_extension",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "帮我找一个能发推特的插件",
+      "search_query": "搜索 插件 扩展"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "search_extension"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_07_csv_parse",
+    "name": "非核心工具先 tool_search 再调用：csv_parse",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "把这个 CSV 文件解析一下，统计每列",
+      "search_query": "CSV 解析"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "csv_parse"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_08_core_memory_edit",
+    "name": "非核心工具先 tool_search 再调用：core_memory_edit",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "把核心记忆里 persona 那一块改一下",
+      "search_query": "核心记忆 编辑"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "core_memory_edit"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_09_diff_text",
+    "name": "非核心工具先 tool_search 再调用：diff_text",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "比较这两段文本有什么差异",
+      "search_query": "文本 差异 diff"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "diff_text"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_10_get_datetime",
+    "name": "非核心工具先 tool_search 再调用：get_datetime",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "现在几点了，今天星期几",
+      "search_query": "时间 日期"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "get_datetime"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_11_harness_rollback",
+    "name": "非核心工具先 tool_search 再调用：harness_rollback",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "把上一次 harness 的改动回滚掉",
+      "search_query": "harness 回滚"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "harness_rollback"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  },
+  {
+    "id": "adr0119_case_12_notebook_edit",
+    "name": "非核心工具先 tool_search 再调用：notebook_edit",
+    "description": "懒加载下该工具不在首轮 tools 数组；模型应先 tool_search 激活，下一轮再调用",
+    "input": {
+      "user_input": "在这个 notebook 的第三个单元格里加一行代码",
+      "search_query": "notebook 单元格 编辑"
+    },
+    "expected": {
+      "expected_tool_sequence": [
+        "tool_search",
+        "notebook_edit"
+      ]
+    },
+    "level": 2,
+    "severity": "P1",
+    "behavior_type": "tool_call_sequence",
+    "tags": [
+      "adr0119",
+      "tool_search",
+      "lazy_load"
+    ]
+  }
+]

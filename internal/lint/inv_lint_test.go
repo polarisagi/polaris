@@ -1,0 +1,1577 @@
+// Package lint_test 静态扫描不变量 CI 测试。
+// 使用 go/ast 精确检测调用点，字符串字面量不触发误报。
+package lint_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// repoRoot 返回仓库根目录（此文件在 internal/lint/，向上两级）。
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("repoRoot: %v", err)
+	}
+	// 防卫性校验：存在 go.mod 才是真正的根目录
+	if _, err := os.Stat(filepath.Join(abs, "go.mod")); err != nil {
+		t.Fatalf("repoRoot: go.mod not found under %s", abs)
+	}
+	return abs
+}
+
+// loadExemptFile 从 testdata/ 下的 JSON 文件加载豁免集合（map[string]bool）。
+// JSON 格式：{"path/or/key": true, ...}。键名以 "_" 开头的条目为注释，自动跳过。
+// convertPath=true 时将键中的斜杠转换为本地路径分隔符（兼容 Windows）；
+// convertPath=false 时保留原始键（用于 "relpath:line" 形式的键）。
+func loadExemptFile(t *testing.T, root, name string) map[string]bool {
+	t.Helper()
+	return loadExemptFileOpts(t, root, name, true)
+}
+
+// loadExemptFileRaw 与 loadExemptFile 相同，但不转换路径分隔符。
+// 适用于键格式为 "relpath:line" 的审计白名单（如 taint_content_approved_calls.json）。
+func loadExemptFileRaw(t *testing.T, root, name string) map[string]bool {
+	t.Helper()
+	return loadExemptFileOpts(t, root, name, false)
+}
+
+func loadExemptFileOpts(t *testing.T, root, name string, convertPath bool) map[string]bool {
+	t.Helper()
+	p := filepath.Join(root, "internal", "lint", "testdata", name)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("loadExemptFile %s: %v", name, err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("loadExemptFile %s: parse error: %v", name, err)
+	}
+	out := make(map[string]bool, len(raw))
+	for k, v := range raw {
+		if strings.HasPrefix(k, "_") {
+			continue // 跳过 _comment 等注释键
+		}
+		var ok bool
+		if err := json.Unmarshal(v, &ok); err != nil || !ok {
+			continue
+		}
+		if convertPath {
+			k = filepath.FromSlash(k)
+		}
+		out[k] = true
+	}
+	return out
+}
+
+// violation 描述一处违规调用点。
+type violation struct {
+	relPath string
+	line    int
+	detail  string
+}
+
+func (v violation) String() string {
+	return fmt.Sprintf("%s:%d: %s", v.relPath, v.line, v.detail)
+}
+
+// walkRepoGoFiles 遍历 internal/ + pkg/ 下所有非测试 .go 文件。
+//
+// 2026-08-08：本函数原名 walkPkgGoFiles，函数体硬编码 walkGoFilesUnder(t, root,
+// "pkg", ...)。2026-07-07 那次复核抽出了 walkGoFilesUnder 以便"平移到覆盖
+// internal/"（见其文档注释），但这个包装函数没跟着改，用它的 5 条规则
+// （M1-01 裸 HTTP、M11-05 裸 net.Dial、FFI 边界、.Content() 审计、裸 error 棘轮）
+// 因此继续对着 29 个文件的 pkg/ 扫描，而真实代码的 1189 个文件在 internal/ 下
+// 从未被检查过——CI 恒绿，给的是虚假保证。改名是为了让"只扫 pkg"这个语义
+// 无法再被无声继承。
+func walkRepoGoFiles(t *testing.T, root string, exemptRel map[string]bool,
+	fn func(fset *token.FileSet, f *ast.File, relPath string)) {
+	t.Helper()
+	for _, sub := range []string{"internal", "pkg"} {
+		walkGoFilesUnder(t, root, sub, exemptRel, fn)
+	}
+}
+
+// walkGoFilesUnder 遍历 root/<subdir>/ 下所有非测试 .go 文件，返回解析后的 AST。
+// 跳过 exemptRel 中列出的相对路径（相对于 root）。subdir 为空字符串等价于遍历 root 本身。
+// 抽出本函数是为了让 pkg/ 专属的检查规则（本文件历史上大量规则只覆盖 pkg/）能够
+// 平移到覆盖 internal/ ——2026-07-07 复核发现多条规则因仓库从 pkg/* 迁移到
+// internal/* 四层布局后从未同步，长期对着不存在的目录扫描、始终"通过"但没有
+// 真正检查任何东西（见 local_playground/reports/code-quality-remediation-verification-20260707.md）。
+func walkGoFilesUnder(t *testing.T, root, subdir string, exemptRel map[string]bool,
+	fn func(fset *token.FileSet, f *ast.File, relPath string)) {
+
+	t.Helper()
+	pkgDir := root
+	if subdir != "" {
+		pkgDir = filepath.Join(root, subdir)
+	}
+	err := filepath.Walk(pkgDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// .pb.go 是 protoc 生成代码（内部持有大量包级 file_*_proto_* 反射元数据变量，
+		// 均由 protoc-gen-go 固定模式生成，不是手写的"裸全局可变状态"），跳过。
+		if info.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, ".pb.go") {
+			return nil //nolint:nilerr
+		}
+		rel, _ := filepath.Rel(root, path)
+		if exemptRel[rel] {
+			return nil //nolint:nilerr
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		fset := token.NewFileSet()
+		// parser.ParseComments：保留 //go:embed 等指令注释挂载到 Doc 字段，
+		// 供 Test_inv_NoGlobalVar 识别编译期嵌入常量（2026-07-07 新增需求）。
+		f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+		if err != nil {
+			return nil //nolint:nilerr // 跳过解析失败的文件（生成代码等）
+		}
+		fn(fset, f, rel)
+		return nil //nolint:nilerr
+	})
+	if err != nil {
+		t.Fatalf("walkPkgGoFiles: %v", err)
+	}
+}
+
+// isExemptVarInit 判断包级 var 的初始化表达式是否属于豁免类别。
+// 豁免类别（不可变或并发安全后置初始化，不是"裸全局可变状态"）：
+//  1. errors.New / fmt.Errorf / perrors.New — 哨兵错误（原规则保留）
+//  2. sync.OnceValue(...) — 惰性只读单次计算
+//  3. regexp.MustCompile(...) — 预编译不可变正则
+//  4. []*regexp.Regexp{regexp.MustCompile(...), ...} — 不可变正则表（所有元素均为 MustCompile）
+//
+// 注意：atomic.Int64/Int32/Pointer 零值变量不在此处豁免——它们是并发安全的可变状态，
+// 全局 atomic 变量在可观测性包中通过 ADR-0001 的架构决策维护，由 baseline JSON 豁免。
+func isExemptVarInit(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if ok {
+		sel, ok2 := call.Fun.(*ast.SelectorExpr)
+		if ok2 {
+			pkg, ok3 := sel.X.(*ast.Ident)
+			if ok3 {
+				name := pkg.Name + "." + sel.Sel.Name
+				switch name {
+				// "perrors.New" 是 pkg/apperr 重命名前的旧别名（历史遗留），实际
+				// import path 早已是 "github.com/polarisagi/polaris/pkg/apperr"、
+				// 调用点写的是 apperr.New/apperr.Wrap —— 只保留旧名会让本豁免规则
+				// 对所有现存 apperr 哨兵错误失效（2026-07-07 复核发现，见
+				// local_playground/reports/code-quality-remediation-verification-20260707.md）。
+				case "errors.New", "fmt.Errorf", "perrors.New", "apperr.New", "apperr.Wrap",
+					"sync.OnceValue",
+					"regexp.MustCompile":
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// []*regexp.Regexp{regexp.MustCompile(...), ...} 正则表
+	lit, ok := expr.(*ast.CompositeLit)
+	if ok && len(lit.Elts) > 0 {
+		for _, elt := range lit.Elts {
+			if !isExemptVarInit(elt) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// isExemptZeroValueType 判断无初始化表达式的包级 var 类型是否属于豁免范畴。
+// 适用于 `var x atomic.Int64`、`var x sync.Once` 等零值即可用的并发原语。
+// 豁免原则：这些类型的零值语义是正确的、并发安全的，不属于"裸全局可变状态"范畴。
+//
+// 不豁免（需要保留在 baseline 或彻底重构）：
+//   - nil interface / nil 指针（如 metric.Int64Counter、http.Handler）— 可变，需要 InitXxx 赋值
+//   - 普通 struct 初始化（如 NewSurpriseIndex()）— 取决于使用方式
+func isExemptZeroValueType(typeExpr ast.Expr) bool {
+	switch t := typeExpr.(type) {
+	case *ast.SelectorExpr:
+		pkg, ok := t.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		// sync.Once/Mutex/RWMutex/Map 零值即可用，内部自带并发保护，
+		// 与 atomic.* 属同一类"零值安全并发原语"（2026-07-07 扩容 internal/ 扫描
+		// 范围后发现 internal/gateway/server/chat/sse.go skillEmbedCacheMu、
+		// internal/downloader/http.go dlLocks 均属此类，原规则只认
+		// sync.Once 是历史遗漏）。
+		if pkg.Name == "sync" {
+			switch t.Sel.Name {
+			case "Once", "Mutex", "RWMutex", "Map":
+				return true
+			}
+		}
+		// atomic.Int32/Int64/Uint32/Uint64/Bool/Value 零值合法，并发安全
+		if pkg.Name == "atomic" {
+			switch t.Sel.Name {
+			case "Int32", "Int64", "Uint32", "Uint64", "Bool", "Value", "Pointer":
+				return true
+			}
+		}
+		// embed.FS 由 //go:embed 编译器指令填充，编译后不可变，等价于只读常量
+		if pkg.Name == "embed" && t.Sel.Name == "FS" {
+			return true
+		}
+	case *ast.IndexExpr:
+		// atomic.Pointer[T]（Go 1.18+ 泛型实例化）—— 零值 == nil，Load() 安全返回 nil
+		sel, ok := t.X.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		return pkg.Name == "atomic" && sel.Sel.Name == "Pointer"
+	}
+	return false
+}
+
+// ─── inv_M1_01 ────────────────────────────────────────────────────────────────
+
+// ─── inv_M1_01 / inv_M11_05：判据已移交 tools/safe_dialer_lint.go（2026-08-17）──
+//
+// 原先这里有 Test_inv_M1_01_NoRawHTTPCalls 与 Test_inv_M11_05_NoRawNetDial 两条测试，
+// 与 tools/safe_dialer_lint.go（inv_safe_dialer_01 / F-1 / L-01）查的是同一件事：
+// 出站连接必须经 SafeDialer。**两份实现已经漂了**——
+//
+//	这里独有：net.DialContext、http.Head、http.DefaultClient 的非调用引用
+//	那边独有：net.DialTimeout、http.PostForm、smtp.*、websocket.Dialer、扫 cmd/
+//
+// 即两边各自放过了对方能抓的形态，而任何一方绿灯都会被读成"这条不变量守住了"。
+// 判据只能有一个归属：两份实现不会同步演进，只会各自腐烂到互相掩盖。
+//
+// 现取并集归 tools/safe_dialer_lint.go 单一所有——它在 make lint 里、有棘轮基线、
+// 且在 tools/lint-selftest.txt 有负向用例（F-1 / L-01），三样这里都没有。
+// 合并当场抓出 4 处两套系统都没看见的 http.DefaultTransport 引用，其中 3 处是
+// 「nil 时回落到全局默认 Transport」这一形态（HE-2 明禁的 nil 安全门放行），
+// 已逐条记入 tools/baselines/safe-dialer-baseline.md 待定夺。
+//
+// 不要在这里重新加回这两条测试。要改判据，改 tools/safe_dialer_lint.go。
+// 豁免表 testdata/raw_http_calls_exempt.json、raw_net_dial_exempt.json 随之删除
+// （两者 2026-08-08 起即为空表）。
+
+// ─── inv_XR06 ─────────────────────────────────────────────────────────────────
+
+// Test_inv_XR06_DownloaderNoRawTransport 验证 internal/downloader/ 下不存在裸
+// http.DefaultTransport / http.DefaultClient 引用（绕过 M11 SafeDialer 的 SSRF
+// 防护）。豁免列表由 testdata/xr06_raw_transport_exempt.json 管理——每条豁免必须
+// 有对应 ADR（见 ADR-0071）。
+//
+// 扫描范围刻意限定在 internal/downloader/（而非全量 internal/），因为
+// internal/security/network/ 下对 http.DefaultTransport 的引用是 SafeDialer/
+// NetworkGuard 自身实现（改写全局默认值以做纵深防御），并非绕过；将其纳入本规则
+// 需要另立豁免语义，超出 ADR-0071 的既定范围，留待专项处理。
+func Test_inv_XR06_DownloaderNoRawTransport(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "xr06_raw_transport_exempt.json")
+
+	forbiddenHTTPSelectors := map[string]bool{
+		"DefaultTransport": true,
+		"DefaultClient":    true,
+	}
+
+	var violations []violation
+	walkGoFilesUnder(t, root, filepath.Join("internal", "downloader"), exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok || pkgIdent.Name != "http" {
+				return true
+			}
+			if forbiddenHTTPSelectors[sel.Sel.Name] {
+				pos := fset.Position(sel.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  fmt.Sprintf("http.%s — 裸 HTTP 出口，绕过 M11 SafeDialer（XR-06），未登记豁免须改用注入的 SafeDialer client", sel.Sel.Name),
+				})
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_XR06 VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_M11_05 / inv_M7_06 ──────────────────────────────────────────────────
+
+// ─── 辅助测试：验证扫描逻辑本身的正确性 ─────────────────────────────────────
+
+// Test_inv_LintScanner_DoesNotFlagStringLiterals 验证扫描器对字符串字面量中的
+// "net.Dial" "http.Get" 等模式不产生误报。
+// 背景：internal/extension/skill/skill_pipeline.go 的 StaticAnalyzer.Analyze 将这些字符串作为
+// 被扫描目标（字符串比较），不是实际调用——AST 方案应正确区分。
+func Test_inv_LintScanner_DoesNotFlagStringLiterals(t *testing.T) {
+	// 构造一个包含字符串字面量"net.Dial"的合成文件，解析后确认无 CallExpr 违规
+	src := `package test
+
+import "strings"
+
+func check(code string) bool {
+	return strings.Contains(code, "net.Dial") ||
+		strings.Contains(code, "http.Get") ||
+		strings.Contains(code, "grpc.Dial")
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse synthetic: %v", err)
+	}
+
+	callCount := 0
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if pkg.Name == "net" && (sel.Sel.Name == "Dial" || sel.Sel.Name == "DialContext") {
+			callCount++
+			t.Errorf("false positive: net.Dial string literal flagged as call at line %d", fset.Position(call.Pos()).Line)
+		}
+		if pkg.Name == "http" && (sel.Sel.Name == "Get" || sel.Sel.Name == "DefaultClient") {
+			callCount++
+			t.Errorf("false positive: http.Get string literal flagged as call at line %d", fset.Position(call.Pos()).Line)
+		}
+		return true
+	})
+
+	if callCount > 0 {
+		t.Errorf("scanner incorrectly flagged %d string literal(s) as call violations", callCount)
+	}
+}
+
+// ─── inv_NoCrossLayerImport ──────────────────────────────────────────────────
+
+// Test_inv_NoCrossLayerImport 验证高层包不导入低层反向依赖。
+func Test_inv_NoCrossLayerImport(t *testing.T) {
+	root := repoRoot(t)
+
+	type layerRule struct {
+		layerPrefix             string
+		forbiddenImportPrefixes []string
+	}
+
+	// 层级表按 CLAUDE.md 当前四层布局（原 pkg/* 键已随重构消失，曾导致规则空转）：
+	//   L0: store/observability/security/llm/ffi/protocol/config/sysinfo/downloader/runtimeinfo
+	//   L1: agent/action/memory/tool/sandbox/prompt/vfs/execute
+	//   L2: swarm/learning/knowledge/extension
+	//   L3: gateway/automation/eval/channel/sysmgr
+	// 依赖方向必须单向 L0←L1←L2←L3（R1.7），即低层禁止反向 import 高层。
+	l1 := []string{"agent", "action", "memory", "tool", "sandbox", "prompt", "vfs", "execute"}
+	l2 := []string{"swarm", "learning", "knowledge", "extension"}
+	l3 := []string{"gateway", "automation", "eval", "channel", "sysmgr"}
+
+	forbiddenFor := func(pkgs ...string) []string {
+		out := make([]string, 0, len(pkgs))
+		for _, p := range pkgs {
+			out = append(out, "github.com/polarisagi/polaris/internal/"+p+"/")
+		}
+		return out
+	}
+
+	// sysinfo/downloader 是被放错在 sysmgr/ 下的通用 L0 能力，已迁出为独立顶层包，无需跨层豁免。
+	l0 := []string{"store", "observability", "security", "llm", "ffi", "protocol", "config", "sysinfo", "downloader", "runtimeinfo"}
+	rules := make([]layerRule, 0, len(l0)+len(l1)+len(l2))
+	for _, p := range l0 {
+		rules = append(rules, layerRule{
+			layerPrefix:             "internal/" + p + "/",
+			forbiddenImportPrefixes: append(append(forbiddenFor(l1...), forbiddenFor(l2...)...), forbiddenFor(l3...)...),
+		})
+	}
+	for _, p := range l1 {
+		rules = append(rules, layerRule{
+			layerPrefix:             "internal/" + p + "/",
+			forbiddenImportPrefixes: append(forbiddenFor(l2...), forbiddenFor(l3...)...),
+		})
+	}
+	for _, p := range l2 {
+		rules = append(rules, layerRule{
+			layerPrefix:             "internal/" + p + "/",
+			forbiddenImportPrefixes: forbiddenFor(l3...),
+		})
+	}
+
+	var violations []violation
+	walkGoFilesUnder(t, root, "internal", nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		var applicableRule *layerRule
+		for _, r := range rules {
+			forwardSlashPath := filepath.ToSlash(relPath)
+			if strings.HasPrefix(forwardSlashPath, r.layerPrefix) {
+				applicableRule = &r
+				break
+			}
+		}
+
+		if applicableRule == nil {
+			return
+		}
+
+		for _, imp := range f.Imports {
+			if imp.Path != nil {
+				importPath := strings.Trim(imp.Path.Value, `"`)
+				for _, forbiddenPrefix := range applicableRule.forbiddenImportPrefixes {
+					if strings.HasPrefix(importPath, forbiddenPrefix) {
+						pos := fset.Position(imp.Pos())
+						violations = append(violations, violation{
+							relPath: relPath,
+							line:    pos.Line,
+							detail:  fmt.Sprintf("import %q — L0/L1/L2 禁止反向或跨级依赖", importPath),
+						})
+					}
+				}
+			}
+		}
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_NoCrossLayerImport VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoOsExecInHigherLayers ──────────────────────────────────────────────
+
+// Test_inv_NoOsExecInHigherLayers 验证高层禁止直接 os/exec。
+func Test_inv_NoOsExecInHigherLayers(t *testing.T) {
+	root := repoRoot(t)
+
+	// 2026-07-07 修正：原列表指向 pkg/cognition|swarm|governance|edge|gateway，
+	// 这些目录在仓库重构后已不存在（同 Test_inv_NoCrossLayerImport 的修正说明），
+	// 导致本检查长期对空目录扫描、从未真正拦截过任何文件。改为 R1.13
+	// （docs/specs/00-Constitution.md）明确列出的四个禁止直接 os/exec 的包：
+	// internal/agent/ internal/swarm/ internal/eval/ internal/gateway/
+	// （install hook 是唯一例外，须经 ContainerSandbox.RunScript，不在此列表放行）。
+	highLayerDirs := []string{
+		filepath.Join(root, "internal", "agent"),
+		filepath.Join(root, "internal", "swarm"),
+		filepath.Join(root, "internal", "eval"),
+		filepath.Join(root, "internal", "gateway"),
+	}
+
+	var violations []violation
+
+	for _, dir := range highLayerDirs {
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil //nolint:nilerr
+				}
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil //nolint:nilerr
+			}
+
+			relPath, _ := filepath.Rel(root, path)
+
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", path, err)
+			}
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, path, src, parser.ImportsOnly)
+			if err != nil {
+				return nil //nolint:nilerr
+			}
+
+			for _, imp := range f.Imports {
+				if imp.Path != nil && imp.Path.Value == `"os/exec"` {
+					pos := fset.Position(imp.Pos())
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  `import "os/exec" — R1.13 禁止直接 exec，须委托 protocol.ToolRegistry.ExecuteTool + internal/sandbox`,
+					})
+				}
+			}
+			return nil //nolint:nilerr
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
+		}
+	}
+
+	for _, v := range violations {
+		t.Errorf("inv_NoOsExecInHigherLayers VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoGlobalVarInPkg ────────────────────────────────────────────────────
+
+// Test_inv_NoGlobalVar 验证 pkg/ 与 internal/ 中禁止全局可变变量（R1.3）。
+//
+// 2026-07-07 修正：原名 Test_inv_NoGlobalVarInPkg，且实现只扫描 pkg/（apperr/types/
+// version，三者均无业务逻辑，天然不太会出现可变单例）。R1.3 的真实高发区是
+// internal/ 下的 service/policy/classifier 一类包（例如本次复核实际发现并修复的
+// internal/security/policy/gate.go EvalTimeout、internal/security/classifier/
+// classifier.go Default，见 local_playground/reports/
+// code-quality-remediation-verification-20260707.md）——旧实现完全没有覆盖到，
+// 相当于给了这一整类问题一个天然盲区。现扩大扫描范围到 internal/，baseline 文件
+// 里同步补全了 internal/ 下真实存在的 FFI/OTel 豁免项（原 baseline 里的
+// pkg/substrate/、pkg/action/、pkg/cognition/ 等路径同样是旧目录结构下的残留，
+// 对应文件早已不存在，已按现状清理并替换为 internal/ 下真实路径）。
+func Test_inv_NoGlobalVar(t *testing.T) {
+	root := repoRoot(t)
+
+	// 已清理或通过 ADR-0011 / ADR-0001 正式豁免（R1.3 ratchet）。
+	// 见 baseline JSON 中的 _permanent_reason 字段。
+	// ✅ 已清理（不再出现在本列表）：
+	//   agent.go (errTaintViolation, stateToTriggerMap), hooks.go (errNotFound),
+	//   reflection_worker.go (defaultReflectionConfig), swarm.go (DefaultAgentLimits),
+	//   killswitch.go (PolarisKillswitchStage), env.go (allowedEnvKeys),
+	//   curriculum.go (dangerousCommands)
+	baselinePath := filepath.Join(root, "internal", "lint", "testdata", "global_var_baseline.json")
+	b, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("读取 baseline 失败: %v", err)
+	}
+	// 用 json.RawMessage 先解析，再按 loadExemptFileOpts 相同逻辑过滤：
+	// 跳过 "_" 开头的注释键（如 _comment、_permanent_reason），只处理值为 true 的条目。
+	var rawBaseline map[string]json.RawMessage
+	if err := json.Unmarshal(b, &rawBaseline); err != nil {
+		t.Fatalf("解析 baseline 失败: %v", err)
+	}
+	exempt := make(map[string]bool)
+	for k, v := range rawBaseline {
+		if strings.HasPrefix(k, "_") {
+			continue
+		}
+		var ok bool
+		if err := json.Unmarshal(v, &ok); err != nil || !ok {
+			continue
+		}
+		exempt[filepath.FromSlash(k)] = true
+	}
+
+	// baseline 路径必须真实存在。
+	//
+	// 2026-08-08 新增：baseline 里 `internal/sandbox/wasm_host.go` 与
+	// `internal/tool/builtin/sandboxenv/hostenv.go` 两条指向的文件不仅当前不
+	// 存在，在整个 git 历史里也从未存在过——是 2026-07-07 那次"按当前 internal/
+	// 四层布局真实路径重新核对全部条目"时凭空写进去的。而那次重写的动因，恰恰
+	// 就是清理上一代残留的失效路径（见本文件上方注释）。同一种腐烂一年内复发
+	// 两次，说明问题不在某次疏忽，而在于 baseline 没有任何自校验：写错的豁免
+	// 项不会报错，只会安静地不生效，等下一轮人工审计再翻出来。
+	//
+	// 失效条目不是无害的：它让"这里有一处已知豁免"这条信息变成假的，审计时会
+	// 据此跳过真正需要看的地方。此处按文件是否存在直接失败，成本一次 os.Stat。
+	for rel := range exempt {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("global_var_baseline.json 条目 %q 指向不存在的文件——豁免项失效（既不生效也不报错）。"+
+				"文件被删除/迁移时必须同步删除或订正该条目", filepath.ToSlash(rel))
+		}
+	}
+
+	checkGlobalVars := func(fset *token.FileSet, f *ast.File, relPath string) []violation {
+		var vs []violation
+		for _, decl := range f.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.VAR {
+				continue
+			}
+			// //go:embed 编译期嵌入指令：内容由编译器在构建时一次性写入，运行期只读，
+			// 与 embed.FS 同等对待（2026-07-07 扩容扫描范围后发现
+			// internal/config/integrity_check.go kernelManifestJSON 属此类，
+			// 原规则只认 embed.FS 类型、没识别 //go:embed 指令本身）。
+			// 注意：ast.CommentGroup.Text() 会主动剥离 "//go:xxx" 这类编译器指令注释
+			// （go/ast 文档明确说明），必须直接扫原始 List，不能用 .Text()。
+			hasEmbedDirective := func(cg *ast.CommentGroup) bool {
+				if cg == nil {
+					return false
+				}
+				for _, c := range cg.List {
+					if strings.Contains(c.Text, "go:embed") {
+						return true
+					}
+				}
+				return false
+			}
+			genDeclHasEmbed := hasEmbedDirective(genDecl.Doc)
+			for _, spec := range genDecl.Specs {
+				valSpec, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				specHasEmbedDirective := genDeclHasEmbed || hasEmbedDirective(valSpec.Doc)
+
+				for i, name := range valSpec.Names {
+					if strings.HasPrefix(name.Name, "Err") || name.Name == "_" {
+						continue
+					}
+					if specHasEmbedDirective {
+						continue
+					}
+
+					if i < len(valSpec.Values) {
+						if isExemptVarInit(valSpec.Values[i]) {
+							continue
+						}
+					} else if valSpec.Type != nil && isExemptZeroValueType(valSpec.Type) {
+						// 无初始化表达式 + 类型是 atomic.*/sync.Once — 零值即合法
+						continue
+					}
+
+					pos := fset.Position(valSpec.Pos())
+					vs = append(vs, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  fmt.Sprintf("var %s — 全局可变变量，须改为包内局部初始化或注入依赖", name.Name),
+					})
+				}
+			}
+		}
+		return vs
+	}
+
+	var violations []violation
+	walkGoFilesUnder(t, root, "pkg", exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		violations = append(violations, checkGlobalVars(fset, f, relPath)...)
+	})
+	walkGoFilesUnder(t, root, "internal", exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		violations = append(violations, checkGlobalVars(fset, f, relPath)...)
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_NoGlobalVar VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoAlterTableInSchema ────────────────────────────────────────────────
+
+// Test_inv_NoAlterTableInSchema 验证禁止使用 ALTER TABLE 补丁。
+func Test_inv_NoAlterTableInSchema(t *testing.T) {
+	root := repoRoot(t)
+	schemaDir := filepath.Join(root, "internal", "protocol", "schema")
+
+	err := filepath.Walk(schemaDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil //nolint:nilerr
+			}
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".sql") {
+			return nil //nolint:nilerr
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(string(content), "\n")
+		for i, line := range lines {
+			upperLine := strings.ToUpper(line)
+			if strings.Contains(upperLine, "ALTER TABLE") ||
+				strings.Contains(upperLine, "ADD COLUMN") ||
+				strings.Contains(upperLine, "DROP COLUMN") ||
+				strings.Contains(upperLine, "RENAME COLUMN") {
+				relPath, _ := filepath.Rel(root, path)
+				t.Errorf("inv_NoAlterTableInSchema VIOLATED: %s:%d:\n  %q — 上线前禁止 ALTER TABLE，直接修改原始建表文件并删库重建", relPath, i+1, strings.TrimSpace(line))
+			}
+		}
+		return nil //nolint:nilerr
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", schemaDir, err)
+	}
+}
+
+// ─── inv_NoFFIOutsideFfiPkg ──────────────────────────────────────────────────
+
+// Test_inv_NoFFIOutsideFfiPkg 验证 purego FFI 仅限受控边界使用。
+//
+// 豁免原则（L0 受控 FFI 边界）：
+// 以下文件均属于 L0 基础设施或 L1 动作层内的性能关键路径，
+// 且各自拥有独立的 Rust dylib 绑定目标，不具备合并到 internal/ffi/ 的价值。
+// 每条豁免均需有明确的 Rust FFI 目标说明，禁止以"历史原因"为由新增豁免。
+//   - internal/ffi/                → purego 桥的权威实现（定义 allowlist 的原点）
+//   - internal/tool/sandbox/rust_native_sandbox.go + rust_wasmtime_sandbox.go
+//     → Rust WASM/native sandbox，独立 dylib，L1 合法 exec 封装
+//   - internal/llm/stt/            → Sherpa-ONNX STT dylib（音频推理，L0 基础设施）
+//   - internal/llm/tts/            → Sherpa-ONNX TTS dylib（音频推理，L0 基础设施）
+//   - internal/security/policy/    → Cedar 策略引擎 dylib（L0 安全基础设施）
+//   - internal/store/              → SurrealDB embedded dylib（L0 存储基础设施）
+//   - internal/llm/embedonnx/      → ONNX Runtime dylib（ADR-0109 向量嵌入推理，L0 基础设施）
+func Test_inv_NoFFIOutsideFfiPkg(t *testing.T) {
+	root := repoRoot(t)
+	// 豁免列表由 testdata/ffi_boundary_exempt.json 管理，见该文件注释说明。
+	exempt := loadExemptFile(t, root, "ffi_boundary_exempt.json")
+
+	var violations []violation
+	walkRepoGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		for _, imp := range f.Imports {
+			if imp.Path != nil && strings.Trim(imp.Path.Value, `"`) == "github.com/ebitengine/purego" {
+				pos := fset.Position(imp.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `import "github.com/ebitengine/purego" — purego FFI 桥仅限 pkg/substrate/ffi/`,
+				})
+			}
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if pkgIdent.Name == "purego" && (sel.Sel.Name == "Dlopen" || sel.Sel.Name == "RegisterLibFunc") {
+				pos := fset.Position(call.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  fmt.Sprintf("purego.%s(...) — purego FFI 桥仅限 pkg/substrate/ffi/", sel.Sel.Name),
+				})
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_NoFFIOutsideFfiPkg VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_TaintContentCallAudit ───────────────────────────────────────────────
+
+// Test_inv_TaintContentCallAudit 审计 .Content() 调用。
+func Test_inv_TaintContentCallAudit(t *testing.T) {
+	root := repoRoot(t)
+	// 已审计的 .Content() 调用由 testdata/taint_content_approved_calls.json 管理。
+	// 每新增一处须在该文件中登记，否则 CI 失败。键格式："relpath:line"，不转换路径分隔符。
+	approvedCalls := loadExemptFileRaw(t, root, "taint_content_approved_calls.json")
+
+	var violations []violation
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		forwardSlashPath := filepath.ToSlash(relPath)
+		if strings.HasPrefix(forwardSlashPath, "pkg/substrate/policy/") {
+			return
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "Content" {
+				pos := fset.Position(sel.Pos())
+				key := fmt.Sprintf("%s:%d", relPath, pos.Line)
+				if !approvedCalls[key] {
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  ".Content() 调用未登记 — 须在 approvedCalls 中审计确认，或改用 SafeString",
+					})
+				}
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_TaintContentCallAudit VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_BareErrorReturnRatchet ──────────────────────────────────────────────
+
+// Test_inv_BareErrorReturnRatchet 检测并防范「err 来自外部调用却裸返回」。
+//
+// 判定按 err 的来源收窄，而非见 `return err` 就报（ADR-0089 决策二）：
+//   - err 来自**标准库 / 三方库**调用 → 违规。此时错误链上除了库自己的措辞没有
+//     任何本仓上下文，调用方拿到 "no such file or directory" 无从定位是谁在读哪个文件；
+//   - err 来自**本仓调用**（同包函数、方法、接口）→ 合规。被调方按 pkg/apperr
+//     约定自行包装，调用点再包一层只会得到 apperr 套 apperr 的重复链。
+//
+// 2026-08-08 收窄前，本规则见 `return err` 即报，baseline 因此积了 106 条；AST 溯源
+// 显示其中 104 条的 err 来自本仓调用，真正缺上下文的只有 1 条。按旧判定清偿这 106 条
+// 会把重复包装写进全仓，且规则文本要求的 `fmt.Errorf / errors.Wrap` 与 CLAUDE.md
+// 「禁裸 errors.New/fmt.Errorf 泄漏调用链」直接冲突。
+//
+// baseline 保留为空并作为「零债务」的守卫。原 cmd/gen_bare_error_baseline 一键重建
+// 工具已随本次收窄删除：它持有一份与本规则并行的判定副本，且「一键接受当前全部违规」
+// 正是空 baseline 与空转规则长期共存的原因。需要重新建档时，本规则的失败输出即清单。
+func Test_inv_BareErrorReturnRatchet(t *testing.T) {
+	root := repoRoot(t)
+	baselinePath := filepath.Join(root, "internal", "lint", "testdata", "bare_error_return_baseline.json")
+
+	b, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("读取 baseline 失败: %v", err)
+	}
+	var baseline map[string]bool
+	if err := json.Unmarshal(b, &baseline); err != nil {
+		t.Fatalf("解析 baseline 失败: %v", err)
+	}
+
+	var violations []violation
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		external := externalPkgIdents(f)
+		ast.Inspect(f, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				return true
+			}
+			for _, hit := range bareErrReturns(fn) {
+				if !errFromExternalCall(fn, hit, external) {
+					continue
+				}
+				pos := fset.Position(hit.Pos())
+				key := fmt.Sprintf("%s:%d", relPath, pos.Line)
+				if baseline[key] {
+					continue
+				}
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `err 来自标准库/三方调用却裸返回 — 须用 apperr.Wrap 补上「谁在做什么」的上下文`,
+				})
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_BareErrorReturnRatchet VIOLATED: %s", v)
+	}
+}
+
+// externalPkgIdents 返回本文件中「非本仓」导入包的引用名集合。
+// 判定依据是导入路径不以模块路径开头——标准库无域名前缀，三方库域名不同。
+func externalPkgIdents(f *ast.File) map[string]bool {
+	const modulePath = "github.com/polarisagi/polaris/"
+	out := map[string]bool{}
+	for _, imp := range f.Imports {
+		p := strings.Trim(imp.Path.Value, `"`)
+		if strings.HasPrefix(p, modulePath) {
+			continue
+		}
+		name := p[strings.LastIndex(p, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name != "_" && name != "." {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// bareErrReturns 收集函数体内所有含裸 `err` 结果的 return 语句。
+func bareErrReturns(fn *ast.FuncDecl) []*ast.ReturnStmt {
+	var out []*ast.ReturnStmt
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, res := range ret.Results {
+			if id, isIdent := res.(*ast.Ident); isIdent && id.Name == "err" {
+				out = append(out, ret)
+				return true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// errFromExternalCall 报告 ret 处的 err 是否由外部包调用赋值而来。
+// 取 ret 之前最后一次对 err 的赋值作为来源；来源不是包选择器调用（同包函数、
+// 变量方法、接口方法）一律视为本仓来源。
+//
+// 作用域限定在**最内层**函数体：闭包里的 err 常常是回调契约自带的形参
+// （filepath.WalkFunc、sql 事务闭包），此时 `return err` 是把错误交还给框架，
+// 不是丢上下文，必须与外层函数里的同名变量区分开。
+func errFromExternalCall(fn *ast.FuncDecl, ret *ast.ReturnStmt, external map[string]bool) bool {
+	scope, params := innermostScope(fn, ret)
+	if params["err"] {
+		return false // err 是回调形参，return err 属于契约内的错误交还
+	}
+	var origin ast.Expr
+	ast.Inspect(scope, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || assign.Pos() >= ret.Pos() {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			if id, isIdent := lhs.(*ast.Ident); isIdent && id.Name == "err" && len(assign.Rhs) > 0 {
+				origin = assign.Rhs[len(assign.Rhs)-1]
+			}
+		}
+		return true
+	})
+	call, ok := origin.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkgIdent, ok := sel.X.(*ast.Ident)
+	return ok && external[pkgIdent.Name]
+}
+
+// ─── inv_MCPSubprocessEnvSanitized ───────────────────────────────────────────
+
+// Test_inv_MCPSubprocessEnvSanitized 禁止任何子进程启动器通过 cmd.Env = os.Environ() 或
+// cmd.Env = append(os.Environ(), ...) 继承父进程完整环境（R1.15）。
+//
+// 覆盖范围：
+//   - internal/extension/ — MCP 子进程（R1.15 核心场景）
+//   - internal/action/    — hook 脚本、X11 工具、sandbox DryRunMode 等所有子进程启动器
+//
+// 正确做法：使用域专属白名单函数（sanitizeParentEnv / sanitizeHookEnv /
+// sanitizeX11Env / sandboxMinEnv）构造子进程环境，再 append 调用方显式注入的变量。
+//
+// 检测模式：
+//  1. *.Env = os.Environ()
+//  2. *.Env = append(os.Environ(), ...)
+func Test_inv_MCPSubprocessEnvSanitized(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	// isOsEnvironCall 判断一个 AST 表达式是否是 os.Environ() 调用。
+	isOsEnvironCall := func(expr ast.Expr) bool {
+		call, ok := expr.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "os" && sel.Sel.Name == "Environ"
+	}
+
+	// containsOsEnviron 检测表达式是否包含 os.Environ() — 直接调用或作为 append 的第一参数。
+	containsOsEnviron := func(expr ast.Expr) bool {
+		if isOsEnvironCall(expr) {
+			return true
+		}
+		// append(os.Environ(), ...) 模式
+		call, ok := expr.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok || fn.Name != "append" {
+			return false
+		}
+		return len(call.Args) > 0 && isOsEnvironCall(call.Args[0])
+	}
+
+	// scanDir 对单个目录执行 AST 扫描，检测两种违规赋值模式。
+	scanDir := func(dir string) error {
+		return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil //nolint:nilerr
+			}
+			relPath, _ := filepath.Rel(root, path)
+
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, path, src, 0)
+			if err != nil {
+				return nil //nolint:nilerr
+			}
+
+			ast.Inspect(f, func(n ast.Node) bool {
+				assignStmt, ok := n.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for i, lhs := range assignStmt.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "Env" {
+						continue
+					}
+					if i < len(assignStmt.Rhs) && containsOsEnviron(assignStmt.Rhs[i]) {
+						pos := fset.Position(assignStmt.Pos())
+						violations = append(violations, violation{
+							relPath: relPath,
+							line:    pos.Line,
+							detail:  `禁止将 cmd.Env 赋为 os.Environ() 或 append(os.Environ(),...)，须用白名单函数构造子进程环境（R1.15）`,
+						})
+					}
+				}
+				return true
+			})
+			return nil //nolint:nilerr
+		})
+	}
+
+	for _, dir := range []string{
+		filepath.Join(root, "pkg", "extensions"), // MCP 子进程
+		filepath.Join(root, "pkg", "action"),     // hook / X11 / sandbox 等所有子进程启动器
+	} {
+		if err := scanDir(dir); err != nil {
+			t.Fatalf("walk %s failed: %v", dir, err)
+		}
+	}
+
+	for _, v := range violations {
+		t.Errorf("inv_MCPSubprocessEnvSanitized VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoRawDBExecWriteInGateway ───────────────────────────────────────────
+
+// Test_inv_NoRawDBExecWriteInGateway 禁止 Gateway 层直写 DB（有白名单例外）。
+func Test_inv_NoRawDBExecWriteInGateway(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	// 已清理（全部迁移至 Domain Layer）。
+	// 此基线文件已清空（{}），此处保留检查逻辑防退化。
+	baselinePath := filepath.Join(root, "internal", "lint", "testdata", "gateway_db_write_baseline.json")
+	b, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("读取 baseline 失败: %v", err)
+	}
+	var exempt map[string]bool
+	if err := json.Unmarshal(b, &exempt); err != nil {
+		t.Fatalf("解析 baseline 失败: %v", err)
+	}
+
+	// 2026-08-08：原扫描根 pkg/gateway 在四层布局迁移后根本不存在，
+	// filepath.Walk 对不存在的目录直接返回，本规则等同从未运行。
+	err = filepath.Walk(filepath.Join(root, "internal", "gateway"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil //nolint:nilerr
+		}
+		relPath, _ := filepath.Rel(root, path)
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "Exec" || sel.Sel.Name == "ExecContext" || sel.Sel.Name == "Query" || sel.Sel.Name == "QueryContext" {
+				if len(call.Args) > 0 {
+					var argNode ast.Node
+					if (sel.Sel.Name == "ExecContext" || sel.Sel.Name == "QueryContext") && len(call.Args) > 1 {
+						argNode = call.Args[1]
+					} else {
+						argNode = call.Args[0]
+					}
+
+					if basicLit, isLit := argNode.(*ast.BasicLit); isLit && basicLit.Kind == token.STRING {
+						qStr := strings.ToUpper(basicLit.Value)
+						if strings.Contains(qStr, "INSERT ") || strings.Contains(qStr, "UPDATE ") || strings.Contains(qStr, "DELETE ") {
+							pos := fset.Position(call.Pos())
+							key := fmt.Sprintf("%s:%d", filepath.ToSlash(relPath), pos.Line)
+							if !exempt[key] {
+								violations = append(violations, violation{
+									relPath: relPath,
+									line:    pos.Line,
+									detail:  fmt.Sprintf(`Gateway 层禁止直接执行写操作 DB.%s — 须通过 Domain Layer`, sel.Sel.Name),
+								})
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+		return nil //nolint:nilerr
+	})
+	if err != nil {
+		t.Fatalf("walk failed: %v", err)
+	}
+
+	for _, v := range violations {
+		t.Errorf("inv_NoRawDBExecWriteInGateway VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoBareLogPrint ──────────────────────────────────────────────────────
+
+// Test_inv_NoBareLogPrint 禁止在 cmd/polaris 以外使用 fmt.Print/Printf/Println。
+func Test_inv_NoBareLogPrint(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	// 2026-08-08：原扫描根为 pkg/（29 文件），规则文本说的"cmd/polaris 以外"
+	// 主体是 internal/（1189 文件），从未被扫过。
+	err := walkDirsErr(root, []string{"internal", "pkg"}, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil //nolint:nilerr
+		}
+		relPath, _ := filepath.Rel(root, path)
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if pkgIdent, isIdent := sel.X.(*ast.Ident); isIdent && pkgIdent.Name == "fmt" {
+				if sel.Sel.Name == "Print" || sel.Sel.Name == "Printf" || sel.Sel.Name == "Println" {
+					pos := fset.Position(call.Pos())
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  fmt.Sprintf(`禁止使用 fmt.%s — 业务层须使用结构化日志 (slog)`, sel.Sel.Name),
+					})
+				}
+			}
+			return true
+		})
+		return nil //nolint:nilerr
+	})
+	if err != nil {
+		t.Fatalf("walk failed: %v", err)
+	}
+
+	for _, v := range violations {
+		t.Errorf("inv_NoBareLogPrint VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoRawSQLDBField ─────────────────────────────────────────────────────
+
+// Test_inv_NoRawSQLDBField 禁止在 storage 层以外的包声明 *sql.DB 结构体字段。
+// 非 storage 包须持有 protocol.SQLQuerier 或领域 Repository 接口，保证可测试性与边界隔离。
+// 白名单：internal/store/ 下所有 repo_*.go + store.go + 基础设施文件，
+//
+//	以及 internal/execute/orchestrator/sqlite_blackboard.go（CAS 原子操作须直接持有 *sql.DB）。
+func Test_inv_NoRawSQLDBField(t *testing.T) {
+	root := repoRoot(t)
+
+	// 豁免列表由 testdata/sql_db_field_exempt.json 管理，见该文件注释说明。
+	exempt := loadExemptFile(t, root, "sql_db_field_exempt.json")
+
+	var violations []violation
+
+	// 2026-08-08：原扫描根为 pkg/，storage 层与所有消费方均已迁至 internal/。
+	err := walkDirsErr(root, []string{"internal", "pkg"}, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil //nolint:nilerr
+		}
+		relPath, _ := filepath.Rel(root, path)
+		if exempt[relPath] {
+			return nil
+		}
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok {
+				return true
+			}
+			for _, field := range st.Fields.List {
+				star, ok := field.Type.(*ast.StarExpr)
+				if !ok {
+					continue
+				}
+				sel, ok := star.X.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if pkg.Name == "sql" && sel.Sel.Name == "DB" {
+					pos := fset.Position(field.Pos())
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  `禁止在 storage 层外持有 *sql.DB 字段 — 改用 protocol.SQLQuerier 或 Repository 接口`,
+					})
+				}
+			}
+			return true
+		})
+		return nil //nolint:nilerr
+	})
+	if err != nil {
+		t.Fatalf("walk failed: %v", err)
+	}
+
+	for _, v := range violations {
+		t.Errorf("inv_NoRawSQLDBField VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_NoDirectSemanticMemoryWriteOutsideBuiltin ───────────────────────────
+
+// Test_inv_NoDirectSemanticMemoryWriteOutsideBuiltin 验证禁止在 tool/builtin/、memory/、knowledge/ 之外
+// 直接调用 SemanticMemWriter 的写方法 (UpsertFact / UpsertRelation)，
+// 防止绕过 Memory-Write-Tool 的统一入口。
+func Test_inv_NoDirectSemanticMemoryWriteOutsideBuiltin(t *testing.T) {
+	root := repoRoot(t)
+
+	// 允许调用该接口的目录
+	allowedDirs := []string{
+		filepath.Join("internal", "tool", "builtin"),
+		filepath.Join("internal", "memory"),
+		filepath.Join("internal", "knowledge"),
+	}
+
+	var violations []violation
+
+	walkGoFilesUnder(t, root, "internal", nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		isAllowed := false
+		for _, allowed := range allowedDirs {
+			// 将路径规范化，防止跨平台路径分隔符不一致导致的问题
+			if strings.HasPrefix(filepath.ToSlash(relPath), filepath.ToSlash(allowed)) {
+				isAllowed = true
+				break
+			}
+		}
+		if isAllowed {
+			return
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+
+			// 匹配调用了 UpsertFact, UpsertFactExclusive, UpsertRelation 的地方
+			methodName := sel.Sel.Name
+			if methodName == "UpsertFact" || methodName == "UpsertFactExclusive" || methodName == "UpsertRelation" {
+				pos := fset.Position(call.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  fmt.Sprintf(`调用了 %s — 领先设计防退化：禁止在 tool/builtin/ 外直接调用语义记忆写接口，需通过 ExecuteTool`, methodName),
+				})
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_NoDirectSemanticMemoryWriteOutsideBuiltin VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_M13_06 ─────────────────────────────────────────────────────────────
+
+// Test_inv_M13_06_ChannelNoRawHTTPClient 验证 internal/channel/ 下不存在裸
+// &http.Client{...} 构造或 http.DefaultClient 引用（S-03，防止 Channel Poller
+// 绕过 host.HTTPClient() 承载的 SafeDialer SSRF 五阶段防护）。豁免列表由
+// testdata/m13_raw_http_exempt.json 管理——每条豁免须有对应 ADR，初始为空。
+//
+// 扫描范围刻意限定在 internal/channel/：homeserver/apiURL 等出站目标来自用户
+// 可控的 channels 表配置，是真实 SSRF 面；其余模块的 &http.Client{} 构造属于
+// 另一类问题（如 downloader 的 ADR-0071 豁免），不在本规则覆盖范围。
+func Test_inv_M13_06_ChannelNoRawHTTPClient(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "m13_raw_http_exempt.json")
+
+	var violations []violation
+	walkGoFilesUnder(t, root, filepath.Join("internal", "channel"), exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CompositeLit:
+				sel, ok := node.Type.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkgIdent, ok := sel.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "http" || sel.Sel.Name != "Client" {
+					return true
+				}
+				pos := fset.Position(node.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  "http.Client{} 裸构造 — 绕过 host.HTTPClient() 承载的 SafeDialer SSRF 防护，须改用 deriveClient(host.HTTPClient(), ...)",
+				})
+			case *ast.SelectorExpr:
+				pkgIdent, ok := node.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "http" {
+					return true
+				}
+				if node.Sel.Name == "DefaultClient" || node.Sel.Name == "DefaultTransport" {
+					pos := fset.Position(node.Pos())
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  fmt.Sprintf("http.%s — 裸 HTTP 出口，绕过 SafeDialer SSRF 防护，须改用注入的 host.HTTPClient()", node.Sel.Name),
+					})
+				}
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_M13_06 VIOLATED: %s", v)
+	}
+}
+
+// Test_inv_VFS_QuotaMustUseWithQuota 验证阶段03 R-07：新增 VFS 配额预占写入
+// 路径一律使用 WorkspaceManager.WithQuota 闭包，禁止裸调 CheckQuota（历史上
+// 依赖"每条失败路径手工配对 ReleaseQuota"的人工纪律，是配额预占泄漏的高发
+// 模式）。扫描 internal/ 下所有 "<expr>.CheckQuota(" 形式的调用点，豁免仅限
+// WithQuota 自身实现所在文件（internal/vfs/workspace_manager.go）。
+func Test_inv_VFS_QuotaMustUseWithQuota(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "vfs_quota_exempt.json")
+
+	var violations []violation
+	walkGoFilesUnder(t, root, "internal", exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "CheckQuota" {
+				return true
+			}
+			pos := fset.Position(call.Pos())
+			violations = append(violations, violation{
+				relPath: relPath,
+				line:    pos.Line,
+				detail:  "裸调 CheckQuota(...) — 新增配额预占写入路径须改用 WorkspaceManager.WithQuota(pendingWrite, fn) 闭包，避免失败路径遗漏 ReleaseQuota（阶段03 R-07）",
+			})
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_VFS_Quota VIOLATED: %s", v)
+	}
+}
+
+// ─── inv_M13（A-03 SessionOrchestrator，GD-13-008）───────────────────────────
+
+// Test_inv_M13_SessionPkgNoHTTP 验证 internal/gateway/session/ 下零 net/http
+// 依赖（04-arch-refactor.md A-03 §5 规则1）。session 包的消费端窄接口
+// （Sink/HookRunner/Persistence 等，见 types.go）刻意不依赖 net/http 具体类型，
+// 由 chat/sse_sink.go 在 HTTP 边界层反向实现 Sink，避免 session 包与传输协议
+// 耦合、也避免 chat→session→chat 循环依赖。本规则只扫描该包自身文件的直接
+// import（不含测试文件——ids_test.go/orchestrator_test.go 等测试用 fake 不
+// 应受此约束影响，但因内容不含 net/http 目前无论扫不扫都通过，保留
+// walkGoFilesUnder 默认跳过 _test.go 的行为，不额外放宽）。
+func Test_inv_M13_SessionPkgNoHTTP(t *testing.T) {
+	root := repoRoot(t)
+
+	var violations []violation
+	walkGoFilesUnder(t, root, filepath.Join("internal", "gateway", "session"), nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		for _, imp := range f.Imports {
+			if imp.Path == nil {
+				continue
+			}
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			if importPath == "net/http" {
+				pos := fset.Position(imp.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `import "net/http" — internal/gateway/session 包硬约束零 net/http 依赖（A-03 §5 规则1），HTTP 边界逻辑须留在 chat/sse.go 等调用方`,
+				})
+			}
+		}
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_M13_SessionPkgNoHTTP VIOLATED: %s", v)
+	}
+}
+
+// Test_inv_M13_SingleTurnEntry 验证 SetTaskIntent(...) + SendIntent(types.
+// TriggerIntentReceived) 配对调用（驱动一轮 Agent FSM 的底层触发原语）只出现
+// 在三处固定位置：internal/gateway/session/（SSE+Headless 会话轮次，A-03
+// 收敛后的唯一会话编排入口）、internal/agent/pool.go（Acquire/AcquireHeadless
+// 自身的 Agent 生命周期原语，非会话编排）、cmd/polaris/boot_crash_recovery.go
+// （崩溃回放，重放上次未完成的用户消息）。其余调用点须登记进
+// testdata/turn_entry_exempt.json 并附豁免理由，防止"第三方会话编排重复实现"
+// 静默重新出现（04-arch-refactor.md A-03 §5 规则2）。
+//
+// 检测锚点选 SendIntent(types.TriggerIntentReceived) 而非要求 SetTaskIntent
+// 紧邻同现：这是真正触发 FSM 状态跳转的调用，SetTaskIntent 只是写入待消费的
+// intent 字节，二者在部分调用点之间会插入 SafeGo 包裹的 goroutine 启动等
+// 中间代码（如 cmd/polaris/adapters_eval.go），单独锚定后者更稳健。
+func Test_inv_M13_SingleTurnEntry(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "turn_entry_exempt.json")
+
+	allowedPrefixes := []string{
+		filepath.ToSlash(filepath.Join("internal", "gateway", "session")) + "/",
+	}
+	allowedExact := map[string]bool{
+		filepath.ToSlash(filepath.Join("internal", "agent", "pool.go")):             true,
+		filepath.ToSlash(filepath.Join("cmd", "polaris", "boot_crash_recovery.go")): true,
+	}
+
+	var violations []violation
+	// 本规则的合法调用点横跨 internal/ 与 cmd/，walkGoFilesUnder 单次只能遍历
+	// 一个子目录，分两趟扫描（与 Test_inv_NoDirectSemanticMemoryWriteOutsideBuiltin
+	// 的目录级豁免思路一致，但那里只需扫 internal/）。
+	scan := func(subdir string) {
+		walkGoFilesUnder(t, root, subdir, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+			forwardPath := filepath.ToSlash(relPath)
+			if allowedExact[forwardPath] {
+				return
+			}
+			for _, prefix := range allowedPrefixes {
+				if strings.HasPrefix(forwardPath, prefix) {
+					return
+				}
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "SendIntent" || len(call.Args) != 1 {
+					return true
+				}
+				argSel, ok := call.Args[0].(*ast.SelectorExpr)
+				if !ok || argSel.Sel.Name != "TriggerIntentReceived" {
+					return true
+				}
+				pkgIdent, ok := argSel.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "types" {
+					return true
+				}
+				pos := fset.Position(call.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `SendIntent(types.TriggerIntentReceived) — 驱动 FSM 轮次的调用只允许出现在 internal/gateway/session/、internal/agent/pool.go、cmd/polaris/boot_crash_recovery.go 三处，其余调用点须登记进 internal/lint/testdata/turn_entry_exempt.json 并附豁免理由（A-03 §5 规则2，防"第三方会话编排重复实现"重新出现）`,
+				})
+				return true
+			})
+		})
+	}
+	scan("internal")
+	scan("cmd")
+
+	for _, v := range violations {
+		t.Errorf("inv_M13_SingleTurnEntry VIOLATED: %s", v)
+	}
+}
+
+// walkDirsErr 依次遍历 root 下多个子目录，语义等价于对每个子目录调用
+// filepath.Walk。抽出本函数是因为仓库从 pkg/* 迁到 internal/* 四层布局后，
+// 多条规则的检查面同时横跨两者，而 filepath.Walk 单次只能给一个根。
+func walkDirsErr(root string, subdirs []string, fn filepath.WalkFunc) error {
+	for _, sub := range subdirs {
+		if err := filepath.Walk(filepath.Join(root, sub), fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// innermostScope 返回包含 ret 的最内层函数体，以及该函数的形参名集合。
+func innermostScope(fn *ast.FuncDecl, ret *ast.ReturnStmt) (*ast.BlockStmt, map[string]bool) {
+	scope, ftype := fn.Body, fn.Type
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit.Body == nil {
+			return true
+		}
+		if lit.Body.Pos() < ret.Pos() && ret.Pos() < lit.Body.End() &&
+			lit.Body.Pos() >= scope.Pos() {
+			scope, ftype = lit.Body, lit.Type
+		}
+		return true
+	})
+	params := map[string]bool{}
+	if ftype.Params != nil {
+		for _, f := range ftype.Params.List {
+			for _, nm := range f.Names {
+				params[nm.Name] = true
+			}
+		}
+	}
+	return scope, params
+}

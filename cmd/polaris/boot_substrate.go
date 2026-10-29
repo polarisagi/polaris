@@ -1,0 +1,853 @@
+// boot_substrate.go — §0.5~§4 启动阶段：
+// 配置加载 → 数据目录 → 硬件探针 → KillSwitch → 日志 → 存储层 → 策略引擎 → 推理路由器。
+// SubstrateBundle 持有所有 L0 基础设施产物，向上层 boot 函数传递。
+//
+// resolveDataDirBase 和 initSurrealStore 从 main.go 移入，消除 main.go 对 storage/observability 的直接依赖。
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/polarisagi/polaris/configs"
+	"github.com/polarisagi/polaris/internal/automation"
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/downloader"
+	"github.com/polarisagi/polaris/internal/eval"
+	"github.com/polarisagi/polaris/internal/gateway/egress"
+	"github.com/polarisagi/polaris/internal/gateway/server"
+	"github.com/polarisagi/polaris/internal/gateway/server/provider"
+	"github.com/polarisagi/polaris/internal/llm"
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+	"github.com/polarisagi/polaris/internal/llm/embedassets"
+	"github.com/polarisagi/polaris/internal/memory/retrieval"
+	"github.com/polarisagi/polaris/internal/observability"
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/observability/trace"
+	"github.com/polarisagi/polaris/internal/prompt"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/schema"
+	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/security/policy"
+	"github.com/polarisagi/polaris/internal/security/taint"
+	sysstore "github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/internal/store/audit"
+	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/offpeak"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// SubstrateBundle 持有 §0.5~§4 所有 L0 基础设施产物。
+// 向所有上层 boot 函数传递，避免大量参数列表。
+type SubstrateBundle struct {
+	// 配置与数据目录
+	Cfg       *config.Config
+	DataDir   string
+	Layout    config.DataLayout
+	Vault     *credential.Vault
+	PromptMgr protocol.PromptFacade
+
+	// OffPeak 错峰窗口（ADR-0105 决策七），未配置 m1_router.offpeak.windows 时为 nil（不错峰）。
+	// 可延迟后台任务的触发点（建图/摘要、合成评测与技能、课程生成、prompt 优化）共用这一份。
+	OffPeak *offpeak.Gate
+
+	// RAGChunksTaintSerializer 是 rag_chunks 表跨 SQL 持久化边界的 HMAC-SHA256
+	// 校验器（M11-Policy-Safety.md §2.1 第三重防护，inv_M11_02）。key 从 Vault
+	// masterKey 派生（domain-separated subkey，用途标识见 ragChunksTaintHMACPurpose），
+	// Vault 缺失时为 nil（此时 knowledge 包各写/读点退化为不校验，见
+	// sealChunkTaint/verifyChunkTaint 的 nil-serializer 分支）。
+	RAGChunksTaintSerializer *taint.TaintBoundarySerializer
+
+	// 硬件探针与可观测性（AutoConf 可 nil，Tier0 降级）
+	AutoConf     *observability.AutoConfig
+	TBR          *metrics.TokenBurnRate
+	DriftMonitor *eval.DriftMonitor
+
+	// 安全三件套
+	KS         *security.KillSwitch
+	AuditTrail *security.AuditTrail
+	// EventLog 是 M2 events 表的串行写入口。inv_M1_04 的 streaming_interrupted
+	// 事件由 InferenceRouter 经 streamInterruptEventLogger 写入这里。
+	EventLog   protocol.EventLogger
+	AuditChain *audit.AuditChain
+
+	// 日志：LogFile 需调用方 defer Close（可 nil）
+	LogFile  io.Closer
+	LogStore *server.LogStore
+
+	// 存储层
+	Store         *sysstore.SQLiteStore
+	SurrealStore  *sysstore.SurrealDBCoreStore // 可 nil（<8GB VPS）
+	StorageRouter *sysstore.StorageRouter
+	Outbox        *sysstore.OutboxWorker
+	DBWriter      *sysstore.DatabaseWriter
+	DBWriterDone  <-chan struct{}
+	DecisionLog   *audit.SQLiteDecisionLog // M3/M7 决策审计日志，注入给 PipelineOrchestrator
+
+	// 策略引擎
+	Gate     *policy.Gate
+	TrustMap map[string]int
+
+	// Governor for resource admission
+	ResourceGov *automation.ResourceGovernor
+
+	// 网络安全层
+	Dialer         *network.SafeDialer
+	SafeHTTPClient network.SafeHTTPClient
+	// EgressGW 包裹 SafeHTTP 的域名白名单预检层；跨节点委派在其上追加对端精确放行（ADR-0111）。
+	EgressGW *egress.EgressGateway
+	SafeHTTP *http.Client
+
+	// 推理层
+	InfReg   *llm.ProviderRegistry
+	Router   *llm.InferenceRouter
+	Embedder search.Embedder // 可 nil（FeatureLocalEmbedding 未启用）；实际类型为 *search.SyncBatcherAdapter，
+	// 请求经 EmbeddingBatcher 自动合批后再调用 DynEmbedder，供 Router/Knowledge/Memory/Tool 等高频调用方使用。
+	// DynEmbedder 底层动态原子代理（Set() 热替换真实引擎，WaitReady() 首次就绪信号）。
+	// Embedder 字段自 EmbeddingBatcher 接线后已不再直接持有 *llm.DynamicEmbedder，下游若需要
+	// WaitReady() 信号或真批量 EmbedBatch()（如 boot_server.go §11.6 回填触发器、插件目录预计算器），
+	// 须直接使用本字段而非对 Embedder 做类型断言。恒非 nil（bootSubstrate 无条件构造）。
+	DynEmbedder *llm.DynamicEmbedder
+	// EmbedBatcher Embedder 背后的合批器；停机序列在生产者停止后调用 Stop()（GR-1.1-004）。
+	EmbedBatcher *search.EmbeddingBatcher
+	// EmbedChoice 当前选定的向量化决策 (ADR-0109 D1)
+	EmbedChoice embedChoice
+	// EmbedBackoff 后台向量任务（reindexer 与插件向量回填）的重试退避器 (ADR-0109 D5)
+	EmbedBackoff *retrieval.EmbedBackoff
+	// EmbedRebenchRunning 防止并发重复触发 ONNX 档位重测（ADR-0109）。
+	EmbedRebenchRunning atomic.Bool
+
+	// 训练适配器（门控，M9 流水线消费；当前作占位）
+	QLoRA    *llmadapter.QLoRAAdapter
+	PRM      *llmadapter.PRMAdapter
+	Steering *llmadapter.SteeringAdapter
+	// CVStore 激活引导控制向量注册表（M09 §1.3 /steer 命令面，2026-07-21 补齐），
+	// 与 Steering 同步构造（非 nil 当且仅当 Steering 非 nil）。
+	CVStore *llmadapter.ControlVectorStore
+
+	// OTA restart fn 捕获：取消主 ctx + 等待 dbWriter + 关闭 store
+	Stop context.CancelFunc
+}
+
+// bootSubstrate 执行 §0.5~§4 初始化，返回 L0 基础设施 bundle。
+// stop 来自 run() 的 signal.NotifyContext，注入 bundle 供 OTA restart fn 使用。
+func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBundle, error) { //nolint:gocyclo
+	// SafeGo panic hook：将 goroutine panic 上报到 polaris_goroutine_panic_total 指标（HE-1）。
+	// RecordGoroutinePanic 内部已做 nil 保护，直接传递函数引用消除与此处内联实现的重复。
+	concurrent.SetOnPanic(metrics.RecordGoroutinePanic)
+
+	// ─── 0.5 内核完整性校验 (L4) ─────────────────────────────────────────────
+	if err := config.VerifyKernelIntegrity(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "CRITICAL: kernel integrity compromised", err)
+	}
+
+	// ─── 1. 配置加载 ─────────────────────────────────────────────────────────
+	cfgPath := configFilePath()
+	if os.Getenv(config.EnvPolarisConfig) != "" {
+		// 显式配置路径缺失 → fail-fast，避免掩盖运维挂载问题
+		if _, statErr := os.Stat(cfgPath); os.IsNotExist(statErr) {
+			return nil, apperr.New(apperr.CodeInternal, config.EnvPolarisConfig+" file not found: "+cfgPath)
+		}
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "config.Load", err)
+	}
+	slog.Info("polaris: config loaded", "tier", cfg.System.Tier, "max_agents", cfg.System.MaxAgents)
+	config.Update(cfg)
+
+	// ─── 0.3 数据目录解析与初始化 ────────────────────────────────────────────
+	dataDir, err := resolveDataDirBase(cfg)
+	if err != nil {
+		return nil, err
+	}
+	layout := cfg.LayoutFor(dataDir)
+	if err := layout.MkdirAll(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to create data directories", err)
+	}
+	layout.Migrate()
+
+	// ─── 0.35 日志初始化 ─────────────────────────────────────────────────────
+	//
+	// 位置紧跟数据目录就绪之后，**先于任何可能失败的启动步骤**。
+	//
+	// 2026-08-11 前移：原先排在 KillSwitch 检查之后。后果是任何在此之前失败的
+	// 启动路径都写不进日志文件——用户实际遭遇的正是这个：系统因 .fullstop 封存
+	// 拒绝启动，守护进程每 10s 重启一次，而 logs/ 下**根本没有 polaris.error.log**
+	// （lumberjack 在首次写入时才建文件，而 SetupLogger 压根没被执行到）。
+	// 启动失败恰恰是最需要日志的时刻，却是唯一拿不到日志的时刻。
+	//
+	// 前移的前提：SetupLogger 只依赖 dataDir，上面 MkdirAll 已保证目录存在。
+	logFile := observability.SetupLogger(layout.Logs)
+	logStore := server.NewLogStore(slog.Default().Handler(), 500)
+	slog.SetDefault(slog.New(logStore))
+	slog.Info("polaris: logger initialized", "logs_dir", layout.Logs, "data_dir", dataDir)
+
+	vault, err := credential.NewVaultInDir(dataDir)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "credential.NewVaultInDir", err)
+	}
+	// ragChunksTaintHMACPurpose 是从 vault masterKey 派生 rag_chunks 跨边界
+	// HMAC 密钥的用途标识（inv_M11_02，见 009_rag_chunks.sql taint_hmac 列注释）。
+	// 修改此常量等价于密钥轮换——历史行 taint_hmac 全部校验失败，读取时降级为
+	// TaintHigh（fail-closed，仅信任等级重置，非数据丢失）。
+	const ragChunksTaintHMACPurpose = "rag_chunks_taint_boundary_v1"
+	ragChunksTaintSerializer := taint.NewTaintBoundarySerializer(vault.DeriveKey(ragChunksTaintHMACPurpose))
+
+	// ─── 0.3.5 Thresholds 覆盖加载 ──────────────────────────────────────────
+	thresholds, err := config.GetThresholds(dataDir)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "config.GetThresholds", err)
+	}
+	cfg.Thresholds = *thresholds
+
+	// ─── 0.34 硬件探针 & TBR ────────────────────────────────────────────────
+	var caution, warning, critical uint64
+	if cfg.Thresholds.M3Observability.MemCautionMB > 0 {
+		caution = uint64(cfg.Thresholds.M3Observability.MemCautionMB)
+		warning = uint64(cfg.Thresholds.M3Observability.MemWarningMB)
+		critical = uint64(cfg.Thresholds.M3Observability.MemCriticalMB)
+	}
+	autoConf, err := observability.NewAutoConfig(caution, warning, critical)
+	if err != nil {
+		slog.Warn("polaris: AutoConfig failed, using Tier0 defaults", "err", err)
+	}
+	var tbr *metrics.TokenBurnRate
+	if autoConf != nil {
+		tbr = autoConf.TBR
+	} else {
+		tbr = metrics.NewTokenBurnRate()
+	}
+	if cfg != nil {
+		tbr.SetThrottleBaseline(float64(cfg.Thresholds.M3Observability.ThrottleBaselineTPS))
+	}
+	driftMonitor := eval.NewDriftMonitor()
+	metrics.SetFoundingAnchorDriftScorer(driftMonitor.GetScore)
+
+	// ─── 0.35 KillSwitch ────────────────────────────────────────────────────
+	if security.IsFullStopFilePresent(dataDir) {
+		// 报错必须带上封存现场。.fullstop 里存着 timestamp/reason/actor，而原实现
+		// 只说"remove the file to restart"——用户面对一个可能是几天前写下的封存，
+		// 既不知道发生过什么，也无从判断删掉安不安全，更不知道有 unseal 命令。
+		return nil, apperr.New(apperr.CodeInternal, security.DescribeSeal(dataDir))
+	}
+	ks := security.NewKillSwitch(dataDir, tbr)
+	// 性能漂移只告警，**不触发 KillSwitch**。
+	//
+	// 2026-08-11 修复：此处原本在 DriftLevelCritical（RelativeDrop >= 0.8）时直接
+	// 调 ks.ManualFullStop("performance_drift", ...)，越过 Stage 1/2 一步跳到最高档
+	// 封存。这违反 M11 §4.1 的 KillSwitch 三阶 FSM 触发条件表——Stage 3 FULLSTOP
+	// 的触发条件只有三项：「Stage 2 未在 15min 内审批 / 致命违规 / 管理员手动」，
+	// **性能漂移不在其中**。M11 对同类质量信号的一贯立场也是"超阈值告警不自动降级"
+	// （§2 Taint 统计监控）。
+	//
+	// 后果不是理论上的：一次漂移写下的 .fullstop 会让进程此后**永久拒绝启动**
+	// （封存态无过期），而守护进程每 10s 重启一次、每次都撞同一堵墙。用户实际
+	// 遭遇：8 天前的一次漂移把重装后的全新安装直接 brick 掉。
+	//
+	// 吞吐下降是质量问题，该由 M9 自进化环与告警渠道处理；把它升级成需要人工
+	// 解封的安全熔断，是拿一个"系统变慢了"的信号去执行"系统可能被攻陷了"的处置。
+	metrics.GlobalPerformanceDrift().RegisterListener(func(alert metrics.DriftAlert) {
+		logDrift := slog.Warn
+		if alert.Level() == metrics.DriftLevelCritical {
+			logDrift = slog.Error
+		}
+		logDrift("polaris: performance drift detected",
+			"level", alert.Level(),
+			"current_rate", alert.CurrentRate,
+			"baseline_rate", alert.BaselineRate,
+			"relative_drop", alert.RelativeDrop,
+			"window_size", alert.WindowSize)
+	})
+
+	ks.StateChangeCallback = func(newState types.KillState, _ string) {
+		metrics.GlobalKillswitchStage.Store(int32(newState))
+	}
+
+	promptMgr := prompt.NewManager(filepath.Join(cfgPath, ".."), configs.FS)
+
+	if autoConf != nil {
+		slog.Info("polaris: hardware probed",
+			"tier", autoConf.Config.Tier,
+			"ram_mb", autoConf.Config.TotalRAMMB,
+			"cpu_cores", autoConf.Config.CPUCores,
+		)
+		// AutoConfig.Summary() 此前已完整实现（tier/ram/cpu/provider/local_model/
+		// qlora/l3_sandbox/script_workers/storage 一行摘要），但从未被任何调用方
+		// 消费，启动日志一直只有上面这 3 个字段的精简版本。
+		slog.Info(autoConf.Summary())
+	}
+
+	// ─── 0.6 TBR 心跳 goroutine ─────────────────────────────────────────────
+	concurrent.SafeGo(ctx, "boot_substrate.tbr_heartbeat", func(ctx context.Context) {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tbr.Tick()
+				// Stage1 的进入与自动回落都由这一拍驱动；此前燃烧率只在 ReportError 等事件里被顺带检查，
+				// 状态只升不降，且无错误上报时永远不会判定。
+				ks.CheckAndAct()
+			}
+		}
+	})
+
+	// ─── 0.65 KILLSWITCH 文件熔断（M11 §4.1 触发条件表：文件存在 → FullStop，<500ms）──
+	// GR-2.1-004：CheckKILLSWITCHFile 此前无生产调用方，运维 touch 文件不生效。
+	// 轮询而非 fsnotify：Tier-0 无额外依赖，单次 os.Stat 开销可忽略。
+	concurrent.SafeGo(ctx, "boot_substrate.killswitch_file_watch", func(ctx context.Context) {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ks.CheckKILLSWITCHFile()
+			}
+		}
+	})
+
+	// ─── 0.7 内存压力监控（每 5s 轮询，驱动 FeatureGate 运行时降级）──────────
+	concurrent.SafeGo(ctx, "boot_substrate.memory_watcher", func(ctx context.Context) {
+		autoConf.RunMemoryWatcher(ctx)
+	})
+	slog.Info("polaris: memory pressure monitor started", "poll_interval_s", 5)
+
+	// ─── 2. SQLite 存储 ──────────────────────────────────────────────────────
+	// cleanup guard：以下任何步骤失败都要关闭已打开的资源
+	var committed bool
+	if logFile != nil {
+		defer func() {
+			if !committed {
+				logFile.Close()
+			}
+		}()
+	}
+
+	store, err := sysstore.OpenSQLite(layout.SQLiteDB, schema.FS)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "sysstore.OpenSQLite", err)
+	}
+	defer func() {
+		if !committed {
+			store.Close()
+		}
+	}()
+	slog.Info("polaris: storage initialized", "db", layout.SQLiteDB)
+
+	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）────────────
+	_, onnxAvail := embedassets.ORTLibAsset(runtime.GOOS, runtime.GOARCH)
+	surrealVecDim := chooseEmbedding(cfg.Embedding, cfg.Inference.EmbedderDim, onnxAvail).Dim
+	if surrealVecDim <= 0 {
+		if surrealVecDim = cfg.Inference.EmbedderDim; surrealVecDim <= 0 {
+			surrealVecDim = 1536
+		}
+	}
+	surrealStore := initSurrealStore(autoConf, cfg, layout, surrealVecDim)
+
+	// B4-F3: 将 SurrealDB Purge 回调注入 AutoConfig，
+	// 使 OSMemoryGuard DegradationCritical 时可清理认知轴内存。
+	if autoConf != nil && surrealStore != nil {
+		autoConf.WithSurrealPurger(func() {
+			if err := surrealStore.Purge(); err != nil {
+				slog.Warn("polaris: surrealStore.Purge failed during memory pressure", "err", err)
+			}
+		})
+		slog.Info("polaris: SurrealDB purger wired into AutoConfig memory pressure callback")
+	}
+
+	// ─── 2.6 StorageRouter（三轴统一路由）───────────────────────────────────
+	var surrealProto protocol.Store
+	if surrealStore != nil {
+		surrealProto = surrealStore
+	}
+	storageRouter := sysstore.NewStorageRouter(store, surrealProto)
+	slog.Info("polaris: storage router initialized")
+
+	// ─── 2.7 OutboxWorker（跨引擎投影）─────────────────────────────────────
+	// [MUST] 必须调用 Run()，不得内联 goroutine 替代。
+	// Run() 内含 loadCursor（DB 恢复游标）、saveCursor（单调性保护）、
+	// processAndMark（CAS 防竞争）、Poison Pill 隔离、失败指数退避。
+	// 参考：docs/arch/Module-Dependency-Axioms.md XR-04 + outbox_worker.go L176
+	// 退避/重试参数必须走配置层（SSoT: spec/state.yaml §thresholds.m2_storage →
+	// config.M2StorageThresholds），禁止在此内联字面量——历史上此处硬编码
+	// (3, 1000, 30000) 与 state.yaml (5, 100, 8000) 四方不一致，见 DR-1-007。
+	// pollInterval 无对应阈值键，保持 5s（与 NewOutboxWorker 内部兜底一致）。
+	m2 := cfg.Thresholds.M2Storage
+	outboxWorker := sysstore.NewOutboxWorker(store.DB(), 5,
+		m2.OutboxMaxAttempts, m2.OutboxBackoffInitialMs, m2.OutboxBackoffMaxMs)
+	concurrent.SafeGo(ctx, "outbox-worker", func(ctx context.Context) {
+		if err := outboxWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("polaris: outbox worker exited unexpectedly", "err", err)
+		}
+	})
+	slog.Info("polaris: outbox worker started (Run mode, cursor-persistent)", "poll_interval_s", 5)
+
+	// ─── 2.8 DatabaseWriter（AI 核心数据单写者）────────────────────────────
+	dbWriter := sysstore.NewDatabaseWriter(store.DB(), nil)
+	dbWriterDoneCh := make(chan struct{})
+
+	// 设置 panic 重启机制（复用既有外层重启思路）
+	dbWriter.InjectOnPanic(func(err interface{}, stack []byte) {
+		slog.Warn("polaris: StorageFabric triggering DatabaseWriter restart after panic")
+	})
+
+	// 单写者生命周期与信号 ctx 解耦（GR-3-001）：SIGTERM 后 HTTP 排空、Supervisor 停止期间
+	// 仍有合法写入（审计事件、决策日志），writer 必须活到所有生产者停下，
+	// 由 main §14 显式 Close() 触发排空落盘；Close 后不再重启 Run。
+	writerCtx := context.WithoutCancel(ctx)
+	concurrent.SafeGo(writerCtx, "boot_substrate.db_writer", func(ctx context.Context) {
+		defer close(dbWriterDoneCh)
+		for {
+			dbWriter.Run(ctx)
+			if ctx.Err() != nil || dbWriter.IsClosed() {
+				return
+			}
+			// 退出且未被 cancel 时，说明发生了 panic 或异常，触发 StorageFabric 重启机制
+			time.Sleep(time.Second)
+		}
+	})
+	eventLog := audit.NewSQLiteEventLog(dbWriter)
+	decisionLog := audit.NewSQLiteDecisionLog(dbWriter)
+	slog.Info("polaris: mutation bus (database writer) started")
+
+	// ─── 2.9 AuditTrail ──────────────────────────────────────────────────────
+	auditRepo := repo.NewSQLiteAuditRepository(store.DB(), eventLog)
+	auditTrail := security.NewAuditTrail(auditRepo, layout.AuditArchive)
+	if err := auditTrail.RecoverOnStartup(); err != nil {
+		slog.Error("polaris: AuditTrail recovery failed", "err", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "boot_substrate: AuditTrail 恢复失败", err)
+	}
+	slog.Info("polaris: audit trail recovered and initialized")
+
+	auditChain := audit.NewAuditChain(store.DB())
+	var auditGuard *probe.OSMemoryGuard
+	var auditGate *probe.FeatureGate
+	if autoConf != nil {
+		auditGuard = autoConf.Guard
+		auditGate = autoConf.Gate
+	}
+	concurrent.SafeGo(ctx, "audit-chain-periodic-verify", func(ctx context.Context) {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		resourceBudget := budget.NewResourceBudget(tbr, auditGuard, auditGate)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if resourceBudget.BackgroundPermit(3) {
+					rep, err := auditChain.VerifyChain(ctx, 0)
+					if err != nil {
+						slog.Error("audit: chain verify failed", "err", err)
+					} else if !rep.Valid {
+						slog.Error("audit: chain integrity broken", "report", rep)
+					} else {
+						slog.Info("audit: periodic verify passed")
+					}
+				}
+			}
+		}
+	})
+
+	// ─── 月度成本报告 (M13 §1.1) ─────────────────────────────────────────────
+	automation.StartMonthlyCostReport(ctx, layout.Reports, store.DB())
+
+	// ─── 3. 策略引擎 (L0 PolicyGate) ────────────────────────────────────────
+	// onKillSwitch: Cedar 评估连续失败 10 次 / FFI 超时累计 5 次触发（gate.go recordFailure/
+	// evaluateCedar）。[2026-07-12 修复] 此前仅记录日志、未做任何实际动作——策略引擎本身持续
+	// 故障（fail-closed 语义要求此时应收紧而非静默降级）从未真正驱动 KillSwitch Stage 1
+	// 熔断（ks 在此处已构造，见上方 §0.35）。HITL 网关通知仍是已知缺口，留待网关初始化后
+	// 补充（真正的通知投递需要 hitlGateway 实例，此处保留待办而非假装已完成）。
+	gate := policy.NewGate(func() {
+		slog.Error("polaris: POLICY GATE HITL TRIGGERED — human review required",
+			"component", "policy_gate",
+			"action", "hitl_callback",
+		)
+		ks.ReportError()
+	})
+
+	switch strings.ToLower(cfg.Policy.CedarEnforceMode) {
+	case "full":
+		gate.WithCedarEnforceMode(policy.CedarEnforceFull)
+	case "deny":
+		gate.WithCedarEnforceMode(policy.CedarEnforceDeny)
+	default:
+		gate.WithCedarEnforceMode(policy.CedarShadow)
+	}
+	// 加载 Cedar 策略：优先使用 configs/ embed 内置策略；若配置了覆盖路径，从磁盘加载。
+	// Cedar 加载失败不阻断启动——evaluate() 已有 Go 规则兜底。
+	if cedarErr := loadGateCedarPolicies(gate, cfg.Policy); cedarErr != nil {
+		slog.Warn("polaris: cedar policy load failed, using Go fallback rules",
+			"err", cedarErr,
+			"engine", cfg.Policy.Engine,
+		)
+	} else {
+		slog.Info("polaris: cedar policy loaded", "policy_count", gate.CedarPolicyCount())
+	}
+	trustPol := policy.ProfilePolicy(policy.TrustProfile(cfg.Security.TrustProfile))
+	slog.Info("polaris: trust profile configured", "profile", trustPol.Profile)
+
+	// ─── 3.5 信任发布者白名单 ─────────────────────────────────────────────────
+	publisherTrustMap := config.ListTrustedPublishers(configs.FS, "extensions/trusted-publishers.yaml")
+
+	// ─── 4. 推理路由器 (L0 M1) ──────────────────────────────────────────────
+	dialer := network.NewSafeDialer(0, cfg.System.EgressAllowedDomains, cfg.Thresholds.M11Policy)
+	if trustPol.SafeDialerAuditOnly {
+		dialer.WithAuditOnly(true)
+	}
+	safeHTTPClient := network.NewSafeHTTPClient(dialer)
+	// M13 §1.2.2: EgressGateway 包裹 SafeDialer transport，添加域名白名单预检层
+	allowedDomains := append(egress.DefaultAllowedDomains(), cfg.System.EgressAllowedDomains...)
+	egressGW := egress.NewEgressGateway(safeHTTPClient.Transport, allowedDomains)
+	safeHTTPClient.Transport = egressGW
+	llmadapter.SetDefaultHTTPClient(safeHTTPClient.Client)
+	// 将 SafeDialer 注入下载器，使 GitHub Proxy 探测也经过 SSRF 过滤（XR-06）
+	downloader.Configure(cfg.Download.GithubProxy, safeHTTPClient.Client)
+
+	// ─── 4.1 OpenLLMetry 轨迹导出器（ADR-0069，默认关闭）──────────────────────
+	// 复用上面已构造的 safeHTTPClient：它已套了 egressGW（域名白名单预检）+
+	// SafeDialer（SSRF 阻断），满足 ADR-0069 决策点 3"必须走 M11 SafeDialer 机制"
+	// 的要求，无需为导出器单独造一个 SafeDialer 实例。若用户配置的 endpoint 域名
+	// 不在 EgressGateway 白名单内，请求会被 egressGW 拒绝——这是刻意的纵深防御，
+	// 需要通过 cfg.System.EgressAllowedDomains 显式放行该域名。
+	if te := cfg.Thresholds.M3Observability.TraceExport; te.Enabled && te.Endpoint != "" {
+		trace.SetDefaultExporters([]trace.SpanExporter{trace.NewOTLPHTTPExporter(safeHTTPClient.Client, te.Endpoint)})
+		slog.Info("polaris: trace exporter enabled", "endpoint", te.Endpoint)
+	} else if te.Enabled {
+		slog.Warn("polaris: trace_export.enabled=true 但 endpoint 为空，跳过导出器注册")
+	}
+
+	reg := llm.NewProviderRegistry(cfg.Thresholds.M1Router)
+	// 每次 LLM 调用写一行 llm_calls（用途/模型/token/费用，ADR-0101 决策六）。
+	reg.InjectUsageRecorder(ctx, repo.NewSQLiteLLMCallRepository(store.DB()))
+	// 确定性后台调用（graphrag_*/rag_query_rewrite/memory_write_filter 等白名单用途）的精确匹配响应缓存
+	// （ADR-0105 决策六）：命中不调用 Provider，只记一行 status=cache_hit 的 llm_calls。读走读连接，
+	// 写走单写连接；内核阶段 purpose 在 internal/llm 内被硬性排除，与配置无关。
+	reg.InjectResponseCache(ctx, repo.NewSQLiteLLMResponseCacheRepository(store.DB(), store.ReadDB()),
+		llm.ResponseCacheConfigFromThresholds(cfg.Thresholds.M1Router))
+	reg.InjectProviderFactory(NewDBProviderFactory(store.DB(), vault, safeHTTPClient.Client, tbr))
+	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。
+	provider.SeedProvidersFromEnv(ctx, repo.NewSQLiteProviderRepository(store.DB()).WithVault(vault))
+
+	// ─── 4.5~4.9 向量化引擎与训练适配器 (ADR-0109) ───────────────────────────
+	embedBackoff := retrieval.NewEmbedBackoff()
+	embedder, dynEmbedder, batcher, embedChoice := initEmbedding(ctx, cfg, layout, safeHTTPClient, embedBackoff, store.DB(),
+		newEmbedModelSwitchHandler(store.DB(), surrealVecClear(surrealStore)))
+
+	var (
+		qloraAdapter    *llmadapter.QLoRAAdapter
+		prmAdapter      *llmadapter.PRMAdapter
+		steeringAdapter *llmadapter.SteeringAdapter
+		cvStore         *llmadapter.ControlVectorStore
+	)
+
+	// QLoRA / PRM / Steering 适配器仅在显式启用本地后端时初始化 (ADR-0109 D6)
+	if localBackendEnabled(cfg) {
+		ollamaHTTPClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
+		qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient.Client)
+		prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient.Client)
+		steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient.Client)
+		cvStore = llmadapter.NewControlVectorStore()
+		slog.Info("polaris: local training/steering adapters initialized")
+	}
+
+	if autoConf != nil {
+		autoConf.WithLocalModelUnloader(reg)
+		slog.Info("polaris: local model unloader wired into AutoConfig memory pressure callback")
+	}
+
+	gov := automation.NewResourceGovernor(cfg.System.MaxAgents, cfg.System.ResourceGovernor)
+	if maxLLM := cfg.Thresholds.M13Interface.MaxConcurrentLLMCalls; maxLLM > 0 {
+		gov.WithMaxConcurrentLLM(maxLLM)
+	}
+
+	var semanticCache *search.SemanticCache
+	if surrealStore != nil {
+		cacheStore := search.NewSurrealCacheStore(store, surrealStore)
+		semanticCache = search.NewSemanticCache(
+			cacheStore,
+			embedder,
+			"default", // namespace
+			"",        // systemPromptHash (empty for default init, actual request keys have their own)
+			cfg.Thresholds.M1Router.SemanticCacheSimilarity,
+			cfg.Thresholds.M1Router.SemanticCacheMaxEntries,
+			time.Duration(cfg.Thresholds.M1Router.SemanticCacheTTLHours)*time.Hour,
+		)
+	}
+
+	routerOpts := []llm.RouterOption{llm.WithGovernor(gov)}
+	if semanticCache != nil {
+		routerOpts = append(routerOpts, llm.WithSemanticCache(semanticCache))
+	}
+	router := llm.NewInferenceRouter(reg, dialer, routerOpts...)
+	// inv_M1_04：流中断必须落 EventLog。装配在此而非 llm 包内部——EventLogger
+	// 属 L0 存储层，internal/llm 只声明消费端接口（HE-3）。
+	router.InjectStreamInterruptRecorder(streamInterruptEventLogger{eventLog: eventLog})
+	slog.Info("polaris: inference router initialized")
+
+	committed = true
+	return &SubstrateBundle{
+		Cfg:                      cfg,
+		DataDir:                  dataDir,
+		Layout:                   layout,
+		AutoConf:                 autoConf,
+		TBR:                      tbr,
+		KS:                       ks,
+		AuditTrail:               auditTrail,
+		EventLog:                 eventLog,
+		AuditChain:               auditChain,
+		LogFile:                  logFile,
+		LogStore:                 logStore,
+		PromptMgr:                promptMgr,
+		OffPeak:                  newOffpeakGate(cfg.Thresholds.M1Router),
+		Store:                    store,
+		SurrealStore:             surrealStore,
+		StorageRouter:            storageRouter,
+		DriftMonitor:             driftMonitor,
+		DecisionLog:              decisionLog,
+		Outbox:                   outboxWorker,
+		DBWriter:                 dbWriter,
+		DBWriterDone:             dbWriterDoneCh,
+		Gate:                     gate,
+		TrustMap:                 publisherTrustMap,
+		ResourceGov:              gov,
+		Dialer:                   dialer,
+		SafeHTTPClient:           safeHTTPClient,
+		EgressGW:                 egressGW,
+		SafeHTTP:                 safeHTTPClient.Client,
+		InfReg:                   reg,
+		Router:                   router,
+		Embedder:                 embedder,
+		DynEmbedder:              dynEmbedder,
+		EmbedBatcher:             batcher,
+		EmbedChoice:              embedChoice,
+		EmbedBackoff:             embedBackoff,
+		QLoRA:                    qloraAdapter,
+		PRM:                      prmAdapter,
+		Steering:                 steeringAdapter,
+		CVStore:                  cvStore,
+		Stop:                     stop,
+		Vault:                    vault,
+		RAGChunksTaintSerializer: ragChunksTaintSerializer,
+	}, nil
+}
+
+// resolveDataDirBase 解析运行时数据根目录。
+// 委托给 config.ResolveDataDir 统一权威决议（POLARIS_DATA_DIR env > cfg.System.DataDir > ~/.polaris）。
+// 从 main.go 移入，消除 main.go 对 path/filepath/strings 的依赖。
+func resolveDataDirBase(cfg *config.Config) (string, error) {
+	explicit := ""
+	if cfg != nil {
+		explicit = cfg.System.DataDir
+	}
+	dir, err := config.ResolveDataDir(explicit)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "failed to resolve data dir", err)
+	}
+	return dir, nil
+}
+
+// loadGateCedarPolicies 读取 Cedar 策略内容并加载到 Gate。
+// 优先级：磁盘覆盖路径（PolicyConfig.Hard/SoftConstraintsPath 非空时）> embed 内置默认策略。
+// 三个策略文件均合并为一次 LoadPolicies 调用（Cedar 替换全局 PolicyStore）。
+func loadGateCedarPolicies(gate *policy.Gate, cfg config.PolicyConfig) error {
+	if cfg.Engine != "cedar" {
+		return nil // 非 cedar 引擎，跳过
+	}
+
+	readContent := func(diskPath, embedPath string) (string, error) {
+		if diskPath != "" {
+			b, err := os.ReadFile(diskPath)
+			if err != nil {
+				return "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("cedar: read %s", diskPath), err)
+			}
+			return string(b), nil
+		}
+		b, err := configs.FS.ReadFile(embedPath)
+		if err != nil {
+			return "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("cedar: read embed %s", embedPath), err)
+		}
+		return string(b), nil
+	}
+
+	hard, err := readContent(cfg.HardConstraintsPath, "policy/hard_constraints.cedar")
+	if err != nil {
+		return err
+	}
+	soft, err := readContent(cfg.SoftConstraintsPath, "policy/soft_constraints.cedar")
+	if err != nil {
+		return err
+	}
+	// memory.cedar 仅从 embed 加载（无磁盘覆盖路径——内存工具权限不对外开放）
+	memory, err := readContent("", "policy/memory.cedar")
+	if err != nil {
+		return err
+	}
+
+	combined := hard + "\n\n" + soft + "\n\n" + memory
+	if err := gate.SyncCedarPolicies(combined); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "sync cedar policies failed", err)
+	}
+	return nil
+}
+
+// initSurrealStore 初始化 SurrealDB Core 认知存储。
+//
+// 内存分级策略（默认开启，按硬件自动降级）：
+//
+//	TotalRAM < 2GB  → 完全跳过 SurrealDB，cognitive axis 降级到纯 SQLite
+//	2GB ≤ RAM < 4GB → 强制 "mem" 后端（无持久化，进程重启丢失）
+//	TotalRAM ≥ 4GB  → 使用 config 配置值（默认 "rocksdb"，持久化）
+//
+// FeatureGate（可用 RAM < 512MB 时）提供运行时动态降级兜底。
+func initSurrealStore(
+	autoConf *observability.AutoConfig,
+	cfg *config.Config,
+	layout config.DataLayout,
+	vecDim int,
+) *sysstore.SurrealDBCoreStore {
+	const (
+		minRAMForSurreal   = 2 * 1024 * 1024 * 1024 // 2GB：以下完全跳过
+		memBackendRAMLimit = 4 * 1024 * 1024 * 1024 // 4GB：以下强制 mem 后端
+		largeRAMThreshold  = 8 * 1024 * 1024 * 1024 // 8GB：workerThreads 自动升档
+	)
+
+	if autoConf == nil {
+		slog.Warn("polaris: AutoConfig 初始化失败，SurrealDB Core 跳过，cognitive axis → SQLite")
+		return nil
+	}
+
+	// 硬件能力门控：< 2GB 物理内存直接跳过
+	if autoConf.Probe.TotalRAM < minRAMForSurreal {
+		slog.Info("polaris: SurrealDB Core skipped (TotalRAM < 2GB), cognitive axis → SQLite",
+			"total_ram_mb", autoConf.Probe.TotalRAM/(1024*1024),
+		)
+		return nil
+	}
+
+	// FeatureGate 动态门控：可用内存压力时降级（运行时兜底）
+	if autoConf.Gate.State(probe.FeatureSurrealDBCore) == probe.FeatureDisabled {
+		slog.Info("polaris: SurrealDB Core disabled by FeatureGate (available memory pressure), cognitive axis → SQLite")
+		return nil
+	}
+
+	// 确定实际后端：配置默认 "rocksdb"，低内存机器强制降级为 "mem"
+	backend := cfg.Cognition.SurrealBackend
+	if backend == "" {
+		backend = "rocksdb"
+	}
+	if backend == "rocksdb" && autoConf.Probe.TotalRAM < memBackendRAMLimit {
+		backend = "mem"
+		slog.Info("polaris: SurrealDB backend downgraded rocksdb→mem (TotalRAM 2-4GB, no persistence)",
+			"total_ram_mb", autoConf.Probe.TotalRAM/(1024*1024),
+		)
+	}
+
+	dbPath := cfg.Cognition.SurrealDBPath
+	if dbPath == "" {
+		dbPath = layout.SurrealDB
+	}
+
+	if vecDim <= 0 {
+		vecDim = 1536
+	}
+
+	// ≥ 8GB 时 workerThreads 自动升档以匹配 rocksdb I/O 并发需求
+	workerThreads := cfg.Cognition.SurrealWorkerThreads
+	if workerThreads <= 2 && autoConf.Probe.TotalRAM >= largeRAMThreshold {
+		workerThreads = 0 // 0 = auto: min(CPU, 4)
+	}
+
+	st, err := sysstore.OpenSurrealDBCore(backend, dbPath, vecDim, workerThreads)
+	if err != nil {
+		slog.Warn("polaris: SurrealDB Core init failed, cognitive axis falls back to SQLite", "err", err)
+		return nil
+	}
+	slog.Info("polaris: SurrealDB Core initialized",
+		"backend", backend,
+		"configured_backend", cfg.Cognition.SurrealBackend,
+		"total_ram_gb", autoConf.Probe.TotalRAM/(1024*1024*1024),
+		"vec_dim", vecDim,
+		"worker_threads", workerThreads,
+	)
+	return st
+}
+
+// configFilePath 返回配置文件路径：委托给 config.ResolveConfigFile 统一决议。
+func configFilePath() string {
+	return config.ResolveConfigFile("", "")
+}
+
+// admitBackground 是 boot 层各后台 ticker 的统一资源准入入口。
+//
+// 周期性后台工作（重索引、向量回填、知识同步、时序过期…）在每轮开始前调用它，
+// 拿到 release 才执行、用完立即 release；拿不到就跳过本轮，等下个 tick 再试。
+// 治理器缺席（极简装配/测试）时恒放行，保持"治理是增强而非前置依赖"。
+//
+// 背景与判据见 automation.ResourceGovernor.AdmitBackground。
+func admitBackground(sb *SubstrateBundle, work string) (release func(), ok bool) {
+	if sb == nil || sb.ResourceGov == nil {
+		return func() {}, true
+	}
+	return sb.ResourceGov.AdmitBackground(work)
+}
+
+// runAdmittedBackground 过准入后执行一轮周期性后台工作，拿不到额度即跳过本轮。
+// release 以 defer 归还：fn panic 被 SafeGo 兜住时额度照样归还，不永久占用 inFlight。
+func runAdmittedBackground(sb *SubstrateBundle, work string, fn func()) {
+	release, ok := admitBackground(sb, work)
+	if !ok {
+		return
+	}
+	defer release()
+	fn()
+}
+
+// waitForBackgroundSlot 供"只跑一次、跳过即永久缺失"的一次性后台工作使用
+// （典型：插件向量回填）：拿不到额度时退避重试，而不是像周期性 ticker 那样
+// 直接跳过本轮。ctx 取消时返回 ok=false。
+func waitForBackgroundSlot(ctx context.Context, sb *SubstrateBundle, work string) (release func(), ok bool) {
+	const (
+		retryInterval = 30 * time.Second
+		maxWait       = 30 * time.Minute
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		if release, admitted := admitBackground(sb, work); admitted {
+			return release, true
+		}
+		if time.Now().After(deadline) {
+			// 超过上限仍拿不到额度：强行开跑。一次性回填缺席的代价（向量永久
+			// 缺失、语义检索长期降级）高于短时资源争用，且此时已退避了 30 分钟。
+			slog.Warn("polaris: background slot wait exceeded limit, proceeding anyway", "work", work)
+			return func() {}, true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(retryInterval):
+		}
+	}
+}

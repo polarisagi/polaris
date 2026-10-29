@@ -1,0 +1,81 @@
+-- ============================================================================
+-- 007_tasks: Agent 任务生命周期状态
+-- ============================================================================
+-- 架构角色: 记录多 Agent 任务的完整生命周期。与 events 表和 Blackboard 联动。
+-- 关联: M4(Agent Kernel), M8(Multi-Agent Orchestrator)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id                  TEXT    PRIMARY KEY,
+    session_id               TEXT    NOT NULL,
+    parent_task_id           TEXT,
+    status                   TEXT    NOT NULL,
+    priority                 INTEGER NOT NULL DEFAULT 1,
+    -- intent: TaskEntry.Intent 的持久化落点（2026-07-12 补齐）。此前 PostTask 仅写
+    -- task_id/session_id/status/priority/version/namespace，Intent 字段虽由各
+    -- Pattern*Executor（tryPostNode 等）填充，却从未落盘、也不出现在 task_posted
+    -- 事件 payload 中——Worker 认领任务后无法得知任务的实际意图内容，此前无真实
+    -- 生产 Worker 消费这些编排任务（PatternDAGExecutor/StateGraphExecutor 等均无
+    -- 生产调用点）才未暴露。workflow 集成 StateGraphExecutor 需要 Worker 读回
+    -- state_graph_node_id/template 等字段，此列为该链路补齐的必要前提。
+    intent                   BLOB,
+    claimed_by               TEXT,
+    claimed_at               TEXT,
+    expires_at               TEXT,
+    version                  INTEGER NOT NULL DEFAULT 0,
+    replan_count             INTEGER NOT NULL DEFAULT 0,
+    retry_count              INTEGER NOT NULL DEFAULT 0,
+    max_retries              INTEGER NOT NULL DEFAULT 3,
+    depends_on               TEXT,
+    -- result: CompleteTask 写入的任务产出（2026-07-26 补齐）。此前该表只有
+    -- result_taint（污点等级）没有 result 本体，CompleteTask 接收 result
+    -- 参数却从未持久化，PeekTask 读回的 TaskSnapshot.Result 永远为空——
+    -- 任何依赖"委派/编排子任务完成结果"的调用方（transfer_to_agent 恢复
+    -- 分支、PatternDebate 辩论历史/裁决）实际上从未真正拿到过结果内容。
+    -- 见 local_playground/upgrade 复核记录（GD-1/GD-6 关联缺陷）。
+    result                   BLOB,
+    error                    TEXT,
+    suspend_reason           TEXT,
+    provider_suspended_count INTEGER NOT NULL DEFAULT 0,
+    -- TaintLevel: 0=TaintNone, 1=TaintLow, 2=TaintMedium, 3=TaintHigh, 4=TaintUserReviewed
+    -- 随 Intent/Result 跨 Agent 边界传递（inv_M8_05），只升不降
+    intent_taint             INTEGER NOT NULL DEFAULT 0,
+    result_taint             INTEGER NOT NULL DEFAULT 0,
+    -- 流水线阶段 handoff 字段（M08 §5 Pipeline Protocol）
+    -- pipeline_id: 所属流水线实例 ID，空表示非流水线任务
+    pipeline_id              TEXT,
+    -- pipeline_stage: 阶段名称（research/plan/execute/verify）
+    pipeline_stage           TEXT,
+    -- context_payload: 前序阶段结构化产出（JSON），Agent S_PERCEIVE 优先读取
+    context_payload          TEXT,
+    -- namespace: 协同任务共享记忆命名空间（GD-14-001），同一 namespace 下的多个
+    -- Worker Agent 可检索到彼此写入的 episodic 记忆片段；空值 = 不共享
+    namespace                TEXT,
+    trace_id                 TEXT,
+    span_id                  TEXT,
+    -- Token 记账（Gap-A: per-task observability，HE-Rule-1）
+    -- tokens_input/output: 本任务累计 LLM 输入/输出 token 数
+    -- tokens_cache_read: Anthropic prompt cache 命中 token 数（缓存命中比输入便宜 10x）
+    -- cost_usd: 本任务估算费用（= 按 ProviderCapabilities.CostUSD，费率 USD/百万 token）
+    tokens_input             INTEGER NOT NULL DEFAULT 0,
+    tokens_output            INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_read        INTEGER NOT NULL DEFAULT 0,
+    cost_usd                 REAL    NOT NULL DEFAULT 0.0,
+    -- spawn_depth: TaskEntry.SpawnDepth 的持久化落点（ADR-0084 补齐）。此前
+    -- PostTask/PostBatch 只在内存中校验 task.SpawnDepth 是否超过
+    -- resolveMaxDepth 上限（inv_M8_06），从未写入本表——PeekTask 无法读回，
+    -- 委派链上任何"认领任务→再次派生子任务"的 Worker（如
+    -- DefaultTaskWorker/MCPA2AWorker）都拿不到父任务的当前深度，深度上限
+    -- 对 transfer_to_agent 委派链实际从未生效（entry.SpawnDepth 恒为 0）。
+    spawn_depth              INTEGER NOT NULL DEFAULT 0,
+    created_at               TEXT    NOT NULL,
+    updated_at               TEXT    NOT NULL
+);
+
+-- Reaper 轮询超时过期任务（status + expires_at 复合过滤）
+CREATE INDEX IF NOT EXISTS idx_tasks_reaper
+    ON tasks(status, expires_at) WHERE expires_at IS NOT NULL;
+
+-- 流水线状态查询索引（按 pipeline_id + stage 快速定位）
+CREATE INDEX IF NOT EXISTS idx_tasks_pipeline
+    ON tasks(pipeline_id, pipeline_stage) WHERE pipeline_id IS NOT NULL;

@@ -1,0 +1,11 @@
+name: read_tool_ref
+description: "Reads the offloaded raw content of a pruned tool output by its task_id and id."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - utility
+  - debugging

@@ -1,0 +1,9 @@
+name: automation_list
+description: |
+  列出当前系统中的自动化任务概要（包含定时 prompt 任务与采集管线）。
+  返回任务 ID、类型、触发规则、来源、启用状态及最新执行状态。
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none

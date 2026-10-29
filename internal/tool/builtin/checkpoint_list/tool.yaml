@@ -1,0 +1,12 @@
+name: checkpoint_list
+description: "列出当前项目目录的写前快照列表（仅 full 档可用）。返回最近 N 条快照的 hash 与时间戳，用于 checkpoint_restore 指定恢复点。"
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - checkpoint
+  - recovery
+  - audit

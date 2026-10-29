@@ -1,0 +1,101 @@
+package plugin
+
+import (
+	"database/sql"
+	"errors"
+	"log/slog"
+	"net/http"
+
+	"github.com/polarisagi/polaris/internal/extension/marketplace"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+// HandleUpgradePlugin 处理插件升级请求 (B3, ADR-0016)。
+//
+// 复核修正（本轮审查）：初版实现只更新 installed_version 字符串，从未真正同步
+// install_path 下的文件——对 ext_type='skill'/'plugin'（唯一真正落盘文件的两种
+// 类型，见 020_extension_instances.sql "MCP/App 为空字符串" 注释）而言，这会让
+// DB 记录的版本号与磁盘实际内容永久失真，且后续升级请求会因版本号"已匹配"而
+// 被误判为无需处理，掩盖问题而非解决。现对 skill/plugin 经 CatalogInstaller.Upgrade
+// 同步取回新版本（暂存后替换，含新增依赖），在返回响应前拿到成功/失败结果；mcp 无落盘
+// 文件，版本号同步即完整，维持原地更新。
+//
+// 拆分说明：本函数原与 manage.go 中其余 handler 同文件，因加入本实现后
+// manage.go 超过 R7 400 行上限，按职责（升级流程自成一段）拆出独立文件，
+// 不改变任何行为。
+//
+//nolint:gocyclo
+func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pluginID := r.PathValue("id")
+	if pluginID == "" {
+		http.Error(w, "plugin id required", http.StatusBadRequest)
+		return
+	}
+
+	var installedVersion, catalogID, catalogVersion, extType, name string
+	err := h.DB.QueryRowContext(ctx,
+		`SELECT i.installed_version, i.catalog_id, COALESCE(c.version,''), i.ext_type, i.name
+		 FROM extension_instances i
+		 LEFT JOIN extension_catalog c ON i.catalog_id = c.id
+		 WHERE i.id=?`, pluginID).Scan(&installedVersion, &catalogID, &catalogVersion, &extType, &name)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
+		httputil.RespondError(w, "query extension instance failed", apperr.Wrap(apperr.CodeInternal, "HandleUpgradePlugin", err), http.StatusInternalServerError)
+		return
+	}
+
+	if catalogID == "" || catalogVersion == "" {
+		http.Error(w, "该扩展不支持在线升级检测", http.StatusBadRequest)
+		return
+	}
+
+	if installedVersion == catalogVersion {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotModified)
+		_, _ = w.Write([]byte(`{"error": "already up to date"}`))
+		return
+	}
+
+	newVersion := catalogVersion
+
+	if extType == "skill" || extType == "plugin" {
+		// 落盘类型：必须真正同步文件，否则不得推进 installed_version。先取回到暂存目录再替换，
+		// 失败时 install_path 保持原样（CatalogInstaller.Upgrade）。
+		if h.Catalog == nil {
+			http.Error(w, "catalog installer not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if upErr := h.Catalog.Upgrade(ctx, marketplace.CatalogInstallRequest{CatalogID: catalogID, ExtensionID: pluginID,
+			Principal: "user"}); upErr != nil {
+			h.updateExtensionInstanceError(ctx, pluginID, upErr.Error())
+			http.Error(w, "文件同步失败，install_path 保持原样: "+upErr.Error(), apperr.HTTPStatus(apperr.CodeOf(upErr)))
+			return
+		}
+	}
+
+	err = h.ExtRepo.UpdateInstanceInstalledVersion(ctx, pluginID, newVersion)
+	if err != nil {
+		// 错误态回写本身再失败，实例会停在 'installing' 之类的中间态，UI 上
+		// 表现为"升级卡住"而非"升级失败"，用户无从判断该重试还是该回滚。
+		// 兜底路径不宜再向上抛（主错误已在下面返回给客户端），但必须留痕。
+		if markErr := h.ExtRepo.UpdateInstanceStatus(ctx, pluginID, "error", err.Error()); markErr != nil {
+			slog.ErrorContext(ctx, "plugin: 升级失败后错误态回写也失败，实例将停在中间态",
+				"plugin_id", pluginID, "upgrade_err", err, "mark_err", markErr)
+		}
+		http.Error(w, "Failed to update plugin version", http.StatusInternalServerError)
+		return
+	}
+
+	httputil.WriteJSON(w, map[string]any{
+		"status":      "upgraded",
+		"plugin_id":   pluginID,
+		"old_version": installedVersion,
+		"new_version": newVersion,
+	})
+}

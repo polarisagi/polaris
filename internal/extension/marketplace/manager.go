@@ -1,0 +1,387 @@
+package marketplace
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/polarisagi/polaris/internal/extension/lifecycle"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
+)
+
+// ExtensionInstaller 负责将扩展文件下载到本地并返回安装目录。
+// 调用方注入具体实现（如 MCPMarketplaceClient.Install）。
+type ExtensionInstaller interface {
+	Install(ctx context.Context, target any) (installDir string, err error)
+}
+
+var ErrRequiresApproval = apperr.NewSentinel(apperr.CodeForbidden, "installation requires user approval")
+
+// MCPRuntimeManager MCP 运行时管理的最小接口（消费方定义，防包循环）。
+type MCPRuntimeManager interface {
+	Remove(id string)
+}
+
+type Manager struct {
+	extRepo           protocol.ExtensionRepository
+	mcpMgr            MCPRuntimeManager
+	policyGate        protocol.PolicyGate
+	prefsRepo         protocol.PreferencesRepo
+	auditTrail        *security.AuditTrail
+	publisherTrustMap map[string]int
+	installer         ExtensionInstaller // 新增：文件下载
+	installFSM        *lifecycle.InstallFSM
+	outbox            protocol.OutboxWriter
+}
+
+func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int, outbox protocol.OutboxWriter) *Manager {
+	if publisherTrustMap == nil {
+		publisherTrustMap = make(map[string]int)
+	}
+	return &Manager{
+		extRepo:           extRepo,
+		mcpMgr:            mcpMgr,
+		policyGate:        pg,
+		prefsRepo:         pr,
+		auditTrail:        at,
+		publisherTrustMap: publisherTrustMap,
+		outbox:            outbox,
+	}
+}
+
+func (m *Manager) WithInstaller(i ExtensionInstaller) *Manager {
+	m.installer = i
+	return m
+}
+
+func (m *Manager) WithInstallFSM(fsm *lifecycle.InstallFSM) *Manager {
+	m.installFSM = fsm
+	return m
+}
+
+func (m *Manager) WithOutbox(ob protocol.OutboxWriter) *Manager {
+	m.outbox = ob
+	return m
+}
+
+// Authorize handles the install flow with M11 Cedar-Gate without writing to DB.
+//
+//nolint:gocyclo
+func (m *Manager) Authorize(ctx context.Context, req protocol.ExtensionInstallRequest) error {
+	if m.policyGate == nil {
+		return apperr.New(apperr.CodeInternal, "policy gate not configured (fail-closed)")
+	}
+	mode, err := m.prefsRepo.GetPermissionMode(ctx)
+	if err != nil {
+		mode = types.ModeDefault // 读不到偏好时取最严档（fail-closed）
+	}
+
+	// 1. TrustTier Override based on whitelist
+	if knownTier, ok := m.publisherTrustMap[req.Publisher]; ok {
+		req.TrustTier = knownTier
+	} else if req.TrustTier >= int(types.TrustOfficial) {
+		req.TrustTier = int(types.TrustCommunity) // Downgrade self-claimed official
+	}
+
+	evalCtx := map[string]any{
+		"trust_level":     req.TrustTier,
+		"publisher":       req.Publisher,
+		"ext_type":        req.ExtType,
+		"permission_mode": string(mode),
+		"has_hooks":       req.HasHooks,
+	}
+
+	reviewReq := types.PolicyReviewRequest{
+		Principal: req.Principal,
+		Action:    "install_extension",
+		Resource:  req.ExtensionID,
+		Context:   evalCtx,
+	}
+
+	result, err := m.policyGate.Review(ctx, reviewReq)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Manager.Authorize", err)
+	}
+
+	if !result.Allowed {
+		if strings.HasPrefix(result.Reason, "forbidden:") {
+			return apperr.New(apperr.CodeForbidden, "installation forbidden: "+result.Reason)
+		}
+		if result.Reason == "denied by default" {
+			return apperr.Wrap(apperr.CodeForbidden, "installation requires user approval", ErrRequiresApproval)
+		}
+		return apperr.New(apperr.CodeForbidden, "installation denied")
+	}
+	return nil
+}
+
+// AuthorizeAction authorizes arbitrary actions (e.g., "plugin:manage").
+func (m *Manager) AuthorizeAction(ctx context.Context, principal string, action string, target any) error {
+	if m.policyGate == nil {
+		return apperr.New(apperr.CodeInternal, "policy gate not configured (fail-closed)")
+	}
+	reviewReq := types.PolicyReviewRequest{
+		Principal: principal,
+		Action:    action,
+		Resource:  "plugin",
+		Context:   map[string]any{},
+	}
+	res, err := m.policyGate.Review(ctx, reviewReq)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Manager.AuthorizeAction", err)
+	}
+	if !res.Allowed {
+		return apperr.New(apperr.CodeForbidden, action+" action denied by policy")
+	}
+	return nil
+}
+
+// InstallExtension handles the install flow with M11 Cedar-Gate and stores to DB.
+func (m *Manager) InstallExtension(ctx context.Context, req protocol.ExtensionInstallRequest) error {
+	if !req.BypassAuth {
+		if err := m.Authorize(ctx, req); err != nil {
+			// S-06：保留 PolicyGate 的原始语义 Code（如 CodeForbidden），避免
+			// apperr.Wrap 以入参 Code 为准把 403 覆盖成 500。
+			return apperr.Wrap(apperr.CodeOf(err), "Manager.InstallExtension", err)
+		}
+	}
+
+	req = normalizeInstallRequest(req)
+
+	// 先标记 status='installing'，防止重复安装竞争（UNIQUE INDEX on catalog_id）。
+	if err := m.insertExtensionInstance(ctx, req); err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "Manager.InstallExtension", err)
+	}
+
+	return m.postInstallSteps(ctx, req)
+}
+
+func normalizeInstallRequest(req protocol.ExtensionInstallRequest) protocol.ExtensionInstallRequest {
+	if req.ExtensionID == "" {
+		req.ExtensionID = util.GenerateHumanReadableID("ext", req.Name)
+	}
+	if req.Name == "" {
+		req.Name = req.ExtensionID
+		if req.Publisher != "" {
+			req.Name = fmt.Sprintf("%s/%s", req.Publisher, req.ExtensionID)
+		}
+	}
+	if req.Config == "" {
+		req.Config = "{}"
+	}
+	return req
+}
+
+func (m *Manager) insertExtensionInstance(ctx context.Context, req protocol.ExtensionInstallRequest) error {
+	if err := m.reclaimInstanceID(ctx, req.ExtensionID); err != nil {
+		return err
+	}
+	err := m.extRepo.UpsertInstance(ctx, types.ExtInstanceRow{
+		ID:        req.ExtensionID,
+		ExtType:   req.ExtType,
+		Origin:    "marketplace",
+		CatalogID: req.CatalogID,
+		Name:      req.Name,
+		Publisher: req.Publisher,
+		TrustTier: req.TrustTier,
+		RuntimeID: req.RuntimeID,
+		Config:    req.Config,
+		Status:    "installing",
+	})
+	if err != nil {
+		// UNIQUE 冲突 → 已安装，幂等返回成功
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return nil
+		}
+		return apperr.Wrap(apperr.CodeInternal, "marketplace.InstallExtension: insert instance", err)
+	}
+	return nil
+}
+
+// reclaimInstanceID 实例 ID 按身份确定（ADR-0124）后，重装会落到上一代的同一行：
+//   - uninstalling：异步卸载尚未完成，此时重装会被随后的卸载删掉文件与实例 → 拒绝
+//   - failed / error：删旧行后重建，使 created_at（卸载幂等键与卸载代次）换代
+//   - 其余状态保持原 upsert 幂等：HITL 与目录安装会对同一 ID 先后调用两次 InstallExtension
+func (m *Manager) reclaimInstanceID(ctx context.Context, id string) error {
+	prev, err := m.extRepo.GetInstance(ctx, id)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "marketplace.InstallExtension: load instance", err)
+	}
+	if prev == nil {
+		return nil
+	}
+	switch prev.Status {
+	case "uninstalling":
+		return apperr.New(apperr.CodeConflict, "extension "+id+" is still uninstalling, retry after it finishes")
+	case "failed", "error":
+		if err := m.extRepo.DeleteInstance(ctx, id); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "marketplace.InstallExtension: drop stale instance", err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) postInstallSteps(ctx context.Context, req protocol.ExtensionInstallRequest) error {
+	instID := req.ExtensionID
+
+	// 文件下载（若注入了 installer）或使用本地路径
+	var installDir string
+	if req.LocalPath != "" {
+		installDir = req.LocalPath
+	} else if m.installer != nil && req.Target != nil {
+		dir, dlErr := m.installer.Install(ctx, req.Target)
+		if dlErr != nil {
+			_ = m.extRepo.UpdateInstanceStatus(ctx, instID, "failed", dlErr.Error())
+			return apperr.Wrap(apperr.CodeInternal, "marketplace: download failed", dlErr)
+		}
+		installDir = dir
+	}
+
+	// 文件尚未就位（gateway 异步拷贝市场缓存）：保持 installing/downloading，由 CompleteInstall
+	// 在文件就位后执行运行时绑定。此前 FSM 在空目录上"安装成功"并把实例标成 installed。
+	if installDir == "" {
+		// 调用方已自行写好运行时行（如手工创建的 MCP 连接器）：只需回写 runtime_id 并置 installed。
+		if req.RuntimeID != "" {
+			return m.UpdateInstance(ctx, instID, InstanceUpdate{Status: "installed", RuntimeID: req.RuntimeID})
+		}
+		return nil
+	}
+	return m.CompleteInstall(ctx, req, installDir)
+}
+
+// CompleteInstall 对已通过 InstallExtension 授权并登记的实例，在文件就位后执行运行时绑定
+// （plugin / skill / mcp 安装器），并由 InstallFSM 回写 install_path / runtime_id / status。
+func (m *Manager) CompleteInstall(ctx context.Context, req protocol.ExtensionInstallRequest, dir string) error {
+	if m.installFSM == nil {
+		return apperr.New(apperr.CodeInternal, "marketplace: install fsm not configured")
+	}
+	reqFSM := lifecycle.InstallReq{
+		InstID:    req.ExtensionID,
+		CatalogID: req.CatalogID,
+		Name:      req.Name,
+		Publisher: req.Publisher,
+		TrustTier: req.TrustTier,
+		Target:    req.Target,
+		LocalPath: dir,
+		Config:    req.Config,
+
+		MarketplaceEntry: req.MarketplaceEntry,
+	}
+	// GR-8-007：FSM 失败（实例已被置 failed）必须向上返回。
+	if _, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType)); err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "marketplace: install fsm failed", err)
+	}
+	return nil
+}
+
+// UninstallExtension completely removes an extension and its physical files.
+//
+//nolint:nestif
+func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) error {
+	allInsts, err := m.extRepo.ListInstances(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension", err)
+	}
+
+	var insts []types.ExtInstanceRow
+	for _, inst := range allInsts {
+		if inst.CatalogID == catalogID {
+			insts = append(insts, inst)
+		}
+	}
+
+	if len(insts) == 0 {
+		return apperr.New(apperr.CodeNotFound, "extension not installed")
+	}
+
+	// fail-fast 必须先于任何状态推进：卸载靠 Outbox 异步投递驱动，outbox 为 nil 时
+	// 无人推进流程。若先把实例置成 uninstalling 再报错，实例就永久卡在该状态——
+	// 既装不了也卸不掉，比直接拒绝更糟。2026-08-12 复核：此判断此前位于循环内、
+	// UpdateInstanceStatus 之后，首个实例仍会被写成 uninstalling 才返回错误。
+	if m.outbox == nil {
+		return apperr.New(apperr.CodeInternal,
+			"Manager.UninstallExtension: outbox writer not injected, cannot complete uninstall")
+	}
+
+	for _, inst := range insts {
+		// 状态推进失败即中止：状态没置成 uninstalling 却继续投递卸载消息，会让
+		// DB 与 Outbox 两侧对同一实例的认知分叉。
+		if err := m.extRepo.UpdateInstanceStatus(ctx, inst.ID, "uninstalling", ""); err != nil {
+			return apperr.Wrap(apperr.CodeInternal,
+				"Manager.UninstallExtension: update status to uninstalling", err)
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"instance_id":  inst.ID,
+			"generation":   inst.CreatedAt, // 卸载处理器据此丢弃旧代次的过期消息（ADR-0124 决策三）
+			"catalog_id":   catalogID,
+			"install_path": inst.InstallPath,
+			"ext_type":     inst.ExtType,
+			"trust_tier":   inst.TrustTier,
+			"runtime_id":   inst.RuntimeID,
+		})
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: marshal payload", err)
+		}
+		if err := m.outbox.Write(ctx, protocol.OutboxEntry{
+			TargetEngine: protocol.TopicExtensionUninstall,
+			Operation:    "extension_uninstall",
+			Scope:        "extension",
+			Payload:      payload,
+			// GR-8-006：幂等键须区分"安装代次"：同一实例 ID 卸载→重装→再卸载时，
+			// 固定 (inst.ID, version=1) 会与首次卸载撞键被 outbox 当重复丢弃。
+			// 以实例创建时间标识代次：同一次卸载的重试仍幂等，新一代安装得到新键。
+			// 同键 dead 记录（历史坏数据/曾失败的卸载）须重新入队，pending 中的同键则幂等忽略。
+			RetryOnDead:    true,
+			IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicExtensionUninstall, "extension_instance", inst.ID+"@"+inst.CreatedAt, "uninstall", 1)),
+		}); err != nil {
+			// 投递失败：把状态回滚出 uninstalling，否则实例同样会卡死。
+			// 回滚失败只留痕，不覆盖原始错误——原始错误才是根因。
+			if rbErr := m.extRepo.UpdateInstanceStatus(ctx, inst.ID, "installed", err.Error()); rbErr != nil {
+				slog.Error("marketplace: outbox 投递失败后状态回滚也失败，实例可能卡在 uninstalling",
+					"ext", inst.ID, "rollback_err", rbErr)
+			}
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: outbox write", err)
+		}
+	}
+
+	return nil
+}
+
+// InstanceUpdate 表示需要更新的字段（零值字段跳过）。
+type InstanceUpdate struct {
+	Status      string // 若非空则更新
+	RuntimeID   string // 若非空则更新
+	InstallPath string // 若非空则更新
+	ErrorMsg    string // 若非空则更新（"" 表示清除）
+	ClearError  bool   // true 时将 error_msg 清为 NULL
+}
+
+func (m *Manager) UpdateInstance(ctx context.Context, id string, upd InstanceUpdate) error {
+	if upd.Status != "" {
+		if err := m.extRepo.UpdateInstanceStatus(ctx, id, upd.Status, upd.ErrorMsg); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
+		}
+	} else if upd.ClearError {
+		// UpdateInstanceStatus with empty errorMsg will clear it conceptually,
+		// but since we don't have a direct clear method, we do a minimal update.
+		_ = m.extRepo.UpdateInstanceStatus(ctx, id, "", "")
+	}
+	if upd.InstallPath != "" {
+		if err := m.extRepo.UpdateInstanceInstallPath(ctx, id, upd.InstallPath); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
+		}
+	}
+	if upd.RuntimeID != "" {
+		if err := m.extRepo.UpdateInstanceRuntimeID(ctx, id, upd.RuntimeID); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
+		}
+	}
+	return nil
+}
