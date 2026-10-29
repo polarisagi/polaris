@@ -8,14 +8,18 @@ COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X main.Version=$(VERSION) -X main.CommitHash=$(COMMIT) -X main.BuildDate=$(DATE)
 
-build: generate-manifest rust-build build-ui
+# CI 优化：SKIP_RUST_BUILD=1 时跳过 Rust 编译（release.yml 已通过预编译 artifact 获取）。
+SKIP_RUST_BUILD ?=
+_RUST_DEP := $(if $(SKIP_RUST_BUILD),,rust-build)
+
+build: generate-manifest $(_RUST_DEP) build-ui
 	@mkdir -p bin/lib
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
 	$(GO) build -ldflags="$(LDFLAGS)" -o bin/polaris ./cmd/polaris
 
-build-backend: generate-manifest rust-build
+build-backend: generate-manifest $(_RUST_DEP)
 	@mkdir -p bin/lib
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
