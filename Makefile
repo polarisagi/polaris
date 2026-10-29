@@ -28,6 +28,7 @@ build-backend: generate-manifest $(_RUST_DEP)
 
 build-ui:
 	cd web && npm ci && npm run build
+	@touch web/dist/.gitkeep
 
 rust-build:
 	CFLAGS= LDFLAGS= $(CARGO) build --release $(if $(CARGO_TARGET),--target $(CARGO_TARGET),) --manifest-path rust/substrate/Cargo.toml
