@@ -8,7 +8,7 @@ INSTALL_DIR="$HOME/.polaris/bin"
 PLIST_LABEL="com.polarisagi.polaris"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 
-if [[ "$LANG" == *"zh"* ]] || [[ "$LC_ALL" == *"zh"* ]] || [[ "$LANGUAGE" == *"zh"* ]]; then
+if [[ "${LANG:-}" == *"zh"* ]] || [[ "${LC_ALL:-}" == *"zh"* ]] || [[ "${LANGUAGE:-}" == *"zh"* ]]; then
     LANG_ZH=true
 else
     LANG_ZH=false
@@ -67,10 +67,13 @@ fi
 # ── 3. 删除桌面外壳 ───────────────────────────────────────────────────────────
 # install.sh 将统一归档内的 desktop/ 复制到系统常规位置后即清空原件（不留副本），
 # 故这里直接清理落地位置：macOS → /Applications，Linux → ~/.local/bin + .desktop。
-if [ "$OS" = "darwin" ] && [ -d "/Applications/Polaris.app" ]; then
-    msg "🗑️  删除桌面外壳: /Applications/Polaris.app" \
-        "🗑️  Removing desktop shell: /Applications/Polaris.app"
-    rm -rf "/Applications/Polaris.app"
+if [ "$OS" = "darwin" ]; then
+    for app_path in "/Applications/Polaris.app" "$HOME/Applications/Polaris.app"; do
+        if [ -d "$app_path" ] && [ -w "$(dirname "$app_path")" ]; then
+            msg "🗑️ 删除桌面外壳: $app_path" "🗑️ Removing desktop shell: $app_path"
+            rm -rf "$app_path"
+        fi
+    done
 elif [ "$OS" = "linux" ]; then
     if [ -f "$HOME/.local/bin/polaris-desktop" ]; then
         msg "🗑️  删除桌面外壳: ~/.local/bin/polaris-desktop" \

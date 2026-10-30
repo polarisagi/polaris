@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -260,5 +262,73 @@ func TestSandboxRouter_AnomalyPaths(t *testing.T) {
 	remoteRouter := router.WithRemote(NewRemoteSandbox("http://dummy", "", 1, nil))
 	if remoteRouter == nil {
 		t.Error("expected new router from WithRemote")
+	}
+}
+
+func TestLookPathPython_SkipsWindowsStoreStub(t *testing.T) {
+	if !isWindowsStoreStub(`C:\Users\alice\AppData\Local\Microsoft\WindowsApps\python3.exe`) {
+		t.Fatal("expected WindowsApps path to be identified as stub")
+	}
+	if isWindowsStoreStub(`/Users/alice/.local/bin/python3`) {
+		t.Fatal("did not expect ~/.local/bin/python3 to be identified as stub")
+	}
+
+	tmp := t.TempDir()
+	stubDir := filepath.Join(tmp, "Microsoft", "WindowsApps")
+	realDir := filepath.Join(tmp, "uv", "python")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stubBin := filepath.Join(stubDir, "python3")
+	realBin := filepath.Join(realDir, "python3")
+	if runtime.GOOS == "windows" {
+		stubBin += ".exe"
+		realBin += ".exe"
+	}
+	if err := os.WriteFile(stubBin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", stubDir+string(filepath.ListSeparator)+realDir)
+	got := lookPathPython()
+	if got != realBin {
+		t.Fatalf("expected lookPathPython to skip WindowsApps stub and return %q, got %q", realBin, got)
+	}
+}
+
+func TestLookPathPython_RejectsNonExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 使用 PATHEXT 而非 Unix 执行位")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte("not executable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if got := lookPathPython(); got != "" {
+		t.Fatalf("不可执行文件被选为解释器: %q", got)
+	}
+}
+
+func TestLookPathPython_RejectsRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	name := "python3"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", ".")
+	if got := lookPathPython(); got != "" {
+		t.Fatalf("相对路径被选为解释器: %q", got)
 	}
 }

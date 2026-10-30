@@ -11,11 +11,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -69,15 +73,48 @@ func printServiceHelp() {
 // 而失真的表现是"某些扩展在前台跑得好好的，装成服务就用不了"。
 // 用户此刻的 PATH 就是那个已经能跑通的环境，直接固化它最准。
 func servicePATH(installDir string) string {
-	p := os.Getenv("PATH")
-	if p == "" {
-		p = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	parts := filepath.SplitList(os.Getenv("PATH"))
+	if len(parts) == 0 && runtime.GOOS != "windows" {
+		parts = []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
 	}
+	parts = serviceUserPaths(parts)
 	// 二进制自身所在目录必须在内：服务里 `polaris` 调自己或同目录工具时要能找到。
-	if installDir != "" && !strings.Contains(p, installDir) {
-		p = installDir + ":" + p
+	if installDir != "" {
+		parts = append([]string{installDir}, parts...)
 	}
-	return p
+	seen := make(map[string]bool)
+	unique := make([]string, 0, len(parts))
+	for _, dir := range parts {
+		key := dir
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(dir)
+		}
+		if dir != "" && !seen[key] {
+			unique = append(unique, dir)
+			seen[key] = true
+		}
+	}
+	return strings.Join(unique, string(os.PathListSeparator))
+}
+
+func serviceUserPaths(parts []string) []string {
+	// 兜底补齐 ~/.local/bin 与 ~/.cargo/bin（install.sh 将 uv/python3/node/npx 统一软链至此）：
+	// 即使用户在未加载 profile 的裸非交互式 shell 中手动运行 polaris service install，
+	// 服务单元也能定位到运行时依赖。
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		for _, userBin := range []string{
+			filepath.Join(home, ".cargo", "bin"),
+			filepath.Join(home, ".local", "bin"),
+		} {
+			present := slices.ContainsFunc(parts, func(dir string) bool {
+				return dir == userBin || (runtime.GOOS == "windows" && strings.EqualFold(dir, userBin))
+			})
+			if info, statErr := os.Stat(userBin); statErr == nil && info.IsDir() && !present {
+				parts = append([]string{userBin}, parts...)
+			}
+		}
+	}
+	return parts
 }
 
 // serviceExecPath 返回当前二进制的绝对路径，并解析符号链接。
@@ -90,7 +127,7 @@ func serviceExecPath() (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(exe)
 	if err != nil {
-		return exe, nil //nolint:nilerr // 解析失败时退回原路径，不阻断安装
+		return "", apperr.Wrap(apperr.CodeInternal, "service: 无法解析程序实际路径", err)
 	}
 	return resolved, nil
 }
@@ -257,7 +294,8 @@ func launchdInstall(exe string) error {
   </dict>
 </dict>
 </plist>
-`, serviceLabel, exe, logDir, logDir, home, servicePATH(filepath.Dir(exe)))
+`, serviceLabel, html.EscapeString(exe), html.EscapeString(logDir), html.EscapeString(logDir),
+		html.EscapeString(home), html.EscapeString(servicePATH(filepath.Dir(exe))))
 
 	if err = os.MkdirAll(logDir, 0o700); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "service: 创建日志目录失败", err)
@@ -289,6 +327,28 @@ func launchdUninstall() error {
 
 // ── Linux: systemd user unit ─────────────────────────────────────────────────
 
+// ensureLinuxUserRuntimeEnv 在非图形 SSH / su 会话下补齐 XDG_RUNTIME_DIR，
+// 防止 systemctl --user 因找不到 /run/user/<uid>/bus 报 Failed to connect to bus。
+func ensureLinuxUserRuntimeEnv() {
+	if os.Getenv("XDG_RUNTIME_DIR") != "" {
+		return
+	}
+	runtimeDir := fmt.Sprintf("/run/user/%d", os.Getuid())
+	if info, err := os.Stat(runtimeDir); err == nil && info.IsDir() {
+		if setErr := os.Setenv("XDG_RUNTIME_DIR", runtimeDir); setErr != nil {
+			slog.Debug("service: 设置 XDG_RUNTIME_DIR 失败", "dir", runtimeDir, "err", setErr)
+		}
+	}
+}
+
+// su/SSH 的 USER 可能仍属于原会话，linger 应优先绑定实际系统身份。
+func currentUsername() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}
+
 func systemdInstall(exe string) error {
 	unit, err := serviceUnitPath()
 	if err != nil {
@@ -301,16 +361,17 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStart=%s serve
-Environment=PATH=%s
+Environment=%s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
-`, exe, servicePATH(filepath.Dir(exe)))
+`, systemdQuote(strings.ReplaceAll(exe, "$", "$$")), systemdQuote("PATH="+servicePATH(filepath.Dir(exe))))
 	if err = writeUnit(unit, content); err != nil {
 		return err
 	}
+	ensureLinuxUserRuntimeEnv()
 	if err = runTool("systemctl", "--user", "daemon-reload"); err != nil {
 		return err
 	}
@@ -320,7 +381,8 @@ WantedBy=default.target
 	// 用户级 systemd 默认在最后一个会话退出时随之停止；linger 才能真正开机自启。
 	// 失败不阻断安装（某些发行版/容器无 loginctl），但必须提示，否则用户会以为
 	// 已经配好，直到重启后发现服务没起来。
-	if lingerErr := runTool("loginctl", "enable-linger", os.Getenv("USER")); lingerErr != nil {
+	uname := currentUsername()
+	if uname == "" || runTool("loginctl", "enable-linger", uname) != nil {
 		fmt.Printf("%s 已注册并启动，但 enable-linger 失败：注销后服务会停止。手动执行：loginctl enable-linger $USER\n", clr(ansiWarn, "!"))
 	} else {
 		fmt.Printf("%s 已注册并启动：%s\n", clr(ansiOk, "✓"), unit)
@@ -328,11 +390,17 @@ WantedBy=default.target
 	return nil
 }
 
+// 用户路径可能含空格和 %；systemd 会在引号内继续展开 specifier。
+func systemdQuote(value string) string {
+	return strconv.Quote(strings.ReplaceAll(value, "%", "%%"))
+}
+
 func systemdUninstall() error {
 	unit, err := serviceUnitPath()
 	if err != nil {
 		return err
 	}
+	ensureLinuxUserRuntimeEnv()
 	runToolBestEffort("systemctl", "--user", "disable", "--now", "polaris.service")
 	if err = os.Remove(unit); err != nil && !os.IsNotExist(err) {
 		return apperr.Wrap(apperr.CodeInternal, "service: 删除单元文件失败 "+unit, err)
@@ -345,9 +413,16 @@ func systemdUninstall() error {
 // ── Windows: 计划任务（登录时触发）──────────────────────────────────────────
 
 func schtasksInstall(exe string) error {
+	// 任务调度器可能持有旧注册表环境；固化安装时已验证的 PATH，首次登录也能启动扩展。
+	scriptPath := filepath.Join(filepath.Dir(exe), "polaris-service.ps1")
+	content := windowsServiceScript(exe, servicePATH(filepath.Dir(exe)))
+	if err := writeUnit(scriptPath, content); err != nil {
+		return err
+	}
 	// /rl LIMITED：保持普通用户权限，与"数据目录在用户 home 下"一致（见文件头）。
 	if err := runTool("schtasks", "/create", "/f", "/tn", windowsTaskName,
-		"/tr", `"`+exe+`" serve`, "/sc", "onlogon", "/rl", "LIMITED"); err != nil {
+		"/tr", `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "`+scriptPath+`"`,
+		"/sc", "onlogon", "/rl", "LIMITED"); err != nil {
 		return err
 	}
 	if err := runTool("schtasks", "/run", "/tn", windowsTaskName); err != nil {
@@ -357,10 +432,21 @@ func schtasksInstall(exe string) error {
 	return nil
 }
 
+func windowsServiceScript(exe, path string) string {
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	// UTF-8 BOM 使 Windows PowerShell 5.1 能正确读取中文用户路径；单引号阻断变量展开。
+	return "\ufeff$env:Path = " + quote(path) + "\r\n& " + quote(exe) + " serve\r\nexit $LASTEXITCODE\r\n"
+}
+
 func schtasksUninstall() error {
 	runToolBestEffort("schtasks", "/end", "/tn", windowsTaskName)
 	if err := runTool("schtasks", "/delete", "/f", "/tn", windowsTaskName); err != nil {
 		return err
+	}
+	if exe, err := serviceExecPath(); err == nil {
+		if err := os.Remove(filepath.Join(filepath.Dir(exe), "polaris-service.ps1")); err != nil && !os.IsNotExist(err) {
+			return apperr.Wrap(apperr.CodeInternal, "service: 删除启动脚本失败", err)
+		}
 	}
 	fmt.Printf("%s 已移除计划任务\n", clr(ansiOk, "✓"))
 	return nil

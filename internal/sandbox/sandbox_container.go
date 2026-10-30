@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -223,10 +224,8 @@ func (s *ContainerSandbox) runNativeScript(ctx context.Context, spec SandboxSpec
 func resolveInterpreter(scriptPath string) (string, error) {
 	switch strings.ToLower(filepath.Ext(scriptPath)) {
 	case ".py":
-		for _, name := range []string{"python3", "python"} {
-			if p, err := exec.LookPath(name); err == nil {
-				return p, nil
-			}
+		if p := lookPathPython(); p != "" {
+			return p, nil
 		}
 		return "", apperr.New(apperr.CodeNotFound, "sandbox: python3/python not found in PATH")
 	case ".sh", ".bash":
@@ -240,4 +239,32 @@ func resolveInterpreter(scriptPath string) (string, error) {
 		return "", apperr.New(apperr.CodeInternal,
 			fmt.Sprintf("sandbox: unsupported script extension %q", filepath.Ext(scriptPath)))
 	}
+}
+
+// 商店占位程序会弹窗而不执行脚本，必须继续扫描后面的真实解释器。
+func lookPathPython() string {
+	for _, name := range []string{"python3", "python"} {
+		if p := lookPathSkippingWindowsStub(name); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+func isWindowsStoreStub(p string) bool {
+	normalized := strings.ReplaceAll(strings.ToLower(p), `\`, "/")
+	return strings.Contains(normalized, "/microsoft/windowsapps/")
+}
+
+func lookPathSkippingWindowsStub(name string) string {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if !filepath.IsAbs(dir) || isWindowsStoreStub(dir+"/") {
+			continue
+		}
+		// 沿用系统的执行权限和 PATHEXT 检查，不能仅凭文件存在就作为解释器。
+		if p, err := exec.LookPath(filepath.Join(dir, name)); err == nil && !isWindowsStoreStub(p) {
+			return p
+		}
+	}
+	return ""
 }

@@ -94,6 +94,10 @@ func SandboxPathAddUserTools(add func(string)) {
 		return
 	}
 	for _, p := range []string{
+		filepath.Join(home, ".polaris", "bin"),
+		filepath.Join(home, ".polaris", "deps", "node", "bin"),
+		filepath.Join(home, ".polaris", "deps", "node"),
+		filepath.Join(home, ".polaris", "deps", "git", "cmd"),
 		home + "/.cargo/bin",
 		home + "/.local/bin",
 		home + "/go/bin",

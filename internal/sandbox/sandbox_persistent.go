@@ -99,10 +99,7 @@ func NewPersistentSandbox(wrapper ArgvWrapper, cfg PersistentSandboxConfig) *Per
 		cfg:         cfg,
 		sessions:    make(map[string]*liveSession),
 	}
-	p.pythonPath, _ = exec.LookPath("python3")
-	if p.pythonPath == "" {
-		p.pythonPath, _ = exec.LookPath("python")
-	}
+	p.pythonPath = lookPathPython()
 	p.bashPath, _ = exec.LookPath("bash")
 
 	reapCtx, cancel := context.WithCancel(context.Background())

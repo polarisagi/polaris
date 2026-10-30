@@ -1,4 +1,4 @@
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $Culture = [System.Globalization.CultureInfo]::InstalledUICulture.Name
 $IsZh = ($Culture -match "zh")
@@ -32,11 +32,17 @@ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Silent
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
     -Name $TaskName -ErrorAction SilentlyContinue
 
-# ── 3. 删除二进制 ────────────────────────────────────────────────────────────
+# ── 3. 删除二进制及 Rust 动态库 ──────────────────────────────────────────────
 $FinalExe = "$InstallDir\polaris.exe"
+Remove-Item -Path "$InstallDir\polaris-service.ps1" -Force -ErrorAction SilentlyContinue
 if (Test-Path $FinalExe) {
     Write-Msg -zh "🗑️  删除程序文件: $FinalExe" -en "🗑️  Removing binary: $FinalExe" -Color Cyan
     Remove-Item -Path $FinalExe -Force -ErrorAction SilentlyContinue
+}
+$LibDir = "$InstallDir\lib"
+if (Test-Path $LibDir) {
+    Write-Msg -zh "🗑️  删除 Rust 动态库: $LibDir" -en "🗑️  Removing Rust library: $LibDir" -Color Cyan
+    Remove-Item -Path $LibDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── 3.5 删除桌面外壳 ─────────────────────────────────────────────────────────

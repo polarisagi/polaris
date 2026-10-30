@@ -18,6 +18,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  installer-unix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Unix installer isolated regression
+        run: python3 scripts/tests/test_install.py
+
+  installer-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Windows PowerShell 5.1 installer checks
+        shell: powershell
+        run: .\scripts\tests\install_windows_test.ps1
+
   lint:
     runs-on: ubuntu-latest
     steps:
