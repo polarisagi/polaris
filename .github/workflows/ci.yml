@@ -1,5 +1,8 @@
 name: Public source validation
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: [main]
@@ -14,21 +17,29 @@ jobs:
   build-test-package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
           cache: true
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y bubblewrap libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev patchelf
+      - name: Cache cargo-deny
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        run: |
+          if ! command -v cargo-deny >/dev/null 2>&1; then
+            cargo install cargo-deny --locked
+          fi
       - name: Build and test from public source
         run: scripts/ci_test_public.sh
       - name: Package source build
@@ -40,7 +51,7 @@ jobs:
           cp LICENSE release/polaris/
           tar -czf "release/polaris-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C release polaris
           sha256sum release/*.tar.gz > release/SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: linux-amd64-release

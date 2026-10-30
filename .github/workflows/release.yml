@@ -3,13 +3,10 @@ name: Release
 # ═══════════════════════════════════════════════════════════════════════
 # 发布流程
 #
-# 关键路径：
-#   prepare (ensure-rust, ~30s) ──┐
-#   build-frontend (~3min) ───────┤ 并行
-#   build-go [6×ubuntu] (~4min) ──┘
-#     → package (下载预编译 Rust, ~30s)
-#       ↘ desktop [4×各平台 runner] (~10min)   并行
-#         → publish：合并 core + desktop 为每平台单一归档 → GitHub Release
+# 关键路径（优化后）：
+#   build-frontend (~3min) ─→ build-and-package [6×ubuntu] (~5min) ─┐
+#   ensure-rust (~30s) → prepare ──→ ↗                              ├→ publish
+#   desktop [4×各平台 runner] (~10min，无依赖立即启动) ────────────────┘
 #
 # 最终产物：每系统/架构组合一个归档（6 个），含守护进程 + 桌面外壳 + configs。
 # 无桌面版的平台（linux-arm64 / windows-arm64）归档仅含核心。
@@ -97,12 +94,12 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────
-  # 2. 交叉编译 Go 二进制（全部在 ubuntu-latest，CGO=0）
-  #    与 prepare 并行，等 frontend 完成后即启动
+  # 2. 交叉编译 Go 二进制 + 打包发布归档（全部在 ubuntu-latest，CGO=0）
+  #    合并原 build-go + package，省去一次 artifact 中转与 runner 分配
   # ───────────────────────────────────────────────
-  build-go:
-    name: Build Go (${{ matrix.name }})
-    needs: build-frontend
+  build-and-package:
+    name: Build & Package (${{ matrix.name }})
+    needs: [build-frontend, prepare]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true   # 任一平台失败立即取消其余，避免浪费
@@ -112,28 +109,46 @@ jobs:
             goos: linux
             goarch: amd64
             cargo_target: x86_64-unknown-linux-gnu
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-linux-amd64.so
+            rust_libname:  libsubstrate.so
           - name: linux-arm64
             goos: linux
             goarch: arm64
             cargo_target: aarch64-unknown-linux-gnu
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-linux-arm64.so
+            rust_libname:  libsubstrate.so
           - name: darwin-arm64
             goos: darwin
             goarch: arm64
             cargo_target: aarch64-apple-darwin
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-darwin-arm64.dylib
+            rust_libname:  libsubstrate.dylib
           - name: darwin-amd64
             goos: darwin
             goarch: amd64
             cargo_target: x86_64-apple-darwin
+            archive_format: tar.gz
+            rust_artifact: libsubstrate-darwin-amd64.dylib
+            rust_libname:  libsubstrate.dylib
           - name: windows-amd64
             goos: windows
             goarch: amd64
             cargo_target: x86_64-pc-windows-msvc
             binary_suffix: ".exe"
+            archive_format: zip
+            rust_artifact: substrate-windows-amd64.dll
+            rust_libname:  substrate.dll
           - name: windows-arm64
             goos: windows
             goarch: arm64
             cargo_target: aarch64-pc-windows-msvc
             binary_suffix: ".exe"
+            archive_format: zip
+            rust_artifact: substrate-windows-arm64.dll
+            rust_libname:  substrate.dll
     steps:
       - uses: actions/checkout@v7
         with:
@@ -163,57 +178,6 @@ jobs:
       - name: Rename binary (Windows)
         if: matrix.binary_suffix == '.exe'
         run: mv bin/polaris bin/polaris.exe
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: go-${{ matrix.name }}
-          path: bin/polaris${{ matrix.binary_suffix }}
-          retention-days: 1
-
-  # ───────────────────────────────────────────────
-  # 3. 打包发布（依赖 build-go + prepare）
-  #    Rust 产物直接从 pre-release 下载，无编译开销
-  # ───────────────────────────────────────────────
-  package:
-    name: Package (${{ matrix.name }})
-    needs: [build-go, prepare]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - name: linux-amd64
-            archive_format: tar.gz
-            rust_artifact: libsubstrate-linux-amd64.so
-            rust_libname:  libsubstrate.so
-          - name: linux-arm64
-            archive_format: tar.gz
-            rust_artifact: libsubstrate-linux-arm64.so
-            rust_libname:  libsubstrate.so
-          - name: darwin-arm64
-            archive_format: tar.gz
-            rust_artifact: libsubstrate-darwin-arm64.dylib
-            rust_libname:  libsubstrate.dylib
-          - name: darwin-amd64
-            archive_format: tar.gz
-            rust_artifact: libsubstrate-darwin-amd64.dylib
-            rust_libname:  libsubstrate.dylib
-          - name: windows-amd64
-            archive_format: zip
-            rust_artifact: substrate-windows-amd64.dll
-            rust_libname:  substrate.dll
-          - name: windows-arm64
-            archive_format: zip
-            rust_artifact: substrate-windows-arm64.dll
-            rust_libname:  substrate.dll
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Download Go binary
-        uses: actions/download-artifact@v8
-        with:
-          name: go-${{ matrix.name }}
-          path: bin
 
       # 从 pre-release 下载对应平台的预编译 Rust .so / .dylib / .dll
       - name: Download prebuilt Rust artifact
@@ -258,7 +222,7 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────
-  # 3.5 桌面外壳构建（ADR-0096）
+  # 3. 桌面外壳构建（ADR-0096）
   #
   # Tauri **不支持交叉编译**：外壳链接各平台自己的 WebView（WKWebView /
   # WebView2 / WebKitGTK），必须在目标 OS 上构建。故这里是三种 runner 的独立
@@ -270,10 +234,14 @@ jobs:
   # Silicon 的硬要求），不公证；Windows 不做 Authenticode。安装脚本走
   # curl/Invoke-WebRequest 不写隔离属性/MOTW，故不触发 Gatekeeper
   # 与 SmartScreen（ADR-0095）。
+  #
+  # 优化：无任何上游依赖，tag push 后立即启动，与 build-and-package 完全并行。
+  # 此 job 不需要 rust/substrate 产物（编译的是 desktop/src-tauri 自己的 Cargo），
+  # 版本号直接取 GITHUB_REF_NAME。
   # ───────────────────────────────────────────────
   desktop:
     name: Desktop Shell (${{ matrix.name }})
-    needs: [prepare]
+    needs: []
     strategy:
       fail-fast: false
       matrix:
@@ -332,7 +300,15 @@ jobs:
           PY
           grep -m1 '^version' desktop/src-tauri/Cargo.toml
 
+      - name: Cache Tauri CLI
+        id: tauri-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: tauri-cli-${{ runner.os }}-v2
+
       - name: Install Tauri CLI
+        if: steps.tauri-cache.outputs.cache-hit != 'true'
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: Build desktop bundle
@@ -382,14 +358,14 @@ jobs:
   # ───────────────────────────────────────────────
   # 4. 发布 GitHub Release
   #
-  # 合并 package（core 二进制 + Rust dylib + configs）与 desktop（外壳）
+  # 合并 build-and-package（core 二进制 + Rust dylib + configs）与 desktop（外壳）
   # 的产物为每平台单一归档，消除 GitHub Release 页面上"带桌面 / 不带桌面"
   # 的分裂。无桌面版的平台（linux-arm64 / windows-arm64）原样发布。
   # 合并不违反 ADR-0096 决策四——安装脚本仍将二者放到各自位置。
   # ───────────────────────────────────────────────
   publish:
     name: Publish GitHub Release
-    needs: [package, desktop]
+    needs: [build-and-package, desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
