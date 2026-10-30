@@ -1,20 +1,28 @@
 name: Public source validation
 
+# 公开仓源码门控。打包发布只由 release.yml（push v* tag）负责，本工作流不再
+# 在 tag 上重复跑全量门控/产出单平台包——那份产物从未进入 GitHub Release，纯耗时。
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_NET_RETRY: 3
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
 
 permissions:
   contents: read
 
+# 同一分支/PR 新推送时取消旧的运行，避免排队浪费
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-test-package:
+  build-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -23,13 +31,25 @@ jobs:
           go-version: '1.26'
           cache: true
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # rust/substrate 编译缓存（clippy/test 的 debug 产物 + make build 的 release 产物）
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/substrate
+          cache-on-failure: true
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev patchelf
+      # ci_test_public.sh 不构建桌面外壳，只需 bubblewrap（沙箱测试）；
+      # WebKitGTK 等 Tauri 依赖由 release.yml 的 desktop job 自行安装。
+      - name: Install Bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04+ 默认限制非特权 user namespace，bwrap 需要它
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Cache cargo-deny
         uses: actions/cache@v6
         with:
@@ -42,17 +62,10 @@ jobs:
           fi
       - name: Build and test from public source
         run: scripts/ci_test_public.sh
-      - name: Package source build
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          mkdir -p release/polaris
-          cp bin/polaris release/polaris/
-          cp -R configs release/polaris/
-          cp LICENSE release/polaris/
-          tar -czf "release/polaris-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C release polaris
-          sha256sum release/*.tar.gz > release/SHA256SUMS
-      - uses: actions/upload-artifact@v7
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Upload CI logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
         with:
-          name: linux-amd64-release
-          path: release/*
+          name: ci-logs
+          path: .ci-logs/
+          retention-days: 7

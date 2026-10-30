@@ -7,7 +7,7 @@ import (
 )
 
 // 本文件声明 memory 包对外部模块的消费端接口（Consumer-side Interfaces）。
-// 设计原则（参照 polaris-agent internal/memory/provider.go）：
+// 设计原则：
 //   - memory 包只引用此处声明的接口，禁止直接 import store/vfs/llm 等具体包
 //   - 外部包实现这些接口并在构造时注入
 //   - 接口名以 "Provider" 或 "Broker" 结尾，语义清晰

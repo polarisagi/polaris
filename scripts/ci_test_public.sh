@@ -149,7 +149,7 @@ package_local() {
 printf 'Polaris public release checks\n日志目录: %s\n' "$LOG_DIR"
 run_step '检查构建工具链' check_tools
 run_step '检查 Git 差异空白错误' check_diff_clean
-run_step '安装锁定的前端依赖' npm ci --prefix web
+# npm audit 只读 package-lock.json，无需先装依赖；依赖安装由 make build → build-ui 的 npm ci 完成，避免装两遍。
 run_step '前端依赖漏洞审计' npm audit --prefix web --audit-level=moderate
 run_step 'Go 源码格式' check_go_format
 # unsafe.Pointer 是 Rust/C FFI 的预期边界；保留其他 vet 检查。
