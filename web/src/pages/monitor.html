@@ -1,10 +1,10 @@
-<div x-show="$store.nav.page === 'monitor'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100" x-data="{ tab: 'status', _insightsLoaded: false, _agentsLoaded: false }">
-  <div class="max-w-5xl mx-auto w-full flex flex-col">
-    <div class="mb-8 border-b border-base-300 pb-4">
+<div x-show="$store.nav.page === 'monitor'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 bg-base-100" x-data="{ tab: 'status', _insightsLoaded: false, _agentsLoaded: false }">
+  <div class="max-w-4xl mx-auto w-full flex flex-col">
+    <div class="mb-6 border-b border-base-300 pb-4">
       <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_monitor')"></h2>
       
       <!-- Tabs -->
-      <div role="tablist" class="tabs tabs-boxed">
+      <div role="tablist" class="tabs tabs-boxed flex-wrap h-auto">
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'status' }" @click="tab = 'status'" x-text="$store.i18n.t('nav_status')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'insights' }" @click="tab = 'insights'; if (!_insightsLoaded) { $store.insights.load(); _insightsLoaded = true }" x-text="$store.i18n.t('nav_insights')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'agents' }" @click="tab = 'agents'; if (!_agentsLoaded) { $store.agents.load(); _agentsLoaded = true }" x-text="$store.i18n.t('nav_agents')"></a>
@@ -24,10 +24,10 @@
            init() { this.load(); setInterval(() => this.load(), 10000); }
          }">
       
-      <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
         <!-- Connection Status -->
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-          <div class="card-body p-5">
+          <div class="card-body p-4 gap-1">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_conn')"></h3>
             <div class="flex items-center gap-3">
               <div class="w-3 h-3 rounded-full" :class="$store.statusBar.connected ? 'bg-success shadow-[0_0_8px_rgba(0,255,0,0.4)]' : 'bg-error'"></div>
@@ -38,7 +38,7 @@
 
         <!-- Model ID -->
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-          <div class="card-body p-5">
+          <div class="card-body p-4 gap-1">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_model')"></h3>
             <div class="font-mono text-sm break-all font-bold" x-text="$store.statusBar.modelID || metrics.model_id || '—'"></div>
           </div>
@@ -46,7 +46,7 @@
 
         <!-- Tokens -->
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-          <div class="card-body p-5">
+          <div class="card-body p-4 gap-1">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_token')"></h3>
             <div class="font-mono font-bold text-xl mb-2" x-text="$store.statusBar.tokenUsed.toLocaleString()"></div>
             <progress class="progress w-full" :class="$store.statusBar.tokenPct > 0.95 ? 'progress-error' : $store.statusBar.tokenPct > 0.80 ? 'progress-warning' : 'progress-primary'" :value="$store.statusBar.tokenPct * 100" max="100"></progress>
@@ -56,7 +56,7 @@
 
         <!-- Memory -->
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-          <div class="card-body p-5">
+          <div class="card-body p-4 gap-1">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_memory')"></h3>
             <div class="font-mono font-bold text-xl mb-2" x-text="`${$store.statusBar.memoryMB} MB`"></div>
             <progress class="progress w-full" :class="$store.statusBar.memPct > 0.9 ? 'progress-error' : $store.statusBar.memPct > 0.75 ? 'progress-warning' : 'progress-primary'" :value="$store.statusBar.memPct * 100" max="100"></progress>
@@ -66,7 +66,7 @@
 
         <!-- Cost -->
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-          <div class="card-body p-5">
+          <div class="card-body p-4 gap-1">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_cost')"></h3>
             <div class="font-mono font-bold text-xl" x-text="`≈ ${$store.fmt.money($store.statusBar.costUSD)}`" :title="$store.fmt.hint"></div>
           </div>
@@ -74,7 +74,7 @@
 
         <!-- Service Status -->
         <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-          <div class="card-body p-5">
+          <div class="card-body p-4 gap-1">
             <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_service')"></h3>
             <div class="font-bold text-lg">
               <span x-show="$store.statusBar.sealed" class="text-error animate-pulse" x-text="$store.i18n.t('status_sealed')"></span>
@@ -85,7 +85,7 @@
       </div>
 
       <!-- Doctor Checks -->
-      <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors"
+      <details :open="!ok" class="collapse collapse-arrow bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors"
            x-data="{
              checks: [],
              ok: true,
@@ -101,7 +101,11 @@
              },
              init() { this.run(); }
            }">
-        <div class="card-body p-5">
+        <summary class="collapse-title text-sm font-medium flex items-center gap-2">
+          <span x-text="$store.i18n.t('monitor_diagnostics')"></span>
+          <span class="badge badge-sm" :class="ok ? 'badge-success badge-outline' : 'badge-error'" x-text="$store.i18n.t(loading ? 'loading' : ok ? 'ui_checks_ok' : 'ui_checks_attention')"></span>
+        </summary>
+        <div class="collapse-content">
           <div class="flex justify-between items-center mb-4">
             <h3 class="font-bold text-base" x-text="$store.i18n.t('monitor_diagnostics')"></h3>
             <button class="btn btn-sm btn-ghost" @click="run()" :disabled="loading">
@@ -120,7 +124,7 @@
             </template>
           </div>
         </div>
-      </div>
+      </details>
 
       <!-- Raw Metrics -->
       <div class="collapse collapse-arrow bg-base-200 border border-base-300 shadow-sm rounded-box hover:border-primary transition-colors">
@@ -186,7 +190,7 @@
           </div>
 
           <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-            <div class="card-body p-5">
+            <div class="card-body p-4 gap-1">
               <h3 class="font-bold text-sm mb-4" x-text="$store.i18n.t('insights_role_breakdown')"></h3>
               <div class="flex gap-4 flex-wrap">
                 <template x-for="[role, cnt] in Object.entries($store.insights.data.role_breakdown || {})" :key="role">
@@ -200,7 +204,7 @@
           </div>
 
           <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-            <div class="card-body p-5">
+            <div class="card-body p-4 gap-1">
               <h3 class="font-bold text-sm mb-4" x-text="$store.i18n.t('insights_daily_trend')"></h3>
               <div x-show="$store.insights.data.daily_trend.length === 0" class="text-sm text-base-content/70" x-text="$store.i18n.t('monitor_no_data')"></div>
               
@@ -220,7 +224,7 @@
           </div>
 
           <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-            <div class="card-body p-5">
+            <div class="card-body p-4 gap-1">
               <h3 class="font-bold text-sm mb-4" x-text="$store.i18n.t('insights_top_sessions')"></h3>
               <div x-show="$store.insights.data.top_sessions.length === 0" class="text-sm text-base-content/70" x-text="$store.i18n.t('monitor_no_data')"></div>
               <div class="space-y-2">
@@ -238,6 +242,9 @@
         </div>
       </template>
 
+      <details class="collapse collapse-arrow bg-base-200 border border-base-300 mt-6">
+        <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('monitor_export')"></summary>
+        <div class="collapse-content">
       <div class="alert shadow-sm bg-base-200 border border-base-300 mt-6">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
         <div class="flex-1">
@@ -255,6 +262,8 @@
              download="trajectories.jsonl" x-text="$store.i18n.t('monitor_export_jsonl')"></a>
         </div>
       </div>
+        </div>
+      </details>
     </div>
 
     <!-- Agents Tab -->
@@ -276,7 +285,7 @@
           <!-- Agent Metrics -->
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div class="card bg-base-200 border border-base-300 shadow-sm col-span-2 md:col-span-4 hover:border-primary transition-colors">
-              <div class="card-body p-5">
+              <div class="card-body p-4 gap-1">
                 <h3 class="text-sm font-bold mb-4" x-text="$store.i18n.t('agents_status')"></h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -312,7 +321,7 @@
             </div>
 
             <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
-              <div class="card-body p-4">
+              <div class="card-body p-4 gap-1">
                 <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_tools')"></h3>
                 <div class="font-mono font-bold text-2xl" x-text="$store.agents.tools.length"></div>
                 <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_tools_count')"></div>
@@ -320,7 +329,7 @@
             </div>
             
             <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
-              <div class="card-body p-4">
+              <div class="card-body p-4 gap-1">
                 <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_skills')"></h3>
                 <div class="font-mono font-bold text-2xl" x-text="$store.agents.enabledSkillCount"></div>
                 <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_skills_count')"></div>
@@ -328,7 +337,7 @@
             </div>
 
             <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
-              <div class="card-body p-4">
+              <div class="card-body p-4 gap-1">
                 <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_mcp')"></h3>
                 <div class="font-mono font-bold text-2xl" x-text="$store.agents.mcpServers.length"></div>
                 <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_mcp_count')"></div>
@@ -336,7 +345,7 @@
             </div>
 
             <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
-              <div class="card-body p-4">
+              <div class="card-body p-4 gap-1">
                 <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_channels')"></h3>
                 <div class="font-mono font-bold text-2xl" x-text="$store.agents.channels.filter(c=>c.enabled).length"></div>
                 <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_channels_count')"></div>
@@ -345,16 +354,13 @@
           </div>
 
           <!-- MCP Servers List -->
-          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-            <div class="card-body p-5">
-              <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                <span x-text="$store.i18n.t('agents_mcp')"></span>
-                <span class="badge badge-sm badge-ghost" x-text="$store.agents.mcpServers.length"></span>
-              </h3>
+          <details class="collapse collapse-arrow bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('agents_mcp') + ' (' + $store.agents.mcpServers.length + ')'"></summary>
+        <div class="collapse-content">
               
               <div x-show="$store.agents.mcpServers.length === 0" class="text-sm text-base-content/50 py-4 text-center border border-dashed border-base-300 rounded-box" x-text="$store.i18n.t('agents_no_mcp')"></div>
               
-              <div class="space-y-2">
+              <div class="space-y-2 max-h-80 overflow-y-auto min-h-0">
                 <template x-for="srv in $store.agents.mcpServers" :key="srv.id">
                   <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm">
                     <div class="w-2.5 h-2.5 rounded-full shrink-0"
@@ -375,19 +381,16 @@
                 </template>
               </div>
             </div>
-          </div>
+          </details>
 
           <!-- Tools List -->
-          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-            <div class="card-body p-5">
-              <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                <span x-text="$store.i18n.t('agents_tools')"></span>
-                <span class="badge badge-sm badge-ghost" x-text="$store.agents.tools.length"></span>
-              </h3>
+          <details class="collapse collapse-arrow bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('agents_tools') + ' (' + $store.agents.tools.length + ')'"></summary>
+        <div class="collapse-content">
               
               <div x-show="$store.agents.tools.length === 0" class="text-sm text-base-content/50 py-4 text-center border border-dashed border-base-300 rounded-box" x-text="$store.i18n.t('cap_no_tools')"></div>
               
-              <div class="space-y-2">
+              <div class="space-y-2 max-h-80 overflow-y-auto min-h-0">
                 <template x-for="t in $store.agents.tools" :key="t.name">
                   <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm">
                     <!-- 工具名称：mcp__ 前缀转为可读格式 -->
@@ -407,19 +410,16 @@
                 </template>
               </div>
             </div>
-          </div>
+          </details>
 
           <!-- Skills List -->
-          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
-            <div class="card-body p-5">
-              <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                <span x-text="$store.i18n.t('agents_skills')"></span>
-                <span class="badge badge-sm badge-ghost" x-text="`${$store.agents.enabledSkillCount} / ${$store.agents.skills.length}`"></span>
-              </h3>
+          <details class="collapse collapse-arrow bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('agents_skills') + ' (' + $store.agents.skills.length + ')'"></summary>
+        <div class="collapse-content">
 
               <div x-show="$store.agents.skills.length === 0" class="text-sm text-base-content/50 py-4 text-center border border-dashed border-base-300 rounded-box" x-text="$store.i18n.t('cap_no_skills')"></div>
 
-              <div class="space-y-2">
+              <div class="space-y-2 max-h-80 overflow-y-auto min-h-0">
                 <template x-for="sk in $store.agents.skills" :key="sk.name">
                   <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm"
                        :class="!sk.enabled ? 'opacity-50' : ''">
@@ -451,7 +451,7 @@
                 </template>
               </div>
             </div>
-          </div>
+          </details>
 
         </div>
     </div>

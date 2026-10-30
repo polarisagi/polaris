@@ -1,5 +1,5 @@
-<div x-show="$store.nav.page === 'plugins'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100">
-  <div class="max-w-6xl mx-auto w-full flex flex-col">
+<div x-show="$store.nav.page === 'plugins'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 bg-base-100">
+  <div class="max-w-5xl mx-auto w-full flex flex-col">
     
     <!-- Page Header & Filters -->
     <div class="mb-6 border-b border-base-300 pb-4">
@@ -19,7 +19,7 @@
       </div>
 
       <div class="flex flex-wrap gap-4 items-center justify-between">
-        <div role="tablist" class="tabs tabs-boxed">
+        <div role="tablist" class="tabs tabs-boxed flex-wrap h-auto">
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'plugin' }" @click="$store.plugins.setFilter('plugin')" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.setFilter('mcp')" x-text="'🔌 ' + $store.i18n.t('plugins_tab_mcp')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'skill' }" @click="$store.plugins.setFilter('skill')" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></a>
@@ -27,16 +27,21 @@
         </div>
 
         <div class="flex gap-2 w-full md:w-auto">
-          <label for="store-plugins-search" class="input input-bordered input-sm flex items-center gap-2 w-full md:w-64">
+          <label for="store-plugins-search" class="input input-bordered input-sm flex items-center gap-2 w-full md:w-56">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 opacity-70"><path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" /></svg>
             <input id="store-plugins-search" name="store-plugins-search" type="search" class="grow" :placeholder="$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_search_marketplace') : `${$store.i18n.t('plugins_search_prefix')}${$store.plugins.typeLabel($store.plugins.filter)}...`" x-model="$store.plugins.search" @input="$store.plugins.resetVisible()" />
           </label>
+          <details class="dropdown dropdown-end shrink-0">
+            <summary class="btn btn-ghost btn-sm border border-base-300" x-text="$store.i18n.t('ui_manage')"></summary>
+            <div class="dropdown-content z-20 w-60 p-3 bg-base-100 rounded-box border border-base-300 shadow-lg flex flex-col gap-2">
           <button class="btn btn-primary btn-sm" @click="$store.plugins.openCreateModal()" x-text="`+ ${$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_btn_add_market') : $store.i18n.t('plugins_btn_create')}`"></button>
           <button class="btn btn-outline btn-sm" @click="$store.plugins.syncMarketplaces($store.plugins.filter !== 'marketplace')" :disabled="$store.plugins.syncing">
             <span x-show="$store.plugins.syncing" class="loading loading-spinner loading-xs"></span>
             <span x-show="!$store.plugins.syncing" x-text="'⟳ ' + $store.i18n.t('plugins_btn_sync')"></span>
           </button>
           <button x-show="$store.plugins.filter === 'plugin'" class="btn btn-outline btn-sm" @click="$store.plugins.prunePlugins()" x-text="'🧹 ' + $store.i18n.t('plugins_btn_prune')"></button>
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -329,8 +334,8 @@
         <p class="text-sm text-base-content/70 mb-4" x-text="$store.i18n.t('plugins_env_hint')"></p>
         <div class="space-y-4">
           <template x-for="[key] in Object.entries($store.plugins.envPending?.envVars || {})" :key="key">
-            <div class="form-control w-full">
-              <label :for="'env-var-' + key" class="label"><span class="label-text font-bold" x-text="key"></span></label>
+            <div class="flex flex-col gap-2 min-w-0 w-full">
+              <label :for="'env-var-' + key" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="key"></span></label>
               <input :id="'env-var-' + key" :name="'env-var-' + key" type="password" class="input input-bordered w-full" :placeholder="`${$store.i18n.t('plugins_placeholder_env')} ${key}`" :value="$store.plugins.envPending?.envVars[key] || ''" @input="if($store.plugins.envPending) $store.plugins.envPending.envVars[key]=$event.target.value" />
             </div>
           </template>
@@ -368,37 +373,37 @@
       <div class="modal-box bg-base-200 border border-base-300 w-11/12 max-w-lg">
         <h3 class="font-bold text-lg mb-4" x-text="$store.plugins.editingId ? `${$store.i18n.t('plugins_edit_title')} ${$store.plugins.createForm.name}` : `${$store.i18n.t('plugins_create_title')} ${$store.plugins.typeLabel($store.plugins.filter)}`"></h3>
         <div class="space-y-4">
-          <div class="form-control">
-            <label for="store-plugins-createform-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_name')"></span></label>
+          <div class="flex flex-col gap-2 min-w-0">
+            <label for="store-plugins-createform-name" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_name')"></span></label>
             <input id="store-plugins-createform-name" name="store-plugins-createform-name" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.name" :placeholder="$store.i18n.t('plugins_placeholder_name')" />
           </div>
 
-          <div class="form-control" x-show="$store.plugins.filter === 'marketplace'">
-            <label for="store-plugins-createform-description" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_desc')"></span></label>
+          <div class="flex flex-col gap-2 min-w-0" x-show="$store.plugins.filter === 'marketplace'">
+            <label for="store-plugins-createform-description" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_desc')"></span></label>
             <textarea id="store-plugins-createform-description" name="store-plugins-createform-description" class="textarea textarea-bordered h-24" x-model="$store.plugins.createForm.description" :placeholder="$store.i18n.t('plugins_placeholder_desc')"></textarea>
           </div>
 
           <!-- Type specific templates ported directly, just wrapping with DaisyUI classes -->
           <template x-if="['skill', 'plugin'].includes($store.plugins.filter)">
-            <div class="form-control">
-              <label for="store-plugins-createform-source" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_source')"></span></label>
+            <div class="flex flex-col gap-2 min-w-0">
+              <label for="store-plugins-createform-source" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_source')"></span></label>
               <input id="store-plugins-createform-source" name="store-plugins-createform-source" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.source" placeholder="owner/repo@v1 · https://github.com/owner/repo/tree/main/skills/x · npm:@org/plugin" />
-              <label class="label"><span class="label-text-alt opacity-70" x-text="$store.i18n.t('plugins_hint_source')"></span></label>
+              <label class="block text-sm text-base-content/70"><span class="label-text-alt opacity-70" x-text="$store.i18n.t('plugins_hint_source')"></span></label>
             </div>
           </template>
 
           <template x-if="$store.plugins.filter === 'marketplace'">
             <div class="space-y-4">
-              <div class="form-control">
-                <label for="store-plugins-createform-mptype" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_mp_type')"></span></label>
+              <div class="flex flex-col gap-2 min-w-0">
+                <label for="store-plugins-createform-mptype" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_mp_type')"></span></label>
                 <select id="store-plugins-createform-mptype" name="store-plugins-createform-mptype" class="select select-bordered w-full" x-model="$store.plugins.createForm.mp_type">
                   <option value="plugin" x-text="$store.i18n.t('plugins_mp_type_plugin')"></option>
                   <option value="skill" x-text="$store.i18n.t('plugins_mp_type_skill')"></option>
                   <option value="mcp" x-text="$store.i18n.t('plugins_mp_type_mcp')"></option>
                 </select>
               </div>
-              <div class="form-control">
-                <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo_url')"></span></label>
+              <div class="flex flex-col gap-2 min-w-0">
+                <label for="store-plugins-createform-url" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo_url')"></span></label>
                 <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.url" placeholder="owner/repo@main · https://git.example/repo.git · https://…/marketplace.json" />
               </div>
             </div>
@@ -406,8 +411,8 @@
 
           <template x-if="$store.plugins.filter === 'mcp'">
             <div class="space-y-4">
-              <div class="form-control">
-                <label for="store-plugins-createform-transport" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_transport')"></span></label>
+              <div class="flex flex-col gap-2 min-w-0">
+                <label for="store-plugins-createform-transport" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_transport')"></span></label>
                 <select id="store-plugins-createform-transport" name="store-plugins-createform-transport" class="select select-bordered" x-model="$store.plugins.createForm.transport">
                   <option value="stdio">stdio</option>
                   <option value="streamable_http">streamable_http</option>
@@ -417,31 +422,31 @@
               
               <template x-if="$store.plugins.createForm.transport === 'stdio'">
                 <div class="space-y-4">
-                  <div class="form-control">
-                    <label for="store-plugins-createform-command" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_cmd')"></span></label>
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label for="store-plugins-createform-command" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_cmd')"></span></label>
                     <input id="store-plugins-createform-command" name="store-plugins-createform-command" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.command" placeholder="npx, python, etc." />
                   </div>
-                  <div class="form-control">
-                    <label for="store-plugins-createform-args" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_args')"></span></label>
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label for="store-plugins-createform-args" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_args')"></span></label>
                     <input id="store-plugins-createform-args" name="store-plugins-createform-args" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.args" placeholder='["-y", "@modelcontextprotocol/server-filesystem"]' />
                   </div>
                 </div>
               </template>
 
               <template x-if="$store.plugins.createForm.transport === 'sse'">
-                <div class="form-control">
-                  <label for="store-plugins-createform-sse-url" class="label"><span class="label-text font-bold">SSE URL</span></label>
+                <div class="flex flex-col gap-2 min-w-0">
+                  <label for="store-plugins-createform-sse-url" class="block text-sm text-base-content/70"><span class="label-text font-bold">SSE URL</span></label>
                   <input id="store-plugins-createform-sse-url" name="store-plugins-createform-sse-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.url" placeholder="https://..." />
                 </div>
               </template>
 
-              <div class="form-control">
-                <label for="store-plugins-createform-env" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_env')"></span></label>
+              <div class="flex flex-col gap-2 min-w-0">
+                <label for="store-plugins-createform-env" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_env')"></span></label>
                 <input id="store-plugins-createform-env" name="store-plugins-createform-env" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.env" placeholder='{"API_KEY": "value"}' />
               </div>
 
-              <div class="form-control" x-show="$store.plugins.createForm.transport !== 'stdio'">
-                <label for="store-plugins-createform-headers" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_headers')"></span></label>
+              <div class="flex flex-col gap-2 min-w-0" x-show="$store.plugins.createForm.transport !== 'stdio'">
+                <label for="store-plugins-createform-headers" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_headers')"></span></label>
                 <input id="store-plugins-createform-headers" name="store-plugins-createform-headers" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.headers" placeholder='{"Authorization": "Bearer ..."}' />
                 <p class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('plugins_label_headers_hint')"></p>
               </div>
@@ -453,24 +458,24 @@
                 <input type="checkbox" />
                 <div class="collapse-title font-bold text-sm" x-text="$store.i18n.t('plugins_mcp_oauth_section')"></div>
                 <div class="collapse-content space-y-3">
-                  <div class="form-control">
-                    <label for="store-plugins-oauth-client-id" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_client_id')"></span></label>
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label for="store-plugins-oauth-client-id" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_client_id')"></span></label>
                     <input id="store-plugins-oauth-client-id" name="store-plugins-oauth-client-id" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthClientId" />
                   </div>
-                  <div class="form-control">
-                    <label for="store-plugins-oauth-client-secret" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_client_secret')"></span></label>
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label for="store-plugins-oauth-client-secret" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_client_secret')"></span></label>
                     <input id="store-plugins-oauth-client-secret" name="store-plugins-oauth-client-secret" type="password" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthClientSecret" :disabled="$store.plugins.createForm.oauthClearSecret" :placeholder="$store.plugins.createForm.oauthHasClientSecret ? $store.i18n.t('plugins_mcp_oauth_secret_placeholder') : ''" />
                     <label class="label cursor-pointer justify-start gap-2" x-show="$store.plugins.createForm.oauthHasClientSecret">
                       <input type="checkbox" class="checkbox checkbox-xs" x-model="$store.plugins.createForm.oauthClearSecret" />
                       <span class="label-text-alt" x-text="$store.i18n.t('plugins_mcp_oauth_clear_secret')"></span>
                     </label>
                   </div>
-                  <div class="form-control">
-                    <label for="store-plugins-oauth-metadata-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_metadata_url')"></span></label>
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label for="store-plugins-oauth-metadata-url" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_metadata_url')"></span></label>
                     <input id="store-plugins-oauth-metadata-url" name="store-plugins-oauth-metadata-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthAuthServerMetadataUrl" placeholder="https://as.example.com/.well-known/oauth-authorization-server" />
                   </div>
-                  <div class="form-control">
-                    <label for="store-plugins-oauth-scopes" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_scopes')"></span></label>
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label for="store-plugins-oauth-scopes" class="block text-sm text-base-content/70"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_mcp_oauth_scopes')"></span></label>
                     <input id="store-plugins-oauth-scopes" name="store-plugins-oauth-scopes" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.oauthScopes" placeholder="read write" />
                   </div>
                 </div>
@@ -607,8 +612,8 @@
                     <div x-show="(sc.options||[]).length === 0" class="text-xs text-base-content/50" x-text="$store.i18n.t('plugin_detail_config_empty')"></div>
                     <div class="flex flex-col gap-3">
                       <template x-for="opt in (sc.options||[])" :key="opt.key">
-                        <div class="form-control">
-                          <label class="label py-1">
+                        <div class="flex flex-col gap-2 min-w-0">
+                          <label class="block text-sm text-base-content/70 py-1">
                             <span class="label-text text-xs" x-text="opt.title + (opt.required ? ' *' : '')"></span>
                             <span x-show="opt.sensitive && $store.plugins.isConfigSet(sc.scope, opt.key)" class="badge badge-success badge-xs" x-text="$store.i18n.t('plugin_detail_config_sensitive_set')"></span>
                           </label>

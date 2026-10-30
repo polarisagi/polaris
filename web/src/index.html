@@ -11,17 +11,20 @@
 <div class="drawer drawer-end h-full" x-data>
   <input id="logs-drawer" type="checkbox" class="drawer-toggle" x-model="$store.logs.drawerOpen" />
   <div class="drawer-content flex flex-col h-full min-h-0">
-    <div id="app" class="flex flex-1 w-full h-full min-h-0">
+    <div id="app" class="drawer lg:drawer-open flex-1 w-full h-full min-h-0" x-data="{ navOpen: false }">
+      <input id="nav-drawer" type="checkbox" class="drawer-toggle" x-model="navOpen" :aria-label="$store.i18n.t('ui_navigation')">
 
   <!-- ── 侧边栏 ────────────────────────────────────── -->
-  <aside id="sidebar" class="w-64 bg-base-200/50 border-r border-base-300 flex flex-col flex-shrink-0">
+  <div class="drawer-side z-40">
+    <label for="nav-drawer" class="drawer-overlay" :aria-label="$store.i18n.t('ui_close_navigation')"></label>
+  <aside id="sidebar" class="w-64 min-h-full bg-base-100 border-r border-base-300 flex flex-col" @click="if ($event.target.closest('a[href]')) navOpen = false">
     <div class="p-6 pb-2">
       <div class="flex flex-row items-center gap-2">
         <h1 class="text-xl font-bold tracking-widest text-primary flex items-center gap-2">
           ⭐ Polaris
         </h1>
       </div>
-      <p class="text-[10px] text-base-content/70 mt-1 uppercase tracking-widest font-semibold">AI Agent Harness</p>
+      <p class="text-[10px] text-base-content/70 mt-1 uppercase tracking-widest font-semibold"><span x-text="$store.i18n.t('ui_tagline')"></span></p>
     </div>
 
     <!-- Menu -->
@@ -167,35 +170,43 @@
       </div>
     </div>
   </aside>
+  </div>
 
   <!-- ── 主内容区 ──────────────────────────────────── -->
-  <main class="flex-1 flex flex-col min-w-0 bg-base-100 relative">
+  <main class="drawer-content flex flex-col min-w-0 min-h-0 h-full bg-base-100 relative">
     
     <!-- ── 顶部状态栏 ────────────────────────── -->
-    <header class="navbar min-h-12 h-14 bg-base-100/80 backdrop-blur border-b border-base-300 px-4 text-xs font-mono text-base-content/70 flex gap-4 shrink-0 z-10"
+    <header class="navbar min-h-12 h-14 bg-base-100/80 backdrop-blur border-b border-base-300 px-4 text-xs text-base-content/70 flex gap-3 shrink-0 z-10"
             :class="$store.statusBar.sealed ? 'bg-error text-error-content border-error' : ''">
+      <label for="nav-drawer" class="btn btn-square btn-ghost btn-sm lg:hidden shrink-0" :aria-label="$store.i18n.t('ui_navigation')" role="button" tabindex="0" @keydown.enter.prevent="navOpen = !navOpen" @keydown.space.prevent="navOpen = !navOpen">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </label>
       <!-- Sealed 模式 -->
       <div x-show="$store.statusBar.sealed" x-cloak class="font-bold tracking-widest text-sm">
         ⚠ SEALED — 服务器已封印，所有操作暂停。请联系管理员解封。
       </div>
 
       <!-- 正常模式 -->
-      <div x-show="!$store.statusBar.sealed" class="flex items-center gap-3 w-full">
+      <div x-show="!$store.statusBar.sealed" class="flex items-center gap-2 sm:gap-3 w-full min-w-0">
         <div class="flex items-center gap-2">
           <div class="w-2 h-2 rounded-full" :class="$store.statusBar.connected ? 'bg-success shadow-[0_0_8px_rgba(0,255,0,0.5)]' : 'bg-error'"></div>
           <span x-text="$store.statusBar.connected ? $store.i18n.t('status_conn_ok') : $store.i18n.t('status_conn_fail')"></span>
         </div>
         <div class="divider divider-horizontal mx-0"></div>
-        <span x-text="$store.statusBar.modelID || '未知模型'"></span>
+        <span class="truncate min-w-0 max-w-32 sm:max-w-xs" :title="$store.statusBar.modelID" x-text="$store.statusBar.modelID || $store.i18n.t('ui_no_model')"></span>
         
+        <span x-show="$store.statusBar.tokenBadge" class="badge badge-xs" :class="$store.statusBar.tokenBadge?.cls" x-text="$store.statusBar.tokenBadge?.label"></span>
+        <details class="dropdown shrink-0">
+          <summary class="btn btn-ghost btn-xs" x-text="$store.i18n.t('ui_status_details')"></summary>
+          <div class="dropdown-content z-30 w-72 max-w-[80vw] p-4 bg-base-100 rounded-box border border-base-300 shadow-lg flex flex-col gap-2 text-xs break-words">
         <template x-if="$store.statusBar.sessionID">
           <div class="flex items-center gap-3">
-            <div class="divider divider-horizontal mx-0"></div>
+            <div class="divider my-0 h-px"></div>
             <span x-text="`session: ${$store.statusBar.sessionID.slice(0,12)}`"></span>
           </div>
         </template>
         
-        <div class="divider divider-horizontal mx-0"></div>
+        <div class="divider my-0 h-px"></div>
         <div class="flex items-center gap-2" :title="$store.i18n.t('status_ctx_title')">
           <!-- 有会话：上下文占用（最近一次请求的输入 / 模型窗口）；无会话：今日全局累计 -->
           <template x-if="$store.statusBar.usageScope === 'session' && $store.statusBar.tokenLimit > 0">
@@ -207,15 +218,18 @@
           <template x-if="$store.statusBar.usageScope !== 'session'">
             <span x-text="`${$store.i18n.t('status_today')}: ${$store.fmt.tok($store.statusBar.usage?.input)} ${$store.i18n.t('usage_in')} · ${$store.fmt.tok($store.statusBar.usage?.output)} ${$store.i18n.t('usage_out')}`"></span>
           </template>
-          <span x-show="$store.statusBar.tokenBadge" class="badge badge-xs" :class="$store.statusBar.tokenBadge?.cls" x-text="$store.statusBar.tokenBadge?.label"></span>
+
         </div>
         <template x-if="$store.statusBar.usageScope === 'session' && $store.statusBar.usage">
-          <span class="hidden md:inline text-base-content/60"
+          <span class="text-base-content/60"
                 x-text="`${$store.fmt.tok($store.statusBar.usage.input)} ${$store.i18n.t('usage_in')} · ${$store.fmt.pct($store.statusBar.usage.cache_hit_ratio)} ${$store.i18n.t('usage_hit')} · ${$store.fmt.tok($store.statusBar.usage.output)} ${$store.i18n.t('usage_out')}`"></span>
         </template>
 
-        <div class="divider divider-horizontal mx-0"></div>
-        <span x-text="`mem: ${$store.statusBar.memoryMB}MB`"></span>
+        <div class="divider my-0 h-px"></div>
+        <span x-text="`${$store.i18n.t('status_memory')}: ${$store.statusBar.memoryMB}MB`"></span>
+
+          </div>
+        </details>
 
         <!-- 语音模型进度/状态 Chip (ADR-0108) -->
         <div x-show="$store.audio.chipVisible" x-cloak class="dropdown dropdown-hover dropdown-bottom dropdown-end">
@@ -302,7 +316,7 @@
           </div>
         </div>
 
-        <span class="ml-auto font-bold" :title="$store.fmt.hint"
+        <span class="ml-auto font-medium shrink-0 whitespace-nowrap" :title="$store.fmt.hint"
               x-text="`≈${$store.fmt.money($store.statusBar.costUSD)}${$store.statusBar.usageScope === 'session' ? '' : ' / ' + $store.i18n.t('status_today')}`"></span>
       </div>
     </header>

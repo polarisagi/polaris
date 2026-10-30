@@ -23,6 +23,6 @@
 }
 
 :root, [data-theme] {
-  --radius-box: 2.5rem !important;
-  --radius-field: 1.25rem !important;
+  --radius-box: 1rem !important;
+  --radius-field: 0.75rem !important;
 }

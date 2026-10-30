@@ -1,11 +1,11 @@
-<div x-show="$store.nav.page === 'automation'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100"
+<div x-show="$store.nav.page === 'automation'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 bg-base-100"
   x-data="{ tab: 'routine', _cronLoaded: false, _approvalsLoaded: false, _wfLoaded: false }">
-  <div class="max-w-5xl mx-auto w-full flex flex-col">
-    <div class="mb-8 border-b border-base-300 pb-4">
+  <div class="max-w-4xl mx-auto w-full flex flex-col">
+    <div class="mb-6 border-b border-base-300 pb-4">
       <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_automation')"></h2>
 
       <!-- Tabs -->
-      <div role="tablist" class="tabs tabs-boxed">
+      <div role="tablist" class="tabs tabs-boxed flex-wrap h-auto">
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'routine' }" @click="tab = 'routine'; if (!_cronLoaded) { $store.cron.load(); _cronLoaded = true }" x-text="$store.i18n.t('automation_tab_routine')"></a>
         <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'workflow' }"
            @click="tab = 'workflow'; if (!_wfLoaded) { $store.workflow.load(); _wfLoaded = true }"
@@ -26,7 +26,7 @@
 
     <!-- Routine Tab -->
     <div x-show="tab === 'routine'" class="space-y-6">
-      <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+      <div class="flex flex-wrap gap-3 justify-between items-center bg-base-200 p-4 rounded-box border border-base-300">
         <div>
           <h3 class="font-bold text-lg" x-text="$store.i18n.t('automation_tasks_title')"></h3>
           <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('automation_tasks_desc')"></p>
@@ -178,7 +178,7 @@
                 <span x-text="$store.i18n.t('chat_approval_remember').replace('{0}', req.remember_label)"></span>
               </label>
 
-              <input id="comment" name="comment" type="text" class="input input-sm input-bordered w-full text-xs mt-2" :placeholder="$store.i18n.t('tasks_note_optional')" x-model="comment" />
+              <input id="comment" name="comment" type="text" class="input input-sm input-bordered w-full w-full text-xs mt-2" :placeholder="$store.i18n.t('tasks_note_optional')" x-model="comment" />
 
               <div class="card-actions justify-between items-center mt-4 pt-4 border-t border-base-300">
                 <div class="font-mono text-sm font-bold" :class="remaining > 60000 ? 'text-success' : remaining > 0 ? 'text-warning' : 'text-error'" x-text="remaining > 0 ? (remaining >= 3600000 ? `⏱ ${Math.floor(remaining/3600000)}h ${String(Math.floor((remaining%3600000)/60000)).padStart(2,'0')}m` : `⏱ ${Math.floor(remaining/60000)}:${String(Math.floor((remaining%60000)/1000)).padStart(2,'0')}`) : '⌛ ' + $store.i18n.t('automation_approvals_timeout')"></div>
@@ -197,7 +197,7 @@
   <div x-show="tab === 'workflow'" class="space-y-6">
 
     <!-- 头部：标题 + 新建按钮 -->
-    <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+    <div class="flex flex-wrap gap-3 justify-between items-center bg-base-200 p-4 rounded-box border border-base-300">
       <div>
         <h3 class="font-bold text-lg" x-text="$store.i18n.t('wf_title')"></h3>
         <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('wf_desc')"></p>
@@ -298,47 +298,53 @@
 
   <!-- ═══════════════════════════════════════════════ 例行任务 创建/编辑 Modal -->
   <dialog id="cron_modal" class="modal" x-effect="$store.cron.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.cron.showModal = false" x-cloak>
-    <div class="modal-box w-11/12 max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="modal-box w-11/12 max-w-2xl max-h-[90vh] flex flex-col">
       <h3 class="font-bold text-lg mb-4" x-text="$store.cron.editMode === 'create' ? $store.i18n.t('auto_modal_create') : $store.i18n.t('auto_modal_edit')"></h3>
-      <div class="space-y-4">
-        <div class="form-control">
-          <label for="cron-f-name" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_name')"></span></label>
-          <input id="cron-f-name" name="cron-f-name" type="text" class="input input-bordered" x-model="$store.cron.form.name">
+      <div class="space-y-4 overflow-y-auto min-h-0 pr-1">
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="cron-f-name" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_name')"></span></label>
+          <input id="cron-f-name" name="cron-f-name" type="text" class="input input-bordered w-full" x-model="$store.cron.form.name">
         </div>
-        <div class="form-control">
-          <label for="cron-f-prompt" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_prompt')"></span></label>
-          <textarea id="cron-f-prompt" name="cron-f-prompt" rows="4" class="textarea textarea-bordered" x-model="$store.cron.form.prompt"></textarea>
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="cron-f-prompt" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_prompt')"></span></label>
+          <textarea id="cron-f-prompt" name="cron-f-prompt" rows="4" class="textarea textarea-bordered w-full" x-model="$store.cron.form.prompt"></textarea>
         </div>
-        <div class="form-control">
-          <label for="cron-f-trigger" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
-          <select id="cron-f-trigger" name="cron-f-trigger" class="select select-bordered" x-model="$store.cron.form.trigger_type">
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="cron-f-trigger" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
+          <select id="cron-f-trigger" name="cron-f-trigger" class="select select-bordered w-full" x-model="$store.cron.form.trigger_type">
             <option value="cron" x-text="$store.i18n.t('wf_trigger_cron')"></option>
             <option value="webhook" x-text="$store.i18n.t('auto_trigger_webhook')"></option>
             <option value="both" x-text="$store.i18n.t('auto_trigger_both')"></option>
             <option value="manual" x-text="$store.i18n.t('wf_trigger_manual')"></option>
           </select>
         </div>
-        <div class="form-control" x-show="['cron','both'].includes($store.cron.form.trigger_type)">
-          <label for="cron-f-presets" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
-          <select id="cron-f-presets" name="cron-f-presets" class="select select-bordered mb-2" @change="$store.cron.form.cron_schedule = $event.target.value">
+        <div class="flex flex-col gap-2 min-w-0" x-show="['cron','both'].includes($store.cron.form.trigger_type)">
+          <label for="cron-f-presets" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
+          <select id="cron-f-presets" name="cron-f-presets" class="select select-bordered w-full mb-2" @change="$store.cron.form.cron_schedule = $event.target.value">
             <template x-for="p in $store.cron.schedulePresets" :key="p.value">
               <option :value="p.value" :selected="$store.cron.form.cron_schedule === p.value" x-text="p.label"></option>
             </template>
           </select>
-          <input name="cron-f-schedule" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.cron_schedule" placeholder="0 9 * * 1-5">
+          <details class="text-sm">
+            <summary class="cursor-pointer text-base-content/60" x-text="$store.i18n.t('ui_custom_schedule')"></summary>
+            <div class="mt-2"><input name="cron-f-schedule" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.cron.form.cron_schedule" placeholder="0 9 * * 1-5"></div>
+          </details>
         </div>
-        <div class="form-control" x-show="['webhook','both'].includes($store.cron.form.trigger_type)">
-          <label for="cron-f-channel" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_channel')"></span></label>
-          <input id="cron-f-channel" name="cron-f-channel" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.channel_id">
+        <div class="flex flex-col gap-2 min-w-0" x-show="['webhook','both'].includes($store.cron.form.trigger_type)">
+          <label for="cron-f-channel" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_channel')"></span></label>
+          <input id="cron-f-channel" name="cron-f-channel" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.cron.form.channel_id">
         </div>
-        <div class="form-control">
-          <label for="cron-f-workdir" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_workdir')"></span></label>
-          <input id="cron-f-workdir" name="cron-f-workdir" type="text" class="input input-bordered font-mono text-sm" x-model="$store.cron.form.working_dir">
+        <details class="collapse collapse-arrow border border-base-300 bg-base-200/40">
+          <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('ui_advanced_options')"></summary>
+          <div class="collapse-content space-y-4">
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="cron-f-workdir" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_workdir')"></span></label>
+          <input id="cron-f-workdir" name="cron-f-workdir" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.cron.form.working_dir">
         </div>
         <!-- 所属项目：运行产生的会话归入该项目；无人值守审批的「以后不再询问」按它记忆 -->
-        <div class="form-control">
-          <label for="cron-f-project" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_project')"></span></label>
-          <select id="cron-f-project" name="cron-f-project" class="select select-bordered" x-model="$store.cron.form.project_id">
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="cron-f-project" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_project')"></span></label>
+          <select id="cron-f-project" name="cron-f-project" class="select select-bordered w-full" x-model="$store.cron.form.project_id">
             <template x-for="p in $store.projects.active" :key="p.id">
               <option :value="p.id" :selected="p.id === $store.cron.form.project_id" x-text="p.name"></option>
             </template>
@@ -346,29 +352,31 @@
           <p class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('auto_project_hint')"></p>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div class="form-control">
-            <label for="cron-f-effort" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_effort')"></span></label>
-            <select id="cron-f-effort" name="cron-f-effort" class="select select-bordered" x-model="$store.cron.form.reasoning_effort">
+          <div class="flex flex-col gap-2 min-w-0">
+            <label for="cron-f-effort" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_effort')"></span></label>
+            <select id="cron-f-effort" name="cron-f-effort" class="select select-bordered w-full" x-model="$store.cron.form.reasoning_effort">
               <template x-for="r in $store.cron.reasoningLevels" :key="r.value">
                 <option :value="r.value" :selected="r.value === $store.cron.form.reasoning_effort" x-text="r.label + ' · ' + r.desc"></option>
               </template>
             </select>
           </div>
-          <div class="form-control">
-            <label for="cron-f-result" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('auto_field_result')"></span></label>
-            <select id="cron-f-result" name="cron-f-result" class="select select-bordered" x-model="$store.cron.form.result_action">
+          <div class="flex flex-col gap-2 min-w-0">
+            <label for="cron-f-result" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('auto_field_result')"></span></label>
+            <select id="cron-f-result" name="cron-f-result" class="select select-bordered w-full" x-model="$store.cron.form.result_action">
               <template x-for="r in $store.cron.resultActions" :key="r.value">
                 <option :value="r.value" :selected="r.value === $store.cron.form.result_action" x-text="r.label"></option>
               </template>
             </select>
           </div>
         </div>
-        <div class="form-control flex-row items-center gap-3">
+          </div>
+        </details>
+        <div class="flex items-center gap-3">
           <input type="checkbox" name="cron-f-enabled" class="toggle toggle-primary" x-model="$store.cron.form.enabled">
-          <span class="label-text" x-text="$store.i18n.t('wf_field_enabled')"></span>
+          <span class="text-sm" x-text="$store.i18n.t('wf_field_enabled')"></span>
         </div>
       </div>
-      <div class="modal-action mt-6">
+      <div class="modal-action mt-4 shrink-0">
         <button type="button" class="btn btn-ghost" @click="$store.cron.showModal = false" x-text="$store.i18n.t('cancel')"></button>
         <button type="button" class="btn btn-primary" @click="$store.cron.save()" x-text="$store.i18n.t('save')"></button>
       </div>
@@ -378,61 +386,69 @@
 
   <!-- ═══════════════════════════════════════════════ Workflow 创建/编辑 Modal -->
   <dialog id="workflow_modal" class="modal" x-effect="$store.workflow.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.workflow.showModal = false" x-cloak>
-    <div class="modal-box w-11/12 max-w-3xl max-h-[90vh] overflow-y-auto">
+    <div class="modal-box w-11/12 max-w-3xl max-h-[90vh] flex flex-col">
       <h3 class="font-bold text-lg mb-4"
         x-text="$store.workflow.editMode === 'create' ? $store.i18n.t('wf_modal_create') : $store.i18n.t('wf_modal_edit')">
       </h3>
 
-      <div class="space-y-4">
+      <div class="space-y-4 overflow-y-auto min-h-0 pr-1">
         <!-- 基础信息 -->
-        <div class="form-control">
-          <label for="auto-id-automation-1" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_name')"></span></label>
-          <input id="auto-id-automation-1" type="text" class="input input-bordered" x-model="$store.workflow.form.name"
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="auto-id-automation-1" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_name')"></span></label>
+          <input id="auto-id-automation-1" type="text" class="input input-bordered w-full" x-model="$store.workflow.form.name"
             :placeholder="$store.i18n.t('wf_ph_name')">
         </div>
 
-        <div class="form-control">
-          <label for="auto-id-automation-2" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_desc')"></span></label>
-          <input id="auto-id-automation-2" type="text" class="input input-bordered" x-model="$store.workflow.form.description"
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="auto-id-automation-2" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_desc')"></span></label>
+          <input id="auto-id-automation-2" type="text" class="input input-bordered w-full" x-model="$store.workflow.form.description"
             :placeholder="$store.i18n.t('wf_ph_desc')">
         </div>
 
         <!-- 触发类型 -->
-        <div class="form-control">
-          <label for="auto-id-automation-3" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
-          <select id="auto-id-automation-3" class="select select-bordered" x-model="$store.workflow.form.trigger_type">
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="auto-id-automation-3" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_trigger')"></span></label>
+          <select id="auto-id-automation-3" class="select select-bordered w-full" x-model="$store.workflow.form.trigger_type">
             <option value="manual" x-text="$store.i18n.t('wf_trigger_manual')"></option>
             <option value="cron" x-text="$store.i18n.t('wf_trigger_cron')"></option>
           </select>
         </div>
 
-        <div class="form-control" x-show="$store.workflow.form.trigger_type === 'cron'">
-          <label for="auto-id-automation-4" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
-          <select id="auto-id-automation-4" class="select select-bordered mb-2" @change="$store.workflow.form.cron_schedule = $event.target.value">
+        <div class="flex flex-col gap-2 min-w-0" x-show="$store.workflow.form.trigger_type === 'cron'">
+          <label for="auto-id-automation-4" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_schedule')"></span></label>
+          <select id="auto-id-automation-4" class="select select-bordered w-full mb-2" @change="$store.workflow.form.cron_schedule = $event.target.value">
             <template x-for="p in $store.workflow.schedulePresets" :key="p.value">
               <option :value="p.value" :selected="$store.workflow.form.cron_schedule === p.value" x-text="p.label"></option>
             </template>
           </select>
-          <input name="wf-cron-schedule" type="text" class="input input-bordered font-mono text-sm" x-model="$store.workflow.form.cron_schedule"
-            placeholder="0 9 * * 1-5">
+          <details class="text-sm">
+            <summary class="cursor-pointer text-base-content/60" x-text="$store.i18n.t('ui_custom_schedule')"></summary>
+            <div class="mt-2"><input name="wf-cron-schedule" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.workflow.form.cron_schedule"
+            placeholder="0 9 * * 1-5"></div>
+          </details>
         </div>
 
         <!-- 启用开关 -->
-        <div class="form-control flex-row items-center gap-3">
+        <div class="flex items-center gap-3">
           <input type="checkbox" name="wf-form-enabled" class="toggle toggle-primary" x-model="$store.workflow.form.enabled">
-          <span class="label-text" x-text="$store.i18n.t('wf_field_enabled')"></span>
+          <span class="text-sm" x-text="$store.i18n.t('wf_field_enabled')"></span>
         </div>
 
+        <details class="collapse collapse-arrow border border-base-300 bg-base-200/40" :open="$store.workflow.form.type === 'dag'">
+          <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('ui_execution_options')"></summary>
+          <div class="collapse-content space-y-4">
         <!-- 执行模式：chain（顺序）| dag（并行，支持依赖 + 失败重试） -->
-        <div class="form-control">
-          <label for="auto-id-automation-wftype" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_type')"></span></label>
-          <select id="auto-id-automation-wftype" class="select select-bordered" x-model="$store.workflow.form.type">
+        <div class="flex flex-col gap-2 min-w-0">
+          <label for="auto-id-automation-wftype" class="block text-sm text-base-content/60"><span class="font-medium" x-text="$store.i18n.t('wf_field_type')"></span></label>
+          <select id="auto-id-automation-wftype" class="select select-bordered w-full" x-model="$store.workflow.form.type">
             <option value="chain" x-text="$store.i18n.t('wf_type_chain')"></option>
             <option value="dag" x-text="$store.i18n.t('wf_type_dag')"></option>
           </select>
           <p class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('wf_type_hint')"></p>
         </div>
 
+          </div>
+        </details>
         <!-- 步骤编辑器 -->
         <div>
           <div class="flex justify-between items-center mb-3">
@@ -447,12 +463,60 @@
                 <div class="flex justify-between items-center mb-3">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="badge badge-neutral badge-sm font-mono" x-text="`步骤 ${idx + 1}`"></span>
-                    <span class="badge badge-sm font-bold uppercase font-mono"
-                      :class="$store.workflow.kindBadgeClass(step.kind)"
-                      x-text="step.kind || 'agent'"></span>
-                    <select class="select select-xs select-bordered font-mono" x-model="step.kind">
+
+                  </div>
+                  <button class="btn btn-xs btn-ghost text-error"
+                    @click="$store.workflow.removeStep(idx)"
+                    :disabled="$store.workflow.form.steps.length <= 1">✕</button>
+                </div>
+
+                <div class="grid grid-cols-1 gap-3 mb-3">
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label class="block text-sm text-base-content/60"><span class="text-xs" x-text="$store.i18n.t('wf_step_name')"></span></label>
+                    <input type="text" class="input input-sm input-bordered w-full" x-model="step.name"
+                      :placeholder="$store.i18n.t('wf_step_ph_name')">
+                  </div>
+
+                </div>
+
+                <div class="flex flex-col gap-2 min-w-0 mb-3" x-show="step.kind === 'agent' || step.kind === 'llm'">
+                  <label class="block text-sm text-base-content/60">
+                    <span class="text-xs" x-text="$store.i18n.t('wf_step_prompt')"></span>
+                  </label>
+                  <textarea class="textarea textarea-bordered w-full text-sm min-h-[80px]"
+                    x-model="step.prompt"
+                    :placeholder="$store.i18n.t('wf_step_ph_prompt')"></textarea>
+                </div>
+
+                <!-- Config JSON 编辑器 (针对非 agent 步骤) -->
+                <div class="flex flex-col gap-2 min-w-0 mb-3" x-show="step.kind !== 'agent'">
+                  <label class="flex flex-wrap items-center justify-between gap-1 text-base-content/60">
+                    <span class="text-xs font-mono font-medium" x-text="$store.i18n.t('wf_step_config_json')"></span>
+                    <span class="text-xs text-base-content/50" x-show="step.kind === 'tool'">{"tool":"feed_fetch","args":{...}}</span>
+                    <span class="text-xs text-base-content/50" x-show="step.kind === 'transform'">{"needs":["..."],"ops":[...]}</span>
+                    <span class="text-xs text-base-content/50" x-show="step.kind === 'llm'">{"needs":["..."],"input":"...","fields":[...]}</span>
+                  </label>
+                  <textarea class="textarea textarea-bordered w-full font-mono text-xs min-h-[100px] leading-relaxed"
+                    x-model="step.config_text"
+                    :placeholder="$store.i18n.t('wf_step_config_json')"></textarea>
+                  <div class="text-xs text-error mt-1 font-mono" x-show="step.config_error" x-text="step.config_error"></div>
+                </div>
+
+        <details class="collapse collapse-arrow border border-base-300 bg-base-200/40">
+          <summary class="collapse-title text-sm font-medium" x-text="$store.i18n.t('ui_step_options')"></summary>
+          <div class="collapse-content space-y-4">
+                  <div class="flex flex-col gap-2 min-w-0" x-show="step.kind === 'agent' || step.kind === 'llm'">
+                    <label class="block text-sm text-base-content/60"><span class="text-xs" x-text="$store.i18n.t('wf_step_reasoning')"></span></label>
+                    <select class="select select-sm select-bordered w-full" x-model="step.reasoning_effort">
+                      <template x-for="r in $store.workflow.reasoningLevels" :key="r.value">
+                        <option :value="r.value" x-text="r.label"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <select class="select select-sm w-full" :aria-label="$store.i18n.t('ui_step_kind')" x-model="step.kind">
                       <template x-for="k in $store.workflow.stepKinds" :key="k.value">
-                        <option :value="k.value" :selected="step.kind === k.value" x-text="k.label"></option>
+                        <option :value="k.value" :selected="step.kind === k.value" x-text="$store.i18n.t('ui_step_kind_' + k.value)"></option>
                       </template>
                     </select>
                     <input type="text" class="input input-xs input-bordered font-mono w-28"
@@ -465,71 +529,27 @@
                         :disabled="idx === $store.workflow.form.steps.length - 1" title="下移">↓</button>
                     </div>
                   </div>
-                  <button class="btn btn-xs btn-ghost text-error"
-                    @click="$store.workflow.removeStep(idx)"
-                    :disabled="$store.workflow.form.steps.length <= 1">✕</button>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                  <div class="form-control">
-                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_name')"></span></label>
-                    <input type="text" class="input input-sm input-bordered" x-model="step.name"
-                      :placeholder="$store.i18n.t('wf_step_ph_name')">
-                  </div>
-                  <div class="form-control" x-show="step.kind === 'agent' || step.kind === 'llm'">
-                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_reasoning')"></span></label>
-                    <select class="select select-sm select-bordered" x-model="step.reasoning_effort">
-                      <template x-for="r in $store.workflow.reasoningLevels" :key="r.value">
-                        <option :value="r.value" x-text="r.label"></option>
-                      </template>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="form-control mb-3" x-show="step.kind === 'agent' || step.kind === 'llm'">
-                  <label class="label pb-1">
-                    <span class="label-text text-xs" x-text="$store.i18n.t('wf_step_prompt')"></span>
-                  </label>
-                  <textarea class="textarea textarea-bordered text-sm min-h-[80px]"
-                    x-model="step.prompt"
-                    :placeholder="$store.i18n.t('wf_step_ph_prompt')"></textarea>
-                </div>
-
-                <!-- Config JSON 编辑器 (针对非 agent 步骤) -->
-                <div class="form-control mb-3" x-show="step.kind !== 'agent'">
-                  <label class="label pb-1 flex justify-between">
-                    <span class="label-text text-xs font-mono font-medium" x-text="$store.i18n.t('wf_step_config_json')"></span>
-                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'tool'">{"tool":"feed_fetch","args":{...}}</span>
-                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'transform'">{"needs":["..."],"ops":[...]}</span>
-                    <span class="label-text-alt text-xs text-base-content/50" x-show="step.kind === 'llm'">{"needs":["..."],"input":"...","fields":[...]}</span>
-                  </label>
-                  <textarea class="textarea textarea-bordered font-mono text-xs min-h-[100px] leading-relaxed"
-                    x-model="step.config_text"
-                    :placeholder="$store.i18n.t('wf_step_config_json')"></textarea>
-                  <div class="text-xs text-error mt-1 font-mono" x-show="step.config_error" x-text="step.config_error"></div>
-                </div>
-
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" x-show="step.kind === 'agent'">
-                  <div class="form-control">
-                    <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_workdir')"></span></label>
-                    <input type="text" class="input input-sm input-bordered font-mono" x-model="step.working_dir"
+                  <div class="flex flex-col gap-2 min-w-0">
+                    <label class="block text-sm text-base-content/60"><span class="text-xs" x-text="$store.i18n.t('wf_step_workdir')"></span></label>
+                    <input type="text" class="input input-sm input-bordered w-full font-mono" x-model="step.working_dir"
                       placeholder="/Users/me/project">
                   </div>
-                  <div class="form-control flex-row items-end gap-2 pb-1">
+                  <div class="flex items-end gap-2 pb-1">
                     <input type="checkbox" name="step-input-prev" class="checkbox checkbox-sm checkbox-primary" x-model="step.input_from_prev">
-                    <span class="label-text text-xs" x-text="$store.i18n.t('wf_step_input_prev')"></span>
+                    <span class="text-xs" x-text="$store.i18n.t('wf_step_input_prev')"></span>
                   </div>
                 </div>
 
                 <!-- 失败重试次数：chain/dag 均生效（附加自环条件边） -->
-                <div class="form-control mt-3 max-w-[200px]">
-                  <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_max_retries')"></span></label>
-                  <input type="number" min="0" max="10" class="input input-sm input-bordered" x-model.number="step.max_retries">
+                <div class="flex flex-col gap-2 min-w-0 mt-3 max-w-[200px]">
+                  <label class="block text-sm text-base-content/60"><span class="text-xs" x-text="$store.i18n.t('wf_step_max_retries')"></span></label>
+                  <input type="number" min="0" max="10" class="input input-sm input-bordered w-full" x-model.number="step.max_retries">
                 </div>
 
                 <!-- 依赖步骤：仅并行 DAG 模式生效 -->
-                <div class="form-control mt-3" x-show="$store.workflow.form.type === 'dag'">
-                  <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_depends_on')"></span></label>
+                <div class="flex flex-col gap-2 min-w-0 mt-3" x-show="$store.workflow.form.type === 'dag'">
+                  <label class="block text-sm text-base-content/60"><span class="text-xs" x-text="$store.i18n.t('wf_step_depends_on')"></span></label>
                   <div class="flex flex-wrap gap-2">
                     <template x-for="(other, oIdx) in $store.workflow.form.steps" :key="oIdx">
                       <label class="btn btn-xs" :class="(step.depends_on || []).includes(String(oIdx)) ? 'btn-primary' : 'btn-outline'"
@@ -543,6 +563,8 @@
                     <span class="text-xs text-base-content/50 self-center" x-show="!(step.depends_on || []).length" x-text="$store.i18n.t('wf_step_depends_on_none')"></span>
                   </div>
                 </div>
+          </div>
+        </details>
               </div>
             </template>
           </div>
@@ -557,7 +579,7 @@
         </div>
       </div>
 
-      <div class="modal-action mt-6">
+      <div class="modal-action mt-4 shrink-0">
         <button type="button" class="btn btn-ghost" @click="$store.workflow.showModal = false"
           x-text="$store.i18n.t('cancel')"></button>
         <button type="button" class="btn btn-primary" @click="$store.workflow.save()"

@@ -1,9 +1,9 @@
 <!-- 技能库页 (M13 §8.1 独立页) -->
-<div x-show="$store.nav.page === 'skills'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100">
-  <div class="max-w-5xl mx-auto w-full flex flex-col">
+<div x-show="$store.nav.page === 'skills'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 bg-base-100">
+  <div class="max-w-4xl mx-auto w-full flex flex-col">
 
     <!-- Page Header -->
-    <div class="mb-8 border-b border-base-300 pb-4 flex justify-between items-end">
+    <div class="mb-6 border-b border-base-300 pb-4 flex flex-wrap gap-4 justify-between items-end">
       <div>
         <h2 class="text-2xl font-bold text-base-content" x-text="$store.i18n.t('skills_title')"></h2>
         <p class="text-sm text-base-content/60 mt-1">
@@ -57,7 +57,7 @@
             <!-- Header -->
             <div class="flex items-start justify-between gap-3">
               <div class="flex-1 min-w-0">
-                <h3 class="font-bold text-base truncate" x-text="sk.name"></h3>
+                <h3 class="font-bold text-base truncate" x-text="$store.agents.skillDisplayName(sk.name)"></h3>
                 <div class="flex flex-wrap gap-1.5 mt-1.5">
                   <!-- 版本 -->
                   <span x-show="sk.version"
@@ -76,9 +76,9 @@
               <!-- 启用/禁用徽章 -->
               <div class="shrink-0">
                 <span x-show="sk.enabled"
-                      class="badge badge-success badge-sm badge-outline font-bold">ON</span>
+                      class="badge badge-success badge-sm badge-outline font-bold" x-text="$store.i18n.t('cap_enable')"></span>
                 <span x-show="!sk.enabled"
-                      class="badge badge-ghost badge-sm font-bold">OFF</span>
+                      class="badge badge-ghost badge-sm font-bold" x-text="$store.i18n.t('cap_disable')"></span>
               </div>
             </div>
 
