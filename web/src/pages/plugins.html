@@ -1,46 +1,52 @@
 <div x-show="$store.nav.page === 'plugins'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 bg-base-100">
-  <div class="max-w-5xl mx-auto w-full flex flex-col">
+  <div class="max-w-6xl mx-auto w-full flex flex-col">
     
     <!-- Page Header & Filters -->
     <div class="mb-6 border-b border-base-300 pb-4">
-      <div class="flex justify-between items-end mb-4">
-        <div>
-          <h2 class="text-2xl font-bold text-base-content" x-text="$store.i18n.t('plugins_title')"></h2>
-          <div class="text-sm text-base-content/60 mt-1 flex items-center gap-2">
-            <span x-text="$store.plugins.catalog.length"></span>
-            <span x-text="$store.i18n.t('plugins_subtitle')"></span>
-            <div class="badge badge-success badge-sm badge-outline" x-text="`${$store.plugins.catalog.filter(e=>e.installed).length} ` + $store.i18n.t('plugins_installed')"></div>
-          </div>
-        </div>
-        <button class="btn btn-ghost btn-sm border border-base-300 shadow-sm" @click="$store.plugins.load()" :disabled="$store.plugins.loading">
-          <span x-show="$store.plugins.loading" class="loading loading-spinner loading-xs"></span>
-          <span x-show="!$store.plugins.loading" x-text="$store.i18n.t('plugins_refresh')"></span>
-        </button>
-      </div>
-
-      <div class="flex flex-wrap gap-4 items-center justify-between">
-        <div role="tablist" class="tabs tabs-boxed flex-wrap h-auto">
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'plugin' }" @click="$store.plugins.setFilter('plugin')" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.setFilter('mcp')" x-text="'🔌 ' + $store.i18n.t('plugins_tab_mcp')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'skill' }" @click="$store.plugins.setFilter('skill')" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></a>
-          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'marketplace' }" @click="$store.plugins.setFilter('marketplace')" x-text="'🛒 ' + $store.i18n.t('plugins_tab_marketplace')"></a>
+      <h2 class="sr-only" x-text="$store.i18n.t('plugins_title')"></h2>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div role="tablist" class="tabs tabs-border flex-wrap h-auto" :aria-label="$store.i18n.t('plugins_type_tabs')">
+          <button role="tab" class="tab text-base font-medium" :aria-selected="$store.plugins.filter === 'plugin'" :class="{ 'tab-active': $store.plugins.filter === 'plugin' }" @click="$store.plugins.setFilter('plugin')" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></button>
+          <button role="tab" class="tab text-base font-medium" :aria-selected="$store.plugins.filter === 'skill'" :class="{ 'tab-active': $store.plugins.filter === 'skill' }" @click="$store.plugins.setFilter('skill')" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></button>
+          <button role="tab" class="tab text-base font-medium" :aria-selected="$store.plugins.filter === 'mcp'" :class="{ 'tab-active': $store.plugins.filter === 'mcp' }" @click="$store.plugins.setFilter('mcp')" x-text="'🔌 ' + $store.i18n.t('plugins_tab_mcp')"></button>
+          <button role="tab" class="tab text-base font-medium" :aria-selected="$store.plugins.filter === 'marketplace'" :class="{ 'tab-active': $store.plugins.filter === 'marketplace' }" @click="$store.plugins.setFilter('marketplace')" x-text="'🛒 ' + $store.i18n.t('plugins_tab_marketplace')"></button>
         </div>
 
-        <div class="flex gap-2 w-full md:w-auto">
-          <label for="store-plugins-search" class="input input-bordered input-sm flex items-center gap-2 w-full md:w-56">
+        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <label for="store-plugins-search" class="input input-bordered input-sm flex items-center gap-2 w-full sm:w-52">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 opacity-70"><path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" /></svg>
             <input id="store-plugins-search" name="store-plugins-search" type="search" class="grow" :placeholder="$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_search_marketplace') : `${$store.i18n.t('plugins_search_prefix')}${$store.plugins.typeLabel($store.plugins.filter)}...`" x-model="$store.plugins.search" @input="$store.plugins.resetVisible()" />
           </label>
-          <details class="dropdown dropdown-end shrink-0">
-            <summary class="btn btn-ghost btn-sm border border-base-300" x-text="$store.i18n.t('ui_manage')"></summary>
-            <div class="dropdown-content z-20 w-60 p-3 bg-base-100 rounded-box border border-base-300 shadow-lg flex flex-col gap-2">
-          <button class="btn btn-primary btn-sm" @click="$store.plugins.openCreateModal()" x-text="`+ ${$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_btn_add_market') : $store.i18n.t('plugins_btn_create')}`"></button>
-          <button class="btn btn-outline btn-sm" @click="$store.plugins.syncMarketplaces($store.plugins.filter !== 'marketplace')" :disabled="$store.plugins.syncing">
-            <span x-show="$store.plugins.syncing" class="loading loading-spinner loading-xs"></span>
-            <span x-show="!$store.plugins.syncing" x-text="'⟳ ' + $store.i18n.t('plugins_btn_sync')"></span>
+          <button x-show="$store.plugins.filter !== 'marketplace'" class="btn btn-sm btn-outline" :class="{ 'btn-active': $store.plugins.status === 'installed' }"
+                  :aria-pressed="$store.plugins.status === 'installed'" @click="$store.plugins.setStatus($store.plugins.status === 'installed' ? '' : 'installed')">
+            <span x-text="$store.i18n.t('plugins_installed')"></span>
+            <span class="badge badge-sm" :class="$store.plugins.catalog.some(e => e.installed && (e.type || 'mcp') === $store.plugins.filter) ? 'badge-success' : 'badge-ghost'" x-text="$store.plugins.catalog.filter(e => e.installed && (e.type || 'mcp') === $store.plugins.filter).length"></span>
           </button>
-          <button x-show="$store.plugins.filter === 'plugin'" class="btn btn-outline btn-sm" @click="$store.plugins.prunePlugins()" x-text="'🧹 ' + $store.i18n.t('plugins_btn_prune')"></button>
-            </div>
+          <button class="btn btn-sm bg-base-content text-base-100 hover:bg-base-content/90 border-transparent" @click="$store.plugins.openCreateModal()" x-text="`+ ${$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_btn_add_market') : $store.i18n.t('plugins_btn_create')}`"></button>
+          <details class="dropdown dropdown-end shrink-0" @click.outside="$el.open = false" @click.capture="$event.target.closest('li') && ($el.open = false)">
+            <summary class="btn btn-sm btn-ghost btn-square" :aria-label="$store.i18n.t('ui_manage')" :title="$store.i18n.t('ui_manage')">⋯</summary>
+            <ul class="dropdown-content menu z-20 p-1 shadow-lg bg-base-100 rounded-box w-44 border border-base-300">
+              <li>
+                <button type="button" @click="$store.plugins.load()" :disabled="$store.plugins.loading">
+                  <span x-show="$store.plugins.loading" class="loading loading-spinner loading-xs"></span>
+                  <span x-show="!$store.plugins.loading">⟳</span>
+                  <span x-text="$store.i18n.t('plugins_refresh')"></span>
+                </button>
+              </li>
+              <li>
+                <button type="button" @click="$store.plugins.syncMarketplaces($store.plugins.filter !== 'marketplace')" :disabled="$store.plugins.syncing">
+                  <span x-show="$store.plugins.syncing" class="loading loading-spinner loading-xs"></span>
+                  <span x-show="!$store.plugins.syncing">↻</span>
+                  <span x-text="$store.i18n.t('plugins_btn_sync')"></span>
+                </button>
+              </li>
+              <li x-show="$store.plugins.filter === 'plugin'">
+                <button type="button" @click="$store.plugins.prunePlugins()">
+                  <span>🧹</span>
+                  <span x-text="$store.i18n.t('plugins_btn_prune')"></span>
+                </button>
+              </li>
+            </ul>
           </details>
         </div>
       </div>
@@ -56,111 +62,145 @@
       </div>
 
       <!-- Empty State -->
-      <div x-show="!$store.plugins.loading && $store.plugins.filtered.length === 0 && $store.plugins.filter !== 'marketplace'" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
-        <div class="text-4xl mb-4 opacity-50">🔌</div>
-        <p class="text-lg" x-text="$store.i18n.t('plugins_empty', '未找到匹配的项')"></p>
-      </div>
-      
       <div x-show="!$store.plugins.loading && $store.plugins.filteredMarketplaces.length === 0 && $store.plugins.filter === 'marketplace'" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
         <div class="text-4xl mb-4 opacity-50">🛒</div>
         <p class="text-lg" x-text="$store.i18n.t('plugins_empty_market')"></p>
       </div>
 
-      <!-- 分类与状态筛选（目录覆盖层，ADR-0123） -->
-      <div x-show="$store.plugins.filter !== 'marketplace'" class="flex flex-wrap items-center gap-2 mb-4">
-        <!-- 分类菜单：四个维度，每个取值带数量；数量为 0 的不显示 -->
-        <div class="dropdown">
-          <div tabindex="0" role="button" class="btn btn-sm btn-outline gap-1">
-            <span x-text="$store.i18n.t('plugins_filter_category')"></span>
-            <span x-show="$store.plugins.facet.value" class="badge badge-primary badge-sm" x-text="$store.plugins.facetLabel($store.plugins.facet.key, $store.plugins.facet.value)"></span>
-          </div>
-          <div tabindex="0" class="dropdown-content z-30 mt-1 w-80 max-h-[28rem] overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
-            <button class="btn btn-ghost btn-sm w-full justify-between" @click="$store.plugins.setFacet('', '')">
-              <span x-text="$store.i18n.t('plugins_filter_all')"></span>
-              <span x-show="!$store.plugins.facet.value">✓</span>
-            </button>
-            <template x-for="key in $store.plugins.facetKeys" :key="key">
-              <div class="border-t border-base-300 mt-1 pt-1" x-show="$store.plugins.facetCounts(key).length > 0">
-                <button class="btn btn-ghost btn-sm w-full justify-between font-bold" @click="$store.plugins.facetOpen[key] = !$store.plugins.facetOpen[key]">
-                  <span x-text="$store.plugins.facetTitle(key)"></span>
-                  <span x-text="$store.plugins.facetOpen[key] ? '▾' : '▸'"></span>
-                </button>
-                <div x-show="$store.plugins.facetOpen[key]" class="flex flex-col">
-                  <template x-for="v in $store.plugins.facetCounts(key)" :key="key + ':' + v.id">
-                    <button class="btn btn-ghost btn-xs h-7 w-full justify-between font-normal"
-                            :class="{ 'btn-active': $store.plugins.facet.key === key && $store.plugins.facet.value === v.id }"
-                            @click="$store.plugins.setFacet(key, v.id)">
-                      <span class="truncate" x-text="v.label"></span>
-                      <span class="opacity-60 font-mono" x-text="v.count"></span>
-                    </button>
-                  </template>
-                </div>
-              </div>
+      <!-- 分类与来源筛选（仅非 marketplace 显示） -->
+      <div x-show="$store.plugins.filter !== 'marketplace'" class="mb-4 space-y-3">
+        <!-- 第一行：来源文字 Tab + 已选标签 + 结果数与排序 -->
+        <div class="flex flex-wrap justify-between items-center gap-2">
+          <!-- 左侧来源文字 tab -->
+          <div class="flex items-center gap-3">
+            <template x-for="s in ['', 'polaris', 'verified', 'community', 'zh']" :key="'st-' + s">
+              <button type="button" class="text-sm px-1 pb-1 transition-colors cursor-pointer"
+                      :class="$store.plugins.status === s ? 'font-bold text-base-content border-b-2 border-base-content' : 'font-medium text-base-content/80 hover:text-base-content'"
+                      :aria-pressed="$store.plugins.status === s"
+                      @click="$store.plugins.setStatus(s)"
+                      x-text="$store.i18n.t('plugins_status_' + (s || 'all'))">
+              </button>
             </template>
           </div>
+          <!-- 右侧：已选维度胶囊 + 清除筛选 + 结果数 + 分段排序 -->
+          <div class="flex flex-wrap items-center gap-2">
+            <template x-for="f in $store.plugins.activeFacets" :key="f.key">
+              <button type="button" class="inline-flex items-center gap-1 rounded-full bg-blue-100 text-blue-800 ring-1 ring-inset ring-blue-300 dark:bg-blue-500/25 dark:text-blue-200 dark:ring-blue-400/50 text-xs font-semibold px-2.5 py-1 cursor-pointer hover:bg-blue-200/80 transition-colors" @click="$store.plugins.setFacet(f.key, '')">
+                <span class="opacity-75" x-text="f.title + ':'"></span>
+                <span x-text="f.label"></span>
+                <span aria-hidden="true">×</span>
+              </button>
+            </template>
+            <button x-show="$store.plugins.hasActiveFacet || $store.plugins.status || $store.plugins.search" class="btn btn-ghost btn-xs shrink-0"
+                    @click="$store.plugins.clearFilters()" x-text="$store.i18n.t('plugins_clear_filters')"></button>
+            <span class="text-xs text-base-content/60 ml-1" x-text="$store.i18n.t('plugins_results_count').replace('{0}', $store.plugins.filtered.length)"></span>
+            <div role="group" :aria-label="$store.i18n.t('plugins_sort_label')" class="bg-base-200 rounded-lg p-0.5 inline-flex items-center text-xs">
+              <button type="button" class="px-2.5 py-1 rounded-md transition-all cursor-pointer"
+                      :class="$store.plugins.sortMode === 'recommended' ? 'bg-base-100 shadow-sm font-medium text-base-content' : 'text-base-content/70 hover:text-base-content'"
+                      @click="$store.plugins.setSort('recommended')"
+                      x-text="$store.i18n.t('plugins_sort_recommended')"></button>
+              <button type="button" class="px-2.5 py-1 rounded-md transition-all cursor-pointer"
+                      :class="$store.plugins.sortMode === 'name' ? 'bg-base-100 shadow-sm font-medium text-base-content' : 'text-base-content/70 hover:text-base-content'"
+                      @click="$store.plugins.setSort('name')"
+                      x-text="$store.i18n.t('plugins_sort_name')"></button>
+            </div>
+          </div>
         </div>
 
-        <!-- 状态 -->
-        <div class="join">
-          <template x-for="s in ['', 'polaris', 'verified', 'community', 'installed', 'zh']" :key="'st-' + s">
-            <button class="btn btn-sm join-item" :class="{ 'btn-active': $store.plugins.status === s }"
-                    @click="$store.plugins.setStatus(s)" x-text="$store.i18n.t('plugins_status_' + (s || 'all'))"></button>
+        <!-- 第二区：四维横向联动筛选矩阵 -->
+        <div class="rounded-xl bg-base-200/40 border border-base-300/70 px-3 py-2.5 space-y-1.5">
+          <template x-for="key in $store.plugins.facetKeys" :key="key">
+            <div x-show="$store.plugins.facetCounts(key).length > 0 || $store.plugins.facets[key]" class="flex items-start gap-2 min-w-0">
+              <span class="w-16 shrink-0 text-sm font-bold text-base-content/85 pt-1 select-none" x-text="$store.plugins.facetTitle(key)"></span>
+              <div class="flex-1 min-w-0"
+                   :class="$store.plugins.facetExpanded[key] ? 'flex flex-wrap gap-1.5' : ('flex items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' + ($store.plugins.facetCounts(key).length > 10 ? ' pr-4 [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]' : ''))">
+                <!-- 选中态统一用深一点的淡蓝色胶囊（不发黑），未选中分类字重加粗、颜色加深以提高可读性 -->
+                <button type="button" class="px-2.5 py-1 rounded-lg text-sm transition-colors cursor-pointer shrink-0"
+                        :class="!$store.plugins.facets[key] ? 'bg-blue-100 text-blue-800 ring-1 ring-inset ring-blue-300 font-semibold dark:bg-blue-500/25 dark:text-blue-200 dark:ring-blue-400/50' : 'font-medium text-base-content/90 hover:bg-base-300/60 hover:text-base-content'"
+                        @click="$store.plugins.setFacet(key, '')"
+                        x-text="$store.i18n.t('plugins_filter_all')"></button>
+                <template x-for="v in $store.plugins.visibleFacetItems(key)" :key="key + ':' + v.id">
+                  <button type="button" class="px-2.5 py-1 rounded-lg text-sm transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1"
+                          :class="$store.plugins.facets[key] === v.id ? 'bg-blue-100 text-blue-800 ring-1 ring-inset ring-blue-300 font-semibold dark:bg-blue-500/25 dark:text-blue-200 dark:ring-blue-400/50' : 'font-medium text-base-content/90 hover:bg-base-300/60 hover:text-base-content'"
+                          :aria-pressed="$store.plugins.facets[key] === v.id"
+                          @click="$store.plugins.setFacet(key, v.id)">
+                    <span x-text="v.label"></span>
+                    <span class="text-[11px] font-mono" :class="$store.plugins.facets[key] === v.id ? 'text-blue-700/80 dark:text-blue-200/80' : 'text-base-content/60'" x-text="v.count"></span>
+                  </button>
+                </template>
+              </div>
+              <button type="button" x-show="$store.plugins.facetCounts(key).length > 10"
+                      class="shrink-0 px-2 py-1 rounded-lg text-xs font-medium text-base-content/75 hover:text-base-content hover:bg-base-200 transition-colors cursor-pointer"
+                      @click="$store.plugins.facetExpanded[key] = !$store.plugins.facetExpanded[key]"
+                      x-text="$store.plugins.facetExpanded[key] ? ($store.i18n.t('plugins_facet_collapse') + ' ▴') : ($store.i18n.t('plugins_facet_expand') + ' (' + $store.plugins.facetCounts(key).length + ') ▾')">
+              </button>
+            </div>
           </template>
         </div>
+      </div>
 
-        <!-- 排序 -->
-        <select class="select select-bordered select-sm" :value="$store.plugins.sortMode" @change="$store.plugins.setSort($event.target.value)">
-          <option value="recommended" x-text="$store.i18n.t('plugins_sort_recommended')"></option>
-          <option value="name" x-text="$store.i18n.t('plugins_sort_name')"></option>
-        </select>
-
-        <span class="text-xs opacity-60" x-text="$store.plugins.filtered.length"></span>
-        <button x-show="$store.plugins.facet.value || $store.plugins.status || $store.plugins.search" class="btn btn-ghost btn-xs"
-                @click="$store.plugins.clearFilters()" x-text="$store.i18n.t('plugins_clear_filters')"></button>
+      <div x-show="!$store.plugins.loading && $store.plugins.filtered.length === 0 && $store.plugins.filter !== 'marketplace'" class="flex flex-col items-center justify-center gap-3 py-12 mb-4 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+        <div class="text-4xl opacity-50">🔌</div>
+        <p class="text-lg" x-text="$store.i18n.t('plugins_empty_filtered')"></p>
+        <button class="btn btn-outline btn-sm" @click="$store.plugins.clearFilters()" x-text="$store.i18n.t('plugins_clear_filters')"></button>
       </div>
 
       <!-- Plugin Grid -->
-      <div x-show="!$store.plugins.loading && $store.plugins.filtered.length > 0 && $store.plugins.filter !== 'marketplace'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div x-show="!$store.plugins.loading && $store.plugins.filtered.length > 0 && $store.plugins.filter !== 'marketplace'" class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3">
         <template x-for="entry in $store.plugins.visibleFiltered" :key="entry.id">
-          <div class="card bg-base-200 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full flex flex-col" :style="`border-left-width:4px;border-left-color:${$store.plugins.typeColor(entry.type)}`">
-            <div class="card-body p-5 flex flex-col h-full gap-4">
+          <div class="group card bg-base-100 border border-base-300 rounded-2xl hover:shadow-md hover:border-base-content/20 transition cursor-pointer h-full flex flex-col" @click="$store.plugins.onDetail(entry)">
+            <div class="card-body p-4 flex flex-col h-full gap-3">
               
               <!-- Header -->
               <div class="flex items-start gap-3">
-                <div class="text-2xl shrink-0" x-text="$store.plugins.publisherIcon(entry.publisher)"></div>
+                <!-- 已安装用图标角标表达：放在元信息行会把行挤到换行，卡片高度随之参差 -->
+                <div class="relative w-11 h-11 rounded-xl bg-base-200 grid place-items-center text-2xl shrink-0">
+                  <span x-text="$store.plugins.publisherIcon(entry.publisher)"></span>
+                  <span x-show="entry.installed" class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-success text-success-content text-[10px] leading-none grid place-items-center ring-2 ring-base-100"
+                        :title="$store.i18n.t('plugins_installed')" :aria-label="$store.i18n.t('plugins_installed')" role="img">✓</span>
+                </div>
                 <div class="flex-1 min-w-0">
-                  <h3 class="font-bold text-sm truncate" :title="entry.name" x-text="$store.plugins.displayName(entry)"></h3>
-                  <div x-show="$store.plugins.displayName(entry) !== entry.name" class="text-[10px] font-mono opacity-50 truncate" x-text="entry.name"></div>
-                  <div class="flex flex-wrap gap-1.5 mt-1.5">
-                    <span class="badge badge-xs font-bold uppercase" :style="`background:color-mix(in srgb,${$store.plugins.typeColor(entry.type)} 20%,transparent);color:${$store.plugins.typeColor(entry.type)};border-color:${$store.plugins.typeColor(entry.type)}`" x-text="$store.plugins.typeLabel(entry.type)"></span>
-                    <span class="badge badge-xs font-bold uppercase" :style="`background:color-mix(in srgb,${$store.plugins.trustColor(entry.trust_tier)} 20%,transparent);color:${$store.plugins.trustColor(entry.trust_tier)};border-color:${$store.plugins.trustColor(entry.trust_tier)}`" x-text="$store.plugins.trustLabel(entry.trust_tier)"></span>
-                    <span class="text-[10px] font-mono text-base-content/70 truncate max-w-full" x-text="entry.publisher"></span>
-                  </div>
+                  <h3>
+                    <button type="button" class="font-semibold text-base truncate text-left max-w-full hover:underline block cursor-pointer" :title="$store.plugins.displayName(entry)" @click.stop="$store.plugins.onDetail(entry)" x-text="$store.plugins.displayName(entry)"></button>
+                  </h3>
+                  <p class="text-sm text-base-content/60 line-clamp-2 min-h-[2.5rem] mt-0.5" :title="entry.description" x-text="$store.plugins.displaySummary(entry)"></p>
+                  <p x-show="$store.plugins.isZh() && entry.i18n_stale" class="text-[10px] text-warning mt-0.5" x-text="$store.i18n.t('plugins_i18n_stale')"></p>
                 </div>
-                <div x-show="entry.installed" class="w-2.5 h-2.5 rounded-full bg-success shadow-[0_0_8px_rgba(0,255,0,0.5)] shrink-0 mt-1" :title="$store.i18n.t('plugins_installed')"></div>
-              </div>
-
-              <!-- Description -->
-              <p class="text-xs text-base-content/70 flex-1 line-clamp-3" :title="entry.description" x-text="$store.plugins.displaySummary(entry)"></p>
-              <p x-show="$store.plugins.isZh() && entry.i18n_stale" class="text-[10px] text-warning" x-text="$store.i18n.t('plugins_i18n_stale')"></p>
-              <div x-show="$store.plugins.entryTags(entry).length > 0" class="flex flex-wrap gap-1">
-                <template x-for="t in $store.plugins.entryTags(entry)" :key="t.key + ':' + t.id">
-                  <button class="badge badge-outline badge-sm text-[10px] h-5 cursor-pointer hover:badge-primary" @click="$store.plugins.setFacet(t.key, t.id)" x-text="$store.plugins.facetLabel(t.key, t.id)"></button>
-                </template>
-              </div>
-
-              <!-- Extra Info (MCP/URL) -->
-              <template x-if="!entry.type || entry.type === 'mcp'">
-                <div class="bg-base-100 rounded p-2 text-[10px] font-mono text-base-content/60 truncate border border-base-300">
-                  <span class="text-primary font-bold mr-1" x-text="entry.transport || 'stdio'"></span>
-                  <span x-show="entry.command" x-text="`${entry.command} ${(entry.args||[]).join(' ')}`"></span>
-                  <span x-show="!entry.command && entry.url" x-text="entry.url"></span>
+                <!-- 动作区 -->
+                <div class="shrink-0" @click.stop>
+                  <template x-if="!entry.installed">
+                    <button type="button" class="btn btn-sm btn-square btn-ghost border border-base-300"
+                            :disabled="!!$store.plugins.installing[entry.id]"
+                            :aria-label="$store.plugins.installing[entry.id] ? $store.i18n.t('plugins_installing') : $store.i18n.t('plugins_install')"
+                            :title="$store.plugins.installing[entry.id] ? $store.i18n.t('plugins_installing') : $store.i18n.t('plugins_install')"
+                            @click.stop="$store.plugins.tryInstall(entry)">
+                      <span x-show="$store.plugins.installing[entry.id]" class="loading loading-spinner loading-xs"></span>
+                      <span x-show="!$store.plugins.installing[entry.id]" class="text-base font-semibold leading-none">+</span>
+                    </button>
+                  </template>
+                  <template x-if="entry.installed">
+                    <!-- details 下拉不会因点击外部或选中菜单项自动收起，需手动关闭 -->
+                    <details class="dropdown dropdown-end" @click.stop @click.outside="$el.open = false" @click.capture="$event.target.closest('li') && ($el.open = false)">
+                      <summary class="btn btn-sm btn-square btn-ghost" :aria-label="$store.i18n.t('ui_manage')">⋯</summary>
+                      <ul class="dropdown-content menu z-20 p-1 shadow-lg bg-base-100 rounded-box w-32 border border-base-300">
+                        <li>
+                          <button type="button" @click.stop="$store.plugins.onDetail(entry)" x-text="$store.i18n.t('plugins_btn_details')"></button>
+                        </li>
+                        <li>
+                          <button type="button" class="text-error" :disabled="!!$store.plugins.uninstalling[entry.id]" @click.stop="$store.plugins.uninstall(entry)">
+                            <span x-show="$store.plugins.uninstalling[entry.id]" class="loading loading-spinner loading-xs"></span>
+                            <span x-show="!$store.plugins.uninstalling[entry.id]" x-text="$store.i18n.t('plugins_uninstall')"></span>
+                          </button>
+                        </li>
+                      </ul>
+                    </details>
+                  </template>
                 </div>
-              </template>
+              </div>
 
               <!-- MCP OAuth 状态（8e-2）：需要授权徽标 + 授权/注销授权/编辑按钮 -->
               <template x-if="(!entry.type || entry.type === 'mcp') && entry.installed && $store.plugins.mcpAuth[entry.id]">
-                <div class="flex flex-wrap items-center gap-1.5">
+                <div class="flex flex-wrap items-center gap-1.5" @click.stop>
                   <span x-show="$store.plugins.mcpAuth[entry.id].auth_required"
                         class="badge badge-warning badge-xs font-bold"
                         :title="($store.plugins.mcpAuth[entry.id].auth_scopes || []).join(' ')"
@@ -185,60 +225,46 @@
                           x-text="$store.i18n.t('plugins_btn_edit')"></button>
                 </div>
               </template>
-              <template x-if="entry.type === 'skill' || entry.type === 'plugin'">
-                <div class="bg-base-100 rounded p-2 text-[10px] font-mono truncate border border-base-300">
-                  <a :href="entry.url" target="_blank" rel="noopener" class="text-primary hover:underline" x-text="(entry.url||'').replace('https://','')"></a>
-                </div>
-              </template>
 
-              <!-- Tags -->
-              <div class="flex flex-wrap gap-1">
-                <template x-for="tag in (entry.tags||[])" :key="tag">
-                  <span class="badge badge-ghost badge-sm text-[10px] h-4" x-text="tag"></span>
-                </template>
-              </div>
-
-              <!-- 快捷提示：点击新建会话并发送（清单 interface.defaultPrompt） -->
-              <template x-if="$store.plugins.promptsFor(entry).length > 0">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[10px] uppercase opacity-60" x-text="$store.i18n.t('plugins_try_prompts')"></span>
-                  <div class="flex flex-wrap gap-1">
-                    <template x-for="p in $store.plugins.promptsFor(entry)" :key="p">
-                      <button class="btn btn-xs btn-outline normal-case max-w-full justify-start" :title="p" @click="$store.plugins.usePrompt(p)">
-                        <span class="truncate" x-text="p"></span>
+              <!-- 设置入口（ADR-0125）与首条快捷提示合并为单行，避免同时存在时把卡片撑高一层 -->
+              <template x-if="$store.plugins.setupFor(entry) || (entry.installed && $store.plugins.promptsFor(entry).length > 0)">
+                <div class="flex flex-wrap items-center gap-1.5 min-w-0" @click.stop>
+                  <template x-if="$store.plugins.setupFor(entry)">
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <button type="button" class="btn btn-xs"
+                              :class="$store.plugins.readyFor(entry)?.ready ? 'btn-ghost border border-base-300' : 'btn-primary'"
+                              :title="$store.plugins.setupFor(entry).setup.available ? '' : $store.plugins.reasonText($store.plugins.setupFor(entry).setup.reason)"
+                              @click="$store.plugins.runSetup($store.plugins.setupFor(entry).row)">
+                        <span x-text="$store.i18n.t('plugins_setup_btn')"></span>
                       </button>
-                    </template>
-                  </div>
-                </div>
-              </template>
-
-              <!-- 设置入口：仅插件声明 setupTool 时出现；打开详情弹窗「设置」页（ADR-0125），不可用原因在页内与此处同时说明 -->
-              <template x-if="$store.plugins.setupFor(entry)">
-                <div class="flex flex-wrap items-center gap-2">
-                  <button class="btn btn-xs btn-primary"
-                          :title="$store.plugins.setupFor(entry).setup.available ? '' : $store.plugins.reasonText($store.plugins.setupFor(entry).setup.reason)"
-                          @click="$store.plugins.runSetup($store.plugins.setupFor(entry).row)">
-                    <span x-text="$store.i18n.t('plugins_setup_btn')"></span>
-                  </button>
-                  <span x-show="!$store.plugins.setupFor(entry).setup.available" class="text-[10px] text-warning"
-                        x-text="$store.plugins.reasonText($store.plugins.setupFor(entry).setup.reason)"></span>
-                  <!-- 自身就绪状态（statusTool）：ready 未知时不显示；message 作悬停提示，未就绪时同时以小字展示 -->
-                  <template x-if="$store.plugins.readyFor(entry)">
-                    <span class="flex items-center gap-1">
-                      <span class="badge badge-xs"
-                            :class="$store.plugins.readyFor(entry).ready ? 'badge-success' : 'badge-warning'"
-                            :title="$store.plugins.readyFor(entry).message"
-                            x-text="$store.i18n.t($store.plugins.readyFor(entry).ready ? 'plugins_setup_ready' : 'plugins_setup_needed')"></span>
-                      <span x-show="!$store.plugins.readyFor(entry).ready && $store.plugins.readyFor(entry).message"
-                            class="text-[10px] opacity-70" x-text="$store.plugins.readyFor(entry).message"></span>
-                    </span>
+                      <span x-show="!$store.plugins.setupFor(entry).setup.available" class="text-[10px] text-warning"
+                            x-text="$store.plugins.reasonText($store.plugins.setupFor(entry).setup.reason)"></span>
+                      <!-- 自身就绪状态（statusTool）：ready 未知时不显示；message 作悬停提示，未就绪时同时以小字展示 -->
+                      <template x-if="$store.plugins.readyFor(entry)">
+                        <span class="flex items-center gap-1">
+                          <span class="badge badge-xs"
+                                :class="$store.plugins.readyFor(entry).ready ? 'badge-success' : 'badge-warning'"
+                                :title="$store.plugins.readyFor(entry).message"
+                                x-text="$store.i18n.t($store.plugins.readyFor(entry).ready ? 'plugins_setup_ready' : 'plugins_setup_needed')"></span>
+                          <span x-show="!$store.plugins.readyFor(entry).ready && $store.plugins.readyFor(entry).message"
+                                class="text-[10px] opacity-70" x-text="$store.plugins.readyFor(entry).message"></span>
+                        </span>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="entry.installed && $store.plugins.promptsFor(entry).length > 0">
+                    <button type="button" class="btn btn-xs btn-ghost border border-base-300 normal-case justify-start flex-1 min-w-[8rem] font-normal"
+                            :title="$store.plugins.promptsFor(entry)[0]"
+                            @click.stop="$store.plugins.usePrompt($store.plugins.promptsFor(entry)[0])">
+                      <span class="truncate" x-text="`${$store.i18n.t('plugins_try_prompts')} · ${$store.plugins.promptsFor(entry)[0]}`"></span>
+                    </button>
                   </template>
                 </div>
               </template>
 
               <!-- 依赖插件需先完成设置 -->
               <template x-for="h in $store.plugins.hintsFor(entry)" :key="h.row.id">
-                <div class="flex flex-wrap items-center gap-2 rounded border border-warning/40 bg-warning/10 p-2">
+                <div class="flex flex-wrap items-center gap-2 rounded border border-warning/40 bg-warning/10 p-2" @click.stop>
                   <span x-show="h.ready === false" class="text-[11px] text-warning flex-1 min-w-0"
                         x-text="$store.i18n.t('plugins_dep_needs_setup').replace('{0}', h.name)"></span>
                   <span x-show="h.ready === false && h.message" class="text-[10px] opacity-70 w-full" x-text="h.message"></span>
@@ -249,40 +275,31 @@
                 </div>
               </template>
 
-              <!-- Actions -->
-              <div class="card-actions mt-auto pt-4 border-t border-base-300 items-center justify-between">
-                <div class="flex-1 flex gap-2">
-                  <template x-if="!entry.installed">
-                    <button class="btn bg-primary text-primary-content border-primary hover:brightness-110 btn-sm flex-1 text-xs" :disabled="!!$store.plugins.installing[entry.id]" @click="$store.plugins.tryInstall(entry)">
-                      <span x-show="$store.plugins.installing[entry.id]" class="loading loading-spinner loading-xs"></span>
-                      <span x-text="$store.plugins.installing[entry.id] ? $store.i18n.t('plugins_installing') : $store.i18n.t('plugins_install')"></span>
+              <!-- 底部元信息行：单行不换行，分类名过长时截断，保持卡片底部对齐 -->
+              <div class="mt-auto flex flex-nowrap items-center gap-1.5 text-xs min-w-0">
+                <span class="badge badge-xs badge-ghost shrink-0" x-text="$store.plugins.trustLabel(entry.trust_tier)"></span>
+                <span class="text-base-content/50 truncate max-w-[8rem] shrink-0" :title="entry.publisher" x-text="entry.publisher"></span>
+                <template x-for="t in $store.plugins.entryTags(entry).slice(0, 2)" :key="t.key + ':' + t.id">
+                  <button type="button" class="badge badge-xs min-w-0 shrink overflow-hidden cursor-pointer"
+                          :class="$store.plugins.facets[t.key] === t.id ? 'bg-blue-100 text-blue-800 border-blue-300 font-semibold dark:bg-blue-500/25 dark:text-blue-200 dark:border-blue-400/50' : 'badge-outline hover:badge-primary'"
+                          :title="$store.plugins.facetLabel(t.key, t.id)"
+                          @click.stop="$store.plugins.setFacet(t.key, t.id)">
+                    <span class="truncate" x-text="$store.plugins.facetLabel(t.key, t.id)"></span>
+                  </button>
+                </template>
+                <div class="ml-auto flex items-center gap-1 shrink-0" @click.stop>
+                  <template x-if="entry.update_available && entry.instance_id">
+                    <button type="button" class="btn btn-xs btn-warning text-warning-content hover:brightness-110"
+                            :title="$store.i18n.t('plugins_update_available')"
+                            :disabled="!!$store.plugins.installing[entry.id] || !!$store.plugins.uninstalling[entry.id]"
+                            @click.stop="$store.plugins.upgrade(entry)">
+                      <span x-show="$store.plugins.installing[entry.id] || $store.plugins.uninstalling[entry.id]" class="loading loading-spinner loading-xs"></span>
+                      <span x-show="!($store.plugins.installing[entry.id] || $store.plugins.uninstalling[entry.id])" x-text="$store.i18n.t('plugins_upgrade')"></span>
                     </button>
                   </template>
-                  <template x-if="entry.installed">
-                    <div class="flex gap-2 flex-1 items-center w-full">
-                      <template x-if="entry.update_available && entry.instance_id">
-                        <div class="flex gap-2 flex-1 items-center">
-                          <span class="text-warning text-xs font-bold flex-1 flex items-center gap-1">💡 发现新版本</span>
-                          <button class="btn btn-warning btn-sm text-warning-content hover:brightness-110" :disabled="!!$store.plugins.installing[entry.id] || !!$store.plugins.uninstalling[entry.id]" @click="$store.plugins.upgrade(entry)">
-                            <span x-show="$store.plugins.installing[entry.id] || $store.plugins.uninstalling[entry.id]" class="loading loading-spinner loading-xs"></span>
-                            <span x-show="!($store.plugins.installing[entry.id] || $store.plugins.uninstalling[entry.id])">🚀 升级</span>
-                          </button>
-                        </div>
-                      </template>
-                      <template x-if="!(entry.update_available && entry.instance_id)">
-                        <div class="flex gap-2 flex-1 items-center">
-                          <span class="text-success text-xs font-bold flex-1 flex items-center gap-1">✓ <span x-text="$store.i18n.t('plugins_installed')"></span></span>
-                          <button class="btn btn-ghost btn-sm text-error hover:bg-error/10" :disabled="!!$store.plugins.uninstalling[entry.id]" @click="$store.plugins.uninstall(entry)">
-                            <span x-show="$store.plugins.uninstalling[entry.id]" class="loading loading-spinner loading-xs"></span>
-                            <span x-show="!$store.plugins.uninstalling[entry.id]" x-text="$store.i18n.t('plugins_uninstall')"></span>
-                          </button>
-                        </div>
-                      </template>
-                    </div>
-                  </template>
                 </div>
-                <button class="btn btn-ghost btn-sm text-xs px-2 shrink-0" @click="$store.plugins.onDetail(entry)" x-text="$store.i18n.t('plugins_btn_details')"></button>
               </div>
+
             </div>
           </div>
         </template>
@@ -296,29 +313,26 @@
       </div>
 
       <!-- Marketplace Grid -->
-      <div x-show="!$store.plugins.loading && $store.plugins.filter === 'marketplace' && $store.plugins.filteredMarketplaces.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div x-show="!$store.plugins.loading && $store.plugins.filter === 'marketplace' && $store.plugins.filteredMarketplaces.length > 0" class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3">
         <template x-for="entry in $store.plugins.filteredMarketplaces" :key="entry.id">
-          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-secondary transition-colors h-full flex flex-col border-l-4 border-l-secondary">
-            <div class="card-body p-5 flex flex-col h-full gap-4">
+          <div class="card bg-base-100 border border-base-300 rounded-2xl hover:shadow-md hover:border-base-content/20 transition h-full flex flex-col">
+            <div class="card-body p-4 flex flex-col h-full gap-3">
               <div class="flex items-start gap-3">
-                <div class="text-2xl shrink-0">🛒</div>
+                <div class="w-11 h-11 rounded-xl bg-base-200 grid place-items-center text-2xl shrink-0">🛒</div>
                 <div class="flex-1 min-w-0">
-                  <h3 class="font-bold text-sm truncate" x-text="entry.name"></h3>
-                  <div class="flex flex-wrap gap-1.5 mt-1.5 items-center">
-                    <span class="badge badge-secondary badge-xs badge-outline font-bold uppercase" x-text="$store.i18n.t('plugins_badge_market')"></span>
-                    <span class="text-[10px] font-mono text-base-content/70 truncate max-w-full" x-text="entry.publisher"></span>
-                  </div>
+                  <h3 class="font-semibold text-base truncate" :title="entry.name" x-text="entry.name"></h3>
+                  <p class="text-sm text-base-content/60 line-clamp-2 min-h-[2.5rem] mt-0.5" :title="$store.plugins.marketDescription(entry)" x-text="$store.plugins.marketDescription(entry)"></p>
                 </div>
-                <div x-show="entry.is_builtin === 1" class="badge badge-success badge-sm badge-outline font-bold text-[10px]" :title="$store.i18n.t('plugins_badge_builtin')">Built-in</div>
               </div>
-              <div class="text-xs text-base-content/70 flex-1 flex flex-col gap-2">
-                <div class="line-clamp-2" x-text="$store.plugins.marketDescription(entry)"></div>
-                <div><span class="opacity-60" x-text="$store.i18n.t('plugins_label_type')"></span> <span class="font-mono font-bold" x-text="(entry.type || '').toUpperCase()"></span></div>
-                <div class="truncate"><span class="opacity-60" x-text="$store.i18n.t('plugins_label_url')"></span> <a :href="entry.repo_url" target="_blank" class="link link-primary font-mono" x-text="entry.repo_url"></a></div>
-              </div>
-              <div class="card-actions mt-auto pt-4 border-t border-base-300 justify-end">
-                <button x-show="entry.is_builtin === 0" class="btn btn-ghost btn-sm text-error hover:bg-error/10" @click="fetch(`/v1/plugins/marketplaces/${entry.id}`, {method:'DELETE'}).then(()=>$store.plugins.load())" x-text="$store.i18n.t('plugins_btn_del_market')"></button>
-                <div x-show="entry.is_builtin === 1" class="text-xs text-base-content/60 px-3 py-1.5" x-text="$store.i18n.t('plugins_builtin_nodel')"></div>
+              <a :href="entry.repo_url" target="_blank" rel="noopener" class="link link-hover text-xs font-mono text-base-content/60 truncate" :title="entry.repo_url" x-text="(entry.repo_url || '').replace(/^https?:\/\//, '')"></a>
+              <!-- 已在「市场」tab 内，不再重复市场徽标；内置不可删除改为悬停说明，避免与内置徽标重复 -->
+              <div class="mt-auto flex flex-wrap items-center gap-1.5 text-xs">
+                <span class="badge badge-xs badge-ghost" x-text="$store.plugins.typeLabel(entry.type)"></span>
+                <span class="text-base-content/50 truncate max-w-[8rem]" :title="entry.publisher" x-text="entry.publisher"></span>
+                <span x-show="entry.is_builtin === 1" class="badge badge-success badge-xs badge-outline" :title="$store.i18n.t('plugins_builtin_nodel')" x-text="$store.i18n.t('plugins_badge_builtin')"></span>
+                <div class="ml-auto">
+                  <button x-show="entry.is_builtin === 0" type="button" class="btn btn-xs btn-ghost text-error" @click="fetch(`/v1/plugins/marketplaces/${entry.id}`, {method:'DELETE'}).then(()=>$store.plugins.load())" x-text="$store.i18n.t('plugins_btn_del_market')"></button>
+                </div>
               </div>
             </div>
           </div>
@@ -509,6 +523,19 @@
           <summary class="text-xs opacity-60 cursor-pointer" x-text="$store.i18n.t('plugins_original')"></summary>
           <p class="text-xs text-base-content/70 whitespace-pre-line break-words mt-1" x-text="$store.plugins.entryDetail?.description"></p>
         </details>
+        <!-- 试试看：在描述后、分类徽标前（若已安装且有快捷提示时展示） -->
+        <template x-if="$store.plugins.entryDetail && ($store.plugins.promptsFor($store.plugins.entryDetail) || []).length > 0">
+          <div class="mt-3">
+            <div class="text-xs font-semibold text-base-content/70 mb-1.5" x-text="$store.i18n.t('plugins_try_prompts')"></div>
+            <div class="flex flex-wrap gap-1.5">
+              <template x-for="p in $store.plugins.promptsFor($store.plugins.entryDetail)" :key="p">
+                <button type="button" class="btn btn-xs btn-outline normal-case max-w-full justify-start text-left" :title="p" @click="$store.plugins.usePrompt(p); $store.plugins.showEntryDetail = false">
+                  <span class="truncate" x-text="p"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+        </template>
         <div class="flex flex-wrap gap-1 mt-3">
           <template x-for="key in $store.plugins.facetKeys" :key="'d-' + key">
             <template x-for="id in ($store.plugins.entryDetail ? $store.plugins.entryFacet($store.plugins.entryDetail, key) : [])" :key="'d-' + key + ':' + id">
@@ -543,9 +570,23 @@
     <dialog class="modal" id="plugin_detail_modal" x-effect="$store.plugins.showDetail ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.detail && $store.plugins.closeDetail()">
       <div class="modal-box max-w-3xl">
         <h3 class="font-bold text-lg" x-text="$store.plugins.detail?.display_name || $store.plugins.detail?.name"></h3>
-        <div class="text-xs text-base-content/60 mb-4">
+        <div class="text-xs text-base-content/60 mb-3">
           <span x-text="$store.plugins.detail?.publisher"></span> · v<span x-text="$store.plugins.detail?.version"></span>
         </div>
+
+        <!-- 已安装插件走本弹窗而非 plugin_entry_modal，完整快捷提示须在此处可达 -->
+        <template x-if="($store.plugins.detail?.defaultPrompts || []).length > 0">
+          <div class="mb-3">
+            <div class="text-xs font-semibold text-base-content/70 mb-1.5" x-text="$store.i18n.t('plugins_try_prompts')"></div>
+            <div class="flex flex-wrap gap-1.5">
+              <template x-for="p in ($store.plugins.detail?.defaultPrompts || [])" :key="p">
+                <button type="button" class="btn btn-xs btn-outline normal-case max-w-full justify-start text-left" :title="p" @click="$store.plugins.usePrompt(p); $store.plugins.closeDetail()">
+                  <span class="truncate" x-text="p"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+        </template>
 
         <div role="tablist" class="tabs tabs-boxed mb-4 flex-wrap">
           <a role="tab" class="tab" x-show="$store.plugins.detail?.setup?.tool" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'setup' }" @click="$store.plugins.switchDetailTab('setup')" x-text="$store.i18n.t('plugin_detail_tab_setup')"></a>

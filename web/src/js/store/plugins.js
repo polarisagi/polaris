@@ -23,8 +23,8 @@ Alpine.store('plugins', {
   // 筛选是内存内过滤（与 search 同一模式），计数基于「类型 + 搜索 + 状态」过滤后的集合，所以数字与当前视图一致。
   taxonomy: null,
   facetKeys: ['topic', 'department', 'industry', 'life'],
-  facet: { key: '', value: '' },  // 当前分类筛选（单选；再点一次取消）
-  facetOpen: { topic: true, department: false, industry: false, life: false },
+  facets: { topic: '', department: '', industry: '', life: '' },
+  facetExpanded: { topic: false, department: false, industry: false, life: false },
   status: '',                     // '' | 'polaris' | 'verified' | 'community' | 'installed' | 'zh'
   sortMode: 'recommended',        // 'recommended'（后端顺序：已安装→精选→官方→名称）| 'name'
 
@@ -83,12 +83,22 @@ Alpine.store('plugins', {
     return Alpine.store('i18n').t('plugins_facet_' + key)
   },
 
-  // entryTags 卡片上展示的分类徽标：主题全部 + 部门第一个（避免卡片过高）。
+  // entryTags 卡片展示的分类徽标：优先置顶当前命中的已选维度，再按主题→部门→行业→生活依次补充。
   entryTags(entry) {
     const out = []
-    for (const id of this.entryFacet(entry, 'topic')) out.push({ key: 'topic', id })
-    const dep = this.entryFacet(entry, 'department')[0]
-    if (dep) out.push({ key: 'department', id: dep })
+    const pushUnique = (key, id) => {
+      if (id && !out.some(t => t.key === key && t.id === id)) out.push({ key, id })
+    }
+    for (const k of this.facetKeys) {
+      if (this.facets[k] && this.entryFacet(entry, k).includes(this.facets[k])) {
+        pushUnique(k, this.facets[k])
+      }
+    }
+    for (const id of this.entryFacet(entry, 'topic')) pushUnique('topic', id)
+    for (const k of ['department', 'industry', 'life']) {
+      const first = this.entryFacet(entry, k)[0]
+      if (first) pushUnique(k, first)
+    }
     return out
   },
 
@@ -103,10 +113,21 @@ Alpine.store('plugins', {
     }
   },
 
-  // facetCounts 当前视图下某维度各取值的条目数（只返回 > 0 的，按数量降序）。
+  // crossFilteredFor 在 baseFiltered 基础上，排除 targetKey 维度，叠加其它维度的已选条件以实现交叉联动。
+  crossFilteredFor(targetKey) {
+    let list = this.baseFiltered
+    for (const k of this.facetKeys) {
+      if (k !== targetKey && this.facets[k]) {
+        list = list.filter(e => this.entryFacet(e, k).includes(this.facets[k]))
+      }
+    }
+    return list
+  },
+
+  // facetCounts 基于交叉过滤集合统计某维度下各取值的数量（只返回 > 0 的，按数量降序、名称升序）。
   facetCounts(key) {
     const counts = {}
-    for (const e of this.baseFiltered) {
+    for (const e of this.crossFilteredFor(key)) {
       for (const id of this.entryFacet(e, key)) counts[id] = (counts[id] || 0) + 1
     }
     return Object.entries(counts)
@@ -114,11 +135,50 @@ Alpine.store('plugins', {
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
   },
 
+  // visibleFacetItems 根据展开态返回前 10 项或完整项；若当前选中项不在列表中则保底可见，避免选中态丢失。
+  visibleFacetItems(key) {
+    const all = this.facetCounts(key)
+    const sel = this.facets[key]
+    if (this.facetExpanded[key]) {
+      if (sel && !all.some(item => item.id === sel)) {
+        return [...all, { id: sel, count: 0, label: this.facetLabel(key, sel) }]
+      }
+      return all
+    }
+    const top = all.slice(0, 10)
+    if (sel && !top.some(item => item.id === sel)) {
+      const found = all.find(item => item.id === sel) || { id: sel, count: 0, label: this.facetLabel(key, sel) }
+      if (top.length >= 10) {
+        top[top.length - 1] = found
+      } else {
+        top.push(found)
+      }
+    }
+    return top
+  },
+
+  get hasActiveFacet() {
+    return this.facetKeys.some(k => !!this.facets[k])
+  },
+
+  get activeFacets() {
+    return this.facetKeys
+      .filter(k => !!this.facets[k])
+      .map(k => ({
+        key: k,
+        id: this.facets[k],
+        title: this.facetTitle(k),
+        label: this.facetLabel(k, this.facets[k]),
+      }))
+  },
+
   setFacet(key, value) {
-    if (this.facet.key === key && this.facet.value === value) {
-      this.facet = { key: '', value: '' }
+    if (!key) {
+      this.facets = { topic: '', department: '', industry: '', life: '' }
+    } else if (!value || this.facets[key] === value) {
+      this.facets[key] = ''
     } else {
-      this.facet = { key, value }
+      this.facets[key] = value
     }
     this.resetVisible()
   },
@@ -134,7 +194,7 @@ Alpine.store('plugins', {
   },
 
   clearFilters() {
-    this.facet = { key: '', value: '' }
+    this.facets = { topic: '', department: '', industry: '', life: '' }
     this.status = ''
     this.search = ''
     this.resetVisible()
@@ -272,8 +332,10 @@ Alpine.store('plugins', {
 
   get filtered() {
     let list = this.baseFiltered
-    if (this.facet.key && this.facet.value) {
-      list = list.filter(e => this.entryFacet(e, this.facet.key).includes(this.facet.value))
+    for (const k of this.facetKeys) {
+      if (this.facets[k]) {
+        list = list.filter(e => this.entryFacet(e, k).includes(this.facets[k]))
+      }
     }
     if (this.sortMode === 'name') {
       list = [...list].sort((a, b) => this.displayName(a).localeCompare(this.displayName(b)))
@@ -348,6 +410,7 @@ Alpine.store('plugins', {
   // ── 插件快捷提示 / 设置向导 ───────────────────────────────────────────
 
   promptsFor(entry) {
+    if (!entry) return []
     return this.installedPluginFor(entry)?.defaultPrompts || []
   },
 
@@ -473,6 +536,7 @@ Alpine.store('plugins', {
   // installedPluginFor 目录条目 → 对应的已安装 pluginRow；找不到（未安装/非 plugin 类型
   // 装成 mcp/skill 单体）返回 null，调用方据此决定是否显示「详情」入口。
   installedPluginFor(entry) {
+    if (!entry) return null
     return this.installedIndex[entry.id] || null
   },
 
@@ -1130,7 +1194,8 @@ Alpine.store('plugins', {
   },
 
   typeLabel(type) {
-    return { mcp: '连接器', skill: '技能', plugin: '插件', marketplace: '市场' }[type] || type || '插件'
+    const key = { mcp: 'plugins_tab_mcp', skill: 'plugins_tab_skill', plugin: 'plugins_tab_plugin', marketplace: 'plugins_tab_marketplace' }[type]
+    return key ? Alpine.store('i18n').t(key) : (type || Alpine.store('i18n').t('plugins_tab_plugin'))
   },
   typeColor(type) {
     return { mcp: '#3b82f6', skill: '#8b5cf6', plugin: '#f59e0b', marketplace: '#ec4899' }[type] || '#3b82f6'
@@ -1140,7 +1205,8 @@ Alpine.store('plugins', {
   },
 
   trustLabel(tier) {
-    return (['不可信', '本地', '社区', '官方认证', '系统内置'])[tier] ?? '未知'
+    const key = ({ 0: 'plugins_trust_untrusted', 1: 'plugins_trust_local', 2: 'plugins_trust_community', 3: 'plugins_trust_verified', 4: 'plugins_trust_builtin' })[tier]
+    return key ? Alpine.store('i18n').t(key) : Alpine.store('i18n').t('plugins_trust_unknown')
   },
   trustColor(tier) {
     return [
