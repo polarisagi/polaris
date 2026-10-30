@@ -1,7 +1,4 @@
-name: Public source validation
-
-# 公开仓源码门控。打包发布只由 release.yml（push v* tag）负责，本工作流不再
-# 在 tag 上重复跑全量门控/产出单平台包——那份产物从未进入 GitHub Release，纯耗时。
+name: CI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -16,56 +13,206 @@ on:
 permissions:
   contents: read
 
-# 同一分支/PR 新推送时取消旧的运行，避免排队浪费
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: "1.26"
           cache: true
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Check Go format
+        run: |
+          bad=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$bad" ]; then
+            echo "以下 Go 文件未格式化:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: Run go vet
+        # unsafe.Pointer 是 Rust/C FFI 的预期边界；保留其他 vet 检查
+        run: go vet -unsafeptr=false ./...
+
+  # 单次编译 Rust，产物通过 artifact 传递给下游 job
+  # 最终产物缓存：如果 Rust 源码无变化，直接跳过工具链安装和编译
+  rust-build:
+    runs-on: ubuntu-latest
+    outputs:
+      rust_unchanged: ${{ steps.rust-final.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache Rust final artifact
+        id: rust-final
+        uses: actions/cache@v6
+        with:
+          path: |
+            rust/substrate/target/release/libsubstrate.so
+            rust/substrate/target/release/libsubstrate.a
+          key: rust-ci-x86_64-unknown-linux-gnu-${{ hashFiles('rust/substrate/**') }}
+
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      # rust/substrate 编译缓存（clippy/test 的 debug 产物 + make build 的 release 产物）
+        if: steps.rust-final.outputs.cache-hit != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust-final.outputs.cache-hit != 'true'
         with:
-          workspaces: rust/substrate
+          workspaces: "rust/substrate"
           cache-on-failure: true
-      - uses: actions/setup-node@v6
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+      - name: Build Rust Substrate
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        run: make rust-build
+
+      - name: Upload Rust Artifact
+        uses: actions/upload-artifact@v7
         with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      # ci_test_public.sh 不构建桌面外壳，只需 bubblewrap（沙箱测试）；
-      # WebKitGTK 等 Tauri 依赖由 release.yml 的 desktop job 自行安装。
+          name: rust-libs
+          path: |
+            rust/substrate/target/release/libsubstrate.so
+            rust/substrate/target/release/libsubstrate.a
+          retention-days: 1
+
+  # cargo test + fmt check 复用同一缓存（编译产物已被 rust-build 预热）
+  rust:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip if Rust code unchanged
+        if: needs.rust-build.outputs.rust_unchanged == 'true'
+        run: echo "Rust code unchanged. Skipping cargo test and fmt."
+      - uses: actions/checkout@v7
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+      - name: Install Bubblewrap
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+          save-if: false
+      - run: cargo test --manifest-path rust/substrate/Cargo.toml
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+      - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+
+  test:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
       - name: Install Bubblewrap
         run: |
           sudo apt-get update && sudo apt-get install -y bubblewrap
           # Ubuntu 24.04+ 默认限制非特权 user namespace，bwrap 需要它
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true && echo "bwrap ok"
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Go tests
+        env:
+          # 告知 Go 链接器 Rust .so 位置
+          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/substrate/target/release
+        run: make test-ci
+
+  build:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Build
+        env:
+          SKIP_RUST_BUILD: 1
+        run: make build
+      - name: Verify kernel manifest clean
+        run: git diff --exit-code -- internal/config/kernel_manifest.json
+
+  rust-lint-deny:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - name: Cache cargo-deny
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-deny
           key: cargo-deny-${{ runner.os }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+          save-if: false
       - name: Install cargo-deny
         run: |
           if ! command -v cargo-deny >/dev/null 2>&1; then
             cargo install cargo-deny --locked
           fi
-      - name: Build and test from public source
-        run: scripts/ci_test_public.sh
-      - name: Upload CI logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
+      - name: Run rust-lint and rust-deny
+        run: |
+          make rust-lint
+          make rust-deny
+
+  eval-gate:
+    needs: [lint, test, build, rust, rust-lint-deny]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
-          name: ci-logs
-          path: .ci-logs/
-          retention-days: 7
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Install Bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true && echo "bwrap ok"
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Copy Rust libs
+        run: |
+          mkdir -p bin/lib
+          cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
+      - name: Eval Gate (HE-4 fail-closed)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
+        run: go run ./cmd/polaris eval --ci-gate

@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-ui rust-build generate-manifest test clean
+.PHONY: build build-backend build-ui rust-build rust-lint rust-deny generate-manifest test test-ci clean
 
 GO := go
 CARGO := cargo
@@ -33,12 +33,26 @@ build-ui:
 rust-build:
 	CFLAGS= LDFLAGS= $(CARGO) build --release $(if $(CARGO_TARGET),--target $(CARGO_TARGET),) --manifest-path rust/substrate/Cargo.toml
 
+rust-lint:
+	CFLAGS= LDFLAGS= $(CARGO) clippy --all-targets --manifest-path rust/substrate/Cargo.toml -- -D warnings
+
+rust-deny:
+	@command -v cargo-deny >/dev/null 2>&1 || { echo "请先安装: cargo install cargo-deny --locked"; exit 1; }
+	$(CARGO) deny --manifest-path rust/substrate/Cargo.toml check
+
 generate-manifest:
 	GOOS= GOARCH= $(GO) run tools/generate_manifest.go
 
+GO_TEST_PKGS  := ./internal/... ./cmd/... ./pkg/...
+GO_TEST_FLAGS := -race -count=1 -shuffle=on -timeout=900s -skip '^(TestFSM_Spec|TestSpec.*)$$'
+
 test:
-	$(GO) test -skip '^(TestFSM_Spec|TestSpec.*)$$' ./internal/... ./cmd/... ./pkg/...
+	$(GO) test $(GO_TEST_FLAGS) $(GO_TEST_PKGS)
 	$(CARGO) test --manifest-path rust/substrate/Cargo.toml
+
+test-ci:
+	$(GO) test $(GO_TEST_FLAGS) -v -coverprofile=coverage.out $(GO_TEST_PKGS)
+	$(GO) tool cover -func=coverage.out
 
 clean:
 	rm -rf bin web/dist rust/substrate/target
