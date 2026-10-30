@@ -82,7 +82,16 @@ preflight() {
   [ -d "$KEYS_DIR" ] || die "找不到 $KEYS_DIR —— 是否在 polaris 仓库内运行？"
 }
 
-count_pubkeys() { ls -1 "$KEYS_DIR"/*.pem 2> /dev/null | wc -l | tr -d ' '; }
+# 注意：set -o pipefail 下若目录无 .pem，ls *.pem 返回非零会导致整条管道失败并在
+# n="$(count_pubkeys)" 处静默退出（恰在 init 最需要的空目录场景崩溃）。用 glob 数组避免管道。
+count_pubkeys() {
+  local files=("$KEYS_DIR"/*.pem)
+  if [ -e "${files[0]}" ]; then
+    printf '%d\n' "${#files[@]}"
+  else
+    printf '0\n'
+  fi
+}
 
 # ── 生成密钥对 ────────────────────────────────────────────────────────────────
 # ECDSA P-256、未加密 PKCS#8。不加口令的理由见 releasekeys/README.md：
