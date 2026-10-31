@@ -22,7 +22,13 @@ func TestLintFSMControlFlow(t *testing.T) {
 	}
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+		if info.IsDir() && info.Name() == ".public-snapshot" {
+			return filepath.SkipDir
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr
 		}
 

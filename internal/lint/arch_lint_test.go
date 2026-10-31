@@ -20,6 +20,9 @@ func TestLintOutboxEntry(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if info.IsDir() && info.Name() == ".public-snapshot" {
+			return filepath.SkipDir
+		}
 		// 排除测试和依赖目录
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.Contains(path, "testdata") || strings.Contains(path, "vendor") {
 			return nil
@@ -82,6 +85,9 @@ func TestLintTypeAssertions(t *testing.T) {
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if info.IsDir() && info.Name() == ".public-snapshot" {
+			return filepath.SkipDir
 		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.Contains(path, "testdata") || strings.Contains(path, "vendor") {
 			return nil

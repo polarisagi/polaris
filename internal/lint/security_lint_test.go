@@ -19,6 +19,9 @@ func TestLintTaintedStringAccess(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if info.IsDir() && info.Name() == ".public-snapshot" {
+			return filepath.SkipDir
+		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.Contains(path, "testdata") || strings.Contains(path, "vendor") {
 			return nil //nolint:nilerr
 		}
@@ -97,7 +100,13 @@ func TestLintSecurityExportsCalled(t *testing.T) {
 	exportedFuncs := make(map[string]string)
 
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+		if info.IsDir() && info.Name() == ".public-snapshot" {
+			return filepath.SkipDir
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr
 		}
 		rel, _ := filepath.Rel(root, path)
@@ -123,7 +132,13 @@ func TestLintSecurityExportsCalled(t *testing.T) {
 
 	called := make(map[string]bool)
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+		if info.IsDir() && info.Name() == ".public-snapshot" {
+			return filepath.SkipDir
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr
 		}
 		f, err := parser.ParseFile(fset, path, nil, 0)
