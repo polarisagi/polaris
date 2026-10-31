@@ -1,4 +1,6 @@
-﻿$PreviousErrorActionPreference = $ErrorActionPreference
+# 保持 UTF-8 无 BOM，避免 irm | iex 将 BOM 当作首条命令的一部分。
+$PreviousErrorActionPreference = $ErrorActionPreference
+$PreviousProgressPreference = $ProgressPreference
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 # 确保 Windows PowerShell 5.1 默认启用 TLS 1.2，防止全新系统访问 GitHub / astral.sh 报 SSL 握手失败
@@ -32,18 +34,18 @@ Write-Msg -zh "🌌 正在安装/更新 PolarisAGI Polaris..." `
            -en "🌌 Installing/Updating PolarisAGI Polaris..." -Color Cyan
 
 $WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("polaris-install-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $WorkDir | Out-Null
 try {
+New-Item -ItemType Directory -Path $WorkDir | Out-Null
 # ── 1. 创建目录与 PATH 管理工具函数 ──────────────────────────────────────────
 foreach ($dir in @($InstallDir, $LogDir, $DepsDir, $LocalBinDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 }
 
 # 将目录幂等插入到用户级 Path 的最前面（确保排在 %LOCALAPPDATA%\Microsoft\WindowsApps 之前，
 # 防止全新 Windows 10/11 的微软商店 python.exe / python3.exe 空壳别名劫持命令解析）
 function Add-UserPathFront {
     param([string]$DirToAdd)
-    if ([string]::IsNullOrWhiteSpace($DirToAdd) -or -not (Test-Path $DirToAdd)) { return }
+    if ([string]::IsNullOrWhiteSpace($DirToAdd) -or -not (Test-Path -LiteralPath $DirToAdd)) { return }
     $Normalized = $DirToAdd.TrimEnd('\')
 
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -84,7 +86,7 @@ function Update-SessionPath {
     foreach ($p in ($ExtraDirs + ($Combined -split ';'))) {
         if (-not [string]::IsNullOrWhiteSpace($p)) {
             $key = $p.TrimEnd('\').ToLowerInvariant()
-            if (-not $Seen.ContainsKey($key) -and (Test-Path $p)) {
+            if (-not $Seen.ContainsKey($key) -and (Test-Path -LiteralPath $p)) {
                 $Seen[$key] = $true
                 $Result.Add($p.TrimEnd('\'))
             }
@@ -225,7 +227,7 @@ function Test-WorkingNode {
     $npxCmd  = Get-Command "npx.cmd" -ErrorAction SilentlyContinue
     if (-not $nodeCmd -or -not $npxCmd) { return $false }
     try {
-        $null = & $nodeCmd.Source -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' 2>$null
+        $null = & $nodeCmd.Source -e 'process.exit(parseInt(process.versions.node,10)>=22?0:1)' 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
         $null = & $npxCmd.Source --version 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
@@ -270,16 +272,22 @@ if (-not (Test-WorkingGit)) {
         foreach ($u in $GitUrls) {
             try {
                 Invoke-WebRequest -Uri $u -OutFile $MinGitZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
-                if ((Get-FileHash -Path $MinGitZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $GitHash) { throw "MinGit checksum mismatch" }
+                if ((Get-FileHash -LiteralPath $MinGitZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $GitHash) { throw "MinGit checksum mismatch" }
                 $GitDest = "$DepsDir\git"
-                if (Test-Path $GitDest) { Remove-Item -Path $GitDest -Recurse -Force -ErrorAction SilentlyContinue }
-                New-Item -ItemType Directory -Force -Path $GitDest | Out-Null
-                Expand-Archive -Path $MinGitZip -DestinationPath $GitDest -Force
-                Remove-Item -Path $MinGitZip -Force -ErrorAction SilentlyContinue
+                $GitExtract = Join-Path $WorkDir 'git-extract'
+                if (Test-Path -LiteralPath $GitExtract) { Remove-Item -LiteralPath $GitExtract -Recurse -Force }
+                Expand-Archive -LiteralPath $MinGitZip -DestinationPath $GitExtract -Force
+                if (-not (Test-Path -LiteralPath (Join-Path $GitExtract 'cmd/git.exe'))) { throw 'MinGit archive does not contain cmd/git.exe' }
+                # 解压及结构验证成功后才替换旧依赖，失败下载不能破坏原安装。
+                if (Test-Path -LiteralPath $GitDest) { Remove-Item -LiteralPath $GitDest -Recurse -Force }
+                Move-Item -LiteralPath $GitExtract -Destination $GitDest
+                Remove-Item -LiteralPath $MinGitZip -Force -ErrorAction SilentlyContinue
                 Add-UserPathFront -DirToAdd "$GitDest\cmd"
                 break
             } catch {
-                Remove-Item -Path $MinGitZip -Force -ErrorAction SilentlyContinue
+                Write-Msg -zh "   ⚠️ MinGit 安装尝试失败：$($_.Exception.Message)" `
+                           -en "   ⚠️ MinGit installation attempt failed: $($_.Exception.Message)" -Color Yellow
+                Remove-Item -LiteralPath $MinGitZip -Force -ErrorAction SilentlyContinue
             }
         }
     }
@@ -290,43 +298,80 @@ if (-not (Test-WorkingGit)) {
     }
 }
 
+# uv 的失败处理会调用 exit；必须隔离到子进程，避免关闭 irm | iex 所在的终端。
+function Invoke-UvInstaller {
+    $InstallerText = Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1" -TimeoutSec 60 -ErrorAction Stop
+    $InstallerPath = Join-Path $WorkDir 'uv-install.ps1'
+    # 子进程按文件读取，BOM 确保 Windows PowerShell 5.1 正确识别 UTF-8。
+    [System.IO.File]::WriteAllText($InstallerPath, $InstallerText, [System.Text.UTF8Encoding]::new($true))
+    $PowerShellExe = (Get-Process -Id $PID).Path
+    & $PowerShellExe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $InstallerPath
+    if ($LASTEXITCODE -ne 0) { throw "uv installer failed (exit code $LASTEXITCODE); see output above." }
+}
+
 # 2. uv 检查与自动安装
 if (-not (Test-WorkingUv)) {
     Write-Msg -zh "   📦 正在安装 uv..." -en "   📦 Installing uv..." -Color Gray
-    if ($IsMainland -and $ActiveProxy) {
-        $env:UV_INSTALLER_GITHUB_BASE_URL = "$ActiveProxy/https://github.com"
-    }
     $SavedUvDir = $env:UV_INSTALL_DIR
-    $env:UV_INSTALL_DIR = $LocalBinDir
+    $SavedUvBase = $env:UV_INSTALLER_GITHUB_BASE_URL
     try {
-        Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1" -TimeoutSec 60 -ErrorAction Stop | Invoke-Expression
-    } catch {
-        Remove-Item Env:\UV_INSTALLER_GITHUB_BASE_URL -ErrorAction SilentlyContinue
+        $env:UV_INSTALL_DIR = $LocalBinDir
+        if ($IsMainland -and $ActiveProxy) {
+            $env:UV_INSTALLER_GITHUB_BASE_URL = "$ActiveProxy/https://github.com"
+        }
         try {
-            Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1" -TimeoutSec 60 -ErrorAction Stop | Invoke-Expression
-        } catch { }
+            Invoke-UvInstaller
+        } catch {
+            Write-Msg -zh "   ⚠️ uv 安装失败：$($_.Exception.Message)，尝试官方源..." `
+                       -en "   ⚠️ uv installation failed: $($_.Exception.Message). Retrying official source..." -Color Yellow
+            Remove-Item Env:\UV_INSTALLER_GITHUB_BASE_URL -ErrorAction SilentlyContinue
+            try {
+                Invoke-UvInstaller
+            } catch {
+                Write-Msg -zh "   ⚠️ uv 重试失败：$($_.Exception.Message)" `
+                           -en "   ⚠️ uv retry failed: $($_.Exception.Message)" -Color Yellow
+            }
+        }
+    } finally {
+        $env:UV_INSTALL_DIR = $SavedUvDir
+        $env:UV_INSTALLER_GITHUB_BASE_URL = $SavedUvBase
     }
-    $env:UV_INSTALL_DIR = $SavedUvDir
-    Remove-Item Env:\UV_INSTALLER_GITHUB_BASE_URL -ErrorAction SilentlyContinue
     Add-UserPathFront -DirToAdd $LocalBinDir
     Add-UserPathFront -DirToAdd $CargoBinDir
     Update-SessionPath
 }
 
+function Install-ManagedPython {
+    $SavedPythonMirror = $env:UV_PYTHON_INSTALL_MIRROR
+    $PythonMirrors = @('')
+    if ($IsMainland -and $ActiveProxy) {
+        $PythonMirrors = @("$ActiveProxy/https://github.com/astral-sh/python-build-standalone/releases/download", '')
+    } elseif ($SavedPythonMirror) {
+        $PythonMirrors = @($SavedPythonMirror, '')
+    }
+    try {
+        foreach ($Mirror in $PythonMirrors) {
+            $env:UV_PYTHON_INSTALL_MIRROR = $Mirror
+            try {
+                & uv python install 3.12
+                if ($LASTEXITCODE -eq 0) { return }
+                throw "uv python install failed (exit code $LASTEXITCODE)"
+            } catch {
+                Write-Msg -zh "   ⚠️ Python 下载尝试失败：$($_.Exception.Message)" `
+                           -en "   ⚠️ Python download attempt failed: $($_.Exception.Message)" -Color Yellow
+            }
+        }
+        Write-Msg -zh "⚠️ Python 安装失败，请检查上面的错误信息。" `
+                   -en "⚠️ Python installation failed. Check the errors above." -Color Yellow
+    } finally {
+        $env:UV_PYTHON_INSTALL_MIRROR = $SavedPythonMirror
+    }
+}
+
 # 3. Python 3 检查与自动安装（通过 uv 安装独立 Python，补齐 python3.exe 并置于 WindowsApps 之前）
 if (-not (Test-WorkingPython) -and (Test-WorkingUv)) {
     Write-Msg -zh "   🐍 正在通过 uv 安装独立 Python 3 环境..." -en "   🐍 Installing standalone Python 3 via uv..." -Color Gray
-    $PyInstalled = $false
-    if ($IsMainland -and $ActiveProxy) {
-        $env:UV_PYTHON_INSTALL_MIRROR = "$ActiveProxy/https://github.com/astral-sh/python-build-standalone/releases/download"
-        & uv python install 3.12
-        if ($LASTEXITCODE -eq 0) { $PyInstalled = $true }
-        Remove-Item Env:\UV_PYTHON_INSTALL_MIRROR -ErrorAction SilentlyContinue
-    }
-    if (-not $PyInstalled) {
-        & uv python install 3.12
-        if ($LASTEXITCODE -ne 0) { Write-Msg -zh "⚠️ Python 安装失败。" -en "⚠️ Python installation failed." -Color Yellow }
-    }
+    Install-ManagedPython
 }
 
 # 已有 Python 也需前置其真实目录；只检查“任意候选可用”会让商店别名继续抢先。
@@ -339,11 +384,11 @@ if (Test-WorkingPython) {
         if ($LASTEXITCODE -ne 0) { $PythonExe = $null }
     } catch { $PythonExe = $null }
 }
-if ($PythonExe -and (Test-Path $PythonExe)) {
+if ($PythonExe -and (Test-Path -LiteralPath $PythonExe)) {
     $PythonDir = Split-Path "$PythonExe".Trim() -Parent
     $Py3Exe = Join-Path $PythonDir "python3.exe"
-    if (-not (Test-Path $Py3Exe)) {
-        Copy-Item -Path $PythonExe -Destination $Py3Exe -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $Py3Exe)) {
+        Copy-Item -LiteralPath $PythonExe -Destination $Py3Exe -Force -ErrorAction SilentlyContinue
     }
     Add-UserPathFront -DirToAdd $PythonDir
 }
@@ -370,7 +415,7 @@ if (-not (Test-WorkingNode)) {
         foreach ($baseUrl in $NodeMirrors) {
             try {
                 $Shasums = Invoke-RestMethod -Uri "https://nodejs.org/dist/latest-v$NodeVersion.x/SHASUMS256.txt" -TimeoutSec 15 -ErrorAction Stop
-                $MatchLine = ($Shasums -split "`n" | Where-Object { $_ -match "^[a-fA-F0-9]{64}\s+node-v$NodeVersion\.\d+\.\d+-win-$NodeArch\.zip$" } | Select-Object -First 1)
+                $MatchLine = ($Shasums -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^[a-fA-F0-9]{64}\s+node-v$NodeVersion\.\d+\.\d+-win-$NodeArch\.zip$" } | Select-Object -First 1)
                 if (-not $MatchLine) { continue }
                 $Tokens = ($MatchLine.Trim() -split '\s+')
                 $ExpectedHash = $Tokens[0].ToLowerInvariant()
@@ -378,28 +423,31 @@ if (-not (Test-WorkingNode)) {
 
                 Write-Msg -zh "   ⬇️  正在下载 Node.js ($ZipFileName)..." -en "   ⬇️  Downloading Node.js ($ZipFileName)..." -Color Gray
                 Invoke-WebRequest -Uri "$baseUrl/$ZipFileName" -OutFile $NodeZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
-                $ActualHash = (Get-FileHash -Path $NodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
+                $ActualHash = (Get-FileHash -LiteralPath $NodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
                 if ($ActualHash -ne $ExpectedHash) {
-                    Remove-Item -Path $NodeZip -Force -ErrorAction SilentlyContinue
-                    continue
+                    throw 'Node archive checksum mismatch'
                 }
 
                 $NodeExtract = "$WorkDir\node-extract"
                 $NodeDest    = "$DepsDir\node"
-                if (Test-Path $NodeExtract) { Remove-Item -Path $NodeExtract -Recurse -Force -ErrorAction SilentlyContinue }
-                if (Test-Path $NodeDest)    { Remove-Item -Path $NodeDest -Recurse -Force -ErrorAction SilentlyContinue }
-                Expand-Archive -Path $NodeZip -DestinationPath $NodeExtract -Force
-                Remove-Item -Path $NodeZip -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $NodeExtract) { Remove-Item -LiteralPath $NodeExtract -Recurse -Force -ErrorAction SilentlyContinue }
+                Expand-Archive -LiteralPath $NodeZip -DestinationPath $NodeExtract -Force
+                Remove-Item -LiteralPath $NodeZip -Force -ErrorAction SilentlyContinue
 
-                $InnerDir = Get-ChildItem -Path $NodeExtract -Directory | Select-Object -First 1
-                if ($InnerDir) {
-                    Move-Item -Path $InnerDir.FullName -Destination $NodeDest -Force
+                $InnerDir = Get-ChildItem -LiteralPath $NodeExtract -Directory | Select-Object -First 1
+                if (-not $InnerDir) { throw 'Node archive has no root directory' }
+                foreach ($Required in @('node.exe', 'npm.cmd', 'npx.cmd')) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $InnerDir.FullName $Required))) { throw "Node archive is missing $Required" }
                 }
-                Remove-Item -Path $NodeExtract -Recurse -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $NodeDest) { Remove-Item -LiteralPath $NodeDest -Recurse -Force }
+                Move-Item -LiteralPath $InnerDir.FullName -Destination $NodeDest
+                Remove-Item -LiteralPath $NodeExtract -Recurse -Force -ErrorAction SilentlyContinue
                 Add-UserPathFront -DirToAdd $NodeDest
                 break
             } catch {
-                Remove-Item -Path $NodeZip -Force -ErrorAction SilentlyContinue
+                Write-Msg -zh "   ⚠️ Node.js 安装尝试失败：$($_.Exception.Message)" `
+                           -en "   ⚠️ Node.js installation attempt failed: $($_.Exception.Message)" -Color Yellow
+                Remove-Item -LiteralPath $NodeZip -Force -ErrorAction SilentlyContinue
             }
         }
     }
@@ -436,11 +484,11 @@ $DownloadedUrl = ""
 foreach ($src in $CandidateURLs) {
     Write-Msg -zh "   尝试: $src" -en "   Trying: $src" -Color Gray
     try {
-        Remove-Item -Path $PartPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
         # OutFile 直接落盘，避免将整个发行包装入 PowerShell 的 Content 内存对象。
         Invoke-WebRequest -Uri $src -OutFile $PartPath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
 
-        Move-Item -Path $PartPath -Destination $ZipPath -Force
+        Move-Item -LiteralPath $PartPath -Destination $ZipPath -Force
         $Downloaded    = $true
         $DownloadedUrl = $src
         break
@@ -453,8 +501,8 @@ foreach ($src in $CandidateURLs) {
 if (-not $Downloaded) {
     Write-Msg -zh "❌ 所有下载源均失败，请检查网络连接或稍后重试。" `
                -en "❌ All download sources failed. Check your network or retry later." -Color Red
-    Remove-Item -Path $PartPath -Force -ErrorAction SilentlyContinue
-    exit 1
+    Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
+    throw "All Polaris download sources failed."
 }
 
 # ── 5. 校验 & 解压 ───────────────────────────────────────────────────────────
@@ -463,7 +511,7 @@ Write-Msg -zh "📦 正在校验并解压..." -en "📦 Verifying and extracting
 # 5a. SHA-256 完整性校验（与 install.sh 对齐，使用 PowerShell 原生 Get-FileHash）
 $ShaFile    = "$ZipPath.sha256"
 $ShaFetched = $false
-Remove-Item -Path $ShaFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $ShaFile -Force -ErrorAction SilentlyContinue
 
 try {
     Invoke-WebRequest -Uri "$GithubURL.sha256" -OutFile $ShaFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
@@ -484,19 +532,19 @@ if (-not $ShaFetched) {
                -en "❌ Failed to download checksum file from official source. Aborting install for supply-chain safety." -Color Red
     Write-Msg -zh "   若你所在网络无法直连 GitHub，可先执行 `$env:POLARIS_ALLOW_MIRROR_CHECKSUM='1'` 后重新运行本脚本以回退到镜像源校验和。" `
                -en "   If your network cannot reach GitHub directly, set `$env:POLARIS_ALLOW_MIRROR_CHECKSUM='1'` and re-run this script to fall back to mirror checksum." -Color Yellow
-    Remove-Item -Path $ZipPath, $ShaFile -Force -ErrorAction SilentlyContinue
-    exit 1
+    Remove-Item -LiteralPath $ZipPath, $ShaFile -Force -ErrorAction SilentlyContinue
+    throw "Cannot obtain trusted Polaris checksum."
 }
 
-$ExpectedSha = ((Get-Content -Path $ShaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
-$ActualSha   = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Remove-Item -Path $ShaFile -Force -ErrorAction SilentlyContinue
+$ExpectedSha = ((Get-Content -LiteralPath $ShaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+$ActualSha   = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Remove-Item -LiteralPath $ShaFile -Force -ErrorAction SilentlyContinue
 
 if ([string]::IsNullOrWhiteSpace($ExpectedSha) -or ($ExpectedSha -ne $ActualSha)) {
     Write-Msg -zh "❌ 下载的安装包校验和不匹配，可能遭遇中间人篡改，安装已中止。" `
                -en "❌ Downloaded package checksum mismatch; possible tampering detected. Installation aborted." -Color Red
-    Remove-Item -Path $ZipPath -Force -ErrorAction SilentlyContinue
-    exit 1
+    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    throw "Polaris archive checksum mismatch."
 }
 Write-Msg -zh "✅ 校验和匹配，归档完整性已确认。" -en "✅ Checksum verified, archive integrity confirmed." -Color Green
 
@@ -508,45 +556,51 @@ try {
 } catch {
     Write-Msg -zh "❌ 归档文件损坏，已删除，请重新运行安装脚本。" `
                -en "❌ Archive corrupted, deleted. Re-run the install script." -Color Red
-    Remove-Item -Path $ZipPath -Force -ErrorAction SilentlyContinue
-    exit 1
+    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    throw "Polaris archive is corrupt."
 }
 
 $ExtractDir = "$WorkDir\extracted"
-if (Test-Path $ExtractDir) { Remove-Item -Path $ExtractDir -Recurse -Force }
+if (Test-Path -LiteralPath $ExtractDir) { Remove-Item -LiteralPath $ExtractDir -Recurse -Force }
 
-Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
-Remove-Item -Path $ZipPath -Force
+Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractDir -Force
+Remove-Item -LiteralPath $ZipPath -Force
 
 # 复制解压目录内容到安装目录（处理可能存在的一层包裹目录）
-$RootItems = @(Get-ChildItem -Path $ExtractDir)
+$RootItems = @(Get-ChildItem -LiteralPath $ExtractDir)
 if ($RootItems.Count -eq 1 -and $RootItems[0].PSIsContainer) {
     $SrcDir = $RootItems[0].FullName
 } else {
     $SrcDir = $ExtractDir
 }
 $NewExe = Join-Path $SrcDir $BinName
-if (-not (Test-Path $NewExe)) { throw "Archive does not contain $BinName; existing installation preserved." }
+if (-not (Test-Path -LiteralPath $NewExe)) { throw "Archive does not contain $BinName; existing installation preserved." }
 & $NewExe version | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "New binary cannot run on this OS; existing installation preserved." }
 
 # 下载、校验及预检成功后才停止旧任务，避免下载失败造成服务停机。
 try { & schtasks /end /tn $TaskName 2>$null | Out-Null } catch { }
-$OldProc = Get-Process -Name "polaris" -ErrorAction SilentlyContinue
-if ($OldProc) {
-    $OldProc | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+# 桌面外壳也会占用安装目录；只停止本安装目录里的进程，避免影响其他实例。
+$InstallPrefix = $InstallDir.TrimEnd('\') + '\'
+$OldProc = @(Get-Process -Name 'polaris', 'polaris-desktop*' -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and $_.Path.StartsWith($InstallPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+})
+if ($OldProc.Count) {
+    $OldProc | Stop-Process -Force -ErrorAction Stop
+    $OldProc | Wait-Process -Timeout 10 -ErrorAction Stop
 }
-Copy-Item -Path "$SrcDir\*" -Destination $InstallDir -Recurse -Force
+Get-ChildItem -LiteralPath $SrcDir -Force | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $InstallDir -Recurse -Force
+}
 $FinalExe = "$InstallDir\$BinName"
-Remove-Item -Path $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
 
-if (-not (Test-Path $FinalExe)) {
+if (-not (Test-Path -LiteralPath $FinalExe)) {
     Write-Msg -zh "❌ 归档中未找到 $BinName。" -en "❌ $BinName not found in archive." -Color Red
-    exit 1
+    throw "Installed Polaris executable is missing."
 }
 
-Unblock-File -Path $FinalExe -ErrorAction SilentlyContinue
+Unblock-File -LiteralPath $FinalExe -ErrorAction SilentlyContinue
 
 Write-Msg -zh "✅ 程序及依赖已安装: $InstallDir" -en "✅ Binary and dependencies installed: $InstallDir" -Color Green
 
@@ -575,8 +629,8 @@ if ($LASTEXITCODE -eq 0) {
 # 统一归档内含 desktop/ 目录（有桌面版的平台才存在）。将桌面外壳 exe 保留在
 # 安装目录内，并创建开始菜单快捷方式使其可被发现。
 $DesktopSrc = "$InstallDir\desktop"
-if (Test-Path $DesktopSrc) {
-    $DesktopExe = Get-ChildItem -Path $DesktopSrc -Filter "*.exe" | Select-Object -First 1
+if (Test-Path -LiteralPath $DesktopSrc) {
+    $DesktopExe = Get-ChildItem -LiteralPath $DesktopSrc -Filter "*.exe" | Select-Object -First 1
     if ($DesktopExe) {
         # 创建开始菜单快捷方式
         $StartMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
@@ -627,6 +681,7 @@ Write-Msg -zh "   请访问: $ConsoleUrl" -en "   Visit: $ConsoleUrl" -Color Yel
 Write-Host ""
 if (-not ($DepsReady -and $ServiceReady)) { throw "Polaris installation incomplete; see warnings above." }
 } finally {
-    Remove-Item -Path $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
+    $ProgressPreference = $PreviousProgressPreference
     $ErrorActionPreference = $PreviousErrorActionPreference
 }

@@ -1,15 +1,31 @@
 ﻿$ErrorActionPreference = 'Stop'
 $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $Source = Join-Path $Root 'scripts/install.ps1'
+# 网络响应可能保留 BOM；ParseFile 会吞掉它，不能覆盖 irm | iex 的入口行为。
+$SourceBytes = [System.IO.File]::ReadAllBytes($Source)
+$Text = [System.Text.Encoding]::UTF8.GetString($SourceBytes)
+if ($Text[0] -eq [char]0xFEFF) { throw 'Installer must use UTF-8 without BOM for irm | iex' }
 $Tokens = $null
 $ParseErrors = $null
-$Ast = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$Tokens, [ref]$ParseErrors)
+$Ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$Tokens, [ref]$ParseErrors)
 if ($ParseErrors.Count) { throw ($ParseErrors | Out-String) }
+if ($Ast.Find({ param($Node) $Node -is [System.Management.Automation.Language.ExitStatementAst] }, $true)) {
+    throw 'Installer must throw on failure instead of exiting the caller PowerShell'
+}
+# 只执行首段初始化，验证字符串管道入口，不触发下载、安装和注册表写入。
+& {
+    $ErrorActionPreference = 'Continue'
+    $Prologue = $Text.Substring(0, $Text.IndexOf('[Console]::OutputEncoding'))
+    $Prologue | Invoke-Expression -ErrorAction Stop
+    if ($PreviousErrorActionPreference -ne 'Continue' -or $ErrorActionPreference -ne 'Stop') {
+        throw 'Installer prologue did not preserve and set ErrorActionPreference'
+    }
+}
 $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Root 'scripts/uninstall.ps1'), [ref]$Tokens, [ref]$ParseErrors)
 if ($ParseErrors.Count) { throw ($ParseErrors | Out-String) }
 
 # 只加载待测函数，不运行安装主体或写入用户注册表。
-foreach ($Name in @('Update-SessionPath', 'Test-WorkingPython', 'Test-WorkingNode', 'Test-WorkingUv')) {
+foreach ($Name in @('Update-SessionPath', 'Test-WorkingPython', 'Test-WorkingNode', 'Test-WorkingUv', 'Invoke-UvInstaller', 'Install-ManagedPython')) {
     $FunctionAst = $Ast.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $_.Name -eq $Name } | Select-Object -First 1
     . ([scriptblock]::Create($FunctionAst.Extent.Text))
@@ -24,6 +40,176 @@ $SavedArch = $env:PROCESSOR_ARCHITECTURE
 $SavedNativeArch = $env:PROCESSOR_ARCHITEW6432
 try {
     New-Item -ItemType Directory -Path $TestDir | Out-Null
+    & {
+        $InstallDir = 'C:\Users\Owner\[test]\.polaris\bin'
+        $script:StoppedPaths = New-Object 'System.Collections.Generic.List[string]'
+        function Get-Process {
+            param($Name, $ErrorAction)
+            foreach ($Path in @("$InstallDir\polaris.exe", "$InstallDir\desktop\polaris-desktop-windows-amd64.exe", "$InstallDir-old\polaris.exe", 'C:\Other\polaris.exe')) {
+                [pscustomobject]@{Path=$Path}
+            }
+        }
+        function Stop-Process {
+            param([Parameter(ValueFromPipeline=$true)]$InputObject, [switch]$Force)
+            process { $script:StoppedPaths.Add($InputObject.Path) }
+        }
+        function Wait-Process { param([Parameter(ValueFromPipeline=$true)]$InputObject, $Timeout) process { } }
+        $Start = $Text.IndexOf('$InstallPrefix =')
+        $End = $Text.IndexOf('Get-ChildItem -LiteralPath $SrcDir', $Start)
+        . ([scriptblock]::Create($Text.Substring($Start, $End - $Start)))
+        Assert-True ($script:StoppedPaths.Count -eq 2) 'Update did not stop installed core and desktop exclusively'
+    }
+    & {
+        $WorkDir = Join-Path $TestDir 'cleanup [中文]'
+        New-Item -ItemType Directory -Path $WorkDir | Out-Null
+        $PreviousErrorActionPreference = 'Continue'
+        $PreviousProgressPreference = 'Continue'
+        $ProgressPreference = 'SilentlyContinue'
+        $MainTry = $Ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
+        $Cleanup = $MainTry.Finally.Extent.Text
+        . ([scriptblock]::Create($Cleanup.Substring(1, $Cleanup.Length - 2)))
+        Assert-True (-not (Test-Path -LiteralPath $WorkDir)) 'Work directory was not removed'
+        Assert-True ($ErrorActionPreference -eq 'Continue' -and $ProgressPreference -eq 'Continue') 'Caller preferences were not restored'
+    }
+    & {
+        # 使用真实 Node 验证旧版参数传递；函数模拟无法发现双引号被吞掉的问题。
+        $NodePath = (Get-Command node -ErrorAction Stop).Source
+        $NodeMajor = [int]((& $NodePath --version).TrimStart('v').Split('.')[0])
+        $PSNativeCommandArgumentPassing = 'Legacy'
+        $NodeFunction = $Ast.Find({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Test-WorkingNode' }, $true)
+        $NodeCode = $NodeFunction.Find({ param($Node) $Node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $Node.Value -like 'process.exit*' }, $true).Value
+        & $NodePath -e $NodeCode
+        Assert-True ($LASTEXITCODE -eq $(if ($NodeMajor -ge 22) { 0 } else { 1 })) 'Node version check failed with legacy argument passing'
+    }
+    & {
+        $OriginalPythonMirror = $env:UV_PYTHON_INSTALL_MIRROR
+        try {
+            $IsMainland = $true
+            $ActiveProxy = 'https://mirror.invalid'
+            function Write-Msg { param($zh, $en, $Color) }
+            function uv {
+                $script:PythonAttempts.Add([string]$env:UV_PYTHON_INSTALL_MIRROR)
+                if ($script:PythonAttempts.Count -eq 1) {
+                    if ($script:PythonFailure -eq 'throw') { throw 'mock native stderr failure' }
+                    $global:LASTEXITCODE = 1
+                } else { $global:LASTEXITCODE = 0 }
+            }
+            foreach ($script:PythonFailure in @('throw', 'exit')) {
+                $env:UV_PYTHON_INSTALL_MIRROR = 'https://previous.invalid'
+                $script:PythonAttempts = New-Object 'System.Collections.Generic.List[string]'
+                Install-ManagedPython
+                Assert-True ($script:PythonAttempts.Count -eq 2) 'Python failure did not retry'
+                Assert-True ($script:PythonAttempts[0] -like 'https://mirror.invalid/*') 'Python mirror was not used'
+                Assert-True ([string]::IsNullOrEmpty($script:PythonAttempts[1])) 'Python retry did not use official source'
+                Assert-True ($env:UV_PYTHON_INSTALL_MIRROR -eq 'https://previous.invalid') 'Python mirror was not restored'
+            }
+        } finally { $env:UV_PYTHON_INSTALL_MIRROR = $OriginalPythonMirror }
+    }
+    & {
+        # 用真实 ZIP 覆盖损坏包和缺文件包，验证替换前不会删除旧依赖。
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        function Write-Msg { param($zh, $en, $Color) }
+        function Add-UserPathFront { param($DirToAdd) }
+        function Update-SessionPath { }
+        function Test-WorkingNode { $false }
+        function Get-Command {
+            param($Name)
+            if ($Name -ne 'winget') { Microsoft.PowerShell.Core\Get-Command $Name }
+        }
+        function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction) Copy-Item -LiteralPath $Fixture -Destination $OutFile -Force }
+        function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) "$FixtureHash  node-v24.1.0-win-x64.zip`r`n" }
+        $NodeStart = $Text.IndexOf('# 4. Node.js')
+        $NodeEnd = $Text.IndexOf("foreach (`$dep in", $NodeStart)
+        $NodeInstall = [scriptblock]::Create($Text.Substring($NodeStart, $NodeEnd - $NodeStart))
+        $GitLoop = $Ast.Find({ param($Node) $Node -is [System.Management.Automation.Language.ForEachStatementAst] -and $Node.Variable.VariablePath.UserPath -eq 'u' -and $Node.Condition.Extent.Text -eq '$GitUrls' }, $true)
+        $GitInstall = [scriptblock]::Create('$MinGitZip = Join-Path $WorkDir "mingit.zip"' + "`n" + $GitLoop.Extent.Text)
+        foreach ($Dependency in @('Node', 'Git')) {
+            foreach ($Scenario in @('corrupt', 'missing', 'valid')) {
+                $WorkDir = Join-Path $TestDir "$Dependency $Scenario [中文]"
+                $DepsDir = Join-Path $WorkDir 'deps'
+                $Dest = Join-Path $DepsDir $Dependency.ToLowerInvariant()
+                New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+                $Sentinel = Join-Path $Dest 'old-install'
+                Set-Content -LiteralPath $Sentinel -Value 'keep'
+                $Fixture = Join-Path $WorkDir 'fixture.zip'
+                $Package = Join-Path $WorkDir 'package'
+                New-Item -ItemType Directory -Path $Package | Out-Null
+                if ($Scenario -eq 'corrupt') {
+                    Set-Content -LiteralPath $Fixture -Value 'not a ZIP'
+                } elseif ($Dependency -eq 'Node') {
+                    foreach ($Name in @('node.exe', 'npm.cmd')) { Set-Content -LiteralPath (Join-Path $Package $Name) -Value 'fixture' }
+                    if ($Scenario -eq 'valid') { Set-Content -LiteralPath (Join-Path $Package 'npx.cmd') -Value 'fixture' }
+                    [System.IO.Compression.ZipFile]::CreateFromDirectory($Package, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+                } else {
+                    $CmdDir = Join-Path $Package 'cmd'
+                    New-Item -ItemType Directory -Path $CmdDir | Out-Null
+                    $Name = if ($Scenario -eq 'valid') { 'git.exe' } else { 'missing.exe' }
+                    Set-Content -LiteralPath (Join-Path $CmdDir $Name) -Value 'fixture'
+                    [System.IO.Compression.ZipFile]::CreateFromDirectory($CmdDir, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+                }
+                $FixtureHash = (Get-FileHash -LiteralPath $Fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+                $GitHash = $FixtureHash
+                $GitUrls = @('https://download.invalid/git.zip')
+                $IsMainland = $false
+                $NodeVersion = '24'
+                $Arch = 'amd64'
+                if ($Dependency -eq 'Node') { . $NodeInstall } else { . $GitInstall }
+                Assert-True ((Test-Path -LiteralPath $Sentinel) -eq ($Scenario -ne 'valid')) "$Dependency $Scenario did not preserve/replace old install correctly"
+                if ($Scenario -eq 'valid') {
+                    $Required = if ($Dependency -eq 'Node') { 'npx.cmd' } else { 'cmd/git.exe' }
+                    Assert-True (Test-Path -LiteralPath (Join-Path $Dest $Required)) "$Dependency valid archive was not installed"
+                }
+            }
+        }
+    }
+    # 真实子进程覆盖 exit 和异常；失败必须回到父进程且能继续重试。
+    & {
+        $WorkDir = Join-Path $TestDir 'uv installer with spaces'
+        New-Item -ItemType Directory -Path $WorkDir | Out-Null
+        function Invoke-RestMethod { $script:MockUvInstaller }
+        foreach ($Scenario in @('exit 23', 'throw "mock uv download failure"', 'exit 0')) {
+            $script:MockUvInstaller = $Scenario
+            $Failed = $false
+            try { Invoke-UvInstaller } catch { $Failed = $true }
+            Assert-True ($Failed -eq ($Scenario -ne 'exit 0')) "Unexpected uv subprocess result: $Scenario"
+        }
+    }
+    & {
+        $OriginalUvDir = $env:UV_INSTALL_DIR
+        $OriginalUvBase = $env:UV_INSTALLER_GITHUB_BASE_URL
+        try {
+            $env:UV_INSTALL_DIR = 'previous-uv-dir'
+            $env:UV_INSTALLER_GITHUB_BASE_URL = 'https://previous.invalid'
+            $LocalBinDir = $TestDir
+            $CargoBinDir = $TestDir
+            $IsMainland = $true
+            $ActiveProxy = 'https://mirror.invalid'
+            function Test-WorkingUv { $false }
+            function Write-Msg { param($zh, $en, $Color) }
+            function Add-UserPathFront { param($DirToAdd) }
+            function Update-SessionPath { }
+            function Invoke-UvInstaller {
+                $script:UvAttempts.Add([string]$env:UV_INSTALLER_GITHUB_BASE_URL)
+                Assert-True ($env:UV_INSTALL_DIR -eq $TestDir) 'uv install directory was not passed to child'
+                if ($script:UvAttempts.Count -eq 1 -or $script:FailUvRetry) { throw 'mock installer failure' }
+            }
+            $Start = $Text.IndexOf('# 2. uv 检查与自动安装')
+            $End = $Text.IndexOf('# 3. Python 3', $Start)
+            $InstallUv = [scriptblock]::Create($Text.Substring($Start, $End - $Start))
+            foreach ($script:FailUvRetry in @($false, $true)) {
+                $script:UvAttempts = New-Object 'System.Collections.Generic.List[string]'
+                . $InstallUv
+                Assert-True ($script:UvAttempts.Count -eq 2) 'uv failure did not trigger retry'
+                Assert-True ($script:UvAttempts[0] -eq 'https://mirror.invalid/https://github.com') 'Mirror was not used first'
+                Assert-True ([string]::IsNullOrEmpty($script:UvAttempts[1])) 'Retry did not clear mirror override'
+                Assert-True ($env:UV_INSTALL_DIR -eq 'previous-uv-dir') 'uv install directory was not restored'
+                Assert-True ($env:UV_INSTALLER_GITHUB_BASE_URL -eq 'https://previous.invalid') 'uv mirror override was not restored'
+            }
+        } finally {
+            $env:UV_INSTALL_DIR = $OriginalUvDir
+            $env:UV_INSTALLER_GITHUB_BASE_URL = $OriginalUvBase
+        }
+    }
     $InstallDir = $TestDir
     $LocalBinDir = $TestDir
     $CargoBinDir = $TestDir
@@ -65,7 +251,6 @@ try {
     Assert-True (Test-WorkingUv) 'Working uv/uvx were rejected'
 
     # x86 PowerShell 在 ARM64 Windows 上必须选择本机 arm64 发行包。
-    $Text = Get-Content $Source -Raw
     $Start = $Text.IndexOf('$NativeArch =')
     $End = $Text.IndexOf('$ArchiveName =', $Start)
     $DetectArch = [scriptblock]::Create($Text.Substring($Start, $End - $Start))
@@ -77,7 +262,7 @@ try {
     $Rejected = $false
     try { . $DetectArch } catch { $Rejected = $true }
     Assert-True $Rejected 'Unsupported x86 OS was accepted'
-    Write-Host 'PASS: parser, session PATH, Python store aliases, Node command shims, uvx, WOW64 architecture'
+    Write-Host 'PASS: UTF-8 entry, scoped process stop, cleanup/preferences, legacy Node arguments, Python retry, Git/Node staging, uv subprocess/retry, parser, session PATH, Python aliases, Node shims, uvx, WOW64'
 } finally {
     $env:Path = $SavedPath
     $env:USERPROFILE = $SavedProfile
