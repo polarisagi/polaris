@@ -24,11 +24,12 @@ $DepsDir       = "$DataDir\deps"
 $LogDir        = "$DataDir\logs"
 $LocalBinDir   = "$env:USERPROFILE\.local\bin"
 $CargoBinDir   = "$env:USERPROFILE\.cargo\bin"
-$Port          = 28888
 $TaskName      = "PolarisAGI-Polaris"
 $NodeVersion   = "24"
 $DepsReady     = $true
 $ServiceReady  = $false
+$ServiceRegistered = $false
+$ServiceLaunchAttempted = $false
 
 Write-Msg -zh "🌌 正在安装/更新 PolarisAGI Polaris..." `
            -en "🌌 Installing/Updating PolarisAGI Polaris..." -Color Cyan
@@ -604,25 +605,55 @@ Unblock-File -LiteralPath $FinalExe -ErrorAction SilentlyContinue
 
 Write-Msg -zh "✅ 程序及依赖已安装: $InstallDir" -en "✅ Binary and dependencies installed: $InstallDir" -Color Green
 
-# ── 6. 配置开机自启 ──────────────────────────────────────────────────────────
+# ── 6. 配置登录自启 ──────────────────────────────────────────────────────────
 # 委托给 `polaris service install`，本脚本**不再自写**任务计划。
 # 两份实现必然漂移其一：任务名、启动参数、权限级别各写一遍，改了一处忘了另一处
 # 的结果是"装出来的任务和 polaris service status 看到的不是同一个"。
 # 单一实现见 cmd/polaris/cli_service.go（ADR-0096 决策一）。
-Write-Msg -zh "⚙️  注册系统服务..." -en "⚙️  Registering system service..." -Color Cyan
+Write-Msg -zh "⚙️  配置当前用户登录自启动..." -en "⚙️  Configuring login autostart for the current user..." -Color Cyan
 
-# 移除旧的注册表自启（历史遗留清理）
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
-    -Name $TaskName -ErrorAction SilentlyContinue
+function Get-PolarisRuntimeStatus {
+    $StatusText = & $FinalExe service status --json
+    if ($LASTEXITCODE -ne 0) { throw "Cannot query Polaris runtime status (exit code $LASTEXITCODE)" }
+    $Status = $StatusText | ConvertFrom-Json -ErrorAction Stop
+    # 状态不可读时不能盲目拉起第二个进程，避免与现有实例争用锁和日志文件。
+    if ($null -eq $Status -or $Status.running -isnot [bool] -or $Status.problem) {
+        throw 'Polaris runtime status is unavailable; inspect service status and logs.'
+    }
+    return $Status
+}
 
-& $FinalExe service install
-if ($LASTEXITCODE -eq 0) {
-    $ServiceReady = $true
+try {
+    & $FinalExe service install
+    $ServiceRegistered = ($LASTEXITCODE -eq 0)
+} catch {
+    Write-Msg -zh "⚠️ 服务注册失败：$($_.Exception.Message)" `
+               -en "⚠️ Service registration failed: $($_.Exception.Message)" -Color Yellow
+}
+if ($ServiceRegistered) {
+    # Go CLI 可能选择普通用户 HKCU Run 后端，安装脚本不能再把它当遗留入口删除。
+    $ServiceLaunchAttempted = $true
     Write-Msg -zh "✅ 服务已注册并启动，登录时自动运行。" `
                -en "✅ Service registered and started, auto-starts on login." -Color Green
 } else {
-    Write-Msg -zh "⚠️  服务注册失败，可稍后手动执行：$FinalExe service install" `
-               -en "⚠️  Service registration failed. Run manually later: $FinalExe service install" -Color Yellow
+    Write-Msg -zh "⚠️ 登录自启动未配置成功，将尝试以当前用户启动后台进程。" `
+               -en "⚠️ Login autostart was not configured. Trying to start a background process as the current user." -Color Yellow
+    Write-Msg -zh "   检查计划任务权限后，在当前账户重试：& '$FinalExe' service install" `
+               -en "   Check Task Scheduler permissions, then retry as the same user: & '$FinalExe' service install" -Color Yellow
+    try {
+        $RuntimeStatus = Get-PolarisRuntimeStatus
+        # 注册可能已成功而即时启动失败，状态查询比进程退出码更能区分这两步。
+        if ($RuntimeStatus.registered -is [bool]) { $ServiceRegistered = $RuntimeStatus.registered }
+        if (-not $RuntimeStatus.running) {
+            Start-Process -FilePath $FinalExe -ArgumentList 'serve' -WorkingDirectory $InstallDir -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $LogDir 'service-fallback.out.log') `
+                -RedirectStandardError (Join-Path $LogDir 'service-fallback.err.log') -ErrorAction Stop
+        }
+        $ServiceLaunchAttempted = $true
+    } catch {
+        Write-Msg -zh "⚠️ 后台启动失败：$($_.Exception.Message)，请检查 $LogDir。" `
+                   -en "⚠️ Background startup failed: $($_.Exception.Message). Check $LogDir." -Color Yellow
+    }
 }
 
 # ── 6.5 桌面外壳安装 ─────────────────────────────────────────────────────────
@@ -652,14 +683,13 @@ if (Test-Path -LiteralPath $DesktopSrc) {
 }
 
 # ── 7. 等待就绪 ──────────────────────────────────────────────────────────────
-# 不再额外 Start-Process：service install 已经启动了守护进程，重复启动会被单实例
-# 锁拒绝，在日志里留下一条看起来像故障的 ALREADY_EXISTS。
+# 注册成功和直接后台启动都必须确认实际就绪，不能把进程创建成功当作服务可用。
 $ConsoleUrl = ""
-if ($ServiceReady) {
+if ($ServiceLaunchAttempted) {
     $ServiceReady = $false
     for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
         try {
-            $rt = & $FinalExe service status --json | ConvertFrom-Json
+            $rt = Get-PolarisRuntimeStatus
             if ($rt.running -and $rt.base_url) {
                 $ConsoleUrl = $rt.base_url
                 $ServiceReady = $true
@@ -671,13 +701,20 @@ if ($ServiceReady) {
 }
 Write-Host ""
 if ($DepsReady -and $ServiceReady) {
-    Write-Msg -zh "🎉 安装完成，后台服务已就绪。" -en "🎉 Installation complete; service is ready." -Color Green
+    if ($ServiceRegistered) {
+        Write-Msg -zh "🎉 安装完成，后台服务已就绪。" -en "🎉 Installation complete; service is ready." -Color Green
+    } else {
+        Write-Msg -zh "✅ 程序已安装，后台进程已就绪；登录自启动尚未配置成功。" `
+                   -en "✅ Core installed and background process ready; login autostart is not configured." -Color Yellow
+    }
 } else {
     Write-Msg -zh "⚠️ 主程序已安装，但依赖或后台服务未就绪。可运行 polaris serve 查看错误，处理后重跑安装。" `
                -en "⚠️ Core installed, but dependencies or service need attention. Run polaris serve for diagnostics, then rerun." -Color Yellow
+    Write-Msg -zh "   日志目录：$LogDir" -en "   Log directory: $LogDir" -Color Yellow
 }
-if (-not $ConsoleUrl) { $ConsoleUrl = "http://127.0.0.1:$Port" }
-Write-Msg -zh "   请访问: $ConsoleUrl" -en "   Visit: $ConsoleUrl" -Color Yellow
+if ($ServiceReady) {
+    Write-Msg -zh "   请访问: $ConsoleUrl" -en "   Visit: $ConsoleUrl" -Color Yellow
+}
 Write-Host ""
 if (-not ($DepsReady -and $ServiceReady)) { throw "Polaris installation incomplete; see warnings above." }
 } finally {

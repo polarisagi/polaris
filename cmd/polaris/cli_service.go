@@ -3,7 +3,7 @@
 // ADR: docs/arch/decisions/ADR-0096-desktop-shell-and-daemon-client-split.md 决策一
 // （守护进程的生命周期独立于任何 GUI）。无桌面的服务器部署同样受益。
 //
-// 三平台都用**用户级**注册（launchd LaunchAgent / systemd --user / 计划任务），
+// 三平台都用**用户级**注册（launchd LaunchAgent / systemd --user / 计划任务或 HKCU Run），
 // 不用系统级：数据目录在用户 home 下，以 root 跑会把文件属主弄成 root，随后用户
 // 直接运行 polaris 会得到一串权限错误，而错误信息不会提到"你之前装过服务"。
 package main
@@ -165,15 +165,14 @@ func serviceUninstall() error {
 // serviceStatus 分别报告"注册状态"与"运行状态"，二者是独立的两件事：
 // 注册了但没跑、跑着但没注册（手工启动）都是常见且合法的状态，合成一个
 // "是否正常"会把用户引向错误的处置。
-// serviceRegistered 判定是否已注册，并返回单元文件路径（Windows 为任务名）。
+// Windows 两种注册后端均需查询，启动脚本存在不代表登录自启动已注册。
 func serviceRegistered() (bool, string) {
 	unit, err := serviceUnitPath()
 	if err != nil {
 		return false, ""
 	}
 	if runtime.GOOS == "windows" {
-		// 查询成功即已注册；schtasks 对不存在的任务返回非零。
-		return runTool("schtasks", "/query", "/tn", windowsTaskName) == nil, unit
+		return windowsServiceRegistration(runTool)
 	}
 	_, statErr := os.Stat(unit)
 	return statErr == nil, unit
@@ -220,9 +219,7 @@ func serviceUnitPath() (string, error) {
 	case "linux":
 		return filepath.Join(home, ".config", "systemd", "user", "polaris.service"), nil
 	case "windows":
-		// 计划任务没有单元文件，返回任务名本身。注册与否由 serviceRegistered
-		// 走 schtasks /query 判定，不靠文件是否存在——此前这里返回一个永远不
-		// 存在的占位路径，于是 Windows 上的状态恒为「未注册」。
+		// 实际注册后端由 windowsServiceRegistration 查询，不能靠启动脚本是否存在判断。
 		return windowsTaskName, nil
 	default:
 		return "", apperr.New(apperr.CodeUnimplemented, "service: 不支持的平台 "+runtime.GOOS)
@@ -410,7 +407,7 @@ func systemdUninstall() error {
 	return nil
 }
 
-// ── Windows: 计划任务（登录时触发）──────────────────────────────────────────
+// ── Windows: 用户级登录自启（计划任务 / HKCU Run）────────────────────────────
 
 func schtasksInstall(exe string) error {
 	// 任务调度器可能持有旧注册表环境；固化安装时已验证的 PATH，首次登录也能启动扩展。
@@ -419,17 +416,7 @@ func schtasksInstall(exe string) error {
 	if err := writeUnit(scriptPath, content); err != nil {
 		return err
 	}
-	// /rl LIMITED：保持普通用户权限，与"数据目录在用户 home 下"一致（见文件头）。
-	if err := runTool("schtasks", "/create", "/f", "/tn", windowsTaskName,
-		"/tr", `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "`+scriptPath+`"`,
-		"/sc", "onlogon", "/rl", "LIMITED"); err != nil {
-		return err
-	}
-	if err := runTool("schtasks", "/run", "/tn", windowsTaskName); err != nil {
-		return err
-	}
-	fmt.Printf("%s 已注册计划任务并启动：%s\n", clr(ansiOk, "✓"), windowsTaskName)
-	return nil
+	return windowsLoginInstall(scriptPath, runTool)
 }
 
 func windowsServiceScript(exe, path string) string {
@@ -439,16 +426,17 @@ func windowsServiceScript(exe, path string) string {
 }
 
 func schtasksUninstall() error {
-	runToolBestEffort("schtasks", "/end", "/tn", windowsTaskName)
-	if err := runTool("schtasks", "/delete", "/f", "/tn", windowsTaskName); err != nil {
+	exe, err := serviceExecPath()
+	if err != nil {
 		return err
 	}
-	if exe, err := serviceExecPath(); err == nil {
-		if err := os.Remove(filepath.Join(filepath.Dir(exe), "polaris-service.ps1")); err != nil && !os.IsNotExist(err) {
-			return apperr.Wrap(apperr.CodeInternal, "service: 删除启动脚本失败", err)
-		}
+	if err := windowsLoginUninstall(exe, runTool); err != nil {
+		return err
 	}
-	fmt.Printf("%s 已移除计划任务\n", clr(ansiOk, "✓"))
+	if err := os.Remove(filepath.Join(filepath.Dir(exe), "polaris-service.ps1")); err != nil && !os.IsNotExist(err) {
+		return apperr.Wrap(apperr.CodeInternal, "service: 删除启动脚本失败", err)
+	}
+	fmt.Printf("%s 已停止并移除登录自启动\n", clr(ansiOk, "✓"))
 	return nil
 }
 

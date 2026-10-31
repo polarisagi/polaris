@@ -25,7 +25,7 @@ $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Ro
 if ($ParseErrors.Count) { throw ($ParseErrors | Out-String) }
 
 # 只加载待测函数，不运行安装主体或写入用户注册表。
-foreach ($Name in @('Update-SessionPath', 'Test-WorkingPython', 'Test-WorkingNode', 'Test-WorkingUv', 'Invoke-UvInstaller', 'Install-ManagedPython')) {
+foreach ($Name in @('Update-SessionPath', 'Test-WorkingPython', 'Test-WorkingNode', 'Test-WorkingUv', 'Invoke-UvInstaller', 'Install-ManagedPython', 'Get-PolarisRuntimeStatus')) {
     $FunctionAst = $Ast.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $_.Name -eq $Name } | Select-Object -First 1
     . ([scriptblock]::Create($FunctionAst.Extent.Text))
@@ -40,6 +40,80 @@ $SavedArch = $env:PROCESSOR_ARCHITECTURE
 $SavedNativeArch = $env:PROCESSOR_ARCHITEW6432
 try {
     New-Item -ItemType Directory -Path $TestDir | Out-Null
+    & {
+        # 直接执行安装和收尾片段，防止“进程已创建”被误报为“服务已就绪”。
+        $Start = $Text.IndexOf('try {', $Text.IndexOf('function Get-PolarisRuntimeStatus'))
+        $End = $Text.IndexOf('# ── 6.5', $Start)
+        $RegisterService = [scriptblock]::Create($Text.Substring($Start, $End - $Start))
+        $Start = $Text.IndexOf('# ── 7.')
+        $End = $Text.LastIndexOf('} finally {')
+        $FinishInstall = [scriptblock]::Create($Text.Substring($Start, $End - $Start))
+        $FinalExe = 'Invoke-MockPolaris'
+        $InstallDir = Join-Path $TestDir 'installation [中文] with spaces'
+        $LogDir = Join-Path $TestDir 'logs'
+        $TaskName = 'Polaris-test'
+        function Write-Host { param($Object) }
+        function Write-Msg { param($zh, $en, $Color) $script:ServiceMessages.Add($en) }
+        function Start-Sleep { param($Seconds) }
+        function Remove-ItemProperty { param($Path, $Name, $ErrorAction) $script:LegacyRemoved = $true }
+        function Invoke-MockPolaris {
+            param($Command, $Action, $Format)
+            $global:LASTEXITCODE = 0
+            if ($Action -eq 'install') {
+                if ($script:ServiceScenario -eq 'registered') { return }
+                if ($script:ServiceScenario -eq 'native-throw') { throw 'mock Access is denied' }
+                $global:LASTEXITCODE = 1
+                return
+            }
+            if ($script:ServiceScenario -eq 'status-failed') { $global:LASTEXITCODE = 1; return }
+            if ($script:ServiceScenario -eq 'invalid-status') { return '{"running":"unknown"}' }
+            if ($script:ServiceScenario -eq 'status-problem') { return '{"running":false,"problem":"mock runtime read failure"}' }
+            if ($script:ServiceScenario -eq 'initializing' -and $script:StatusCalls -eq 0) {
+                $script:StatusCalls++
+                return '{"running":true}'
+            }
+            $Running = $script:ServiceScenario -in @('registered', 'already-running', 'initializing') -or $script:BackgroundStarted
+            if ($script:ServiceScenario -eq 'timeout') { $Running = $false }
+            @{registered=($script:ServiceScenario -in @('registered', 'registered-launch-failed')); running=$Running; base_url=$(if ($Running) { 'http://127.0.0.1:29999' } else { '' })} | ConvertTo-Json -Compress
+        }
+        function Start-Process {
+            [CmdletBinding()]
+            param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle, $RedirectStandardOutput, $RedirectStandardError)
+            Assert-True ($FilePath -eq $FinalExe -and $ArgumentList -eq 'serve') 'Wrong fallback executable or arguments'
+            Assert-True ($WorkingDirectory -eq $InstallDir -and $WindowStyle -eq 'Hidden') 'Fallback lost install path or hidden window setting'
+            Assert-True ($RedirectStandardOutput -eq (Join-Path $LogDir 'service-fallback.out.log')) 'Fallback stdout is not logged'
+            Assert-True ($RedirectStandardError -eq (Join-Path $LogDir 'service-fallback.err.log')) 'Fallback stderr is not logged'
+            if ($script:ServiceScenario -eq 'start-failed') { throw 'mock process creation failure' }
+            $script:BackgroundStarted = $true
+        }
+        foreach ($script:ServiceScenario in @('registered', 'registered-launch-failed', 'denied', 'native-throw', 'already-running', 'initializing', 'start-failed', 'status-failed', 'invalid-status', 'status-problem', 'timeout', 'dependency-failed')) {
+            $ServiceRegistered = $false
+            $ServiceReady = $false
+            $ServiceLaunchAttempted = $false
+            $DepsReady = $script:ServiceScenario -ne 'dependency-failed'
+            $script:BackgroundStarted = $false
+            $script:LegacyRemoved = $false
+            $script:StatusCalls = 0
+            $script:ServiceMessages = New-Object 'System.Collections.Generic.List[string]'
+            . $RegisterService
+            $Failed = $false
+            try { . $FinishInstall } catch { $Failed = $true }
+            $ExpectedFailure = $script:ServiceScenario -in @('start-failed', 'status-failed', 'invalid-status', 'status-problem', 'timeout', 'dependency-failed')
+            Assert-True ($Failed -eq $ExpectedFailure) "Incorrect final install result: $script:ServiceScenario"
+            Assert-True (-not $script:LegacyRemoved) 'Installer removed the CLI-managed per-user autostart entry'
+            Assert-True ($script:ServiceMessages.Contains('   Visit: http://127.0.0.1:29999') -eq $ServiceReady) 'Installer advertised a URL without runtime readiness'
+            if ($script:ServiceScenario -in @('registered', 'already-running', 'initializing', 'status-failed', 'invalid-status', 'status-problem')) {
+                Assert-True (-not $script:BackgroundStarted) "Duplicate or blind launch: $script:ServiceScenario"
+            }
+            if ($script:ServiceScenario -in @('denied', 'native-throw')) {
+                Assert-True ($ServiceReady -and -not $ServiceRegistered) 'Runtime readiness and autostart registration were conflated'
+                Assert-True ($script:ServiceMessages.Contains('✅ Core installed and background process ready; login autostart is not configured.')) 'Fallback did not disclose missing autostart'
+            }
+            if ($script:ServiceScenario -eq 'registered-launch-failed') {
+                Assert-True ($ServiceRegistered -and $ServiceReady) 'Registered autostart was lost when direct startup recovered'
+            }
+        }
+    }
     & {
         $InstallDir = 'C:\Users\Owner\[test]\.polaris\bin'
         $script:StoppedPaths = New-Object 'System.Collections.Generic.List[string]'
@@ -262,7 +336,7 @@ try {
     $Rejected = $false
     try { . $DetectArch } catch { $Rejected = $true }
     Assert-True $Rejected 'Unsupported x86 OS was accepted'
-    Write-Host 'PASS: UTF-8 entry, scoped process stop, cleanup/preferences, legacy Node arguments, Python retry, Git/Node staging, uv subprocess/retry, parser, session PATH, Python aliases, Node shims, uvx, WOW64'
+    Write-Host 'PASS: service registration/fallback/readiness (12 scenarios), UTF-8 entry, scoped process stop, cleanup/preferences, legacy Node arguments, Python retry, Git/Node staging, uv subprocess/retry, parser, session PATH, Python aliases, Node shims, uvx, WOW64'
 } finally {
     $env:Path = $SavedPath
     $env:USERPROFILE = $SavedProfile
