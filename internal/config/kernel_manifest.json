@@ -163,7 +163,7 @@
   "internal/observability/probe/cpu_probe_linux.go": "45878a4019f0a77da8dbe1efcb9374530a45d05fda3b7380743495c5b0eb984a",
   "internal/observability/probe/cpu_probe_wasip1.go": "0404b9fadf1ab7df7d7617084f34b2f4e6ab3dc2703af36058bf11e59713660c",
   "internal/observability/probe/cpu_probe_windows.go": "458263d5331fbf129881ddbcd47228f86959ca4bd514119786ccb88c3a2d55c3",
-  "internal/observability/probe/feature_gate.go": "738f4b7893ded77ebcd5bdc542e433c357160e12e2d16530ee246f4202e48e03",
+  "internal/observability/probe/feature_gate.go": "6fb52540c4ac881a4be4bd0f01dcc64e927fe2cea9976bb5d33dd2a94bd04396",
   "internal/observability/probe/feature_gate_degradation.go": "fb5c84b07372eb3ded60161a26930bed47fff51da487e834edd9058c9514369b",
   "internal/observability/probe/hardware_probe.go": "467e81da0580cdeb1d8ee751e45b58ea79f4a011b9024eec2ffb6ba486dd29a7",
   "internal/observability/probe/memory_probe.go": "fbcf02c2bf1d06de30b1a1f6e35b7f2873f3504de6d03978bff71c05c2053358",

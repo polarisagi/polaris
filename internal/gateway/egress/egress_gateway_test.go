@@ -83,3 +83,24 @@ func TestEgressGateway_PeerAllowlistExactHostPort(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestEgressGateway_DefaultMCPRegistry(t *testing.T) {
+	for _, tc := range []struct {
+		host    string
+		allowed bool
+	}{
+		{"registry.modelcontextprotocol.io", true},
+		{"registry.modelcontextprotocol.io.evil.example", false},
+		{"evil.modelcontextprotocol.io", false},
+	} {
+		t.Run(tc.host, func(t *testing.T) {
+			mt := &mockTransport{}
+			gw := NewEgressGateway(mt, DefaultAllowedDomains())
+			req, _ := http.NewRequest(http.MethodGet, "https://"+tc.host+"/v0.1/servers", nil)
+			_, err := gw.RoundTrip(req)
+			if (err == nil) != tc.allowed || mt.called != tc.allowed {
+				t.Fatalf("allowed=%v, called=%v, err=%v", tc.allowed, mt.called, err)
+			}
+		})
+	}
+}

@@ -74,10 +74,11 @@ var getFeatureRules = sync.OnceValue(func() map[Feature]featureRule {
 		FeatureComputerUseGUI:      {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 38, OSConstraint: "requires_display"},
 		FeatureVisionDisplayServer: {MinTier: Tier1, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 39, OSConstraint: "linux"},
 		FeaturePresidioPII:         {MinTier: Tier1, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 36},
-		FeatureWebUI:               {MinTier: Tier1, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 15},
-		FeatureActivationSteer:     {MinTier: Tier1, MinMemoryMB: 1536, DegradeMemoryMB: 2048, Priority: 48},
-		FeatureDeepRAG:             {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 45},
-		FeatureOTelExporter:        {MinTier: Tier1, MinMemoryMB: 64, DegradeMemoryMB: 128, Priority: 18},
+		// 基本管理入口必须覆盖 Tier0；内存压力仍按原阈值保护（ADR-0096）。
+		FeatureWebUI:           {MinTier: Tier0, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 15},
+		FeatureActivationSteer: {MinTier: Tier1, MinMemoryMB: 1536, DegradeMemoryMB: 2048, Priority: 48},
+		FeatureDeepRAG:         {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 45},
+		FeatureOTelExporter:    {MinTier: Tier1, MinMemoryMB: 64, DegradeMemoryMB: 128, Priority: 18},
 	}
 })
 

@@ -25,3 +25,22 @@ func TestFeatureRules_DegradeAboveMin(t *testing.T) {
 		}
 	}
 }
+
+// 8GB Windows 实测 Tier0、548MB 空闲时，管理页面不能被 Tier1 门槛关闭。
+func TestFeatureWebUI_Tier0(t *testing.T) {
+	fg := &FeatureGate{probe: &HardwareProbe{Tier: Tier0}, states: map[Feature]FeatureState{}, overrides: map[Feature]FeatureState{}}
+	rule := getFeatureRules()[FeatureWebUI]
+	for _, tc := range []struct {
+		available uint64
+		want      FeatureState
+	}{
+		{548, FeatureEnabled},
+		{256, FeatureEnabled},
+		{128, FeatureDegraded},
+		{127, FeatureDisabled},
+	} {
+		if got := fg.computeState(FeatureWebUI, rule, tc.available); got != tc.want {
+			t.Errorf("Tier0 available=%dMB: got %v, want %v", tc.available, got, tc.want)
+		}
+	}
+}

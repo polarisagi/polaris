@@ -55,6 +55,12 @@ try {
         function Write-Host { param($Object) }
         function Write-Msg { param($zh, $en, $Color) $script:ServiceMessages.Add($en) }
         function Start-Sleep { param($Seconds) }
+        function Test-PolarisHTTPHealth {
+            param($BaseUrl)
+            Assert-True ($BaseUrl -eq 'http://127.0.0.1:29999') 'Health probe ignored actual runtime port'
+            if ($script:ServiceScenario -eq 'http-failed') { throw 'mock connection refused' }
+            return $script:ServiceScenario -ne 'http-unhealthy'
+        }
         function Remove-ItemProperty { param($Path, $Name, $ErrorAction) $script:LegacyRemoved = $true }
         function Invoke-MockPolaris {
             param($Command, $Action, $Format)
@@ -86,7 +92,7 @@ try {
             if ($script:ServiceScenario -eq 'start-failed') { throw 'mock process creation failure' }
             $script:BackgroundStarted = $true
         }
-        foreach ($script:ServiceScenario in @('registered', 'registered-launch-failed', 'denied', 'native-throw', 'already-running', 'initializing', 'start-failed', 'status-failed', 'invalid-status', 'status-problem', 'timeout', 'dependency-failed')) {
+        foreach ($script:ServiceScenario in @('registered', 'registered-launch-failed', 'denied', 'native-throw', 'already-running', 'initializing', 'start-failed', 'status-failed', 'invalid-status', 'status-problem', 'timeout', 'http-failed', 'http-unhealthy', 'dependency-failed')) {
             $ServiceRegistered = $false
             $ServiceReady = $false
             $ServiceLaunchAttempted = $false
@@ -98,7 +104,7 @@ try {
             . $RegisterService
             $Failed = $false
             try { . $FinishInstall } catch { $Failed = $true }
-            $ExpectedFailure = $script:ServiceScenario -in @('start-failed', 'status-failed', 'invalid-status', 'status-problem', 'timeout', 'dependency-failed')
+            $ExpectedFailure = $script:ServiceScenario -in @('start-failed', 'status-failed', 'invalid-status', 'status-problem', 'timeout', 'http-failed', 'http-unhealthy', 'dependency-failed')
             Assert-True ($Failed -eq $ExpectedFailure) "Incorrect final install result: $script:ServiceScenario"
             Assert-True (-not $script:LegacyRemoved) 'Installer removed the CLI-managed per-user autostart entry'
             Assert-True ($script:ServiceMessages.Contains('   Visit: http://127.0.0.1:29999') -eq $ServiceReady) 'Installer advertised a URL without runtime readiness'
@@ -193,10 +199,11 @@ try {
         function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction) Copy-Item -LiteralPath $Fixture -Destination $OutFile -Force }
         function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) "$FixtureHash  node-v24.1.0-win-x64.zip`r`n" }
         $NodeStart = $Text.IndexOf('# 4. Node.js')
-        $NodeEnd = $Text.IndexOf("foreach (`$dep in", $NodeStart)
+        $NodeEnd = $Text.IndexOf('# 5. FFmpeg', $NodeStart)
         $NodeInstall = [scriptblock]::Create($Text.Substring($NodeStart, $NodeEnd - $NodeStart))
+        function Expand-PortableGit { param($Archive, $Destination) Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force }
         $GitLoop = $Ast.Find({ param($Node) $Node -is [System.Management.Automation.Language.ForEachStatementAst] -and $Node.Variable.VariablePath.UserPath -eq 'u' -and $Node.Condition.Extent.Text -eq '$GitUrls' }, $true)
-        $GitInstall = [scriptblock]::Create('$MinGitZip = Join-Path $WorkDir "mingit.zip"' + "`n" + $GitLoop.Extent.Text)
+        $GitInstall = [scriptblock]::Create('$PortableGitZip = Join-Path $WorkDir "portable-git.exe"' + "`n" + $GitLoop.Extent.Text)
         foreach ($Dependency in @('Node', 'Git')) {
             foreach ($Scenario in @('corrupt', 'missing', 'valid')) {
                 $WorkDir = Join-Path $TestDir "$Dependency $Scenario [中文]"
@@ -219,7 +226,10 @@ try {
                     New-Item -ItemType Directory -Path $CmdDir | Out-Null
                     $Name = if ($Scenario -eq 'valid') { 'git.exe' } else { 'missing.exe' }
                     Set-Content -LiteralPath (Join-Path $CmdDir $Name) -Value 'fixture'
-                    [System.IO.Compression.ZipFile]::CreateFromDirectory($CmdDir, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+                    $BinDir = Join-Path $Package 'bin'
+                    New-Item -ItemType Directory -Path $BinDir | Out-Null
+                    if ($Scenario -eq 'valid') { Set-Content -LiteralPath (Join-Path $BinDir 'bash.exe') -Value 'fixture' }
+                    [System.IO.Compression.ZipFile]::CreateFromDirectory($Package, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $false)
                 }
                 $FixtureHash = (Get-FileHash -LiteralPath $Fixture -Algorithm SHA256).Hash.ToLowerInvariant()
                 $GitHash = $FixtureHash

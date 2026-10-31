@@ -13,6 +13,7 @@
 package ffi
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -91,8 +92,13 @@ func Load() (uintptr, error) {
 }
 
 func doLoad() (uintptr, error) {
+	return doLoadPaths(libCandidatePaths())
+}
+
+func doLoadPaths(paths []string) (uintptr, error) {
 	var lastErr error
-	for _, path := range libCandidatePaths() {
+	var loadErrors []error
+	for _, path := range paths {
 		if path == "" {
 			continue
 		}
@@ -107,13 +113,17 @@ func doLoad() (uintptr, error) {
 		}
 		h, err := dlopen(abs)
 		if err != nil {
-			lastErr = err
+			loadErrors = append(loadErrors, apperr.Wrap(apperr.CodeInternal, "load substrate: "+abs, err))
 			continue
 		}
 		if err := verifyABI(h); err != nil {
 			return 0, apperr.Wrap(apperr.CodeInternal, "doLoad", err)
 		}
 		return h, nil
+	}
+	// 后续开发目录不存在不能掩盖生产库缺依赖、架构不符等真实加载错误。
+	if len(loadErrors) > 0 {
+		return 0, apperr.Wrap(apperr.CodeInternal, "substrate dylib load failed; 检查动态库架构及其运行时依赖", errors.Join(loadErrors...))
 	}
 	if lastErr == nil {
 		lastErr = apperr.New(apperr.CodeInternal, "no candidate paths matched")

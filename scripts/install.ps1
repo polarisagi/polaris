@@ -30,6 +30,7 @@ $DepsReady     = $true
 $ServiceReady  = $false
 $ServiceRegistered = $false
 $ServiceLaunchAttempted = $false
+$script:VisualCInstallAttempted = $false
 
 Write-Msg -zh "🌌 正在安装/更新 PolarisAGI Polaris..." `
            -en "🌌 Installing/Updating PolarisAGI Polaris..." -Color Cyan
@@ -76,10 +77,15 @@ function Update-SessionPath {
         $LocalBinDir,
         $CargoBinDir,
         "$DepsDir\node",
+        "$DepsDir\ffmpeg\bin",
         "$DepsDir\git\cmd",
+        "$DepsDir\git\bin",
         "$env:ProgramFiles\Git\cmd",
+        "$env:ProgramFiles\Git\bin",
         "${env:ProgramFiles(x86)}\Git\cmd",
+        "${env:ProgramFiles(x86)}\Git\bin",
         "$env:LOCALAPPDATA\Programs\Git\cmd",
+        "$env:LOCALAPPDATA\Programs\Git\bin",
         "$env:ProgramFiles\nodejs"
     )
     $Seen = @{}
@@ -239,9 +245,130 @@ function Test-WorkingNode {
     }
 }
 
-# 1. Git 检查与自动安装（优先 winget，失败或无 winget 时自动回退便携版 MinGit）
-if (-not (Test-WorkingGit)) {
-    Write-Msg -zh "   📦 缺少 Git，正在自动安装..." -en "   📦 Git not found. Installing automatically..." -Color Gray
+function Get-NativePowerShell {
+    $Relative = 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ($env:PROCESSOR_ARCHITEW6432) { $Relative = 'Sysnative\WindowsPowerShell\v1.0\powershell.exe' }
+    return (Join-Path $env:WINDIR $Relative)
+}
+
+function Invoke-PolarisLibraryProbe {
+    param([string[]]$Libraries)
+    $Files = ($Libraries | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ','
+    # 子进程按本机位数加载，避免 WOW64 误报，并在退出时释放所有 DLL 句柄。
+    $Code = @'
+$ErrorActionPreference = 'Stop'
+try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class PolarisNativeProbe {
+    [DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint mode);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="LoadLibraryExW")]
+    public static extern IntPtr Load(string path, IntPtr reserved, uint flags);
+}
+"@
+    [void][PolarisNativeProbe]::SetErrorMode(0x8001)
+    foreach ($File in @(__FILES__)) {
+        $Handle = [PolarisNativeProbe]::Load($File, [IntPtr]::Zero, 0x1100)
+        if ($Handle -eq [IntPtr]::Zero) {
+            $ErrorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            @{ready=$false; code=$ErrorCode; detail="$File : $([ComponentModel.Win32Exception]::new($ErrorCode).Message)"} | ConvertTo-Json -Compress
+            exit 1
+        }
+    }
+    @{ready=$true; code=0; detail=''} | ConvertTo-Json -Compress
+} catch {
+    @{ready=$false; code=-1; detail=$_.Exception.Message} | ConvertTo-Json -Compress
+    exit 1
+}
+'@
+    $Encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Code.Replace('__FILES__', $Files)))
+    $Shell = Get-NativePowerShell
+    $Output = & $Shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $Encoded
+    $ExitCode = $LASTEXITCODE
+    $Result = ($Output -join "`n") | ConvertFrom-Json -ErrorAction Stop
+    if ($null -eq $Result -or $Result.ready -isnot [bool] -or ($ExitCode -ne 0 -and $Result.ready)) { throw 'Invalid native library probe result.' }
+    return $Result
+}
+
+function Test-WorkingVisualC {
+    $NativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    $Names = @('vcruntime140.dll', 'msvcp140.dll')
+    if ($NativeArch -eq 'AMD64') { $Names += 'vcruntime140_1.dll' }
+    $SystemDir = if ($env:PROCESSOR_ARCHITEW6432) { 'Sysnative' } else { 'System32' }
+    $Files = @($Names | ForEach-Object { Join-Path (Join-Path $env:WINDIR $SystemDir) $_ })
+    foreach ($File in $Files) {
+        if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return $false }
+    }
+    return (Invoke-PolarisLibraryProbe @($Files | ForEach-Object { $_.Replace('\Sysnative\', '\System32\') })).ready
+}
+
+function Install-MicrosoftComponent {
+    param([string]$Name, [string]$Uri, [string]$Arguments, [string]$ReadyFunction)
+    $Setup = Join-Path $WorkDir ($Name + '-setup.exe')
+    Invoke-WebRequest -Uri $Uri -OutFile $Setup -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+    $Signature = Get-AuthenticodeSignature -LiteralPath $Setup
+    if ($Signature.Status -ne 'Valid' -or $Signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') {
+        throw "$Name installer Microsoft signature verification failed."
+    }
+    $Process = Start-Process -FilePath $Setup -ArgumentList $Arguments -PassThru -ErrorAction Stop
+    $null = $Process.Handle
+    if (-not $Process.WaitForExit(300000)) {
+        $Process.Kill()
+        throw "$Name installation timed out."
+    }
+    # 安装器退出码不能代替运行验证；3010/1638 仅在组件已实际可用时接受。
+    if ($Process.ExitCode -notin @(0, 3010, 1638) -or -not (& $ReadyFunction)) {
+        throw "$Name installation is not ready (exit code $($Process.ExitCode)); a Windows restart may be required."
+    }
+}
+
+function Install-VisualCRuntime {
+    param([switch]$Repair)
+    if (-not $Repair -and (Test-WorkingVisualC)) { return }
+    $NativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    $VCArch = switch ($NativeArch) { 'AMD64' { 'x64' } 'ARM64' { 'arm64' } default { throw "Unsupported runtime architecture: $NativeArch" } }
+    Write-Msg -zh '⬇️ 正在补齐微软 VC++ 运行库（Windows 可能显示授权提示）...' -en '⬇️ Installing Microsoft VC++ runtime (Windows may request authorization)...' -Color Cyan
+    $script:VisualCInstallAttempted = $true
+    Install-MicrosoftComponent -Name 'VC-runtime' -Uri "https://aka.ms/vc14/vc_redist.$VCArch.exe" -Arguments '/install /passive /norestart' -ReadyFunction 'Test-WorkingVisualC'
+}
+
+function Assert-PolarisNativeRuntime {
+    param([string]$Root)
+    $Library = Join-Path $Root 'lib\substrate.dll'
+    if (-not (Test-Path -LiteralPath $Library -PathType Leaf)) { throw 'Polaris archive does not contain substrate.dll; existing installation preserved.' }
+    $Result = Invoke-PolarisLibraryProbe @($Library)
+    # 已有 CRT 可能过旧；仅依赖/导出缺失尝试补齐最新版，不把架构错误当缺运行库。
+    if (-not $Result.ready -and $Result.code -in @(126, 127) -and -not $script:VisualCInstallAttempted) {
+        Install-VisualCRuntime -Repair
+        $Result = Invoke-PolarisLibraryProbe @($Library)
+    }
+    if (-not $Result.ready) { throw "Polaris native runtime cannot load: $($Result.detail); existing installation preserved." }
+}
+
+Install-VisualCRuntime
+
+function Test-WorkingBash {
+    Update-SessionPath
+    $Commands = @(Get-Command 'bash.exe' -All -ErrorAction SilentlyContinue)
+    foreach ($Command in $Commands) {
+        try {
+            $null = & $Command.Source -c 'exit 0' 2>$null
+            if ($LASTEXITCODE -eq 0) { return $true }
+        } catch { }
+    }
+    return $false
+}
+
+function Expand-PortableGit {
+    param([string]$Archive, [string]$Destination)
+    & $Archive '-y' ("-o" + $Destination) | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Portable Git extraction failed (exit code $LASTEXITCODE)." }
+}
+
+# 1. Git 检查与自动安装（优先 winget，失败或无 winget 时自动回退便携版 Git（含 Bash））
+if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
+    Write-Msg -zh "   📦 缺少 Git 或 Bash，正在自动安装..." -en "   📦 Git or Bash not found. Installing automatically..." -Color Gray
     if (Get-Command "winget" -ErrorAction SilentlyContinue) {
         try {
             & winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --silent
@@ -249,53 +376,56 @@ if (-not (Test-WorkingGit)) {
         Update-SessionPath
     }
 
-    if (-not (Test-WorkingGit)) {
-        Write-Msg -zh "   📦 正在下载便携版 MinGit..." -en "   📦 Downloading portable MinGit..." -Color Gray
-        $MinGitArch = if ($Arch -eq "arm64") { "arm64" } else { "64-bit" }
+    if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
+        Write-Msg -zh "   📦 正在下载便携版 Git（含 Bash）..." -en "   📦 Downloading portable Git with Bash..." -Color Gray
+        $PortableGitArch = if ($Arch -eq "arm64") { "arm64" } else { "64-bit" }
         # 官方 API 的摘要独立于镜像；无法取得可信摘要时不执行镜像中的程序。
         $GitAsset = $null
         try {
             $GitRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest" -TimeoutSec 30 -ErrorAction Stop
-            $GitAsset = $GitRelease.assets | Where-Object { $_.name -match "^MinGit-[0-9.]+-$MinGitArch\.zip$" } | Select-Object -First 1
+            $GitAsset = $GitRelease.assets | Where-Object { $_.name -match "^PortableGit-[0-9.]+-$PortableGitArch\.7z\.exe$" } | Select-Object -First 1
         } catch { }
-        $GhMinGit = if ($GitAsset) { $GitAsset.browser_download_url } else { "" }
+        $GhPortableGit = if ($GitAsset) { $GitAsset.browser_download_url } else { "" }
         $GitHash = if ($GitAsset -and $GitAsset.digest -match '^sha256:([a-fA-F0-9]{64})$') { $Matches[1].ToLowerInvariant() } else { "" }
 
         $GitUrls = @()
         if ($IsMainland) {
-            if ($ActiveProxy -and $GhMinGit -and $GitHash) { $GitUrls += "$ActiveProxy/$GhMinGit" }
-            if ($GhMinGit -and $GitHash) { $GitUrls += $GhMinGit }
+            if ($ActiveProxy -and $GhPortableGit -and $GitHash) { $GitUrls += "$ActiveProxy/$GhPortableGit" }
+            if ($GhPortableGit -and $GitHash) { $GitUrls += $GhPortableGit }
         } else {
-            if ($GhMinGit -and $GitHash) { $GitUrls += $GhMinGit }
+            if ($GhPortableGit -and $GitHash) { $GitUrls += $GhPortableGit }
         }
 
-        $MinGitZip = "$WorkDir\mingit.zip"
+        $PortableGitZip = "$WorkDir\portable-git.exe"
         foreach ($u in $GitUrls) {
             try {
-                Invoke-WebRequest -Uri $u -OutFile $MinGitZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
-                if ((Get-FileHash -LiteralPath $MinGitZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $GitHash) { throw "MinGit checksum mismatch" }
+                Invoke-WebRequest -Uri $u -OutFile $PortableGitZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+                if ((Get-FileHash -LiteralPath $PortableGitZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $GitHash) { throw "PortableGit checksum mismatch" }
                 $GitDest = "$DepsDir\git"
                 $GitExtract = Join-Path $WorkDir 'git-extract'
                 if (Test-Path -LiteralPath $GitExtract) { Remove-Item -LiteralPath $GitExtract -Recurse -Force }
-                Expand-Archive -LiteralPath $MinGitZip -DestinationPath $GitExtract -Force
-                if (-not (Test-Path -LiteralPath (Join-Path $GitExtract 'cmd/git.exe'))) { throw 'MinGit archive does not contain cmd/git.exe' }
+                Expand-PortableGit -Archive $PortableGitZip -Destination $GitExtract
+                foreach ($Required in @('cmd/git.exe', 'bin/bash.exe')) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $GitExtract $Required))) { throw "Portable Git archive does not contain $Required" }
+                }
                 # 解压及结构验证成功后才替换旧依赖，失败下载不能破坏原安装。
                 if (Test-Path -LiteralPath $GitDest) { Remove-Item -LiteralPath $GitDest -Recurse -Force }
                 Move-Item -LiteralPath $GitExtract -Destination $GitDest
-                Remove-Item -LiteralPath $MinGitZip -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $PortableGitZip -Force -ErrorAction SilentlyContinue
                 Add-UserPathFront -DirToAdd "$GitDest\cmd"
+                Add-UserPathFront -DirToAdd "$GitDest\bin"
                 break
             } catch {
-                Write-Msg -zh "   ⚠️ MinGit 安装尝试失败：$($_.Exception.Message)" `
-                           -en "   ⚠️ MinGit installation attempt failed: $($_.Exception.Message)" -Color Yellow
-                Remove-Item -LiteralPath $MinGitZip -Force -ErrorAction SilentlyContinue
+                Write-Msg -zh "   ⚠️ PortableGit 安装尝试失败：$($_.Exception.Message)" `
+                           -en "   ⚠️ PortableGit installation attempt failed: $($_.Exception.Message)" -Color Yellow
+                Remove-Item -LiteralPath $PortableGitZip -Force -ErrorAction SilentlyContinue
             }
         }
     }
 
-    if (-not (Test-WorkingGit)) {
-        Write-Msg -zh "⚠️  Git 自动安装未完成，请稍后手动安装 Git (https://git-scm.com)。" `
-                   -en "⚠️  Git auto-install did not complete. Please install Git manually later (https://git-scm.com)." -Color Yellow
+    if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
+        Write-Msg -zh "⚠️  Git/Bash 自动安装未完成；请检查网络后重跑安装。" `
+                   -en "⚠️  Git/Bash auto-install failed; check the network and rerun setup." -Color Yellow
     }
 }
 
@@ -394,6 +524,61 @@ if ($PythonExe -and (Test-Path -LiteralPath $PythonExe)) {
     Add-UserPathFront -DirToAdd $PythonDir
 }
 
+function Test-WorkingFFmpeg {
+    Update-SessionPath
+    foreach ($Name in @('ffmpeg', 'ffprobe')) {
+        $Command = Get-Command $Name -ErrorAction SilentlyContinue
+        if (-not $Command) { return $false }
+        try {
+            $null = & $Command.Source -version 2>$null
+            if ($LASTEXITCODE -ne 0) { return $false }
+        } catch { return $false }
+    }
+    return $true
+}
+
+function Install-FFmpeg {
+    if (Test-WorkingFFmpeg) { return }
+    Write-Msg -zh '⬇️ 正在补齐音视频运行环境 FFmpeg...' -en '⬇️ Installing FFmpeg for audio and video...' -Color Cyan
+    $Target = if ($Arch -eq 'arm64') { 'winarm64' } else { 'win64' }
+    $Metadata = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -TimeoutSec 30 -ErrorAction Stop
+    $Name = "ffmpeg-master-latest-$Target-lgpl.zip"
+    $Asset = $Metadata.assets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+    if (-not $Asset -or $Asset.digest -notmatch '^sha256:([a-fA-F0-9]{64})$') { throw "Trusted FFmpeg archive unavailable: $Name" }
+    $Hash = $Matches[1]
+    $Urls = @($Asset.browser_download_url)
+    if ($IsMainland -and $ActiveProxy) { $Urls = @("$ActiveProxy/$($Asset.browser_download_url)") + $Urls }
+    $Archive = Join-Path $WorkDir 'ffmpeg.zip'
+    $Destination = Join-Path $DepsDir 'ffmpeg'
+    foreach ($Url in $Urls) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $Archive -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+            if ((Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash -ne $Hash) { throw 'FFmpeg checksum mismatch' }
+            $Stage = Join-Path $WorkDir 'ffmpeg-extract'
+            if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
+            Expand-Archive -LiteralPath $Archive -DestinationPath $Stage -Force
+            $FFmpeg = Get-ChildItem -LiteralPath $Stage -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
+            if (-not $FFmpeg) { throw 'FFmpeg archive missing executable' }
+            $BinDir = $FFmpeg.Directory.FullName
+            foreach ($Exe in @('ffmpeg.exe', 'ffprobe.exe')) {
+                $Path = Join-Path $BinDir $Exe
+                if (-not (Test-Path -LiteralPath $Path)) { throw "FFmpeg archive missing $Exe" }
+                & $Path -version | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "$Exe cannot run on this system" }
+            }
+            if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
+            # 保留完整归档（含许可文本），不能只取 exe 后丢掉上游分发说明。
+            Move-Item -LiteralPath $FFmpeg.Directory.Parent.FullName -Destination $Destination
+            Add-UserPathFront -DirToAdd (Join-Path $Destination 'bin')
+            if (-not (Test-WorkingFFmpeg)) { throw 'FFmpeg post-install verification failed' }
+            return
+        } catch {
+            Write-Msg -zh "⚠️ FFmpeg 安装源失败：$($_.Exception.Message)" -en "⚠️ FFmpeg source failed: $($_.Exception.Message)" -Color Yellow
+        }
+    }
+    throw 'FFmpeg automatic installation failed.'
+}
+
 # 4. Node.js 检查与自动安装（优先 winget，失败/无 winget/大陆网络自动回退官方/npmmirror 便携包）
 if (-not (Test-WorkingNode)) {
     Write-Msg -zh "   🟢 正在安装 Node.js v$NodeVersion..." -en "   🟢 Installing Node.js v$NodeVersion..." -Color Gray
@@ -458,20 +643,50 @@ if (-not (Test-WorkingNode)) {
             try { & npm.cmd config set registry https://registry.npmmirror.com 2>$null } catch { }
         }
     } else {
-        Write-Msg -zh "⚠️  Node.js 自动安装未完成，请稍后手动安装 Node.js (https://nodejs.org)。" `
-                   -en "⚠️  Node.js auto-install did not complete. Please install Node.js manually later (https://nodejs.org)." -Color Yellow
+        Write-Msg -zh "⚠️  Node.js 自动安装未完成；请检查网络后重跑安装。" `
+                   -en "⚠️  Node.js auto-install failed; check the network and rerun setup." -Color Yellow
     }
 }
 
-foreach ($dep in @('Git', 'Uv', 'Python', 'Node')) {
+# 5. FFmpeg / ffprobe 检查与自动安装
+Install-FFmpeg
+
+foreach ($dep in @('Git', 'Bash', 'Uv', 'Python', 'Node', 'FFmpeg', 'VisualC')) {
     $Ready = & "Test-Working$dep"
     if (-not $Ready) {
         $DepsReady = $false
         Write-Msg -zh "⚠️ 运行环境尚未就绪: $dep" -en "⚠️ Dependency not ready: $dep" -Color Yellow
     }
 }
+if (-not $DepsReady) { throw "Required dependencies remain unavailable; existing Polaris installation preserved." }
 if ($DepsReady) { Write-Msg -zh "✅ 基础环境准备就绪。" -en "✅ Dependencies ready." -Color Green }
 
+
+function Test-WebView2Runtime {
+    $KeyName = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+    foreach ($Hive in @([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser)) {
+        foreach ($View in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
+            $Base = $null
+            $Key = $null
+            try {
+                $Base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, $View)
+                $Key = $Base.OpenSubKey($KeyName)
+                $Version = $null
+                if ($null -ne $Key -and [version]::TryParse([string]$Key.GetValue('pv', '0.0.0.0'), [ref]$Version) -and $Version -gt [version]'0.0.0.0') { return $true }
+            } finally {
+                if ($null -ne $Key) { $Key.Dispose() }
+                if ($null -ne $Base) { $Base.Dispose() }
+            }
+        }
+    }
+    return $false
+}
+
+function Install-WebView2Runtime {
+    if (Test-WebView2Runtime) { return }
+    Write-Msg -zh '⬇️ 正在自动安装桌面界面所需的 WebView2...' -en '⬇️ Installing WebView2 for the desktop interface...' -Color Cyan
+    Install-MicrosoftComponent -Name 'WebView2' -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -Arguments '/silent /install' -ReadyFunction 'Test-WebView2Runtime'
+}
 
 # ── 4. 下载（逐源重试）────────────────────────────────────────
 Write-Msg -zh "⬇️  开始下载 Polaris（逐源重试）..." `
@@ -579,6 +794,10 @@ if (-not (Test-Path -LiteralPath $NewExe)) { throw "Archive does not contain $Bi
 & $NewExe version | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "New binary cannot run on this OS; existing installation preserved." }
 
+Assert-PolarisNativeRuntime -Root $SrcDir
+if (Test-Path -LiteralPath (Join-Path $SrcDir 'desktop')) { Install-WebView2Runtime }
+Write-Msg -zh '✅ 原生运行库已验证。' -en '✅ Native runtime verified.' -Color Green
+
 # 下载、校验及预检成功后才停止旧任务，避免下载失败造成服务停机。
 try { & schtasks /end /tn $TaskName 2>$null | Out-Null } catch { }
 # 桌面外壳也会占用安装目录；只停止本安装目录里的进程，避免影响其他实例。
@@ -611,6 +830,26 @@ Write-Msg -zh "✅ 程序及依赖已安装: $InstallDir" -en "✅ Binary and de
 # 的结果是"装出来的任务和 polaris service status 看到的不是同一个"。
 # 单一实现见 cmd/polaris/cli_service.go（ADR-0096 决策一）。
 Write-Msg -zh "⚙️  配置当前用户登录自启动..." -en "⚙️  Configuring login autostart for the current user..." -Color Cyan
+
+function Test-PolarisHTTPHealth($BaseUrl) {
+    # 本机服务必须直连，避免系统代理把回环请求送到远端或返回代理错误页。
+    foreach ($Route in @('/healthz', '/')) {
+        # 健康接口存在不代表首页已注册，Tier 门控曾导致后台正常而控制台返回 404。
+        $Request = [System.Net.WebRequest]::Create("$($BaseUrl.TrimEnd('/'))$Route")
+        $Request.Proxy = $null
+        $Request.Timeout = 1000
+        $Request.ReadWriteTimeout = 1000
+        $Request.AllowAutoRedirect = $false
+        $Response = $null
+        try {
+            $Response = $Request.GetResponse()
+            if ([int]$Response.StatusCode -ne 200) { return $false }
+        } finally {
+            if ($null -ne $Response) { $Response.Close() }
+        }
+    }
+    return $true
+}
 
 function Get-PolarisRuntimeStatus {
     $StatusText = & $FinalExe service status --json
@@ -690,7 +929,7 @@ if ($ServiceLaunchAttempted) {
     for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
         try {
             $rt = Get-PolarisRuntimeStatus
-            if ($rt.running -and $rt.base_url) {
+            if ($rt.running -and $rt.base_url -and (Test-PolarisHTTPHealth $rt.base_url)) {
                 $ConsoleUrl = $rt.base_url
                 $ServiceReady = $true
                 break
@@ -710,6 +949,8 @@ if ($DepsReady -and $ServiceReady) {
 } else {
     Write-Msg -zh "⚠️ 主程序已安装，但依赖或后台服务未就绪。可运行 polaris serve 查看错误，处理后重跑安装。" `
                -en "⚠️ Core installed, but dependencies or service need attention. Run polaris serve for diagnostics, then rerun." -Color Yellow
+    Write-Msg -zh "   诊断状态：& '$FinalExe' service status --json（含本机访问令牌，请勿公开粘贴完整输出）" `
+               -en "   Diagnose: & '$FinalExe' service status --json (contains a local access token; do not share the full output)" -Color Yellow
     Write-Msg -zh "   日志目录：$LogDir" -en "   Log directory: $LogDir" -Color Yellow
 }
 if ($ServiceReady) {

@@ -4,7 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
+	"path"
 
 	"gopkg.in/yaml.v3"
 
@@ -29,9 +29,10 @@ type toolYAML struct {
 
 // GetExtensionToolMeta loads tool.yaml + schema.json from the embedded builtin/ directory.
 func GetExtensionToolMeta(name string) (types.Tool, error) {
-	dir := filepath.Join("builtin", name)
+	// embed.FS 在 Windows 上也只接受斜杠路径，不能使用 filepath.Join。
+	dir := path.Join("builtin", name)
 
-	yamlBytes, err := builtinFS.ReadFile(filepath.Join(dir, "tool.yaml"))
+	yamlBytes, err := builtinFS.ReadFile(path.Join(dir, "tool.yaml"))
 	if err != nil {
 		return types.Tool{}, apperr.Wrap(apperr.CodeInternal,
 			fmt.Sprintf("native/loader: read tool.yaml for %q", name), err)
@@ -44,7 +45,7 @@ func GetExtensionToolMeta(name string) (types.Tool, error) {
 	}
 
 	var inputSchema map[string]any
-	schemaBytes, err := builtinFS.ReadFile(filepath.Join(dir, "schema.json"))
+	schemaBytes, err := builtinFS.ReadFile(path.Join(dir, "schema.json"))
 	if err != nil {
 		return types.Tool{}, apperr.Wrap(apperr.CodeInternal,
 			fmt.Sprintf("native/loader: read schema.json for %q", name), err)

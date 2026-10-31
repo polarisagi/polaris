@@ -46,7 +46,8 @@ func windowsLoginInstall(scriptPath string, run func(string, ...string) error) e
 			return nil
 		}
 	}
-	slog.Warn("service: 计划任务不可用，回退当前用户登录自启动", "err", err)
+	// 普通账户可能无建任务权限；回退成功属于正常注册，失败仍由后续步骤返回。
+	slog.Debug("service: 计划任务不可用，回退当前用户登录自启动", "err", err)
 	if cleanupErr := windowsRemoveTask(run); cleanupErr != nil {
 		return cleanupErr
 	}

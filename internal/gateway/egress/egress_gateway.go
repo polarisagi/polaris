@@ -14,13 +14,15 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// DefaultAllowedDomains 返回内置 Provider 域名白名单（无需配置即生效）。
+// DefaultAllowedDomains 返回内置 Provider 与默认市场域名白名单（无需配置即生效）。
 func DefaultAllowedDomains() []string {
 	return []string{
 		"api.deepseek.com",
 		"api.anthropic.com",
 		"api.openai.com",
 		"api.github.com",
+		// 默认启用的 MCP 市场与 Provider 共用出站客户端。
+		"registry.modelcontextprotocol.io",
 		"github.com",
 		"githubusercontent.com",
 		"ghproxy.net",

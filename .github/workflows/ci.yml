@@ -29,9 +29,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Windows startup regression
+        run: go test ./internal/tool ./internal/extension/native ./internal/observability/probe -run 'TestAllBuiltinManifestsValid|TestAllEmbeddedExtensionManifestsValid|TestGetExtensionToolMeta|TestFeatureWebUI_Tier0' -count=1
       - name: Windows PowerShell 5.1 installer checks
         shell: powershell
-        run: .\scripts\tests\install_windows_test.ps1
+        run: |
+          .\scripts\tests\install_windows_test.ps1
+          .\scripts\tests\runtime_windows_test.ps1
 
   lint:
     runs-on: ubuntu-latest

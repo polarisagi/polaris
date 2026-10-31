@@ -1,6 +1,7 @@
 package ffi
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -128,4 +129,23 @@ func TestCheckMinor(t *testing.T) {
 			t.Fatalf("got>want 应兼容: %v", err)
 		}
 	})
+}
+
+// 无效现存库后跟缺失开发路径时，必须保留现存库的加载失败原因。
+func TestDoLoadPaths_PreservesLoadError(t *testing.T) {
+	invalid := filepath.Join(t.TempDir(), dylibName())
+	if err := os.WriteFile(invalid, []byte("invalid library"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := doLoadPaths([]string{invalid, filepath.Join(t.TempDir(), "missing", dylibName())})
+	if err == nil || !strings.Contains(err.Error(), invalid) || !strings.Contains(err.Error(), "substrate dylib load failed") {
+		t.Fatalf("expected actual library load failure, got %v", err)
+	}
+}
+
+func TestDoLoadPaths_MissingLibrary(t *testing.T) {
+	_, err := doLoadPaths([]string{filepath.Join(t.TempDir(), dylibName())})
+	if err == nil || !strings.Contains(err.Error(), "substrate dylib not found") {
+		t.Fatalf("expected missing library diagnostic, got %v", err)
+	}
 }
