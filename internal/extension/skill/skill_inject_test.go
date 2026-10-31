@@ -43,7 +43,7 @@ func registerInjectedSkill(t *testing.T, instructions string) (*SQLiteRegistryIm
 
 func TestSkillInjection_TrustedExecution(t *testing.T) {
 	reg, digest := registerInjectedSkill(t, injectedSkill)
-	exec := NewScriptSkillExecutor(reg, nil, nil).WithInjector(&SkillInjector{Wrapper: passthroughWrapper{}, Policy: allowGate{},
+	exec := NewScriptSkillExecutor(reg, nil, nil).WithInjector(&SkillInjector{Wrapper: passthroughWrapper{}, Policy: allowGate{}, Auditor: &fakeSkillExecutionAuditor{},
 		Trust: mapTrust{InjectionTrustKey("skill:inj"): digest}})
 	out, err := exec.ExecuteSkill(context.Background(), "skill:inj", []byte(`{"arguments":"'$(id)' x"}`))
 	if err != nil {
@@ -70,7 +70,7 @@ func TestSkillInjection_PendingReviewAndDisabled(t *testing.T) {
 
 func TestSkillInjection_FailureAbortsInvocation(t *testing.T) {
 	reg, digest := registerInjectedSkill(t, "x !`exit 3`")
-	exec := NewScriptSkillExecutor(reg, nil, nil).WithInjector(&SkillInjector{Wrapper: passthroughWrapper{}, Policy: allowGate{},
+	exec := NewScriptSkillExecutor(reg, nil, nil).WithInjector(&SkillInjector{Wrapper: passthroughWrapper{}, Policy: allowGate{}, Auditor: &fakeSkillExecutionAuditor{},
 		Trust: mapTrust{InjectionTrustKey("skill:inj"): digest}})
 	if _, err := exec.ExecuteSkill(context.Background(), "skill:inj", nil); err == nil || !strings.Contains(err.Error(), "Shell command failed") {
 		t.Fatalf("failing command must abort, got %v", err)

@@ -74,24 +74,47 @@ type oaiUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+type oaiError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+}
+
+func writeOAIError(w http.ResponseWriter, status int, message, errorType string) {
+	httputil.WriteJSONStatus(w, status, map[string]any{
+		"error": oaiError{Message: message, Type: errorType},
+	})
+}
+
+func writeOAIStreamError(w http.ResponseWriter, flusher http.Flusher, message string) {
+	payload, err := json.Marshal(map[string]any{"error": oaiError{Message: message, Type: "server_error"}})
+	if err != nil {
+		return
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload); err != nil {
+		slog.Warn("openai compat stream error frame write failed", "error_type", fmt.Sprintf("%T", err))
+		return
+	}
+	flusher.Flush()
+}
+
 // ── 处理器 ──────────────────────────────────────────────────────────────────
 
 // HandleOpenAIChat POST /v1/chat/completions
 func (h *SysAdminHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	var req oaiCompletionReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":{"message":"invalid request body","type":"invalid_request_error"}}`, http.StatusBadRequest)
+		writeOAIError(w, http.StatusBadRequest, "Invalid request body", "invalid_request_error")
 		return
 	}
 	if len(req.Messages) == 0 {
-		http.Error(w, `{"error":{"message":"messages is required","type":"invalid_request_error"}}`, http.StatusBadRequest)
+		writeOAIError(w, http.StatusBadRequest, "Messages are required", "invalid_request_error")
 		return
 	}
 
 	// ADR-0094 决策二类推（fail-closed 空依赖判空）：SysAdminHandler 若未被正确
 	// 注入 Registry/Router（组件解耦测试、降级运行模式），直接调用会 nil 指针崩溃。
 	if h.Registry == nil || h.Router == nil {
-		http.Error(w, `{"error":{"message":"inference backend not ready","type":"server_error"}}`, http.StatusServiceUnavailable)
+		writeOAIError(w, http.StatusServiceUnavailable, "Inference backend is unavailable", "server_error")
 		return
 	}
 
@@ -101,7 +124,7 @@ func (h *SysAdminHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Reques
 		p = h.Registry.PickProvider("general")
 	}
 	if p == nil {
-		http.Error(w, `{"error":{"message":"no provider configured","type":"server_error"}}`, http.StatusServiceUnavailable)
+		writeOAIError(w, http.StatusServiceUnavailable, "No inference provider is configured", "server_error")
 		return
 	}
 
@@ -144,16 +167,15 @@ func (h *SysAdminHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Reques
 func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.Request, p protocol.Provider,
 	inferReq *types.InferRequest, id, model string, created int64) {
 
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeOAIError(w, http.StatusInternalServerError, "Streaming is unavailable", "server_error")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
 
@@ -171,12 +193,7 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 	ch, err := h.Router.StreamInferWithTarget(ctx, p, "openai-compat", inferReq.Messages)
 	if err != nil {
 		slog.Error("openai compat stream infer failed", "err", err)
-		h.writeOAIChunk(w, flusher, oaiChunk{
-			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-			Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: " + truncate(err.Error(), 100) + "]"}}},
-		})
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
+		writeOAIStreamError(w, flusher, "Inference request failed")
 		return
 	}
 
@@ -207,34 +224,20 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 					ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
 					Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: ev.Content}}},
 				})
-			} else if ev.Type == types.StreamError && ev.Content != "" {
-				h.writeOAIChunk(w, flusher, oaiChunk{
-					ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-					Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: " + ev.Content + "]"}}},
-				})
+			} else if ev.Type == types.StreamError {
+				writeOAIStreamError(w, flusher, "Inference request failed")
+				return
 			} else if ev.Type == types.StreamCancelled {
 				// 流被中断（ctx 超时/取消或预算守卫硬阻断）：此前无分支处理，
 				// 直接落进下一次循环的 !ok 分支发 finish_reason=stop，外部
 				// OpenAI 兼容客户端看到的是"正常结束但内容为空"，无法区分
 				// 成功空响应与故障中断。
-				stop := "error"
-				h.writeOAIChunk(w, flusher, oaiChunk{
-					ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-					Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: stream cancelled: " + ev.Content + "]"}, FinishReason: &stop}},
-				})
-				fmt.Fprintf(w, "data: [DONE]\n\n")
-				flusher.Flush()
+				writeOAIStreamError(w, flusher, "Inference request timed out")
 				return
 			}
 		case <-timer.C:
-			// 响应流超时，提前结束
-			stop := "timeout"
-			h.writeOAIChunk(w, flusher, oaiChunk{
-				ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-				Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: stream timeout]"}, FinishReason: &stop}},
-			})
-			fmt.Fprintf(w, "data: [DONE]\n\n")
-			flusher.Flush()
+			// OpenAI 客户端只把顶层 error 对象识别为失败，不能用普通文本 chunk 伪装成功。
+			writeOAIStreamError(w, flusher, "Inference request timed out")
 			return
 		case <-ctx.Done():
 			return
@@ -251,7 +254,7 @@ func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Re
 	ch, err := h.Router.StreamInferWithTarget(ctx, p, "openai-compat", inferReq.Messages)
 	if err != nil {
 		slog.Error("openai compat sync infer failed", "err", err)
-		http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, truncate(err.Error(), 200)), http.StatusInternalServerError)
+		writeOAIError(w, http.StatusInternalServerError, "Inference request failed", "server_error")
 		return
 	}
 
@@ -265,15 +268,13 @@ func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Re
 				usage = ev.Usage
 			}
 		case types.StreamError:
-			if ev.Content != "" {
-				http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, truncate(ev.Content, 200)), http.StatusInternalServerError)
-				return
-			}
+			writeOAIError(w, http.StatusInternalServerError, "Inference request failed", "server_error")
+			return
 		case types.StreamCancelled:
 			// 流中断（ctx 超时/取消或预算守卫硬阻断）：此前无分支处理，for 循环
 			// 结束后径直拿累计的空 sb 拼 200 响应，外部客户端拿到的是一条
 			// "生成成功但内容为空"的合法 completion，无法区分真实空回复与故障。
-			http.Error(w, fmt.Sprintf(`{"error":{"message":"stream cancelled: %s","type":"server_error"}}`, truncate(ev.Content, 200)), http.StatusGatewayTimeout)
+			writeOAIError(w, http.StatusGatewayTimeout, "Inference request timed out", "server_error")
 			return
 		}
 	}
@@ -312,11 +313,4 @@ func oaiRandID() string {
 		b[i] = chars[rand.Intn(len(chars))]
 	}
 	return string(b)
-}
-
-func truncate(s string, max int) string {
-	if len(s) > max {
-		return s[:max] + "..."
-	}
-	return s
 }

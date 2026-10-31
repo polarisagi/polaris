@@ -158,6 +158,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		TranscriptDir:         s.transcriptDir,
 		PromptMgr:             s.promptMgr,
 		SoulMDContent:         &s.soulMDContent,
+		SoulMDMu:              &s.soulMDMu,
 		Hooks:                 s.hooks,
 		DataDir:               s.dataDir,
 		Registry:              s.registry,
@@ -196,6 +197,8 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		SkillsDir:      filepath.Join(s.dataDir, "skills"),
 		DB:             db,
 		Chat:           s.chatHandler,
+		SoulMDContent:  &s.soulMDContent,
+		SoulMDMu:       &s.soulMDMu,
 		// SessionOrch 复用 s.chatHandler 已构造的 session.Orchestrator 单例
 		// （A-03 Step5）：Workflow/Cron/Channels 三个 Headless 子结构体与 chat
 		// SSE 入口共享同一份 Persistence/Hooks/AgentPool/Registry，没有理由

@@ -164,7 +164,7 @@ func (m *mcpServer) dispatch(ctx context.Context, req *rpcRequest) (any, *rpcErr
 		return nil, &rpcError{Code: rpcInvalidParams,
 			Message: "this server never requests input; approvals are resolved by a local human only"}
 	default:
-		return nil, &rpcError{Code: rpcMethodNotFound, Message: "method not found: " + req.Method}
+		return nil, &rpcError{Code: rpcMethodNotFound, Message: "Method not found"}
 	}
 }
 
@@ -274,11 +274,14 @@ func (m *mcpServer) callTool(ctx context.Context, raw json.RawMessage, meta reqM
 			t, err = m.svc.Cancel(ctx, p, a.TaskID)
 		}
 		if err != nil {
-			return textResult(err.Error(), true), nil
+			if call.Name == toolGetTask {
+				return textResult("Task not found or could not be read", true), nil
+			}
+			return textResult("Task could not be cancelled", true), nil
 		}
 		return textResult(describeTask(t), false), nil
 	default:
-		return nil, &rpcError{Code: rpcInvalidParams, Message: "unknown tool: " + call.Name}
+		return nil, &rpcError{Code: rpcInvalidParams, Message: "Unknown tool"}
 	}
 }
 
@@ -298,12 +301,12 @@ func (m *mcpServer) delegate(ctx context.Context, p mesh.Principal, raw json.Raw
 		Text: a.ContextSummary, Delegation: deleg})
 	if err != nil {
 		if apperr.CodeOf(err) == apperr.CodeInvalidInput {
-			return nil, &rpcError{Code: rpcInvalidParams, Message: err.Error()}
+			return nil, &rpcError{Code: rpcInvalidParams, Message: "Invalid delegation parameters"}
 		}
-		return textResult(err.Error(), true), nil
+		return textResult("Task delegation failed", true), nil
 	}
 	if t.State == mesh.StateRejected {
-		return textResult("delegation rejected by node "+m.svc.Self().NodeID+": "+t.StatusMessage, true), nil
+		return textResult("Delegation rejected by peer", true), nil
 	}
 	if meta.tasksExt {
 		state := m.taskState(t)
@@ -319,29 +322,30 @@ func (m *mcpServer) delegate(ctx context.Context, p mesh.Principal, raw json.Raw
 // input_required，见 tasks/update 注释）；completed → completed + result；failed/rejected → failed + error；
 // canceled → cancelled。
 func (m *mcpServer) taskState(t *mesh.Task) map[string]any {
+	public := publicTaskProjection(t)
 	poll := mcpTaskPollMs
-	ttl := t.ExpiresAt.Sub(t.CreatedAt).Milliseconds()
+	ttl := public.ExpiresAt.Sub(public.CreatedAt).Milliseconds()
 	out := map[string]any{
-		"taskId":         t.ID,
-		"createdAt":      t.CreatedAt.UTC().Format(time.RFC3339),
-		"lastUpdatedAt":  t.UpdatedAt.UTC().Format(time.RFC3339),
+		"taskId":         public.ID,
+		"createdAt":      public.CreatedAt.UTC().Format(time.RFC3339),
+		"lastUpdatedAt":  public.UpdatedAt.UTC().Format(time.RFC3339),
 		"ttlMs":          ttl,
 		"pollIntervalMs": poll,
 	}
-	switch t.State {
+	switch public.State {
 	case mesh.StateCompleted:
 		out["status"] = "completed"
-		out["result"] = textResult(t.Result, false)
+		out["result"] = textResult(public.Result, false)
 	case mesh.StateFailed, mesh.StateRejected:
 		out["status"] = "failed"
-		out["error"] = rpcError{Code: rpcInternalError, Message: firstNonEmpty(t.StatusMessage, "task failed")}
+		out["error"] = rpcError{Code: rpcInternalError, Message: public.StatusMessage}
 	case mesh.StateCanceled:
 		out["status"] = "cancelled"
 	default:
 		out["status"] = "working"
 	}
-	if t.StatusMessage != "" {
-		out["statusMessage"] = t.StatusMessage
+	if public.StatusMessage != "" {
+		out["statusMessage"] = public.StatusMessage
 	}
 	return out
 }
@@ -387,16 +391,34 @@ func (m *mcpServer) tasksCancel(ctx context.Context, raw json.RawMessage) (any, 
 func appErrToRPC(err error) *rpcError {
 	switch apperr.CodeOf(err) {
 	case apperr.CodeNotFound, apperr.CodeInvalidInput:
-		return &rpcError{Code: rpcInvalidParams, Message: err.Error()}
+		return &rpcError{Code: rpcInvalidParams, Message: "Invalid or unknown task"}
 	case apperr.CodeForbidden:
-		return &rpcError{Code: rpcInvalidRequest, Message: err.Error()}
+		return &rpcError{Code: rpcInvalidRequest, Message: "Request forbidden"}
 	default:
 		return &rpcError{Code: rpcInternalError, Message: "internal error"}
 	}
 }
 
 func describeTask(t *mesh.Task) string {
-	b, _ := json.Marshal(map[string]any{"task_id": t.ID, "state": t.State, "status_message": t.StatusMessage,
-		"result": t.Result, "updated_at": t.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+	public := publicTaskProjection(t)
+	b, _ := json.Marshal(map[string]any{"task_id": public.ID, "state": public.State, "status_message": public.StatusMessage,
+		"result": public.Result, "updated_at": public.UpdatedAt.UTC().Format(time.RFC3339Nano)})
 	return string(b)
+}
+
+// publicTaskProjection 在 A2A 与 MCP 出站前屏蔽内部失败诊断；成功结果仍是业务数据，必须原样保留。
+func publicTaskProjection(t *mesh.Task) *mesh.Task {
+	if t == nil {
+		return nil
+	}
+	public := *t
+	switch t.State {
+	case mesh.StateFailed:
+		public.StatusMessage = "Task failed"
+		public.Result = ""
+	case mesh.StateRejected:
+		public.StatusMessage = "Task rejected"
+		public.Result = ""
+	}
+	return &public
 }

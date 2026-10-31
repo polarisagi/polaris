@@ -11,7 +11,7 @@ import (
 // HandlePatternDAGRun 触发一条 DAG 编排任务。
 func (h *SysAdminHandler) HandlePatternDAGRun(w http.ResponseWriter, r *http.Request) {
 	if h.PatternDAGExec == nil {
-		http.Error(w, "pattern DAG executor not enabled", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "pattern DAG executor not enabled", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -20,13 +20,13 @@ func (h *SysAdminHandler) HandlePatternDAGRun(w http.ResponseWriter, r *http.Req
 		Spec         protocol.WorkflowGraphSpec `json:"spec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid DAG descriptor format", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid DAG descriptor format", nil, http.StatusBadRequest)
 		return
 	}
 
 	err := h.PatternDAGExec.Execute(r.Context(), req.ParentTaskID, req.Spec)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "DAG task failed", err, http.StatusInternalServerError)
 		return
 	}
 

@@ -1,5 +1,6 @@
 import Alpine from 'alpinejs'
 import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 // ══════════════════════════════════════════════════════════════════════════
 // store: providers（LLM 厂商凭据管理，两层架构 provider → models）
 // ══════════════════════════════════════════════════════════════════════════
@@ -119,7 +120,7 @@ Alpine.store('providers', {
           await this.load()
           Alpine.store('toast').show('ok', '厂商已创建，请手动添加模型')
         } else {
-          const msg = await r.text()
+          const msg = await readHTTPErrorMessage(r)
           Alpine.store('toast').show('error', '创建失败: ' + msg)
         }
       } else {
@@ -148,7 +149,7 @@ Alpine.store('providers', {
           if (reasoningM) msg += `，推理: ${reasoningM.name || reasoningM.model_id}`
           Alpine.store('toast').show('ok', msg)
         } else {
-          const msg = await r.text()
+          const msg = await readHTTPErrorMessage(r)
           Alpine.store('toast').show('error', '添加失败: ' + msg)
         }
       }

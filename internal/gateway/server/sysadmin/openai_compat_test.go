@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/llm"
@@ -19,11 +21,15 @@ type mockStreamProvider struct {
 	protocol.Provider
 	chunks []types.StreamEvent
 	err    error
+	hold   bool
 }
 
 func (m *mockStreamProvider) StreamInfer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.hold {
+		return make(chan types.StreamEvent), nil
 	}
 	ch := make(chan types.StreamEvent, len(m.chunks))
 	for _, c := range m.chunks {
@@ -148,11 +154,99 @@ func TestOpenAIChat_Stream_StreamCancelled(t *testing.T) {
 	h.HandleOpenAIChat(w, req)
 
 	body := w.Body.String()
-	if strings.Contains(body, `"finish_reason":"stop"`) {
-		t.Errorf("cancelled stream must not report finish_reason=stop: %s", body)
+	if !strings.Contains(body, `data: {"error":{"message":"Inference request timed out","type":"server_error"}}`) {
+		t.Errorf("expected OpenAI SSE error object: %s", body)
 	}
-	if !strings.Contains(body, "cancelled") {
-		t.Errorf("expected cancellation to be surfaced in stream output: %s", body)
+	if strings.Contains(body, "context deadline exceeded") || strings.Contains(body, `"finish_reason":"stop"`) || strings.Contains(body, "[error:") {
+		t.Errorf("stream failure leaked cause or looked like a successful content chunk: %s", body)
+	}
+}
+
+func TestOpenAIChat_StreamFailureUsesProtocolErrorEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider *mockStreamProvider
+		timeout  time.Duration
+		cause    string
+	}{
+		{name: "router error", provider: &mockStreamProvider{err: errors.New("private-router-cause")}, cause: "private-router-cause"},
+		{name: "stream error", provider: &mockStreamProvider{chunks: []types.StreamEvent{{Type: types.StreamError, Content: "private-stream-cause"}}}, cause: "private-stream-cause"},
+		{name: "empty stream error", provider: &mockStreamProvider{chunks: []types.StreamEvent{{Type: types.StreamError}}}},
+		{name: "cancelled", provider: &mockStreamProvider{chunks: []types.StreamEvent{{Type: types.StreamCancelled, Content: "private-cancel-cause"}}}, cause: "private-cancel-cause"},
+		{name: "idle timeout", provider: &mockStreamProvider{hold: true}, timeout: time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
+			registry.RegisterWithRole("mock", "mock", "default", tc.provider)
+			h := &SysAdminHandler{Registry: registry, Router: llm.NewInferenceRouter(registry, nil), StreamIdleTimeout: tc.timeout}
+			reqBody := `{"messages":[{"role":"user","content":"hi"}],"stream":true}`
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(reqBody))
+			recorder := httptest.NewRecorder()
+			h.HandleOpenAIChat(recorder, req)
+
+			body := recorder.Body.String()
+			if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/event-stream" {
+				t.Fatalf("stream headers changed after submission: status=%d content-type=%q", recorder.Code, recorder.Header().Get("Content-Type"))
+			}
+			if !strings.Contains(body, `data: {"error":{"message":"Inference request timed out"`) &&
+				!strings.Contains(body, `data: {"error":{"message":"Inference request failed"`) {
+				t.Fatalf("missing protocol error event: %s", body)
+			}
+			if !strings.Contains(body, "data: [DONE]\n\n") || strings.Contains(body, `"finish_reason":"stop"`) || strings.Contains(body, "[error:") {
+				t.Fatalf("failure looked like a successful content stream: %s", body)
+			}
+			if tc.cause != "" && strings.Contains(body, tc.cause) {
+				t.Fatalf("upstream cause leaked into stream: %s", body)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatSync_StreamErrorAlwaysFailsButEmptyStreamSucceeds(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		events     []types.StreamEvent
+		wantStatus int
+		wantError  bool
+	}{
+		{name: "empty stream error", events: []types.StreamEvent{{Type: types.StreamError}}, wantStatus: http.StatusInternalServerError, wantError: true},
+		{name: "non-empty stream error", events: []types.StreamEvent{{Type: types.StreamError, Content: "private-stream-cause"}}, wantStatus: http.StatusInternalServerError, wantError: true},
+		{name: "empty successful stream", events: nil, wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
+			registry.RegisterWithRole("mock", "mock", "default", &mockStreamProvider{chunks: tc.events})
+			h := &SysAdminHandler{Registry: registry, Router: llm.NewInferenceRouter(registry, nil)}
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"messages":[{"role":"user","content":"hi"}],"stream":false}`))
+			recorder := httptest.NewRecorder()
+			h.HandleOpenAIChat(recorder, req)
+
+			if recorder.Code != tc.wantStatus {
+				t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, tc.wantStatus, recorder.Body.String())
+			}
+			if tc.wantError {
+				var body struct {
+					Error struct {
+						Message string `json:"message"`
+						Type    string `json:"type"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+					t.Fatalf("expected OpenAI JSON error: %v; body=%s", err, recorder.Body.String())
+				}
+				if body.Error.Type != "server_error" || body.Error.Message != "Inference request failed" || strings.Contains(recorder.Body.String(), "private-stream-cause") {
+					t.Fatalf("unexpected or unsafe error envelope: %+v body=%s", body.Error, recorder.Body.String())
+				}
+				return
+			}
+			var body oaiCompletion
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("empty successful response lost completion semantics: %v; body=%s", err, recorder.Body.String())
+			}
+			if len(body.Choices) != 1 || body.Choices[0].Message == nil || body.Choices[0].Message.Content != "" {
+				t.Fatalf("unexpected empty completion: %+v", body)
+			}
+		})
 	}
 }
 
@@ -167,6 +261,13 @@ func TestOpenAIChat_Errors(t *testing.T) {
 	h.HandleOpenAIChat(w, req)
 	if w.Result().StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400")
+	}
+	var invalidBody map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &invalidBody); err != nil {
+		t.Fatalf("invalid JSON error must retain the OpenAI envelope: %v body=%s", err, w.Body.String())
+	}
+	if _, ok := invalidBody["error"]; !ok {
+		t.Fatalf("invalid JSON error envelope missing error object: %+v", invalidBody)
 	}
 
 	// Empty messages

@@ -49,3 +49,17 @@ func TestAuthorizePlan_DeniedCallIsNotAskedTwice(t *testing.T) {
 		t.Fatalf("a declined call must be asked once per turn, got %d", f.hitl.count())
 	}
 }
+
+func TestAuthorizeCall_RejectsSchemaInvalidArgumentsBeforePolicy(t *testing.T) {
+	a := &Agent{}
+	a.InjectPermission(newPermMode(types.ModeFullAccess), nil)
+	tool := types.Tool{Name: "write_file", InputSchema: map[string]any{
+		"type":       "object",
+		"required":   []string{"path"},
+		"properties": map[string]any{"path": map[string]any{"type": "string"}},
+	}}
+	grant, reason, ok := a.AuthorizeCall(context.Background(), tool, []byte(`{"path":42}`), types.TaintLow)
+	if ok || grant != protocol.GrantNone || reason == "" {
+		t.Fatalf("invalid bridge/hook args must be rejected before policy, got grant=%v reason=%q ok=%t", grant, reason, ok)
+	}
+}

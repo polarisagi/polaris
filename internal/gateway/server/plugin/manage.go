@@ -158,7 +158,7 @@ func (h *PluginHandler) listPluginMCPStatuses(
 func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 	pluginID := r.PathValue("id")
 	if pluginID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		httputil.RespondError(w, "id required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -176,7 +176,7 @@ func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Reques
 	if err := h.DB.QueryRowContext(r.Context(),
 		`SELECT enabled, mcp_policy FROM plugins WHERE id=?`, pluginID).
 		Scan(&currentEnabled, &mcpPolicyJSON); err != nil {
-		http.Error(w, "plugin not found", http.StatusNotFound)
+		httputil.RespondError(w, "plugin not found", nil, http.StatusNotFound)
 		return
 	}
 
@@ -265,7 +265,7 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 // POST /v1/plugins/{id}/mcp/{serverName}/toggle
 func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Request) { //nolint:nestif
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	authCtx := authcontext.FromContext(r.Context())
@@ -281,7 +281,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 	pluginID := r.PathValue("id")
 	serverName := r.PathValue("serverName")
 	if pluginID == "" || serverName == "" {
-		http.Error(w, "id and serverName required", http.StatusBadRequest)
+		httputil.RespondError(w, "id and serverName required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -295,7 +295,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 
 	var exists int
 	if h.DB.QueryRowContext(r.Context(), `SELECT 1 FROM plugins WHERE id=? AND enabled=1`, pluginID).Scan(&exists) != nil {
-		http.Error(w, "plugin not found or disabled", http.StatusNotFound)
+		httputil.RespondError(w, "plugin not found or disabled", nil, http.StatusNotFound)
 		return
 	}
 

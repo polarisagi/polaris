@@ -137,6 +137,16 @@ func TestP4_ToolResultTaint_PropagateToGlobalTaintLevel(t *testing.T) {
 	if lastMsg.TaintLevel != types.TaintHigh {
 		t.Fatalf("tool 消息的 TaintLevel 未标记为 TaintHigh，got=%v", lastMsg.TaintLevel)
 	}
+
+	// 后续低等级来源不能把显式人工复核等级降回 High。
+	agent.elevateGlobalTaintLevel(types.TaintUserReviewed)
+	agent.elevateGlobalTaintLevel(types.TaintHigh)
+	agent.sCtx.Mu.Lock()
+	gotGlobalTaint = agent.sCtx.GlobalTaintLevel
+	agent.sCtx.Mu.Unlock()
+	if gotGlobalTaint != types.TaintUserReviewed {
+		t.Fatalf("GlobalTaintLevel must preserve TaintUserReviewed, got=%v", gotGlobalTaint)
+	}
 }
 
 // TestP3_ObservationMasking_PreservesRecentRounds 验证批量观察遮蔽永不遮蔽最近 maskAfter 轮的结果，

@@ -2,11 +2,15 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -40,7 +44,9 @@ type ExecRequest struct {
 
 	Tool types.Tool // Kind=Tool/Script 时填充（Source/Capability/SideEffects 驱动 tier）
 
-	Input        []byte
+	Input []byte
+	// AuditArgs 仅在物理脚本正文不在 Input 时用于计算摘要；审计实现不得持久化原文。
+	AuditArgs    []byte
 	ScriptPath   string
 	ScriptBytes  []byte
 	AllowedPaths []string // 文件系统白名单，透传给 SandboxSpec
@@ -109,6 +115,7 @@ type HookFirer interface {
 
 type ExecEnvelope struct {
 	policy        protocol.PolicyGate
+	auditor       protocol.ExecutionAuditor
 	router        *SandboxRouter
 	hwTier        int
 	goos          string
@@ -124,6 +131,12 @@ func NewExecEnvelope(policy protocol.PolicyGate, router *SandboxRouter, hwTier i
 // 独立 setter 而非构造参数：避免变更已有 ~20 处 NewExecEnvelope 调用点（含测试）签名。
 func (e *ExecEnvelope) SetHookFirer(f HookFirer) {
 	e.hookFirer = f
+}
+
+// WithExecutionAuditor 注入进程共享的物理执行审计门。
+func (e *ExecEnvelope) WithExecutionAuditor(a protocol.ExecutionAuditor) *ExecEnvelope {
+	e.auditor = a
+	return e
 }
 
 // PersistentSandboxAvailable 报告 D4/ADR-0008 长驻会话后端当前是否可用。
@@ -146,26 +159,88 @@ func RequiresCapabilityToken(c types.CapabilityLevel) bool {
 
 // applyPreToolUse 执行 PreToolUse hook：阻断时返回失败结果；改写入参时替换 req.Input 并
 // 重新执行 PolicyGate（策略按原入参放行，不能沿用到改写后的入参）。
-func (e *ExecEnvelope) applyPreToolUse(ctx context.Context, req *ExecRequest, start time.Time) (*ExecResult, error) {
+func (e *ExecEnvelope) applyPreToolUse(ctx context.Context, req *ExecRequest, start time.Time) (context.Context, *ExecResult, error) {
 	if e.hookFirer == nil {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	pre := e.hookFirer.FirePreToolUse(ctx, req.Resource, hookToolInput(*req))
 	if pre.Blocked {
 		slog.WarnContext(ctx, "exec_envelope: blocked by PreToolUse hook",
 			"principal", req.Principal, "kind", req.Kind, "resource", req.Resource, "reason", pre.Reason)
-		return &ExecResult{Success: false, Error: "exec_envelope: pre_tool_use hook blocked: " + pre.Reason,
+		return ctx, &ExecResult{Success: false, Error: "exec_envelope: pre_tool_use hook blocked: " + pre.Reason,
 			LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
 	}
 	if pre.UpdatedInput == nil {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	rewritten, err := json.Marshal(pre.UpdatedInput)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "exec_envelope: encode hook updated input", err)
+		return ctx, nil, apperr.Wrap(apperr.CodeInternal, "exec_envelope: encode hook updated input", err)
+	}
+	if sameJSONSemantics(req.Input, rewritten) {
+		return ctx, nil, nil
+	}
+	if err := schemavalidate.ValidateAgainstStrict(req.Tool.InputSchema, rewritten); err != nil {
+		//nolint:nilerr // validation failure is returned as a failed ExecResult to preserve the tool contract.
+		return ctx, &ExecResult{Success: false, Error: "exec_envelope: hook input failed schema validation",
+			LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
+	}
+	authorizer := protocol.ToolCallAuthorizerFromContext(ctx)
+	if authorizer == nil {
+		return ctx, &ExecResult{Success: false, Error: "exec_envelope: modified hook input requires call reauthorization",
+			LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
+	}
+	// Hook 生成的入参不可信；污点至少升到 High，并保留请求或上下文中更高的污点。
+	rewrittenTaint := types.TaintHigh
+	if req.TaintLevel > rewrittenTaint {
+		rewrittenTaint = req.TaintLevel
+	}
+	if contextTaint, ok := ctx.Value(protocol.CtxTaintLevelKey{}).(types.TaintLevel); ok && contextTaint > rewrittenTaint {
+		rewrittenTaint = contextTaint
+	}
+	callCtx := protocol.WithPermissionGrant(ctx, protocol.GrantNone)
+	grant, reason, ok := authorizer.AuthorizeCall(callCtx, req.Tool, rewritten, rewrittenTaint)
+	if !ok || grant == protocol.GrantNone {
+		if reason == "" {
+			reason = "modified hook input requires approval outside the hook"
+		}
+		return ctx, &ExecResult{Success: false, Error: "exec_envelope: hook input reauthorization denied: " + reason,
+			LatencyMs: time.Since(start).Milliseconds(), TaintLevel: rewrittenTaint}, nil
 	}
 	req.Input = rewritten
-	return e.authorize(ctx, *req, start), nil
+	req.TaintLevel = rewrittenTaint
+	callCtx = context.WithValue(callCtx, protocol.CtxTaintLevelKey{}, rewrittenTaint)
+	callCtx = protocol.WithPermissionGrant(callCtx, grant)
+	if denied := e.authorize(callCtx, *req, start); denied != nil {
+		return ctx, denied, nil
+	}
+	return callCtx, nil, nil
+}
+
+func sameJSONSemantics(before, after []byte) bool {
+	beforeValue, beforeErr := decodeSingleJSONValue(before)
+	afterValue, afterErr := decodeSingleJSONValue(after)
+	if beforeErr != nil || afterErr != nil {
+		return false
+	}
+	return equalJSONValues(beforeValue, afterValue)
+}
+
+func decodeSingleJSONValue(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "exec_envelope: decode JSON", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, apperr.New(apperr.CodeInvalidInput, "exec_envelope: multiple JSON values")
+		}
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "exec_envelope: trailing JSON", err)
+	}
+	return value, nil
 }
 
 // authorize PolicyGate 判定；拒绝时返回失败结果（nil 表示放行）。
@@ -214,14 +289,17 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	if denied := e.authorize(ctx, req, start); denied != nil {
 		return denied, nil
 	}
+	executionTool := req.Tool
+	executionTool.Capability = executionTool.EffectiveCapability()
 
 	// Step 1.5: PreToolUse Hook（hook 自身经 sandbox.RunStdio 执行，不经本入口，无递归）。
-	if denied, err := e.applyPreToolUse(ctx, &req, start); denied != nil || err != nil {
+	ctx, denied, err := e.applyPreToolUse(ctx, &req, start)
+	if denied != nil || err != nil {
 		return denied, err
 	}
 
 	// Step 2: 沙箱等级（信任 + 工具属性 → tier）
-	actualTier, tierErr := AssignSandboxTier(req.Tool, req.TrustTier, e.hwTier, e.goos)
+	actualTier, tierErr := AssignSandboxTier(executionTool, req.TrustTier, e.hwTier, e.goos)
 	if tierErr != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "exec_envelope: sandbox tier rejected", tierErr)
 	}
@@ -236,7 +314,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	}
 
 	// Step 3: Capability Token（Privileged/CapWrite 强制）
-	if RequiresCapabilityToken(req.Tool.Capability) {
+	if RequiresCapabilityToken(executionTool.Capability) {
 		if req.CapToken == nil || e.tokenVerifier == nil || e.tokenVerifier.Verify(req.CapToken) != nil {
 			return &ExecResult{Success: false, //nolint:nilerr
 				Error:     "exec_envelope: privileged action requires valid capability token",
@@ -254,7 +332,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		ToolName:     req.Resource,
 		Input:        req.Input,
 		SandboxTier:  actualTier,
-		Capability:   req.Tool.Capability,
+		Capability:   executionTool.Capability,
 		SideEffects:  req.Tool.SideEffects,
 		ScriptPath:   req.ScriptPath,
 		ScriptBytes:  req.ScriptBytes,
@@ -268,11 +346,62 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		SessionID:    req.SessionID,
 		Language:     req.Language,
 	}
+	auditID := ""
+	if e.auditor == nil { //nolint:nestif // the paired intent/completion state must remain fail-closed here.
+		if requiresPhysicalExecutionAudit(req) {
+			return nil, apperr.New(apperr.CodeForbidden, "exec_envelope: execution auditor not initialized (fail-closed)")
+		}
+	} else {
+		auditArgs := req.AuditArgs
+		if auditArgs == nil {
+			auditArgs = req.Input
+		}
+		var auditErr error
+		auditID, auditErr = e.auditor.BeginExecution(ctx, protocol.ExecutionAuditIntent{
+			Tool: req.Resource, Source: req.Principal + ":" + string(req.Kind), Args: auditArgs,
+		})
+		if auditErr != nil {
+			return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "exec_envelope: execution intent audit failed", auditErr)
+		}
+		if auditID == "" {
+			return nil, apperr.New(apperr.CodeStorageUnavailable, "exec_envelope: execution intent audit returned an empty ID")
+		}
+	}
+	auditCompleted := auditID == ""
+	if auditID != "" {
+		defer func() {
+			if auditCompleted {
+				return
+			}
+			auditCompleted = true
+			if auditErr := e.auditor.CompleteExecution(ctx, auditID, false, string(apperr.CodeInternal)); auditErr != nil {
+				slog.ErrorContext(ctx, "exec_envelope: abort completion audit failed",
+					"execution_id", auditID, "error_type", fmt.Sprintf("%T", auditErr), "code", string(apperr.CodeOf(auditErr)))
+			}
+		}()
+	}
 	execCtx, done := e.router.trackExec(ctx, req.Resource)
+	defer done()
 	toolResult, execErr := provider.Run(execCtx, spec)
-	done()
+	if auditID != "" {
+		success := execErr == nil && toolResult != nil && toolResult.Success
+		errorCode := ""
+		if execErr != nil {
+			errorCode = string(apperr.CodeOf(execErr))
+		} else if !success {
+			errorCode = string(apperr.CodeInternal)
+		}
+		auditCompleted = true
+		if auditErr := e.auditor.CompleteExecution(ctx, auditID, success, errorCode); auditErr != nil {
+			slog.ErrorContext(ctx, "exec_envelope: completion audit failed; preserving execution result",
+				"execution_id", auditID, "error_type", fmt.Sprintf("%T", auditErr), "code", string(apperr.CodeOf(auditErr)))
+		}
+	}
 	if execErr != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "exec_envelope: execution failed", execErr)
+	}
+	if toolResult == nil {
+		return nil, apperr.New(apperr.CodeInternal, "exec_envelope: provider returned no execution result")
 	}
 
 	// Step 5: TaintLevel only-up（max 传播；Community 及以下输出至少 TaintHigh）
@@ -302,7 +431,9 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		feedback := e.hookFirer.FirePostToolUse(ctx, req.Resource, hookToolInput(req), string(toolResult.Output), toolResult.Success, toolResult.Error)
 		if feedback != "" {
 			output = append(append(append([]byte{}, output...), "\n\n<hook-feedback>\n"...), feedback+"\n</hook-feedback>"...)
-			outTaint = types.TaintHigh
+			if outTaint < types.TaintHigh {
+				outTaint = types.TaintHigh
+			}
 		}
 	}
 
@@ -311,6 +442,13 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		LatencyMs: time.Since(start).Milliseconds(), TaintLevel: outTaint,
 		SandboxTier: actualTier, ImageParts: toolResult.ImageParts, MCPRaw: toolResult.MCPRaw,
 	}, nil
+}
+
+func requiresPhysicalExecutionAudit(req ExecRequest) bool {
+	if req.Kind != KindToolExecute {
+		return true
+	}
+	return req.Tool.EffectiveCapability() > types.CapReadNetwork || len(req.Tool.SideEffects) > 0
 }
 
 // hookToolInput 两家 hook 的 tool_input 是工具参数对象：Input 为 JSON 对象时原样解码；

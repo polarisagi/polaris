@@ -33,7 +33,7 @@ func (o *orchestrator) withTurnDigests(ctx context.Context, sessionID string, hi
 	}
 	steps, err := src.SessionToolSteps(ctx, sessionID)
 	if err != nil {
-		slog.WarnContext(ctx, "session: load tool steps for turn digest failed", "session", sessionID, "err", err)
+		slog.WarnContext(ctx, "session: load tool steps for turn digest failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 		return history
 	}
 	if len(steps) == 0 {

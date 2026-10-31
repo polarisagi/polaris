@@ -28,7 +28,7 @@ type hookSourceView struct {
 // GET /v1/hooks
 func (h *PluginHandler) HandleListHooks(w http.ResponseWriter, r *http.Request) {
 	if h.HookRunner == nil {
-		http.Error(w, "hook engine not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "hook engine not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	if err := h.HookRunner.Registry().Reload(r.Context()); err != nil {
@@ -61,20 +61,20 @@ func (h *PluginHandler) HandleTrustHook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Key == "" || body.Digest == "" {
-		http.Error(w, "key and digest required", http.StatusBadRequest)
+		httputil.RespondError(w, "key and digest required", nil, http.StatusBadRequest)
 		return
 	}
 	src, ok := h.findHookSource(r.Context(), body.Key)
 	if !ok {
-		http.Error(w, "hook source not found", http.StatusNotFound)
+		httputil.RespondError(w, "hook source not found", nil, http.StatusNotFound)
 		return
 	}
 	if src.Scope == hook.ScopeUser {
-		http.Error(w, "user-level hooks are always trusted", http.StatusBadRequest)
+		httputil.RespondError(w, "user-level hooks are always trusted", nil, http.StatusBadRequest)
 		return
 	}
 	if src.Digest != body.Digest {
-		http.Error(w, "hook definition changed since review; reload and review again", http.StatusConflict)
+		httputil.RespondError(w, "hook definition changed since review; reload and review again", nil, http.StatusConflict)
 		return
 	}
 	if err := h.ExtRepo.SaveHookTrust(r.Context(), body.Key, body.Digest); err != nil {
@@ -93,7 +93,7 @@ func (h *PluginHandler) HandleRevokeHookTrust(w http.ResponseWriter, r *http.Req
 	}
 	key := r.URL.Query().Get("key")
 	if key == "" {
-		http.Error(w, "key required", http.StatusBadRequest)
+		httputil.RespondError(w, "key required", nil, http.StatusBadRequest)
 		return
 	}
 	if err := h.ExtRepo.DeleteHookTrust(r.Context(), key); err != nil {
@@ -106,7 +106,7 @@ func (h *PluginHandler) HandleRevokeHookTrust(w http.ResponseWriter, r *http.Req
 
 func (h *PluginHandler) authorizeHookAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.HookRunner == nil || h.InstallMgr == nil {
-		http.Error(w, "hook engine not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "hook engine not initialized", nil, http.StatusServiceUnavailable)
 		return false
 	}
 	principal := authcontext.FromContext(r.Context()).UserID

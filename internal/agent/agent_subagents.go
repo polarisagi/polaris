@@ -37,7 +37,9 @@ func (a *Agent) countRunningSubagents(ctx context.Context) int {
 	active := make([]string, 0, len(a.spawnedSubagentIDs))
 	for _, id := range a.spawnedSubagentIDs {
 		snap, err := a.handoffPoster.PeekTask(ctx, id)
-		if err == nil && snap != nil && snap.Status != types.TaskDone && snap.Status != types.TaskFailed {
+		// 只有明确读到终态才释放本地名额。瞬时存储错误或异常 nil 快照
+		// 都按仍运行处理，避免失败的查询让父 Agent 超出并发预算。
+		if err != nil || snap == nil || (snap.Status != types.TaskDone && snap.Status != types.TaskFailed) {
 			running++
 			active = append(active, id)
 		}
@@ -233,20 +235,26 @@ func (a *Agent) AgentStatus(ctx context.Context, ids []string) ([]types.Subagent
 
 // AgentResult 查询指定子智能体的执行产物，超过限制时卸载为 read_tool_ref（T5 原则）。
 func (a *Agent) AgentResult(ctx context.Context, id string) (string, error) {
+	result, _, err := a.AgentResultWithTaint(ctx, id)
+	return result, err
+}
+
+func (a *Agent) AgentResultWithTaint(ctx context.Context, id string) (string, types.TaintLevel, error) {
 	if a.handoffPoster == nil {
-		return "", apperr.New(apperr.CodeInternal, "agent_result: handoffPoster not injected")
+		return "", types.TaintHigh, apperr.New(apperr.CodeInternal, "agent_result: handoffPoster not injected")
 	}
 	snap, err := a.handoffPoster.PeekTask(ctx, id)
 	if err != nil || snap == nil {
-		return "", apperr.New(apperr.CodeNotFound, fmt.Sprintf("agent_result: task %s not found", id))
+		return "", types.TaintHigh, apperr.New(apperr.CodeNotFound, fmt.Sprintf("agent_result: task %s not found", id))
 	}
+	taintLevel := types.EffectiveTaskResultTaint(snap.ResultTaint)
 
 	if snap.Status != types.TaskDone && snap.Status != types.TaskFailed {
-		return fmt.Sprintf("子智能体 %s 处于 %v 状态，尚未完成", id, snap.Status), nil
+		return fmt.Sprintf("子智能体 %s 处于 %v 状态，尚未完成", id, snap.Status), types.TaintHigh, nil
 	}
 
 	resStr := string(snap.Result)
-	return a.truncateAndOffloadResult(ctx, id, resStr, 4000), nil
+	return a.truncateAndOffloadResult(ctx, id, resStr, 4000), taintLevel, nil
 }
 
 // AgentMessage 向指定子智能体发送插话消息（ADR-0115 WP4 / WP2 steer 机制，R3-04）。

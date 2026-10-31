@@ -25,7 +25,7 @@ import (
 // Body: {"skill_names": ["..."]}（可选，留空则只刷新元数据不做兼容测试）。
 func (h *ProviderHandler) HandleModelUpgrade(w http.ResponseWriter, r *http.Request) {
 	if h.ModelRegistry == nil {
-		http.Error(w, `{"error":"model registry not available"}`, http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Model registry is unavailable", nil, http.StatusServiceUnavailable)
 		return
 	}
 	providerID := r.PathValue("providerID")
@@ -57,7 +57,7 @@ func (h *ProviderHandler) HandleModelUpgrade(w http.ResponseWriter, r *http.Requ
 // Body: {"successor_model_id": "..."}。
 func (h *ProviderHandler) HandleModelDeprecate(w http.ResponseWriter, r *http.Request) {
 	if h.ModelRegistry == nil {
-		http.Error(w, `{"error":"model registry not available"}`, http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Model registry is unavailable", nil, http.StatusServiceUnavailable)
 		return
 	}
 	providerID := r.PathValue("providerID")

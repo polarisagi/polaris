@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -27,7 +28,7 @@ func (o *orchestrator) runFSMTurn(
 	agentCtrl protocol.AgentController,
 	input string,
 	inputTaint types.TaintLevel,
-) (reply string, inferErr string, aborted bool, viewIDs []string) {
+) (reply string, inferErr string, inferCode apperr.Code, aborted bool, viewIDs []string) {
 	// [W-2-A] 接入 SystemPromptGuard——同时注册 FSM 内核阶段模板（静态指令主体）
 	// 与 ActivatedSystemPrompt（M9 GEPA 动态激活提示词，可能为空），覆盖两类
 	// "系统提示词"来源，不只挡后者。
@@ -43,12 +44,13 @@ func (o *orchestrator) runFSMTurn(
 	}, "http_gateway")
 	agentCtrl.SetTaskIntent(userTS)
 	if err := agentCtrl.SendIntent(types.TriggerIntentReceived); err != nil {
-		slog.Warn("session: fsm advance failed or timeout", "err", err)
-		return "", "Agent 状态机未能接收本轮输入，请稍后重试", false, nil
+		slog.Warn("session: fsm advance failed or timeout", "error_meta", safeErrorSummary(err))
+		return "", "Agent 状态机未能接收本轮输入，请稍后重试", publicErrorCodeFor(err), false, nil
 	}
 
 	var replyBuilder []byte
 	var errBuilder string
+	var errorCode apperr.Code
 	// [HE-1] 回合终止方式此前完全不可观测：channel 关闭、task_done、ctx 取消
 	// 三条出口在"回复为空且无错误"时表现完全一致，日志里只剩一条无法定位的
 	// "推理返回空内容"。记录事件计数与出口分支，使空回合可归因。
@@ -65,18 +67,18 @@ func (o *orchestrator) runFSMTurn(
 		case ev, ok := <-ch:
 			if !ok {
 				slog.WarnContext(ctx, "session: fsm stream closed without task_done",
-					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_err", errBuilder)
-				return string(replyBuilder), errBuilder, false, viewIDs
+					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_error_present", errBuilder != "")
+				return string(replyBuilder), errBuilder, errorCode, false, viewIDs
 			}
 			evCount++
 			if rec := recorderFrom(ctx); rec != nil {
 				rec.onEvent(ev)
 			}
-			stop := o.handleFSMEvent(ctx, sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
+			stop := o.handleFSMEvent(ctx, sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &errorCode, &leakWindow, windowSize, &viewIDs)
 			if stop {
 				slog.InfoContext(ctx, "session: fsm turn done",
-					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_err", errBuilder)
-				return string(replyBuilder), errBuilder, false, viewIDs
+					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_error_present", errBuilder != "")
+				return string(replyBuilder), errBuilder, errorCode, false, viewIDs
 			}
 		case <-ctx.Done():
 			// [GD-13-002 复核 2026-10-20，ADR-0116] ctx 由 TurnHub 持有，仅显式中止
@@ -85,7 +87,7 @@ func (o *orchestrator) runFSMTurn(
 			if agentCtrl != nil {
 				agentCtrl.Interrupt(types.InterruptRequest{Action: types.InterruptAbort})
 			}
-			return string(replyBuilder), ctx.Err().Error(), true, viewIDs
+			return string(replyBuilder), ctx.Err().Error(), publicErrorCodeFor(ctx.Err()), true, viewIDs
 		}
 	}
 }
@@ -101,6 +103,7 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 	systemPromptGuard *guard.SystemPromptGuard,
 	reply *[]byte,
 	inferErr *string,
+	errorCode *apperr.Code,
 	leakWindow *[]byte,
 	windowSize int,
 	viewIDs *[]string,
@@ -126,7 +129,7 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 		_, err := systemPromptGuard.Scan(fullText, false)
 		cleaned, _ := systemPromptGuard.Scan(ev.Content, true)
 		if err != nil {
-			slog.Warn("session: system prompt leak detected", "session_id", sessionID, "err", err)
+			slog.Warn("session: system prompt leak detected", "session_id", sessionID, "error_meta", safeErrorSummary(err))
 			cleaned = ""      // 命中则清理本 token 可输出部分
 			*leakWindow = nil // 重置窗口，防止后续正常 token 一直被误判
 		} else {
@@ -162,8 +165,9 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 	case types.AgentStreamEventError:
 		if *inferErr == "" {
 			*inferErr = ev.Content
+			*errorCode = publicErrorCode(ev.ErrorCode)
 		}
-		o.emitError(sink, "fsm_error", ev.Content, sessionID, nil)
+		o.emitError(ctx, sink, "fsm_error", *errorCode, sessionID, nil)
 	case types.AgentStreamEventPhase:
 		// 回合阶段进度（ADR-0098）：内部阶段不再推 token，客户端靠它在首 token 前
 		// 展示进度。阶段键原样透传，本地化由客户端负责。
@@ -240,7 +244,7 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 func (o *orchestrator) emitSubagentOutput(sink Sink, sessionID string, ev types.AgentStreamEvent, g *guard.SystemPromptGuard) {
 	cleaned, err := g.Scan(ev.Content, true)
 	if err != nil {
-		slog.Warn("session: system prompt leak detected in subagent output", "session_id", sessionID, "err", err)
+		slog.Warn("session: system prompt leak detected in subagent output", "session_id", sessionID, "error_meta", safeErrorSummary(err))
 		cleaned = ""
 	}
 	if cleaned == "" {
@@ -264,7 +268,7 @@ func (o *orchestrator) emitSubagentOutput(sink Sink, sessionID string, ev types.
 // 或 viewIDs 为空时跳过——都不是错误，只是本轮没有可关联的东西。
 func (o *orchestrator) linkAppViews(ctx context.Context, sessionID string, viewIDs []string, messageID int64) {
 	if err := LinkToolUIViews(ctx, o.persistence, sessionID, viewIDs, messageID); err != nil {
-		slog.Error("session: link app views to message failed", "session", sessionID, "message_id", messageID, "err", err)
+		slog.Error("session: link app views to message failed", "session", sessionID, "message_id", messageID, "error_meta", safeErrorSummary(err))
 	}
 }
 
@@ -275,7 +279,7 @@ func (o *orchestrator) linkAppViews(ctx context.Context, sessionID string, viewI
 // 数据库里不存在的 id 回填是无意义的空操作。
 func (o *orchestrator) handleToolUIEvent(ctx context.Context, sink Sink, sessionID string, ui *types.ToolUIRef, viewIDs *[]string) {
 	if err := SaveToolUIView(ctx, o.persistence, sessionID, ui); err != nil {
-		slog.Warn("session: save app view failed", "session", sessionID, "view_id", ui.ViewID, "err", err)
+		slog.Warn("session: save app view failed", "session", sessionID, "view_id", ui.ViewID, "error_meta", safeErrorSummary(err))
 	} else {
 		*viewIDs = append(*viewIDs, ui.ViewID)
 	}

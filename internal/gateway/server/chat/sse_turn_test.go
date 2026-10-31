@@ -2,9 +2,12 @@ package chat
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,16 +17,21 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/session"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // fakeOrch 模拟回合：发 session 事件与一个 token，然后阻塞到 release 或 ctx 取消。
 type fakeOrch struct {
 	release   chan struct{}
+	runErr    error
 	completed atomic.Int32
 	cancelled atomic.Int32
 }
 
 func (f *fakeOrch) RunTurn(ctx context.Context, req session.Request, sink session.Sink) (*session.Result, error) {
+	if f.runErr != nil {
+		return nil, f.runErr
+	}
 	sid := req.SessionID
 	if sid == "" {
 		sid = session.NewSessionID()
@@ -38,6 +46,53 @@ func (f *fakeOrch) RunTurn(ctx context.Context, req session.Request, sink sessio
 	case <-ctx.Done():
 		f.cancelled.Add(1)
 		return &session.Result{SessionID: sid, Aborted: true}, nil
+	}
+}
+
+func TestAgentStreamTurnErrorUsesSafeCodeAndMessage(t *testing.T) {
+	old := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	srv, f, _ := newTurnServer(t)
+	f.runErr = apperr.Wrap(apperr.CodeStorageUnavailable, "database failed", errors.New("private-turn-cause-sentinel"))
+	resp := postStream(t, srv.URL, `{"input":"hi"}`)
+	defer resp.Body.Close()
+	evs := readEvents(t, resp.Body, "error")
+	if len(evs) == 0 {
+		t.Fatal("expected an error event")
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(evs[len(evs)-1].data), &payload); err != nil {
+		t.Fatalf("decode event payload: %v", err)
+	}
+	if payload["code"] != string(apperr.CodeStorageUnavailable) || payload["message"] != http.StatusText(http.StatusServiceUnavailable) {
+		t.Fatalf("unexpected error event: %#v", payload)
+	}
+	if strings.Contains(evs[len(evs)-1].data, "private-turn-cause-sentinel") {
+		t.Fatalf("cause leaked into SSE event: %s", evs[len(evs)-1].data)
+	}
+	if strings.Contains(logs.String(), "private-turn-cause-sentinel") || !strings.Contains(logs.String(), "error_type=*apperr.Error") {
+		t.Fatalf("turn diagnostics unsafe or incomplete: %s", logs.String())
+	}
+}
+
+func TestStartTurnClosedHubUsesServiceUnavailableCode(t *testing.T) {
+	h := &ChatHandler{}
+	h.turns().Shutdown(context.Background())
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/agent/stream", strings.NewReader(`{"input":"hi"}`))
+
+	if turn := h.startTurn(w, r, "", session.Request{}); turn != nil {
+		t.Fatal("closed turn hub must reject the start")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if w.Code != http.StatusServiceUnavailable || body["code"] != string(apperr.CodeServiceUnavailable) {
+		t.Fatalf("unexpected closed-hub response: status=%d body=%#v", w.Code, body)
 	}
 }
 

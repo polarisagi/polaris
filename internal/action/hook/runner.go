@@ -2,8 +2,12 @@ package hook
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -41,6 +45,7 @@ type Deps struct {
 	PII        *guard.PIIDetector
 	PIIDesens  *guard.PIIDesensitizer
 	Approver   Approver // 可选；nil 时 ask 一律拒绝
+	Auditor    protocol.ExecutionAuditor
 }
 
 // Runner 按事件分发 hook。
@@ -173,6 +178,13 @@ func (r *Runner) runAll(ctx context.Context, handlers []boundHandler, in Input, 
 func (r *Runner) runOne(ctx context.Context, bh boundHandler, in Input, payload []byte) handlerResult {
 	ctx, cancel := context.WithTimeout(context.WithValue(ctx, hookActiveKey{}, true), bh.Handler.Timeout())
 	defer cancel()
+	if bh.Handler.Type == TypeCommand || bh.Handler.Type == TypeHTTP || bh.Handler.Type == TypeMCPTool {
+		return r.runAuditedPhysicalHandler(ctx, bh, in, payload)
+	}
+	return r.runOneUnaudited(ctx, bh, in, payload)
+}
+
+func (r *Runner) runOneUnaudited(ctx context.Context, bh boundHandler, in Input, payload []byte) handlerResult {
 	switch bh.Handler.Type {
 	case TypeCommand:
 		return r.runCommand(ctx, bh, in, payload)
@@ -184,4 +196,120 @@ func (r *Runner) runOne(ctx context.Context, bh boundHandler, in Input, payload 
 		return r.runPrompt(ctx, bh, payload)
 	}
 	return handlerResult{Err: apperr.New(apperr.CodeInvalidInput, "hook: unsupported handler type "+bh.Handler.Type)}
+}
+
+func (r *Runner) runAuditedPhysicalHandler(ctx context.Context, bh boundHandler, in Input, payload []byte) (result handlerResult) {
+	if r.deps.Auditor == nil {
+		return r.hookAuditUnavailable(ctx, in, apperr.New(apperr.CodeServiceUnavailable, "hook: execution auditor is not initialized"))
+	}
+	args, err := json.Marshal(struct {
+		Payload      []byte  `json:"payload,omitempty"`
+		Definition   Handler `json:"definition"`
+		SourceDigest string  `json:"source_digest,omitempty"`
+	}{Payload: payload, Definition: bh.Handler, SourceDigest: bh.Source.Digest})
+	if err != nil {
+		return r.hookAuditUnavailable(ctx, in, err)
+	}
+	sourceDigest := sha256.Sum256([]byte(bh.Source.Key))
+	intent := protocol.ExecutionAuditIntent{
+		Tool:   "hook:" + bh.Handler.Type + ":" + string(in.HookEventName),
+		Source: fmt.Sprintf("hook:%s:%s:%x", bh.Source.Scope, in.HookEventName, sourceDigest[:8]),
+		// 审计器只持久化 Args 的摘要和长度；不得把展开后的输入、命令、URL、头、MCP 参数或插件配置写入元数据。
+		Args: args,
+	}
+	auditID, err := safeBeginHookAudit(ctx, r.deps.Auditor, intent)
+	if err != nil {
+		return r.hookAuditUnavailable(ctx, in, err)
+	}
+	defer func() {
+		panicOccurred := false
+		if recovered := recover(); recovered != nil {
+			panicOccurred = true
+			panicType := fmt.Sprintf("%T", recovered)
+			slog.ErrorContext(ctx, "hook physical handler panicked", "panic_type", panicType, "stack", string(debug.Stack()), "code", string(apperr.CodeInternal))
+			result = hookPhysicalHandlerFailure(in, apperr.New(apperr.CodeInternal, "hook: physical handler panicked"))
+		}
+		errorCode := hookResultErrorCode(ctx, result)
+		if panicOccurred {
+			errorCode = string(apperr.CodeInternal)
+		}
+		if completionErr := safeCompleteHookAudit(ctx, r.deps.Auditor, auditID, errorCode == "", errorCode); completionErr != nil {
+			logHookAuditFailure(ctx, "complete", completionErr)
+		}
+	}()
+	return r.runOneUnaudited(ctx, bh, in, payload)
+}
+
+func safeBeginHookAudit(ctx context.Context, auditor protocol.ExecutionAuditor, intent protocol.ExecutionAuditIntent) (id string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = apperr.New(apperr.CodeInternal, "hook: execution auditor panicked during intent")
+		}
+	}()
+	id, err = auditor.BeginExecution(ctx, intent)
+	if err == nil && id == "" {
+		err = apperr.New(apperr.CodeInternal, "hook: execution auditor returned an empty execution ID")
+	}
+	return id, err
+}
+
+func safeCompleteHookAudit(ctx context.Context, auditor protocol.ExecutionAuditor, id string, success bool, errorCode string) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = apperr.New(apperr.CodeInternal, "hook: execution auditor panicked during completion")
+		}
+	}()
+	if err := auditor.CompleteExecution(ctx, id, success, errorCode); err != nil {
+		return apperr.Wrap(apperr.CodeOf(err), "hook: complete execution audit", err)
+	}
+	return nil
+}
+
+func hookResultErrorCode(_ context.Context, result handlerResult) string {
+	if result.Err != nil {
+		switch {
+		case errors.Is(result.Err, context.DeadlineExceeded):
+			return string(apperr.CodeTimeout)
+		case errors.Is(result.Err, context.Canceled):
+			return string(apperr.CodeCancelled)
+		default:
+			return string(apperr.CodeOf(result.Err))
+		}
+	}
+	switch result.ExitCode {
+	case 0:
+		return ""
+	case 2:
+		return string(apperr.CodeForbidden)
+	default:
+		return string(apperr.CodeInternal)
+	}
+}
+
+func (r *Runner) hookAuditUnavailable(ctx context.Context, in Input, cause error) handlerResult {
+	logHookAuditFailure(ctx, "begin", cause)
+	code := apperr.CodeStorageUnavailable
+	if apperr.IsCode(cause, apperr.CodeServiceUnavailable) || apperr.IsCode(cause, apperr.CodeForbidden) {
+		code = apperr.CodeServiceUnavailable
+	}
+	err := apperr.New(code, "hook: execution audit unavailable")
+	// 守卫事件的物理处理器未能写入意图记录时，必须阻断后续操作。
+	if in.HookEventName == EventPreToolUse || in.HookEventName == EventPermissionRequest || in.HookEventName == EventUserPromptSubmit {
+		return handlerResult{ExitCode: 2, Stderr: []byte("hook execution audit unavailable")}
+	}
+	return handlerResult{Err: err}
+}
+
+func hookPhysicalHandlerFailure(in Input, err error) handlerResult {
+	if in.HookEventName == EventPreToolUse || in.HookEventName == EventPermissionRequest || in.HookEventName == EventUserPromptSubmit {
+		return handlerResult{ExitCode: 2, Stderr: []byte("hook physical handler failed")}
+	}
+	return handlerResult{Err: err}
+}
+
+func logHookAuditFailure(ctx context.Context, phase string, err error) {
+	if err == nil {
+		return
+	}
+	slog.ErrorContext(ctx, "hook execution audit failed", "phase", phase, "error_type", fmt.Sprintf("%T", err), "code", string(apperr.CodeOf(err)))
 }

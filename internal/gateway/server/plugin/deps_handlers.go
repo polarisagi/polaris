@@ -19,7 +19,7 @@ type PluginDependencyManager interface {
 // HandleListPluginDependencies GET /v1/plugins/{id}/dependencies：依赖逐条状态（ok/missing/disabled/version_mismatch）。
 func (h *PluginHandler) HandleListPluginDependencies(w http.ResponseWriter, r *http.Request) {
 	if h.Dependencies == nil {
-		http.Error(w, "plugin dependencies not configured", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "plugin dependencies not configured", nil, http.StatusServiceUnavailable)
 		return
 	}
 	statuses, err := h.Dependencies.Check(r.Context(), r.PathValue("id"))

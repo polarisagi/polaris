@@ -98,7 +98,7 @@ func (s *AudioService) Synthesize(ctx context.Context, text string) (TTSAudio, e
 
 func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
 	if box := s.TTSEngine.Load(); box == nil || box.P == nil {
-		http.Error(w, "TTS Engine not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Text-to-speech is unavailable", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -106,11 +106,11 @@ func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 		Input string `json:"input"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Invalid request body", err, http.StatusBadRequest)
 		return
 	}
 	if req.Input == "" {
-		http.Error(w, "input is empty", http.StatusBadRequest)
+		httputil.RespondError(w, "Input is required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -120,7 +120,7 @@ func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		slog.Error("audio: tts generation failed", "err", err)
-		http.Error(w, "internal server error: "+err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Text-to-speech generation failed", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -190,7 +190,7 @@ func (s *AudioService) HandleAudioInstall(kind string) http.HandlerFunc {
 			}
 			slog.Error("audio: install request failed", "kind", kind, "err", err)
 			httputil.WriteJSONStatus(w, http.StatusInternalServerError, map[string]string{
-				"error": "install_failed", "message": err.Error(),
+				"error": "install_failed", "message": "Audio asset installation failed",
 			})
 			return
 		}
@@ -221,13 +221,13 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 	// 解析 multipart，获取 audio 文件 (通常是 wav 或 webm 格式)
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 最大 10MB
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Invalid multipart request", err, http.StatusBadRequest)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "missing file", http.StatusBadRequest)
+		httputil.RespondError(w, "Audio file is required", err, http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -254,7 +254,7 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 			slog.Warn("wav decode failed", "err", err)
 			httputil.WriteJSONStatus(w, http.StatusBadRequest, map[string]string{
 				"error":   "invalid_wav",
-				"message": "WAV 文件解码失败: " + err.Error(),
+				"message": "WAV audio could not be decoded",
 			})
 			return
 		}
@@ -266,13 +266,13 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 		inPath := filepath.Join(tmpDir, uuid.New().String()+ext)
 		outFile, err := os.Create(inPath)
 		if err != nil {
-			http.Error(w, "server error", http.StatusInternalServerError)
+			httputil.RespondError(w, "Audio file could not be processed", err, http.StatusInternalServerError)
 			return
 		}
 		if _, err := io.Copy(outFile, file); err != nil {
 			outFile.Close()
 			os.Remove(inPath)
-			http.Error(w, "server error", http.StatusInternalServerError)
+			httputil.RespondError(w, "Audio file could not be processed", err, http.StatusInternalServerError)
 			return
 		}
 		outFile.Close()
@@ -318,7 +318,7 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 		slog.Error("audio: stt transcribe failed", "err", err)
 		httputil.WriteJSONStatus(w, http.StatusInternalServerError, map[string]string{
 			"error":   "stt_failed",
-			"message": "语音识别失败: " + err.Error(),
+			"message": "Speech recognition failed",
 		})
 		return
 	}

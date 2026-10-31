@@ -31,15 +31,16 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 	// 但 ChatHandler 也可被测试/未来调用方以零值 Dependencies{} 构造，
 	// 裸解引用会 panic（HTTP 路径有 withMiddleware 兜底但仍属不必要的
 	// 500），改为 nil-safe 判空，保持与本文件其余可选字段同一防御风格。
-	if s.SoulMDContent != nil {
-		ic.SoulMDContent = *s.SoulMDContent
+	if soulMDContent, ok := s.readSoulMDContent(); ok {
+		ic.SoulMDContent = soulMDContent
 	}
 
 	// 用户自定义追加指令（~/.polaris/config/prompts/custom_instructions.md）
 	ic.CustomInstructions = s.PromptMgr.ReadPrompt("custom_instructions.md", "")
 
-	// 用户画像（P0-2：消费 default 用户画像）
-	if p, err := agentCtrl.Memory().GetUserProfile(ctx, "default"); err == nil && p != nil {
+	// 用户画像只消费带新来源契约的全局画像；缺失或读取失败时清理共享对象残留。
+	ic.UserProfile = ""
+	if p, err := agentCtrl.Memory().GetUserProfile(ctx, types.GlobalUserProfileKey); err == nil && p != nil {
 		// StableFacts/BehavioralPatterns 都是 map：直接 range 顺序随机，画像内容不变时
 		// 稳定层也逐请求漂移（ADR-0105 决策一字节稳定规则 1），故按键排序后输出值。
 		summary := sortedValueLines(p.StableFacts)

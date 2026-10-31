@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,20 +111,21 @@ func TestIsLoopback(t *testing.T) {
 	}
 }
 
-func TestLoggingResponseWriter(t *testing.T) {
+func TestLoggingResponseWriterTracksFirstStatusWithoutBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	lrw := NewLoggingResponseWriter(w)
 
-	lrw.WriteHeader(404)
-	lrw.Write([]byte("not found"))
-
-	if lrw.statusCode != 404 {
-		t.Errorf("expected 404")
-	}
-	if string(lrw.body) != "not found" {
-		t.Errorf("expected not found")
-	}
+	lrw.WriteHeader(http.StatusNotFound)
+	lrw.WriteHeader(http.StatusInternalServerError)
+	_, _ = lrw.Write([]byte("private response body"))
 	lrw.Flush()
+
+	if lrw.statusCode != http.StatusNotFound || w.Code != http.StatusNotFound {
+		t.Fatalf("first status must win: tracked=%d wire=%d", lrw.statusCode, w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "private response body") {
+		t.Fatal("response body should still reach the HTTP client")
+	}
 }
 
 func TestHealthPaths(t *testing.T) {

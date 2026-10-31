@@ -158,7 +158,7 @@ func TestPIIOpaqueTokenIntegration(t *testing.T) {
 	// 注册一个 echo 工具捕获它实际收到的 input，验证已被还原为明文。
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0)
-	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil)
+	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil).WithExecutionAuditor(testExecutionAuditor{})
 	registry := tool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool).WithTokenVault(vault)
 
 	if err := registry.Register(types.Tool{

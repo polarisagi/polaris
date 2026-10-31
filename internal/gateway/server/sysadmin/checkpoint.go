@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/security/checkpoint"
 )
 
@@ -26,13 +27,13 @@ func (h *SysAdminHandler) HandleListCheckpoints(w http.ResponseWriter, r *http.R
 	retentionCount := config.CurrentThresholds().M4Kernel.CheckpointRetentionCount
 	store, err := checkpoint.NewStore(h.DataDir, projectDir, retentionCount)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Checkpoint operation failed", err, http.StatusInternalServerError)
 		return
 	}
 
 	snaps, err := store.List(r.Context(), limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Checkpoint operation failed", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -71,11 +72,11 @@ func (h *SysAdminHandler) HandleRestoreCheckpoint(w http.ResponseWriter, r *http
 		Hash       string `json:"hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request body", nil, http.StatusBadRequest)
 		return
 	}
 	if req.Hash == "" {
-		http.Error(w, "hash is required", http.StatusBadRequest)
+		httputil.RespondError(w, "hash is required", nil, http.StatusBadRequest)
 		return
 	}
 	if req.ProjectDir == "" {
@@ -85,12 +86,12 @@ func (h *SysAdminHandler) HandleRestoreCheckpoint(w http.ResponseWriter, r *http
 	retentionCount := config.CurrentThresholds().M4Kernel.CheckpointRetentionCount
 	store, err := checkpoint.NewStore(h.DataDir, req.ProjectDir, retentionCount)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Checkpoint operation failed", err, http.StatusInternalServerError)
 		return
 	}
 
 	if err := store.Restore(r.Context(), req.Hash); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Checkpoint operation failed", err, http.StatusInternalServerError)
 		return
 	}
 

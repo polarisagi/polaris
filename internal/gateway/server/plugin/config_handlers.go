@@ -25,7 +25,7 @@ type PluginConfigManager interface {
 // GET /v1/plugins/{id}/config
 func (h *PluginHandler) HandleGetPluginConfig(w http.ResponseWriter, r *http.Request) {
 	if h.PluginConfig == nil {
-		http.Error(w, "plugin config service not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "plugin config service not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	pluginID := r.PathValue("id")
@@ -46,7 +46,7 @@ func (h *PluginHandler) HandleGetPluginConfig(w http.ResponseWriter, r *http.Req
 // PUT /v1/plugins/{id}/config  body: {"values":[{"scope":"","key":"api_token","value":"..."}]}
 func (h *PluginHandler) HandleUpdatePluginConfig(w http.ResponseWriter, r *http.Request) {
 	if h.PluginConfig == nil || h.InstallMgr == nil {
-		http.Error(w, "plugin config service not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "plugin config service not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	principal := authcontext.FromContext(r.Context()).UserID

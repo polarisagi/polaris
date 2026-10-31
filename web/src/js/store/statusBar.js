@@ -1,4 +1,5 @@
 import Alpine from 'alpinejs'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
 // ══════════════════════════════════════════════════════════════════════════
 // store: statusBar（持久状态栏，M13-Interface-WebUI.md §13）
@@ -123,7 +124,7 @@ Alpine.store('statusBar', {
     this.rebenchRunning = true
     try {
       const r = await fetch('/v1/embedding/rebench', { method: 'POST', headers: authHeaders() })
-      if (!r.ok) console.warn('rebench rejected', r.status, await r.text())
+      if (!r.ok) console.warn('rebench rejected', await readHTTPErrorMessage(r))
       await this.poll()
     } catch (e) {
       console.warn('rebench failed', e)

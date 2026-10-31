@@ -20,7 +20,7 @@ import (
 func (h *ChatHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		http.Error(w, "q is required", http.StatusBadRequest)
+		httputil.RespondError(w, "Search query is required", nil, http.StatusBadRequest)
 		return
 	}
 	limit := 10
@@ -100,7 +100,7 @@ func (h *ChatHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 func (h *ChatHandler) HandleGetSessionContext(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionID")
 	if sessionID == "" {
-		http.Error(w, "sessionID required", http.StatusBadRequest)
+		httputil.RespondError(w, "Session ID is required", nil, http.StatusBadRequest)
 		return
 	}
 

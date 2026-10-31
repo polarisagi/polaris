@@ -316,6 +316,14 @@ func (bb *SQLiteBlackboard) startExecutionIdempotentCheck(ctx context.Context, t
 
 // CompleteTask 将任务标记为完成（须持有认领权）。
 func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID string, result []byte) error {
+	return bb.CompleteTaskWithTaint(ctx, taskID, agentID, result, types.TaintHigh)
+}
+
+// CompleteTaskWithTaint 在结果事务中一并落盘来源污点。
+func (bb *SQLiteBlackboard) CompleteTaskWithTaint(ctx context.Context, taskID, agentID string, result []byte, taintLevel types.TaintLevel) error {
+	if taintLevel < types.TaintHigh {
+		taintLevel = types.TaintHigh
+	}
 	bb.mu.Lock()
 	bb.removeCancelFunc(taskID)
 	bb.mu.Unlock()
@@ -335,14 +343,12 @@ func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID st
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask: set running", execErr)
 	}
 
-	// [修复] 此前 UPDATE 语句未写入 result 参数——tasks 表长期只有 result_taint
-	// 没有 result 本体列，导致 CompleteTask 接收的产出内容被静默丢弃，PeekTask
-	// 永远读不到真实结果（见 007_tasks.sql result 列注释）。
+	// 同一UPDATE原子保存结果与其最高来源污点，避免重启后两者不一致。
 	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET status=?, result=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		SET status=?, result=?, result_taint=MAX(result_taint, intent_taint, ?), version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
 		WHERE task_id=? AND claimed_by=? AND status=?`,
-		statusDone, result, taskID, agentID, statusRunning,
+		statusDone, result, int(taintLevel), taskID, agentID, statusRunning,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask", err)
@@ -367,8 +373,7 @@ func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID st
 		// Payload 携带任务结果字节，对齐 FailTask 的 Payload:errBytes 既有模式
 		// （此前遗漏，导致 PatternDAGExecutor/StateGraphExecutor 等消费方读到的
 		// ev.Payload 恒为空——GD-8-001 StateGraph 条件边求值发现，见 M08 §3-quinquies）。
-		// DB 侧不落盘完整 result（tasks 表无独立 result 列，与 FailTask 的 errBytes
-		// 处理方式一致），仅通过广播事件传递给订阅方。
+		// DB 与广播事件共享同一结果载荷；广播用于实时订阅，重启恢复读任务快照。
 		Payload: result,
 	})
 	return nil
@@ -390,9 +395,9 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 	// 此前只随广播发送，恢复/重启后读到的失败任务没有任何原因。
 	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET status=?, result=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		SET status=?, result=?, result_taint=MAX(result_taint, intent_taint, ?), version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
 		WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,
-		statusFailed, errBytes, taskID, agentID, statusClaimed, statusRunning,
+		statusFailed, errBytes, int(types.TaintHigh), taskID, agentID, statusClaimed, statusRunning,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.FailTask", err)

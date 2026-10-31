@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -126,9 +127,10 @@ type StepSummary struct {
 	// Failed 本回合以失败收场（没有产出助手回复）。历史接口据此在对应用户消息之后补一条错误占位；
 	// 这些字段只给人看，不进入发给模型的历史。
 	Failed      bool   `json:"failed,omitempty"`
-	ErrorCode   string `json:"error_code,omitempty"`
+	ErrorCode   string `json:"error_code,omitempty"`   // 历史阶段 kind，保持私有摘要兼容
+	ErrorClass  string `json:"error_class,omitempty"`  // apperr 分类，公开投影时再映射为 code
 	Error       string `json:"error,omitempty"`        // 友好原因
-	ErrorDetail string `json:"error_detail,omitempty"` // 原始错误（截断）
+	ErrorDetail string `json:"error_detail,omitempty"` // 私有摘要中的原始错误（截断）
 }
 
 type stepState struct {
@@ -343,14 +345,14 @@ func (r *stepRecorder) onEvent(ev types.AgentStreamEvent) {
 
 // fail 把本回合标记为失败：追加一个 error 步骤（实时推送并落库）并把原因写进摘要行，
 // 历史接口据此生成错误占位。幂等（只记第一次）。
-func (r *stepRecorder) fail(code, friendly, detail string) {
+func (r *stepRecorder) fail(kind string, errorClass apperr.Code, friendly, detail string) {
 	if r.sum.Failed {
 		return
 	}
-	r.sum.Failed, r.sum.ErrorCode, r.sum.Error = true, code, friendly
+	r.sum.Failed, r.sum.ErrorCode, r.sum.ErrorClass, r.sum.Error = true, kind, string(apperr.NormalizeErrorCode(errorClass)), friendly
 	r.sum.ErrorDetail = clipRunes(detail, errorDetailMax)
 	r.instant(StepKindError, friendly, "", StepStatusError, func(st *stepState) {
-		st.ResultPreview = r.sum.ErrorDetail
+		st.ResultPreview = friendly
 	})
 }
 
@@ -403,9 +405,21 @@ func (r *stepRecorder) onToolResult(ev types.AgentStreamEvent, parent, scope str
 		if looksDenied(raw) {
 			status = StepStatusDenied
 		}
+		st.ResultPreview = safeFailedStepPreview(status)
 	}
 	r.settleApproval(ev.ToolName, scope, status)
 	r.end(st, status)
+}
+
+func safeFailedStepPreview(status string) string {
+	switch status {
+	case StepStatusDenied:
+		return "操作未获批准"
+	case StepStatusCancelled:
+		return "操作已取消"
+	default:
+		return "工具执行失败"
+	}
 }
 
 // findToolStep 按 CallID 找对应的工具步骤；无 CallID 或错过开始事件时按同工具最早的未结束步骤配对。
@@ -468,6 +482,26 @@ func (r *stepRecorder) finalize(aborted bool) StepSummary {
 		r.writer.close(3 * time.Second)
 	}
 	return r.sum
+}
+
+// publicStepSummary 将内部诊断与错误分类折叠为回合完成事件可公开的摘要。
+func publicStepSummary(summary StepSummary) any {
+	if !summary.Failed && summary.ErrorCode == "" && summary.ErrorClass == "" && summary.Error == "" && summary.ErrorDetail == "" {
+		return summary
+	}
+	kind := summary.ErrorCode
+	switch kind {
+	case "session_error", "history_error", "agent_pool_error", "empty_response", "fsm_error", "hook_blocked", "no_provider", "no_agent":
+	default:
+		kind = "turn_error"
+	}
+	return map[string]any{
+		"steps": summary.Total, "omitted": summary.Omitted, "tools": summary.Tools,
+		"searches": summary.Searches, "fetches": summary.Fetches, "duration_ms": summary.DurationMs,
+		"tokens": summary.Tokens, "failed": true, "kind": kind,
+		"error_code": string(apperr.NormalizeErrorCode(apperr.Code(summary.ErrorClass))),
+		"error":      publicTurnErrorMessage(kind),
+	}
 }
 
 func (r *stepRecorder) persist(st *stepState) {
@@ -570,7 +604,7 @@ func (w *stepWriter) close(timeout time.Duration) {
 // ── 小工具 ───────────────────────────────────────────────────────────────
 
 func slogWarn(msg, sessionID, turnID string, err error) {
-	slog.Warn(msg, "session", sessionID, "turn", turnID, "err", err)
+	slog.Warn(msg, "session", sessionID, "turn", turnID, "error_meta", safeErrorSummary(err))
 }
 
 func clipRunes(s string, n int) string {

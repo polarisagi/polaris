@@ -1,16 +1,12 @@
 import Alpine from 'alpinejs'
 import { authHeaders } from '../utils.js'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 // ══════════════════════════════════════════════════════════════════════════
 // store: mesh（设置页「多节点」：本机身份、监听与策略设置、对端配对、令牌，ADR-0111）
 // 后端：GET/PUT /v1/mesh/settings、/v1/mesh/{self,invites,peers,tokens}；配对的 MCP 登记
 // 与 CLI（cmd/polaris/cli_peer.go）同一顺序：先 /v1/mesh/peers，再 /v1/mcp-servers。
 // ══════════════════════════════════════════════════════════════════════════
 const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...authHeaders() })
-
-async function errText(r) {
-  const t = await r.text()
-  try { return JSON.parse(t).error || t } catch { return t || `HTTP ${r.status}` }
-}
 
 Alpine.store('mesh', {
   loading: false,
@@ -38,7 +34,7 @@ Alpine.store('mesh', {
     this.loading = true
     try {
       const r = await fetch('/v1/mesh/settings', { headers: authHeaders() })
-      if (!r.ok) throw new Error(await errText(r))
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       const d = await r.json()
       this.form = { ...d.settings, extra_listen: [...(d.settings.extra_listen || [])] }
       delete d.settings
@@ -71,7 +67,7 @@ Alpine.store('mesh', {
     this.saving = true
     try {
       const r = await fetch('/v1/mesh/settings', { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(this.form) })
-      if (!r.ok) throw new Error(await errText(r))
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       const d = await r.json()
       this.restartRequired = !!d.restart_required
       this.form = { ...d.settings, extra_listen: [...(d.settings.extra_listen || [])] }
@@ -89,7 +85,7 @@ Alpine.store('mesh', {
     this.peersLoading = true
     try {
       const r = await fetch('/v1/mesh/peers' + (probe ? '?probe=1' : ''), { headers: authHeaders() })
-      if (!r.ok) throw new Error(await errText(r))
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       this.peers = (await r.json()).peers || []
     } catch (e) {
       this.toast('error', e.message)
@@ -107,7 +103,7 @@ Alpine.store('mesh', {
   async removePeer(name) {
     if (!(await Alpine.store('dialog').confirm({ message: this.t('mesh_remove_confirm').replace('{0}', name), danger: true }))) return
     const r = await fetch(`/v1/mesh/peers/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() })
-    if (!r.ok) { this.toast('error', await errText(r)); return }
+    if (!r.ok) { this.toast('error', await readHTTPErrorMessage(r)); return }
     const d = await r.json()
     if (d.mcp_server_id) {
       await fetch(`/v1/mcp-servers/${encodeURIComponent(d.mcp_server_id)}`, { method: 'DELETE', headers: authHeaders() })
@@ -125,7 +121,7 @@ Alpine.store('mesh', {
     this.invite.busy = true
     try {
       const r = await fetch('/v1/mesh/invites', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ peer_name: this.invite.peer_name.trim() }) })
-      if (!r.ok) throw new Error(await errText(r))
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       this.invite.result = await r.json()
       this.loadTokens()
     } catch (e) {
@@ -146,12 +142,12 @@ Alpine.store('mesh', {
     try {
       const r = await fetch('/v1/mesh/peers', { method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ name: this.accept.name.trim(), invite: this.accept.invite.trim() }) })
-      if (!r.ok) throw new Error(await errText(r))
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       const d = await r.json()
       if (d.mcp_server?.id) {
         await fetch(`/v1/mcp-servers/${encodeURIComponent(d.mcp_server.id)}`, { method: 'DELETE', headers: authHeaders() })
         const m = await fetch('/v1/mcp-servers', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(d.mcp_server) })
-        if (!m.ok) throw new Error(this.t('mesh_mcp_register_failed') + '：' + await errText(m))
+        if (!m.ok) throw new Error(this.t('mesh_mcp_register_failed') + '：' + await readHTTPErrorMessage(m))
       }
       this.accept.result = d
       this.loadPeers(false); this.loadTokens()
@@ -172,7 +168,7 @@ Alpine.store('mesh', {
   async revokeToken(id) {
     if (!(await Alpine.store('dialog').confirm({ message: this.t('mesh_revoke_confirm'), danger: true }))) return
     const r = await fetch(`/v1/mesh/tokens/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() })
-    if (!r.ok) { this.toast('error', await errText(r)); return }
+    if (!r.ok) { this.toast('error', await readHTTPErrorMessage(r)); return }
     this.loadTokens()
   },
 

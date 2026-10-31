@@ -196,7 +196,7 @@ drainLoop:
 			}
 			if ev.Type == types.AgentStreamEventError {
 				slog.WarnContext(ctx, "AwaitingHandoffReconciler: session ended with error after resume",
-					"session_id", sessionID, "detail", ev.Content)
+					"session_id", sessionID, "error_code", string(apperr.NormalizeErrorCode(apperr.Code(ev.ErrorCode))))
 				return
 			}
 		case <-drainCtx.Done():

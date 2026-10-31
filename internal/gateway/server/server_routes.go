@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/a2a"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 )
@@ -101,10 +102,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 提示词管理 API（三层所有权：Layer 1 用户自定义层，读写 ~/.polaris/config/prompts/）
 	// Layer 0（embedded 内置默认）和 Layer 2（M9 优化）不通过此 API 暴露。
 	//
-	// 【状态：实现完整、刻意未接线，2026-08-12 复核】
-	// sysadmin/prompts.go 的 HandleGetPrompt/HandleSetPrompt/HandleResetPrompt 三者
-	// 已实现且 SysAdminHandler.PromptMgr 早已注入（server_lifecycle.go）——依赖不是
-	// 缺口。唯一真实缺口是写入侧的三项加固，缺任一项都不该开这个口子：
+	// 【状态：刻意未接线】
+	// sysadmin/prompts.go 的处理器已实现；PromptMgr 由 boot_server.go 在 NewServer
+	// 后通过 SetPromptManager 注入，并回填到 SysAdminHandler 与聊天提示服务。SoulMD
+	// 读取/热更新共享 Server 的内容指针和 RWMutex。提示词 API 仍不注册，写入侧还需
+	// 完成以下加固后才能开放：
 	//   1. 审计：HandleSetPrompt/HandleResetPrompt 改的是系统核心指令，必须写
 	//      audit_log（HE-1），当前只写文件不留审计轨迹；
 	//   2. 注入校验：req.Value 是外部输入且会进 system prompt，需过
@@ -330,7 +332,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 func (s *Server) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		http.Error(w, "read body failed", http.StatusBadRequest)
+		httputil.RespondError(w, "Could not read request body", nil, http.StatusBadRequest)
 		return
 	}
 	_ = r.Body.Close()
@@ -339,7 +341,7 @@ func (s *Server) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 		Intent string `json:"intent"`
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httputil.RespondError(w, "Invalid request body", nil, http.StatusBadRequest)
 		return
 	}
 	if probe.Intent != "" {

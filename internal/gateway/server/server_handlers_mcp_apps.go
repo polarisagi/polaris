@@ -134,7 +134,7 @@ func (s *Server) dispatchMCPAppsRPC(ctx context.Context, view *types.ChatAppView
 	case rpcMethodResourceRead:
 		resp.Result, resp.Error = s.dispatchMCPAppsResourceRead(ctx, view, req.Params)
 	default:
-		resp.Error = &mcpAppsRPCError{Code: jsonRPCMethodNotFoundCode, Message: "method not found: " + req.Method}
+		resp.Error = &mcpAppsRPCError{Code: jsonRPCMethodNotFoundCode, Message: "Method not found"}
 	}
 	return resp
 }
@@ -152,7 +152,7 @@ func (s *Server) dispatchMCPAppsToolCall(ctx context.Context, view *types.ChatAp
 	raw, err := s.mcpMgr.CallToolAsApp(ctx, view.ServerID, p.Name, p.Arguments, view.SessionID, viewID)
 	if err != nil {
 		slog.Warn("mcp apps: view rpc tool call failed", "view_id", viewID, "server", view.ServerID, "tool", p.Name, "err", err)
-		return nil, &mcpAppsRPCError{Code: jsonRPCImplementationCode, Message: err.Error()}
+		return nil, &mcpAppsRPCError{Code: jsonRPCImplementationCode, Message: "Tool call failed"}
 	}
 	return raw, nil
 }
@@ -168,7 +168,7 @@ func (s *Server) dispatchMCPAppsResourceRead(ctx context.Context, view *types.Ch
 	}
 	contents, err := s.mcpMgr.ReadResourceAsApp(ctx, view.ServerID, p.URI)
 	if err != nil {
-		return nil, &mcpAppsRPCError{Code: jsonRPCImplementationCode, Message: err.Error()}
+		return nil, &mcpAppsRPCError{Code: jsonRPCImplementationCode, Message: "Resource read failed"}
 	}
 	result, marshalErr := json.Marshal(map[string]any{"contents": contents})
 	if marshalErr != nil {

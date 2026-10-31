@@ -147,7 +147,7 @@ func setupCodeActProductionEngine(t *testing.T, bridgeExec *codeActTestBridgeExe
 
 	container := sandbox.NewContainerSandbox("", runtime.GOOS, 1, toolsb.NewWrapBashCmdRunner(), config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(nil, container, nil, runtime.GOOS, 1)
-	envelope := sandbox.NewExecEnvelope(testPolicyGate{}, router, 1, runtime.GOOS, nil)
+	envelope := sandbox.NewExecEnvelope(testPolicyGate{}, router, 1, runtime.GOOS, nil).WithExecutionAuditor(testExecutionAuditor{})
 
 	caEngine := codeact.NewCodeAct(
 		envelope,

@@ -162,6 +162,7 @@ type SubagentManager interface {
 	SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]string, error)
 	AgentStatus(ctx context.Context, ids []string) ([]types.SubagentStatusInfo, error)
 	AgentResult(ctx context.Context, id string) (string, error)
+	AgentResultWithTaint(ctx context.Context, id string) (string, types.TaintLevel, error)
 	AgentMessage(ctx context.Context, id, text string) (string, error)
 	AgentStop(ctx context.Context, id string) (string, error)
 }

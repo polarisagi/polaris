@@ -193,6 +193,32 @@ func TestInProcessSandbox_AdditionalMethods(t *testing.T) {
 	}
 }
 
+func TestInProcessSandbox_RichResultKeepsMaximumTaint(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result types.TaintLevel
+		floor  types.TaintLevel
+		want   types.TaintLevel
+	}{
+		{name: "registered floor raises lower result", result: types.TaintMedium, floor: types.TaintHigh, want: types.TaintHigh},
+		{name: "reviewed result stays above floor", result: types.TaintUserReviewed, floor: types.TaintHigh, want: types.TaintUserReviewed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+			sb.RegisterRich("rich", func(context.Context, SandboxSpec) (*types.ToolResult, error) {
+				return &types.ToolResult{Success: true, TaintLevel: tc.result}, nil
+			}, tc.floor)
+			res, err := sb.Run(context.Background(), SandboxSpec{ToolName: "rich"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.TaintLevel != tc.want {
+				t.Fatalf("result taint=%v want max(result=%v,floor=%v)=%v", res.TaintLevel, tc.result, tc.floor, tc.want)
+			}
+		})
+	}
+}
+
 // ─── ContainerSandbox Tests (Anomaly Paths) ──────────────────────────────────
 
 type errorCmdRunner struct{}

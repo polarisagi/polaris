@@ -55,6 +55,9 @@ func (s *stubBlackboard) StartExecution(_ context.Context, _, _ string) error   
 func (s *stubBlackboard) CompleteTask(_ context.Context, _, _ string, _ []byte) error {
 	return nil
 }
+func (s *stubBlackboard) CompleteTaskWithTaint(_ context.Context, _, _ string, _ []byte, _ types.TaintLevel) error {
+	return nil
+}
 func (s *stubBlackboard) FailTask(_ context.Context, _, _ string, _ []byte) error { return nil }
 func (s *stubBlackboard) RenewLease(_ context.Context, _, _ string) error         { return nil }
 func (s *stubBlackboard) SuspendForHITL(_ context.Context, _, _ string, _ int64) error {

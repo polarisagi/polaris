@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type SkillInjector struct {
 	Wrapper  sandbox.ArgvWrapper
 	Policy   protocol.PolicyGate
 	Trust    InjectionTrust
+	Auditor  protocol.ExecutionAuditor
 	Disabled bool // 对应 Claude disableSkillShellExecution：命令替换为提示文本，不执行
 }
 
@@ -51,6 +53,8 @@ func planInjections(template string, in pluginspec.RenderInput) injectionPlan {
 }
 
 // run 执行全部注入命令并返回输出；任一命令失败即中止整次技能调用（Claude 语义）。
+//
+//nolint:gocyclo // The audited command sequence is intentionally fail-fast and ordered.
 func (i *SkillInjector) run(ctx context.Context, meta *types.SkillMeta, plan injectionPlan) ([]string, error) {
 	outputs := make([]string, len(plan.points))
 	if i == nil || i.Disabled {
@@ -63,8 +67,51 @@ func (i *SkillInjector) run(ctx context.Context, meta *types.SkillMeta, plan inj
 		return nil, err
 	}
 	for k, cmd := range plan.commands {
-		res, err := sandbox.RunStdio(ctx, i.Wrapper, sandbox.StdioRequest{CallerType: protocol.CallerSkill, Command: cmd,
-			WorkDir: meta.SkillDir, AllowedPaths: nonEmptyPaths(meta.SkillDir), Timeout: 2 * time.Minute})
+		if i.Auditor == nil {
+			return nil, apperr.New(apperr.CodeForbidden, "skill injection: execution auditor not initialized (fail-closed)")
+		}
+		res, err := func() (sandbox.StdioResult, error) {
+			auditID, auditErr := i.Auditor.BeginExecution(ctx, protocol.ExecutionAuditIntent{
+				Tool: meta.Name, Source: "skill_injection", Args: []byte(cmd),
+			})
+			if auditErr != nil {
+				return sandbox.StdioResult{}, apperr.Wrap(apperr.CodeStorageUnavailable, "skill injection: execution intent audit failed", auditErr)
+			}
+			if auditID == "" {
+				return sandbox.StdioResult{}, apperr.New(apperr.CodeStorageUnavailable, "skill injection: execution intent audit returned an empty ID")
+			}
+			completed := false
+			defer func() {
+				if completed {
+					return
+				}
+				completed = true
+				if completionErr := i.Auditor.CompleteExecution(ctx, auditID, false, string(apperr.CodeInternal)); completionErr != nil {
+					slog.ErrorContext(ctx, "skill injection: abort completion audit failed",
+						"execution_id", auditID, "error_type", fmt.Sprintf("%T", completionErr), "code", string(apperr.CodeOf(completionErr)))
+				}
+			}()
+			result, runErr := sandbox.RunStdio(ctx, i.Wrapper, sandbox.StdioRequest{CallerType: protocol.CallerSkill, Command: cmd,
+				WorkDir: meta.SkillDir, AllowedPaths: nonEmptyPaths(meta.SkillDir), Timeout: 2 * time.Minute})
+			success := runErr == nil && !result.TimedOut && (result.ExitCode == 0 || result.ExitCode == 1 && isSearchCommand(cmd))
+			errorCode := ""
+			if runErr != nil {
+				errorCode = string(apperr.CodeOf(runErr))
+			} else if result.TimedOut {
+				errorCode = string(apperr.CodeTimeout)
+			} else if !success {
+				errorCode = string(apperr.CodeInvalidInput)
+			}
+			completed = true
+			if completionErr := i.Auditor.CompleteExecution(ctx, auditID, success, errorCode); completionErr != nil {
+				slog.ErrorContext(ctx, "skill injection: completion audit failed; preserving command result",
+					"execution_id", auditID, "error_type", fmt.Sprintf("%T", completionErr), "code", string(apperr.CodeOf(completionErr)))
+			}
+			if runErr != nil {
+				return result, apperr.Wrap(apperr.CodeOf(runErr), "skill injection: run command", runErr)
+			}
+			return result, nil
+		}()
 		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeOf(err), "skill injection", err)
 		}

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -52,7 +53,8 @@ func (h *ChatHandler) startTurn(w http.ResponseWriter, r *http.Request, sessionI
 		return nil
 	case session.BeginClosed:
 		cancel()
-		httputil.RespondError(w, "", apperr.New(apperr.CodeInternal, "server shutting down"), http.StatusServiceUnavailable)
+		err := apperr.New(apperr.CodeServiceUnavailable, "server shutting down")
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return nil
 	}
 	// 回合 ID 随 ctx 下发：编排层据此把 llm_calls / chat_turn_steps / chat_messages 关联到同一个回合（ADR-0118）。
@@ -63,9 +65,17 @@ func (h *ChatHandler) startTurn(w http.ResponseWriter, r *http.Request, sessionI
 		if _, err := h.Orchestrator.RunTurn(ctx, req, turn); err != nil {
 			// RunTurn 只在会话确保之前的边界校验失败时返回非 nil error；
 			// 正常业务失败均已经 sink 推送 KindError 并返回 nil。
+			code := apperr.CodeOf(err)
+			status := apperr.HTTPStatus(code)
+			slog.ErrorContext(ctx, "chat: turn failed before orchestration completed",
+				"turn_id", turn.ID, "session_id", turn.SessionID(), "code", string(code),
+				"status", status, "error_type", fmt.Sprintf("%T", err))
 			_ = turn.Emit(session.Event{
-				Kind:    session.KindError,
-				Payload: map[string]any{"code": "turn_error", "message": err.Error()},
+				Kind: session.KindError,
+				Payload: map[string]any{
+					"code":    string(code),
+					"message": httputil.PublicErrorMessage(status),
+				},
 			})
 		}
 	})
@@ -105,7 +115,7 @@ func streamSubscription(ctx context.Context, w http.ResponseWriter, flusher http
 func prepareSSE(w http.ResponseWriter) (http.Flusher, bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		httputil.RespondError(w, "Streaming is unavailable", nil, http.StatusInternalServerError)
 		return nil, false
 	}
 	w.Header().Set("Content-Type", "text/event-stream")

@@ -29,11 +29,11 @@ func (h *SysAdminHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Reque
 	}
 	defer r.Body.Close()
 	if req.Intent == "" {
-		http.Error(w, `{"error":"intent is required"}`, http.StatusBadRequest)
+		httputil.RespondError(w, "Intent is required", nil, http.StatusBadRequest)
 		return
 	}
 	if h.InstallMgr == nil {
-		http.Error(w, `{"error":"extension installer not available"}`, http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Extension installer is unavailable", nil, http.StatusServiceUnavailable)
 		return
 	}
 

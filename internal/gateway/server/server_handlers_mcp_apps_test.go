@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -156,6 +158,34 @@ func TestHandleMCPAppsViewRPC_ToolCall_RoutesThroughCallToolAsApp(t *testing.T) 
 	}
 	if !bytes.Equal(resp.Result, fakeMgr.callToolRaw) {
 		t.Fatalf("result must be raw CallToolResult JSON passthrough: %s", resp.Result)
+	}
+}
+
+func TestHandleMCPAppsViewRPC_ToolFailureKeepsJSONRPCIdentityAndHidesCause(t *testing.T) {
+	const secret = "private-mcp-cause-sentinel"
+	s, fakeMgr := newMCPAppsTestServer(t)
+	fakeMgr.callToolErr = apperr.Wrap(apperr.CodeInternal, "tool failure", errors.New(secret))
+	rec := mustPostViewRPC(t, s, "view-1",
+		`{"session_id":"sess-1","jsonrpc":"2.0","id":"request-sentinel","method":"tools/call","params":{"name":"refresh","arguments":{}}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("JSON-RPC error must stay in the HTTP 200 envelope, got %d", rec.Code)
+	}
+	var body struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      string `json:"id"`
+		Error   struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.JSONRPC != "2.0" || body.ID != "request-sentinel" || body.Error.Code != jsonRPCImplementationCode || body.Error.Message != "Tool call failed" {
+		t.Fatalf("JSON-RPC identity/code/safe message changed: %+v", body)
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("underlying cause leaked in JSON-RPC error: %s", rec.Body.String())
 	}
 }
 

@@ -1,5 +1,6 @@
 import Alpine from 'alpinejs'
 import { authHeaders } from '../utils.js'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 
 // ══════════════════════════════════════════════════════════════════════════
 // store: cron（自动化任务管理）
@@ -162,8 +163,8 @@ Alpine.store('cron', {
         })
       }
       if (!r.ok) {
-        const msg = await r.text()
-        throw new Error(`HTTP ${r.status}: ${msg}`)
+        const msg = await readHTTPErrorMessage(r)
+        throw new Error(msg)
       }
       this.showModal = false
       await this.load()

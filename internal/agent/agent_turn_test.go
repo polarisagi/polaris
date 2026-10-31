@@ -1,7 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -35,6 +39,54 @@ func TestAbortTurn_EmitsErrorAndTaskDone(t *testing.T) {
 	}
 	if a.sm.Current() != types.AgentStateFailed {
 		t.Fatalf("中止后必须处于 S_FAILED（Pool 据此换新实例），实际 %v", a.sm.Current())
+	}
+}
+
+func TestStreamErrorCodePreservesSafeClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want apperr.Code
+	}{
+		{"provider exhausted", apperr.Wrap(apperr.CodeProviderExhausted, "provider failed", errors.New("private-sentinel")), apperr.CodeProviderExhausted},
+		{"storage unavailable", apperr.Wrap(apperr.CodeStorageUnavailable, "store failed", errors.New("private-sentinel")), apperr.CodeStorageUnavailable},
+		{"cancelled", context.Canceled, apperr.CodeCancelled},
+		{"timeout", context.DeadlineExceeded, apperr.CodeTimeout},
+		{"unknown", errors.New("private-sentinel"), apperr.CodeInternal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := streamErrorCode(tc.err); got != tc.want {
+				t.Fatalf("streamErrorCode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAbortTurnLogsMetadataAndKeepsTypedInternalEvent(t *testing.T) {
+	old := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	marker := "provider-path-token-sentinel"
+	a := NewAgentWithDefaults("test-safe-error")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub := a.SubscribeStream(ctx)
+	err := apperr.Wrap(apperr.CodeProviderExhausted, "provider request failed", errors.New(marker))
+	a.abortTurn(ctx, err)
+	var errorEvent *types.AgentStreamEvent
+	for len(sub) > 0 {
+		ev := <-sub
+		if ev.Type == types.AgentStreamEventError {
+			errorEvent = &ev
+		}
+	}
+	if errorEvent == nil || errorEvent.ErrorCode != string(apperr.CodeProviderExhausted) || errorEvent.Content != "模型服务暂不可用" || strings.Contains(errorEvent.Content, marker) {
+		t.Fatalf("error event must contain only a safe message and typed code: %#v", errorEvent)
+	}
+	if strings.Contains(logs.String(), marker) || !strings.Contains(logs.String(), "error_code=PROVIDER_EXHAUSTED") || !strings.Contains(logs.String(), "error_type=*apperr.Error") {
+		t.Fatalf("ordinary log must contain only safe metadata: %s", logs.String())
 	}
 }
 

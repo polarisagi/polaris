@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/execute/dag"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -22,6 +25,57 @@ func newTestPoolAgent(sessionID string) *Agent {
 		Nodes: []dag.ExecNode{{ID: "n1", ToolName: "read_file"}},
 	}
 	return a
+}
+
+func TestConsumeHeadlessStreamSanitizesTypedErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    string
+		want    apperr.Code
+		message string
+	}{
+		{"provider exhausted", string(apperr.CodeProviderExhausted), apperr.CodeProviderExhausted, "模型服务暂不可用"},
+		{"cancelled", string(apperr.CodeCancelled), apperr.CodeCancelled, "任务已取消"},
+		{"unknown", "private-code-sentinel", apperr.CodeInternal, "Agent 执行失败"},
+		{"ok is not an error", string(apperr.CodeOK), apperr.CodeInternal, "Agent 执行失败"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := make(chan types.AgentStreamEvent, 1)
+			stream <- types.AgentStreamEvent{Type: types.AgentStreamEventError, ErrorCode: tc.code, Content: "provider /private/token-sentinel"}
+			close(stream)
+			var callbackEvent types.AgentStreamEvent
+			got, err := (&Pool{}).consumeHeadlessStream(stream, &types.HeadlessOptions{EventCallback: func(ev types.AgentStreamEvent) {
+				callbackEvent = ev
+			}})
+			if got != "" {
+				t.Fatalf("failed stream returned output %q", got)
+			}
+			var appErr *apperr.Error
+			if !errors.As(err, &appErr) || appErr.Code != tc.want || appErr.Cause != nil || appErr.Message != tc.message {
+				t.Fatalf("unexpected safe headless error: %#v", err)
+			}
+			if callbackEvent.ErrorCode != string(tc.want) || callbackEvent.Content != tc.message || strings.Contains(callbackEvent.Content, "token-sentinel") {
+				t.Fatalf("callback received unsafe error event: %#v", callbackEvent)
+			}
+		})
+	}
+}
+
+func TestPool_AcquireHeadlessPreservesIntentTaintLevelFour(t *testing.T) {
+	pool := NewPool(newTestPoolAgent, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := pool.AcquireHeadless(ctx, types.Intent{Query: "offline fixture", TaintLevel: types.TaintUserReviewed})
+	if err != nil {
+		t.Fatalf("AcquireHeadless failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("AcquireHeadless returned nil result without error")
+	}
+	if result.TaintLevel != types.TaintUserReviewed {
+		t.Fatalf("AcquireHeadless result taint=%v want TaintUserReviewed(4)", result.TaintLevel)
+	}
 }
 
 // TestPool_Acquire_StartsKernelRunLoop 验证 2026-07-12 复核修复的核心缺陷：

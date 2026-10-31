@@ -90,9 +90,14 @@ func TestTamperedRecordStillRejected(t *testing.T) {
 		t.Fatalf("Record 失败: %v", err)
 	}
 
-	// 改动一个被 hash 覆盖的字段 —— 两种布局都不该验得过。
+	// 调用方记录与内存链采用深拷贝，故直接改调用方对象不得改写已追加链。
 	rec.Outcome = "deny"
-	if recordHashMatches(rec) {
+	if !recordHashMatches(at.records[0]) {
+		t.Fatal("mutating the caller-owned record must not mutate the stable audit chain")
+	}
+	// 直接篡改链内副本则必须被检测到。
+	at.records[0].Outcome = "deny"
+	if recordHashMatches(at.records[0]) {
 		t.Error("内容被篡改的记录必须判失败；旧布局兼容路径不得成为绕过口子")
 	}
 	if ok, _ := at.VerifyIntegrity(); ok {

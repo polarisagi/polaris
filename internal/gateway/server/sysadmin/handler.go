@@ -84,6 +84,7 @@ type SysAdminHandler struct {
 	ExtRepo            protocol.ExtensionRepository
 	PromptMgr          protocol.PromptFacade
 	SoulMDContent      *string
+	SoulMDMu           *sync.RWMutex
 	Updater            *updater.Manager
 	Catalog            ToolCatalog
 	NewWorktreeManager func(workingDir, worktreeRoot string) WorktreeManager
@@ -150,6 +151,8 @@ type Dependencies struct {
 	SequentialExec       *orchestrator.SequentialExecutor
 	SwarmCoord           *orchestrator.SwarmCoordinator
 	KillSwitch           *security.KillSwitch
+	SoulMDContent        *string
+	SoulMDMu             *sync.RWMutex
 	RotateVaultMasterKey func(ctx context.Context) (int, error)
 	ChannelMgr           interface {
 		protocol.ChannelFacade
@@ -208,6 +211,8 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		KillSwitch:           deps.KillSwitch,
 		RotateVaultMasterKey: deps.RotateVaultMasterKey,
 		StreamIdleTimeout:    deps.StreamIdleTimeout,
+		SoulMDContent:        deps.SoulMDContent,
+		SoulMDMu:             deps.SoulMDMu,
 		MaxPermissionMode:    deps.MaxPermissionMode,
 		Insights:             insightsadmin.NewInsightsAdmin(deps.DB),
 		// Store/Sentinel 均先 nil 构造（此时 AgentBundle 尚未构建），Server.SetEvalAdmin

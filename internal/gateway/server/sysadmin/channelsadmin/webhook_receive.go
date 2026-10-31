@@ -44,7 +44,7 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 	defer r.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 	if err != nil {
-		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		httputil.RespondError(w, "Request body is too large", err, http.StatusRequestEntityTooLarge)
 		return
 	}
 

@@ -30,7 +30,7 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	pluginID := r.PathValue("id")
 	if pluginID == "" {
-		http.Error(w, "plugin id required", http.StatusBadRequest)
+		httputil.RespondError(w, "plugin id required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -43,7 +43,7 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "plugin not found", http.StatusNotFound)
+			httputil.RespondError(w, "plugin not found", nil, http.StatusNotFound)
 			return
 		}
 		httputil.RespondError(w, "query extension instance failed", apperr.Wrap(apperr.CodeInternal, "HandleUpgradePlugin", err), http.StatusInternalServerError)
@@ -51,7 +51,7 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 	}
 
 	if catalogID == "" || catalogVersion == "" {
-		http.Error(w, "该扩展不支持在线升级检测", http.StatusBadRequest)
+		httputil.RespondError(w, "该扩展不支持在线升级检测", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -68,13 +68,13 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 		// 落盘类型：必须真正同步文件，否则不得推进 installed_version。先取回到暂存目录再替换，
 		// 失败时 install_path 保持原样（CatalogInstaller.Upgrade）。
 		if h.Catalog == nil {
-			http.Error(w, "catalog installer not configured", http.StatusServiceUnavailable)
+			httputil.RespondError(w, "catalog installer not configured", nil, http.StatusServiceUnavailable)
 			return
 		}
 		if upErr := h.Catalog.Upgrade(ctx, marketplace.CatalogInstallRequest{CatalogID: catalogID, ExtensionID: pluginID,
 			Principal: "user"}); upErr != nil {
 			h.updateExtensionInstanceError(ctx, pluginID, upErr.Error())
-			http.Error(w, "文件同步失败，install_path 保持原样: "+upErr.Error(), apperr.HTTPStatus(apperr.CodeOf(upErr)))
+			httputil.RespondError(w, "Plugin upgrade failed", upErr, apperr.HTTPStatus(apperr.CodeOf(upErr)))
 			return
 		}
 	}
@@ -88,7 +88,7 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 			slog.ErrorContext(ctx, "plugin: 升级失败后错误态回写也失败，实例将停在中间态",
 				"plugin_id", pluginID, "upgrade_err", err, "mark_err", markErr)
 		}
-		http.Error(w, "Failed to update plugin version", http.StatusInternalServerError)
+		httputil.RespondError(w, "Failed to update plugin version", nil, http.StatusInternalServerError)
 		return
 	}
 

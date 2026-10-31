@@ -1,5 +1,6 @@
 import Alpine from 'alpinejs'
 import { authHeaders } from '../utils.js'
+import { readHTTPError, readHTTPErrorMessage } from '../http_error.mjs'
 import { mcpAppsHost } from '../mcp_apps.js'
 // ══════════════════════════════════════════════════════════════════════════
 // store: plugins（插件目录 Catalog）
@@ -464,9 +465,9 @@ Alpine.store('plugins', {
         body: '{}',
       })
       if (!r.ok) {
-        let reason = ''
-        try { reason = (await r.json()).reason || '' } catch { /* 非 JSON 错误体 */ }
-        Alpine.store('toast').show('error', this.reasonText(reason))
+        const error = await readHTTPError(r)
+        const reason = typeof error.payload?.reason === 'string' ? error.payload.reason : ''
+        Alpine.store('toast').show('error', reason ? this.reasonText(reason) : error.message)
         return
       }
       const d = await r.json()
@@ -553,7 +554,7 @@ Alpine.store('plugins', {
         Alpine.store('toast').show('ok', `同步完成，成功拉取 ${d.synced_count} 个项目`)
         await this.load()
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `同步失败：${t}`)
       }
     } catch (e) {
@@ -608,7 +609,7 @@ Alpine.store('plugins', {
         Alpine.store('toast').show('ok', `已安装：${entry.name}`)
         await this.load()
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `安装失败：${t}`)
       }
     } catch (e) {
@@ -635,7 +636,7 @@ Alpine.store('plugins', {
           setTimeout(() => this.load(), 1500)
         }
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `操作失败：${t}`)
       }
     } catch (e) {
@@ -655,7 +656,7 @@ Alpine.store('plugins', {
         Alpine.store('toast').show('ok', `已卸载：${entry.name}`)
         await this.load()
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `卸载失败：${t}`)
       }
     } catch (e) {
@@ -679,7 +680,7 @@ Alpine.store('plugins', {
         Alpine.store('toast').show('ok', `已升级：${entry.name}`)
         await this.load()
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `升级失败：${t}`)
       }
     } catch (e) {
@@ -788,7 +789,7 @@ Alpine.store('plugins', {
         this.showCreateModal = false
         await this.load()
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `创建失败：${t}`)
       }
     } catch (e) {
@@ -817,7 +818,7 @@ Alpine.store('plugins', {
         }),
       })
       if (!r.ok) {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `保存失败：${t}`)
         return
       }
@@ -837,7 +838,7 @@ Alpine.store('plugins', {
           }),
         })
         if (!or.ok) {
-          const t = await or.text()
+          const t = await readHTTPErrorMessage(or)
           Alpine.store('toast').show('error', `OAuth 配置保存失败：${t}`)
           return
         }
@@ -862,7 +863,7 @@ Alpine.store('plugins', {
         headers: authHeaders(),
       })
       if (!r.ok) {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `发起授权失败：${t}`)
         return
       }
@@ -905,7 +906,7 @@ Alpine.store('plugins', {
         Alpine.store('toast').show('ok', `已注销授权：${entry.name}`)
         await this.load()
       } else {
-        const t = await r.text()
+        const t = await readHTTPErrorMessage(r)
         Alpine.store('toast').show('error', `注销失败：${t}`)
       }
     } catch (e) {
@@ -1092,7 +1093,7 @@ Alpine.store('plugins', {
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ values: updates }),
       })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       Alpine.store('toast').show('ok', '配置已保存')
       this.detailConfigValues = {}
       this.detailConfigClear = {}
@@ -1112,7 +1113,7 @@ Alpine.store('plugins', {
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ server_id: serverID }),
       })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       Alpine.store('toast').show('ok', serverID ? `已绑定 ${alias}` : `已解绑 ${alias}`)
       await this._loadDetailApps()
     } catch (e) {
@@ -1129,7 +1130,7 @@ Alpine.store('plugins', {
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: src.key, digest: src.digest }),
       })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       Alpine.store('toast').show('ok', `已信任：${src.key}`)
       await this._loadDetailHooks()
     } catch (e) {
@@ -1140,7 +1141,7 @@ Alpine.store('plugins', {
   async revokeHookTrust(src) {
     try {
       const r = await fetch(`/v1/hooks/trust?key=${encodeURIComponent(src.key)}`, { method: 'DELETE', headers: authHeaders() })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       Alpine.store('toast').show('ok', `已撤销信任：${src.key}`)
       await this._loadDetailHooks()
     } catch (e) {
@@ -1155,7 +1156,7 @@ Alpine.store('plugins', {
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ plugin_id: ch.plugin_id, server: ch.server, enabled: !ch.enabled, permission_relay: ch.permission_relay }),
       })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       await this._loadDetailChannels()
     } catch (e) {
       Alpine.store('toast').show('error', `切换失败：${e.message}`)
@@ -1169,7 +1170,7 @@ Alpine.store('plugins', {
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ plugin_id: ch.plugin_id, server: ch.server, enabled: ch.enabled, permission_relay: !ch.permission_relay }),
       })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       await this._loadDetailChannels()
     } catch (e) {
       Alpine.store('toast').show('error', `切换失败：${e.message}`)
@@ -1183,7 +1184,7 @@ Alpine.store('plugins', {
   async prunePlugins() {
     try {
       const r = await fetch('/v1/plugins/prune', { method: 'POST', headers: authHeaders() })
-      if (!r.ok) throw new Error(await r.text())
+      if (!r.ok) throw new Error(await readHTTPErrorMessage(r))
       const d = await r.json()
       const n = (d.pruned || []).length
       Alpine.store('toast').show('ok', n > 0 ? `已清理 ${n} 个孤儿依赖插件` : '没有可清理的插件')

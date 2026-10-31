@@ -44,6 +44,8 @@ const (
 	CodeNetworkUnavailable Code = "NETWORK_UNAVAILABLE"
 	CodeTaintViolation     Code = "TAINT_VIOLATION"
 	CodeSandboxTier0Limit  Code = "SANDBOX_TIER0_LIMIT"
+	// CodeServiceUnavailable 表示服务当前未就绪或正在关闭，与存储层故障区分。
+	CodeServiceUnavailable Code = "SERVICE_UNAVAILABLE"
 	// CodeStorageUnavailable 标记持久化存储层写入/读取失败（如 SurrealDB kv-mem 连接中断、
 	// 磁盘写满等），与 CodeInternal（泛化内部错误）区分，供上层（如 Agent FSM）识别为
 	// "需要熔断而非重试" 的信号（GD-13-003，见 docs/arch/decisions/ADR-0046-execute-module.md）。
@@ -130,6 +132,20 @@ func CodeOf(err error) Code {
 	return CodeInternal
 }
 
+// NormalizeErrorCode 仅接受本包已定义的错误码；错误出口不得把任意字符串当作分类码。
+func NormalizeErrorCode(code Code) Code {
+	switch code {
+	case CodeInvalidInput, CodeNotFound, CodeAlreadyExists, CodeConflict,
+		CodeUnauthorized, CodeForbidden, CodeTimeout, CodeCancelled,
+		CodeResourceExhausted, CodeInternal, CodeUnimplemented,
+		CodeProviderExhausted, CodeNetworkUnavailable, CodeTaintViolation,
+		CodeSandboxTier0Limit, CodeServiceUnavailable, CodeStorageUnavailable:
+		return code
+	default:
+		return CodeInternal
+	}
+}
+
 // HTTPStatus 将 Code 映射到对应的 HTTP 状态码。
 // 供 gateway 层统一调用，避免各 handler 手写魔法数字。
 //
@@ -161,7 +177,7 @@ func HTTPStatus(code Code) int {
 		return http.StatusNotImplemented
 	case CodeNetworkUnavailable:
 		return http.StatusBadGateway
-	case CodeSandboxTier0Limit:
+	case CodeSandboxTier0Limit, CodeServiceUnavailable, CodeStorageUnavailable:
 		return http.StatusServiceUnavailable
 	default: // CodeInternal 及未知 Code
 		return http.StatusInternalServerError

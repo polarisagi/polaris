@@ -63,7 +63,7 @@ func (o *orchestrator) continueOnGoal(
 		}
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if _, sErr := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); sErr != nil {
-			slog.Error("session: saveMessage assistant before goal continuation", "session", sessionID, "err", sErr)
+			slog.Error("session: saveMessage assistant before goal continuation", "session", sessionID, "error_meta", safeErrorSummary(sErr))
 		}
 		cancel()
 		history = append(history, types.Message{Role: "assistant", Content: reply})
@@ -74,7 +74,7 @@ func (o *orchestrator) continueOnGoal(
 		slog.Info("session: goal continuation", "session", sessionID, "goal", g.ID, "round", g.RoundsUsed)
 
 		before := rec.toolCount()
-		next, inferErr, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
+		next, inferErr, _, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
 			goalContinuationInput(g), types.TaintHigh)
 		allViewIDs = append(allViewIDs, viewIDs...)
 		if aborted {
@@ -86,7 +86,7 @@ func (o *orchestrator) continueOnGoal(
 			return next, inferErr, false, allViewIDs
 		}
 		if _, fErr := o.goals.FinishRound(ctx, g.ID, rec.toolCount() == before, goalMaxIdleRounds); fErr != nil {
-			slog.Warn("session: goal finish round", "session", sessionID, "err", fErr)
+			slog.Warn("session: goal finish round", "session", sessionID, "error_meta", safeErrorSummary(fErr))
 		}
 		reply = next
 	}
@@ -95,6 +95,6 @@ func (o *orchestrator) continueOnGoal(
 // pauseGoal 暂停 active 目标；失败只记日志（目标最坏多续跑一轮，不阻断回合收尾）。
 func (o *orchestrator) pauseGoal(ctx context.Context, sessionID string) {
 	if err := o.goals.PauseGoal(ctx, sessionID); err != nil {
-		slog.Warn("session: pause goal failed", "session", sessionID, "err", err)
+		slog.Warn("session: pause goal failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 }

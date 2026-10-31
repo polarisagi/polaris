@@ -200,7 +200,7 @@ func TestAgentic_E2EContract_FullAutonomyLifecycle(t *testing.T) {
 
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, runtime.GOOS, 0)
-	envelope := sandbox.NewExecEnvelope(&allowPolicyGate{}, router, 0, "", nil)
+	envelope := sandbox.NewExecEnvelope(&allowPolicyGate{}, router, 0, "", nil).WithExecutionAuditor(testExecutionAuditor{})
 	toolReg := tool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
 	err = builtin.RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, nil, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, web_fetch.Deps{}, policy.StandardPolicy(), "", nil, nil, nil, nil)
 	if err != nil {
@@ -221,7 +221,7 @@ func TestAgentic_E2EContract_FullAutonomyLifecycle(t *testing.T) {
 
 	container := sandbox.NewContainerSandbox("", runtime.GOOS, 1, toolsb.NewWrapBashCmdRunner(), config.DefaultThresholds().M7Tool)
 	caRouter := sandbox.NewSandboxRouter(nil, container, nil, runtime.GOOS, 1)
-	caEnvelope := sandbox.NewExecEnvelope(&allowPolicyGate{}, caRouter, 1, runtime.GOOS, nil)
+	caEnvelope := sandbox.NewExecEnvelope(&allowPolicyGate{}, caRouter, 1, runtime.GOOS, nil).WithExecutionAuditor(testExecutionAuditor{})
 	caEngine := codeact.NewCodeAct(caEnvelope, nil,
 		codeact.WithGovernanceAgent(testGovAgent{}),
 		codeact.WithASTChecker(&codeact.DefaultASTChecker{}),

@@ -70,7 +70,7 @@ type addMetaHoldoutCaseRequest struct {
 // 必须携带有效 meta_auditor 签名，否则 SQLiteEvalStore.PutMetaHoldoutCase 拒绝写入。
 func (h *EvalAdmin) HandleAddMetaHoldoutCase(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
-		http.Error(w, "eval store not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "eval store not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	var req addMetaHoldoutCaseRequest
@@ -102,7 +102,7 @@ type runMetaAuditRequest struct {
 // 不提供"只跑不记录"的裸端点，避免执行与持久化不一致。
 func (h *EvalAdmin) HandleRunMetaAudit(w http.ResponseWriter, r *http.Request) {
 	if h.Sentinel == nil {
-		http.Error(w, "meta-eval sentinel not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "meta-eval sentinel not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	var req runMetaAuditRequest
@@ -129,7 +129,7 @@ func (h *EvalAdmin) HandleRunMetaAudit(w http.ResponseWriter, r *http.Request) {
 // 这是给运维仪表盘/CLI status 查询用的低敏感度接口。
 func (h *EvalAdmin) HandleGetMetaAuditStatus(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
-		http.Error(w, "eval store not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "eval store not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	passed, computedAt, ok, err := h.Store.LatestMetaAudit(r.Context())
@@ -148,7 +148,7 @@ func (h *EvalAdmin) HandleGetMetaAuditStatus(w http.ResponseWriter, r *http.Requ
 // HandleBenchmark 触发 Benchmark.
 func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
 	if h.Runner == nil {
-		http.Error(w, "eval runner not available", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "eval runner not available", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -162,13 +162,13 @@ func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
 	case "humaneval":
 		url = benchmark.HumanEvalDatasetURL
 	default:
-		http.Error(w, "unsupported dataset", http.StatusBadRequest)
+		httputil.RespondError(w, "unsupported dataset", nil, http.StatusBadRequest)
 		return
 	}
 
 	cases, err := benchmark.FetchDataset(r.Context(), h.HTTPClient, datasetName, url)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to fetch dataset: %v", err), http.StatusInternalServerError)
+		httputil.RespondError(w, "Failed to fetch evaluation dataset", err, http.StatusInternalServerError)
 		return
 	}
 

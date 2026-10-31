@@ -52,6 +52,9 @@ func (b *fakeA2ABlackboard) StartExecution(ctx context.Context, taskID, agentID 
 	return nil
 }
 func (b *fakeA2ABlackboard) CompleteTask(ctx context.Context, taskID, agentID string, result []byte) error {
+	return b.CompleteTaskWithTaint(ctx, taskID, agentID, result, types.TaintHigh)
+}
+func (b *fakeA2ABlackboard) CompleteTaskWithTaint(ctx context.Context, taskID, agentID string, result []byte, _ types.TaintLevel) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.done[taskID] = result

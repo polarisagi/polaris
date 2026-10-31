@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol/pb"
@@ -116,6 +117,46 @@ func TestAuditTrail_RecoverOnStartup_ReloadsFromDB(t *testing.T) {
 	}
 	if len(at2.records) == 2 && (at2.records[0].ActionType != "a1" || at2.records[1].ActionType != "a2") {
 		t.Errorf("records did not match")
+	}
+}
+
+func TestAuditTrail_RecoverRestoresEpochAfterMarkerLeavesTailWindow(t *testing.T) {
+	db := openTestDB(t)
+	auditRepo := repo.NewSQLiteAuditRepository(db, &mockEventLogger{db: db})
+	first := NewAuditTrail(auditRepo, t.TempDir())
+	if err := first.Record(&AuditRecord{EventID: "before-rotation", ActionType: "action"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.RotateIfNeeded(epochSizeLimitMB); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 105 {
+		if err := first.Record(&AuditRecord{EventID: fmt.Sprintf("epoch-one-%d", i), ActionType: "action"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recovered := NewAuditTrail(auditRepo, t.TempDir())
+	if err := recovered.RecoverOnStartup(); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.epochID != 1 {
+		t.Fatalf("epoch ID must restore from records after marker leaves the tail, got %d", recovered.epochID)
+	}
+	if ok, idx := recovered.VerifyIntegrity(); !ok {
+		t.Fatalf("tail anchor should preserve cross-window chain continuity, broken at %d", idx)
+	}
+	if err := recovered.RotateIfNeeded(epochSizeLimitMB); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"epoch_end_1", "epoch_start_2"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE id = ? AND topic = 'audit.policy'`, id).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("expected exactly one restored-epoch marker %q, got %d", id, count)
+		}
 	}
 }
 

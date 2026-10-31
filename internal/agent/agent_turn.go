@@ -129,13 +129,15 @@ func (a *Agent) reportUnusableFill(ctx context.Context, next types.State, err er
 	slog.WarnContext(ctx, "kernel: llm fill unusable",
 		"agent_id", a.ID, "session", a.sCtx.SessionID, "state", a.sm.Current(), "next", next,
 		"content_bytes", contentLen, "fill_bytes", fillBytes, "reasoning_bytes", reasoningLen,
-		"tool_calls", toolCalls, "finish_reason", finishReason, "output_tokens", outTokens, "err", err)
+		"tool_calls", toolCalls, "finish_reason", finishReason, "output_tokens", outTokens,
+		"error_code", string(streamErrorCode(err)), "error_type", fmt.Sprintf("%T", err))
 	if stateToTriggerMap()[next] != types.TriggerReplanExhausted {
 		return // 非终止性：OnSuccess 已按降级语义继续推进，只需留痕
 	}
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:       types.AgentStreamEventError,
-		Content:    "模型输出不可用：" + err.Error(),
+		Content:    streamErrorMessage(streamErrorCode(err)),
+		ErrorCode:  string(streamErrorCode(err)),
 		TaintLevel: a.sCtx.GlobalTaintLevel,
 	})
 }
@@ -150,16 +152,42 @@ func (a *Agent) reportUnusableFill(ctx context.Context, next types.State, err er
 func (a *Agent) abortTurn(ctx context.Context, err error) {
 	a.cancelHandoffWatcher()
 	slog.WarnContext(ctx, "kernel: turn aborted", "agent_id", a.ID, "session", a.sCtx.SessionID,
-		"state", a.sm.Current(), "err", err)
+		"state", a.sm.Current(), "error_code", string(streamErrorCode(err)), "error_type", fmt.Sprintf("%T", err))
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:       types.AgentStreamEventError,
-		Content:    "Agent 执行失败：" + err.Error(),
+		Content:    streamErrorMessage(streamErrorCode(err)),
+		ErrorCode:  string(streamErrorCode(err)),
 		TaintLevel: a.sCtx.GlobalTaintLevel,
 	})
 	if cur := a.sm.Current(); cur != types.AgentStateFailed && cur != types.AgentStateComplete {
 		a.sm.ForceState(types.AgentStateFailed)
 	}
 	a.handleTerminalState(ctx, types.AgentStateFailed)
+}
+
+func streamErrorCode(err error) apperr.Code {
+	if errors.Is(err, context.Canceled) {
+		return apperr.CodeCancelled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apperr.CodeTimeout
+	}
+	return apperr.NormalizeErrorCode(apperr.CodeOf(err))
+}
+
+func streamErrorMessage(code apperr.Code) string {
+	switch apperr.NormalizeErrorCode(code) {
+	case apperr.CodeProviderExhausted, apperr.CodeNetworkUnavailable:
+		return "模型服务暂不可用"
+	case apperr.CodeStorageUnavailable:
+		return "存储服务暂不可用"
+	case apperr.CodeCancelled:
+		return "任务已取消"
+	case apperr.CodeTimeout:
+		return "任务执行超时"
+	default:
+		return "Agent 执行失败"
+	}
 }
 
 // validationFailureKind S_VALIDATE 拒绝的成因（ADR-0102 决策六）：只有 L0 结构错误计入升级。

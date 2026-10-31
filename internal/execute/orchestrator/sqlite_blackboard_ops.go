@@ -86,6 +86,7 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 	var namespace sql.NullString
 	var intent []byte
 	var result []byte
+	var intentTaint, resultTaint int
 	var taskType string
 	var traceID, spanID sql.NullString
 	var spawnDepth int
@@ -95,8 +96,8 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 	// PatternDebate 等）也永远读不到，见 007_tasks.sql result 列注释。
 	// [ADR-0084] 补齐 spawn_depth 列读取，使自订阅式 Worker 能在派生子任务时
 	// 传递委派链当前深度（此前该列不存在，见 007_tasks.sql spawn_depth 列注释）。
-	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, result, session_id, trace_id, span_id, spawn_depth, parent_task_id FROM tasks WHERE task_id=?", taskID).
-		Scan(&statusStr, &namespace, &intent, &result, &taskType, &traceID, &spanID, &spawnDepth, &parentTaskID)
+	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, result, session_id, trace_id, span_id, spawn_depth, parent_task_id, intent_taint, result_taint FROM tasks WHERE task_id=?", taskID).
+		Scan(&statusStr, &namespace, &intent, &result, &taskType, &traceID, &spanID, &spawnDepth, &parentTaskID, &intentTaint, &resultTaint)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -127,7 +128,9 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 		Status:       status,
 		Namespace:    namespace.String,
 		Intent:       intent,
+		IntentTaint:  types.TaintLevel(intentTaint),
 		Result:       result,
+		ResultTaint:  types.TaintLevel(resultTaint),
 		Type:         taskType,
 		TraceID:      traceID.String,
 		SpanID:       spanID.String,

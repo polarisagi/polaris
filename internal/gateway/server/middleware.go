@@ -258,25 +258,35 @@ func extractIP(r *http.Request) string {
 	return ip
 }
 
-// LoggingResponseWriter intercepts HTTP responses to capture the status code and body for logging.
+// LoggingResponseWriter 仅跟踪首个响应状态码，避免错误正文进入日志。
 type LoggingResponseWriter struct {
 	http.ResponseWriter
-	statusCode int
-	body       []byte
+	statusCode  int
+	wroteHeader bool
 }
 
 func NewLoggingResponseWriter(w http.ResponseWriter) *LoggingResponseWriter {
-	return &LoggingResponseWriter{w, http.StatusOK, nil}
+	return &LoggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 }
 
 func (lrw *LoggingResponseWriter) WriteHeader(code int) {
+	if lrw.wroteHeader {
+		return
+	}
+	// 1xx（101 除外）是可连续发送的提示响应，不是最终响应状态；保留
+	// ResponseWriter 的标准语义，让后续 2xx–5xx 与 panic recovery 正常写头。
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		lrw.ResponseWriter.WriteHeader(code)
+		return
+	}
 	lrw.statusCode = code
+	lrw.wroteHeader = true
 	lrw.ResponseWriter.WriteHeader(code)
 }
 
 func (lrw *LoggingResponseWriter) Write(b []byte) (int, error) {
-	if lrw.statusCode >= 400 {
-		lrw.body = append(lrw.body, b...)
+	if !lrw.wroteHeader {
+		lrw.wroteHeader = true
 	}
 	n, err := lrw.ResponseWriter.Write(b)
 	if err != nil {
@@ -286,6 +296,9 @@ func (lrw *LoggingResponseWriter) Write(b []byte) (int, error) {
 }
 
 func (lrw *LoggingResponseWriter) Flush() {
+	if !lrw.wroteHeader {
+		lrw.wroteHeader = true
+	}
 	if flusher, ok := lrw.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}

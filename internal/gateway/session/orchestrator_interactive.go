@@ -34,7 +34,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	req.SessionID = sessionID
 
 	if err := o.persistence.EnsureSessionInProject(ctx, sessionID, req.ProjectID); err != nil {
-		o.emitError(sink, "session_error", err.Error(), sessionID, err)
+		o.emitError(ctx, sink, "session_error", apperr.CodeInternal, sessionID, err)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 	// 会话 ID 此刻才对客户端可见：新会话前端须据此重连（ADR-0116）。
@@ -43,14 +43,14 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// 附加上下文随本轮任务意图进入内核（污点内容，不进系统提示词）。
 	hookContext, blocked := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
 	if blocked != "" {
-		o.emitError(sink, "hook_blocked", blocked, sessionID, nil)
+		o.emitError(ctx, sink, "hook_blocked", apperr.CodeForbidden, sessionID, nil)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 
 	// 加载历史消息（多轮上下文）
 	history, err := o.persistence.ListMessages(ctx, sessionID)
 	if err != nil {
-		o.emitError(sink, "history_error", err.Error(), sessionID, err)
+		o.emitError(ctx, sink, "history_error", apperr.CodeInternal, sessionID, err)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 	isFirstTurn := len(history) == 0
@@ -59,7 +59,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	if o.trySteerPool(sessionID, req) {
 		finalInput, _ := o.buildUserMessage(req)
 		if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
-			slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
+			slog.Error("session: saveMessage user steer", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 		_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
 			"session_id": sessionID,
@@ -86,7 +86,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		if (st == types.AgentStateLoop || st == types.AgentStateLoopExec || st == types.AgentStateLoopAwait || st == types.AgentStateLoopRecall) && steerAgent(agentCtrl, req) {
 			finalInput, _ := o.buildUserMessage(req)
 			if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
-				slog.Error("session: saveMessage user steer", "session", sessionID, "err", err)
+				slog.Error("session: saveMessage user steer", "session", sessionID, "error_meta", safeErrorSummary(err))
 			}
 			_ = sink.Emit(Event{Kind: KindSteerAccepted, Payload: map[string]any{
 				"session_id": sessionID,
@@ -108,7 +108,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// ── Transcript ────────────────────────────────────────────────────────
 	tw, twErr := openTranscript(o.transcriptDir, sessionID, isFirstTurn)
 	if twErr != nil {
-		slog.Warn("session: transcript open failed", "session", sessionID, "err", twErr)
+		slog.Warn("session: transcript open failed", "session", sessionID, "error_meta", safeErrorSummary(twErr))
 	}
 	if tw != nil {
 		defer tw.Close()
@@ -120,7 +120,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	history = append(history, userMsg)
 	userMsgID, err := o.persistence.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0)
 	if err != nil {
-		slog.Error("session: saveMessage user", "session", sessionID, "err", err)
+		slog.Error("session: saveMessage user", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 	if tw != nil {
 		tw.WriteTurn("user", req.Input, 0, 0)
@@ -141,7 +141,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		if tw != nil {
 			tw.WriteError("no_provider", "未配置任何启用的 LLM 厂商")
 		}
-		o.emitError(sink, "no_provider", "未配置任何启用的 LLM 厂商，请在「模型」页添加并启用厂商", sessionID, nil)
+		o.emitError(ctx, sink, "no_provider", apperr.CodeServiceUnavailable, sessionID, nil)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 
@@ -166,7 +166,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	// taint.NewTaintedString 打 TaintHigh，与工具输出注入用户消息同一污点处理
 	// 路径（HE-2），不单独二次标注。
 	if mcpAppCtx, mcErr := o.persistence.ConsumeSessionModelContext(ctx, sessionID); mcErr != nil {
-		slog.Warn("session: consume mcp app model context failed", "session", sessionID, "err", mcErr)
+		slog.Warn("session: consume mcp app model context failed", "session", sessionID, "error_meta", safeErrorSummary(mcErr))
 	} else {
 		taskInput = withMCPAppContext(taskInput, mcpAppCtx)
 	}
@@ -211,11 +211,12 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 
 	var reply string
 	var inferErr string
+	var inferCode apperr.Code
 	var aborted bool
 	var viewIDs []string
 
 	if agentCtrl == nil {
-		o.emitError(sink, "no_agent", "系统错误：未找到当前会话的 Agent 控制器", sessionID, nil)
+		o.emitError(ctx, sink, "no_agent", apperr.CodeServiceUnavailable, sessionID, nil)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 	// 内核按回合新建 Agent，对上文一无所知；历史须随每轮显式注入（ADR-0098 决策四）。
@@ -230,7 +231,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 			stepRec.finalize(true)
 		}
 	}()
-	reply, inferErr, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput, inputTaintLevel(req))
+	reply, inferErr, inferCode, aborted, viewIDs = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, taskInput, inputTaintLevel(req))
 	if !aborted && inferErr == "" && reply != "" {
 		var stopViewIDs []string
 		reply, inferErr, aborted, stopViewIDs = o.continueOnStopHooks(ctx, sink, sessionID, agentCtrl, history, reply)
@@ -251,7 +252,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0)
 			if err != nil {
-				slog.Error("session: saveMessage assistant (aborted turn)", "session", sessionID, "err", err)
+				slog.Error("session: saveMessage assistant (aborted turn)", "session", sessionID, "error_meta", safeErrorSummary(err))
 			}
 			o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
 			turnFinished = true
@@ -267,11 +268,14 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		inferErr = "推理返回空内容，请检查模型配置或重试"
 	}
 	if inferErr != "" {
+		if inferCode == "" {
+			inferCode = apperr.CodeInternal
+		}
 		if tw != nil {
 			tw.WriteError("empty_response", inferErr)
 		}
-		o.failTurn(ctx, stepRec, turnID, userMsgID, "empty_response", inferErr)
-		o.emitError(sink, "empty_response", inferErr, sessionID, apperr.New(apperr.CodeInternal, inferErr))
+		o.failTurn(ctx, stepRec, turnID, userMsgID, "empty_response", inferCode, inferErr)
+		o.emitError(ctx, sink, "empty_response", inferCode, sessionID, nil)
 		o.hooks.StopFailure(ctx, sessionID, "empty_response")
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
@@ -284,7 +288,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	if reply != "" {
 		messageID, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs)
 		if err != nil {
-			slog.Error("session: saveMessage assistant", "session", sessionID, "err", err)
+			slog.Error("session: saveMessage assistant", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 		o.linkAppViews(saveCtx, sessionID, viewIDs, messageID)
 		turnFinished = true
@@ -300,11 +304,11 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 			titleHint = req.Input
 		}
 		if err := o.persistence.UpdateSessionTitle(saveCtx, sessionID, titleHint); err != nil {
-			slog.Warn("session: update session title failed", "session", sessionID, "err", err)
+			slog.Warn("session: update session title failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 	}
 	if err := o.persistence.TouchSession(saveCtx, sessionID); err != nil {
-		slog.Warn("session: touch session failed", "session", sessionID, "err", err)
+		slog.Warn("session: touch session failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 
 	slog.Info("session: turn complete",
@@ -347,12 +351,12 @@ func (o *orchestrator) tryDispatchSlash(
 	if cmdResult.Response != "" {
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if _, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
-			slog.Error("session: saveMessage slash response", "session", sessionID, "err", err)
+			slog.Error("session: saveMessage slash response", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 		cancel()
 	}
 	if err := o.persistence.TouchSession(context.WithoutCancel(ctx), sessionID); err != nil {
-		slog.Warn("session: touch session failed (slash command path)", "session", sessionID, "err", err)
+		slog.Warn("session: touch session failed (slash command path)", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 	_ = sink.Emit(Event{Kind: KindComplete, Payload: map[string]any{"session_id": sessionID, "session_title": ""}})
 	return &Result{SessionID: sessionID, SlashHandled: true}, true, ""
@@ -378,6 +382,6 @@ func (o *orchestrator) acquireInteractiveAgent(ctx context.Context, sink Sink, r
 		}})
 		return nil, nil, false
 	}
-	o.emitError(sink, "agent_pool_error", "failed to acquire agent: "+err.Error(), sessionID, err)
+	o.emitError(ctx, sink, "agent_pool_error", apperr.CodeInternal, sessionID, err)
 	return nil, nil, false
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2acrypto"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/mesh"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/version"
@@ -109,7 +110,7 @@ func cardHandler(cfg config.A2AConfig, self *mesh.Identity) http.HandlerFunc {
 		card := BuildAgentCard(cfg, self, base)
 		if err := SignAgentCard(r.Context(), card, self); err != nil {
 			slog.Error("meshapi: sign agent card failed", "err", err)
-			http.Error(w, "failed to sign agent card", http.StatusInternalServerError)
+			httputil.RespondError(w, "Agent card could not be signed", err, http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

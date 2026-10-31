@@ -45,7 +45,7 @@ func (h *SysAdminHandler) HandleSetBudget(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if req.MonthlyUSD < 0 {
-		http.Error(w, "monthly_usd must be >= 0", http.StatusBadRequest)
+		httputil.RespondError(w, "monthly_usd must be >= 0", nil, http.StatusBadRequest)
 		return
 	}
 

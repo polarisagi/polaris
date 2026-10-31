@@ -82,15 +82,16 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 			return &types.ToolResult{
 				Success:    true,
 				Output:     snap.Result,
-				TaintLevel: resolveHandoffResultTaint(targetRole, taintLevel),
+				TaintLevel: max(resolveHandoffResultTaint(targetRole, taintLevel), types.EffectiveTaskResultTaint(snap.ResultTaint)),
 			}, nil
 		}
 		if err == nil && snap != nil && snap.Status == types.TaskFailed {
 			a.sCtx.HandoffTaskID = "" // 清理恢复状态
 			a.sCtx.HandoffTaskIDs = nil
 			return &types.ToolResult{ //nolint:nilerr
-				Success: false,
-				Output:  []byte(fmt.Sprintf("handoff task %s failed: %s", snap.ID, snap.Result)),
+				Success:    false,
+				Output:     []byte(fmt.Sprintf("handoff task %s failed: %s", snap.ID, snap.Result)),
+				TaintLevel: max(resolveHandoffResultTaint(targetRole, taintLevel), types.EffectiveTaskResultTaint(snap.ResultTaint)),
 			}, nil
 		}
 		// 如果还没完成，或者查不到（异常），继续往下或者直接再次挂起

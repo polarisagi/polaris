@@ -1,11 +1,14 @@
 package types
 
+// GlobalUserProfileKey 版本化标识全局自动画像的可信来源契约。
+const GlobalUserProfileKey = "global_owner_v1"
+
 type
 
 // UserProfile 用户画像（L3 Persona）。
-// 由 M5 ConsolidationPipeline Stage 3.5 每 50 条新事件自动合成，随使用演化。
+// 由 M5 ConsolidationPipeline Stage 3.5 基于满足来源门控的事件自动合成。
 UserProfile struct {
-	ProfileKey         string         `json:"profile_key"`         // 默认 'default'
+	ProfileKey         string         `json:"profile_key"`         // 画像来源契约键
 	StableFacts        map[string]any `json:"stable_facts"`        // 低频变化事实（角色/技能/偏好）
 	RecentActivity     []string       `json:"recent_activity"`     // 近 7d 行为摘要（最多 20 条）
 	BehavioralPatterns map[string]any `json:"behavioral_patterns"` // 工具频率/编码风格/沟通习惯

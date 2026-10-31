@@ -47,6 +47,7 @@ type ScriptSkillExecutor struct {
 	pluginCtx PluginRenderContextResolver
 	// injector 动态注入执行器；nil 时注入命令替换为"已禁用"提示，不执行（fail-closed）。
 	injector *SkillInjector
+	auditor  protocol.ExecutionAuditor
 
 	// P1-8：幂等缓存与限流，与 InMemoryToolRegistry 保持能力对等。
 	// PII 令牌还原：Skill 脚本的输入来自 Agent planning 层，不经过 LLM 对话的
@@ -87,6 +88,12 @@ func (e *ScriptSkillExecutor) WithInjector(i *SkillInjector) *ScriptSkillExecuto
 	return e
 }
 
+// WithExecutionAuditor 注入进程共享的物理执行审计门。
+func (e *ScriptSkillExecutor) WithExecutionAuditor(a protocol.ExecutionAuditor) *ScriptSkillExecutor {
+	e.auditor = a
+	return e
+}
+
 // renderWithInjections 注入命令在模板上定位与审阅、参数转义后执行；正文渲染时注入点以哨兵
 // 占位，渲染完成后再换入命令输出——参数不会拼出新的注入点，命令输出也不会被二次展开。
 func (e *ScriptSkillExecutor) renderWithInjections(ctx context.Context, meta *types.SkillMeta, in pluginspec.RenderInput) (string, error) {
@@ -123,6 +130,8 @@ func (e *ScriptSkillExecutor) WithPolicy(gate protocol.PolicyGate) *ScriptSkillE
 //
 // 无脚本可执行时（纯 SKILL.md 指令技能，或 runner 未注入）: 返回 instructions 全文供 LLM 读取执行，
 // 与 cmd/polaris/skill_loader.go 注册进 InProcessSandbox 的同名工具保持完全一致的语义（唯一实现，禁止重复）。
+//
+//nolint:gocyclo // This entry point keeps the skill audit, authorization and execution lifecycle in order.
 func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error) {
 	// P1-8 幂等缓存检查：与 InMemoryToolRegistry.checkIdempotency 行为对齐
 	if cached, hit := e.checkIdempotencyCache(ctx); hit {
@@ -166,7 +175,39 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 		return nil, err
 	}
 
+	if e.auditor == nil {
+		return nil, apperr.New(apperr.CodeForbidden, "skill_executor: execution auditor not initialized (fail-closed)")
+	}
+	auditID, err := e.auditor.BeginExecution(ctx, protocol.ExecutionAuditIntent{
+		Tool: skillID, Source: "skill_script", Args: input,
+	})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "skill_executor: execution intent audit failed", err)
+	}
+	if auditID == "" {
+		return nil, apperr.New(apperr.CodeStorageUnavailable, "skill_executor: execution intent audit returned an empty ID")
+	}
+	auditCompleted := false
+	defer func() {
+		if auditCompleted {
+			return
+		}
+		auditCompleted = true
+		if auditErr := e.auditor.CompleteExecution(ctx, auditID, false, string(apperr.CodeInternal)); auditErr != nil {
+			slog.ErrorContext(ctx, "skill_executor: abort completion audit failed",
+				"execution_id", auditID, "error_type", fmt.Sprintf("%T", auditErr), "code", string(apperr.CodeOf(auditErr)))
+		}
+	}()
 	out, err := e.runner.RunScript(ctx, skillID, scriptPath, input, meta.Trust)
+	errorCode := ""
+	if err != nil {
+		errorCode = string(apperr.CodeOf(err))
+	}
+	auditCompleted = true
+	if auditErr := e.auditor.CompleteExecution(ctx, auditID, err == nil, errorCode); auditErr != nil {
+		slog.ErrorContext(ctx, "skill_executor: completion audit failed; preserving script result",
+			"execution_id", auditID, "error_type", fmt.Sprintf("%T", auditErr), "code", string(apperr.CodeOf(auditErr)))
+	}
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: run script", err)
 	}

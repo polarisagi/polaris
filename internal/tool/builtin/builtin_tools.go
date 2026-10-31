@@ -153,7 +153,6 @@ func RegisterBuiltinTools(
 		// 并行子智能体与控制工具（ADR-0115 WP4）
 		{"spawn_agents", spawn_agents.MakeSpawnAgentsFn()},
 		{"agent_status", agent_status.MakeAgentStatusFn()},
-		{"agent_result", agent_result.MakeAgentResultFn()},
 		{"agent_message", agent_message.MakeAgentMessageFn()},
 		{"agent_stop", agent_stop.MakeAgentStopFn()},
 
@@ -176,7 +175,7 @@ func RegisterBuiltinTools(
 				fmt.Sprintf("builtin_tools: load meta for %q", d.name), err)
 		}
 		applyDescriptionOverride(&meta)
-		sbx.Register(meta.Name, d.fn)
+		registerBuiltinSandboxFunction(sbx, meta.Name, d.fn)
 		if err := toolReg.Register(meta); err != nil {
 			return apperr.Wrap(apperr.CodeInternal,
 				fmt.Sprintf("builtin_tools: register %q", d.name), err)
@@ -201,6 +200,7 @@ func RegisterBuiltinTools(
 	}{
 		{"execute_wasm", execute_wasm.MakeExecuteWasmFn(allowedPaths)},
 		{"get_task_result", get_task_result.MakeGetTaskResultFn(asyncTaskProvider)},
+		{"agent_result", agent_result.MakeAgentResultRichFn()},
 	}
 
 	for _, d := range richDefs {
@@ -217,6 +217,24 @@ func RegisterBuiltinTools(
 	}
 
 	return nil
+}
+
+func registerBuiltinSandboxFunction(sbx *sandbox.InProcessSandbox, name string, fn sandbox.InProcessFn) {
+	if builtinOutputTaint(name) > types.TaintNone {
+		sbx.RegisterWithTaint(name, fn, builtinOutputTaint(name))
+		return
+	}
+	sbx.Register(name, fn)
+}
+
+func builtinOutputTaint(name string) types.TaintLevel {
+	switch name {
+	case "web_fetch", "feed_fetch", "web_search", "bash", "run_command", "job_output", "session_search", "session_read":
+		// 这些输出来自外网或宿主进程，必须把不可信来源带到后续回合。
+		return types.TaintHigh
+	default:
+		return types.TaintNone
+	}
 }
 
 type builtinDef struct {

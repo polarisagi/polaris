@@ -1,5 +1,6 @@
 import Alpine from 'alpinejs'
 import { authHeaders } from '../utils.js'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 // ══════════════════════════════════════════════════════════════════════════
 // store: projects（项目 = 会话的运行上下文容器，ADR-0097）
 // 说明：项目 API 仅本地可信客户端/admin 可用。记忆口径见 ADR-0097 决策三修订：情景记忆按项目
@@ -18,13 +19,6 @@ function emptyForm() {
 }
 
 const jsonHeaders = () => ({ ...authHeaders(), 'Content-Type': 'application/json' })
-
-async function errText(r) {
-  try {
-    const t = (await r.text()).trim()
-    return t || `HTTP ${r.status}`
-  } catch { return `HTTP ${r.status}` }
-}
 
 Alpine.store('projects', {
   list: [],
@@ -138,7 +132,7 @@ Alpine.store('projects', {
       const r = await fetch(f.mode === 'create' ? '/v1/projects' : `/v1/projects/${f.id}`, {
         method: f.mode === 'create' ? 'POST' : 'PUT', headers: jsonHeaders(), body: JSON.stringify(body),
       })
-      if (!r.ok) { f.error = await errText(r); return }
+      if (!r.ok) { f.error = await readHTTPErrorMessage(r); return }
       const saved = await r.json()
       await this.load()
       if (f.mode === 'create') { this.setCurrent(saved.id); await this.openProject(saved.id) }
@@ -152,7 +146,7 @@ Alpine.store('projects', {
 
   async setArchived(p, archived) {
     const r = await fetch(`/v1/projects/${p.id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify({ archived }) })
-    if (!r.ok) { Alpine.store('toast').show('error', await errText(r)); return }
+    if (!r.ok) { Alpine.store('toast').show('error', await readHTTPErrorMessage(r)); return }
     await this.load()
   },
 
@@ -161,7 +155,7 @@ Alpine.store('projects', {
     if (!(await Alpine.store('dialog').confirm({ message: msg, danger: true }))) return
     try {
       const r = await fetch(`/v1/projects/${p.id}`, { method: 'DELETE', headers: authHeaders() })
-      if (!r.ok) { Alpine.store('toast').show('error', await errText(r)); return }
+      if (!r.ok) { Alpine.store('toast').show('error', await readHTTPErrorMessage(r)); return }
     } catch (err) {
       Alpine.store('toast').show('error', `${Alpine.store('i18n').t('delete_failed')}: ${err.message}`)
       return
@@ -175,7 +169,7 @@ Alpine.store('projects', {
     const r = await fetch(`/v1/sessions/${sessionID}/project`, {
       method: 'PUT', headers: jsonHeaders(), body: JSON.stringify({ project_id: projectID }),
     })
-    if (!r.ok) { Alpine.store('toast').show('error', await errText(r)); return }
+    if (!r.ok) { Alpine.store('toast').show('error', await readHTTPErrorMessage(r)); return }
     await Promise.all([this.load(), this.loadSessions(), Alpine.store('sessions').load()])
   },
 })

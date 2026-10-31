@@ -16,9 +16,11 @@ StepContext struct {
 
 // TaskSnapshot Task 状态只读快照（避免拷贝含原子字段的 TaskEntry）。
 type TaskSnapshot struct {
-	ID     string
-	Status TaskStatus
-	Result []byte
+	ID          string
+	Status      TaskStatus
+	Result      []byte
+	ResultTaint TaintLevel
+	IntentTaint TaintLevel
 	// Namespace 协同任务共享记忆命名空间（GD-14-001），透传自 TaskEntry.Namespace，
 	// 供 Worker 在派发前注入 AgentKernel.SetMemoryNamespace。空值 = 不共享。
 	Namespace string
@@ -43,6 +45,14 @@ type TaskSnapshot struct {
 	SpawnDepth int
 	// ParentTaskID 委派父任务 ID（ADR-0115 WP4 并行子智能体）。
 	ParentTaskID string
+}
+
+// EffectiveTaskResultTaint 将旧任务行和未知结果来源提升到外部数据地板。
+func EffectiveTaskResultTaint(level TaintLevel) TaintLevel {
+	if level < TaintHigh {
+		return TaintHigh
+	}
+	return level
 }
 
 // TaskControlKind 控制指令类型（R3-04）。
@@ -304,6 +314,7 @@ const (
 type AgentStreamEvent struct {
 	Type           AgentStreamEventType `json:"type"`
 	Content        string               `json:"content"`
+	ErrorCode      string               `json:"error_code,omitempty"`
 	TaintLevel     TaintLevel           `json:"taint_level,omitempty"`
 	ToolName       string               `json:"tool_name,omitempty"`
 	ToolInput      []byte               `json:"tool_input,omitempty"`

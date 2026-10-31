@@ -2,7 +2,6 @@ package codeact
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -29,13 +28,12 @@ import (
 //   - 强制 Sbx-L3（ContainerSandbox），禁止降级为 L1/L2
 //   - 必须携带有效 CapabilityToken
 //   - 执行前 Cedar 策略评估（llm_generated forbid 规则阻断网络写入/部署）
-//   - 全链路 Audit（写入 EventLog）
+//   - 物理执行审计由 ExecEnvelope 统一先记意图、后记结果（ADR-0127）
 //
 // sandbox 字段使用包内 SandboxProvider 接口（Run 签名与 types.SandboxSpec 不同）。
 // LevelChecker 接口仅用于级别断言，由三个沙箱实现通过 Level() 满足。
 type CodeAct struct {
 	envelope       *sandbox.ExecEnvelope
-	auditor        AuditRecorder          // inv_global_07 全链路审计；nil 时跳过（仅测试）
 	govAgent       govAgent               // 可选的安全校验网关 (L1)
 	astChecker     ASTChecker             // L0 AST 检查器
 	reviewer       LLMPeerReviewer        // L2 LLM 同行评审
@@ -115,19 +113,15 @@ func WithTokenManager(mgr tokenManager) CodeActOption {
 	}
 }
 
-// AuditRecorder CodeAct 审计写入的消费端接口（生产由 security.AuditTrail 满足）。
-//
-// 2026-09-20（GR-4.2-005 复核）：此前依赖整个 protocol.ToolExecutor（4 个方法）却只用
-// RecordAudit，而全仓无生产类型同时实现这 4 个方法，装配点只能传 nil——inv_global_07
-// 要求的 CodeAct 全链路审计在生产中从未写入过一条。收窄为单方法接口后直接注入 AuditTrail。
+// AuditRecorder 是 NewCodeAct 的兼容参数，执行审计已统一由 Envelope 在物理边界记录；
+// 此参数不再用于持久化代码或输出原文。
 type AuditRecorder interface {
 	RecordAudit(ctx context.Context, toolName string, payload []byte) error
 }
 
-func NewCodeAct(envelope *sandbox.ExecEnvelope, auditor AuditRecorder, opts ...CodeActOption) *CodeAct {
+func NewCodeAct(envelope *sandbox.ExecEnvelope, _ AuditRecorder, opts ...CodeActOption) *CodeAct {
 	ca := &CodeAct{
 		envelope: envelope,
-		auditor:  auditor,
 	}
 	for _, opt := range opts {
 		opt(ca)
@@ -192,7 +186,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 		// WasmtimeExecute（ScriptBytes 为空，必然失败），不在场时才偶然回落到 Container。
 		Tool: types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated,
 			SideEffects: []types.SideEffect{types.SideProcessSpawn}},
-		Input: []byte("{}"), ScriptPath: tmpFile,
+		Input: []byte("{}"), AuditArgs: []byte(req.Code), ScriptPath: tmpFile,
 		CapToken:   tok,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
 		AllowedPaths: allowedPaths,
@@ -246,26 +240,6 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 			return nil, apperr.Wrap(apperr.CodeInternal, "codeact: output PII desensitization failed, fail-closed", err)
 		}
 		out = []byte(redacted)
-	}
-
-	// 全链路审计：写入 EventLog（inv_global_07 要求）
-	if ca.auditor != nil {
-		// M07 §7.4：审计须含完整代码与输出（输出为上方二次 PII 脱敏后的版本）。
-		auditPayload, _ := json.Marshal(map[string]any{
-			"code":          req.Code,
-			"output":        string(out),
-			"session_id":    req.SessionID,
-			"agent_id":      req.AgentID,
-			"language":      req.Language,
-			"capability_id": req.CapabilityID,
-			"taint_level":   finalTaint,
-			"exit_code":     exitCode,
-			"latency_ms":    res.LatencyMs,
-		})
-		if auditErr := ca.auditor.RecordAudit(ctx, "code_act", auditPayload); auditErr != nil {
-			slog.Error("codeact: audit record failed, compliance trail broken",
-				"err", auditErr)
-		}
 	}
 
 	return &protocol.CodeActResult{

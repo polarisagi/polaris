@@ -67,6 +67,45 @@ func TestDecide_SelfProtected_ViaSymlink(t *testing.T) {
 	}
 }
 
+func TestDecide_SelfProtected_UsesConfiguredLayoutAndKeepsDefaultLayout(t *testing.T) {
+	ctx, defaultLayout, _ := protectedCtx(t)
+	previous := config.Get()
+	t.Cleanup(func() { config.Update(previous) })
+	configuredRoot := filepath.Join(ctx.Home, "operator-data")
+	configuredSecrets := filepath.Join(ctx.Home, "mounted", "secrets")
+	configuredDB := filepath.Join(ctx.Home, "mounted", "database")
+	configuredConfig := filepath.Join(ctx.Home, "mounted", "config")
+	configuredAudit := filepath.Join(ctx.Home, "mounted", "audit")
+	cfg := &config.Config{}
+	cfg.System.DataDir = configuredRoot
+	cfg.System.Dirs = config.DirsConfig{
+		SecretsDir: configuredSecrets,
+		DBDir:      configuredDB,
+		ConfigDir:  configuredConfig,
+		AuditDir:   configuredAudit,
+	}
+	config.Update(cfg)
+
+	paths := []string{
+		filepath.Join(configuredRoot, "vault.key"),
+		filepath.Join(configuredSecrets, "credential"),
+		filepath.Join(configuredDB, "polaris.db"),
+		filepath.Join(configuredConfig, "config.toml"),
+		filepath.Join(configuredAudit, "events.db"),
+		defaultLayout.VaultKeyFile,
+		filepath.Join(defaultLayout.Secrets, "credential"),
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			d := Decide(types.ModeFullAccess, toolRead,
+				jsonArgs(t, map[string]any{"path": path}), types.TaintLow, ctx)
+			if d.Verdict != VerdictDeny || d.Reason != ReasonSelfProtected {
+				t.Fatalf("configured/default self-protected path must be denied: %+v", d)
+			}
+		})
+	}
+}
+
 func TestDecide_SensitivePath_HardLimitInEveryMode(t *testing.T) {
 	ctx, _, _ := protectedCtx(t)
 	ssh := filepath.Join(ctx.Home, ".ssh", "id_rsa")

@@ -57,7 +57,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	name := firstNonEmptyStr(req.Name, "plugin")
@@ -87,7 +87,7 @@ func (h *PluginHandler) installFromSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if h.InstallMgr == nil || h.Catalog == nil {
-		http.Error(w, "installer not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "installer not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	name = firstNonEmptyStr(name, sourceName(src))
@@ -98,7 +98,7 @@ func (h *PluginHandler) installFromSource(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	} else if inst != nil && inst.Status != "failed" && inst.Status != "error" {
-		http.Error(w, "already installed: "+name, http.StatusConflict)
+		httputil.RespondError(w, "Plugin is already installed", nil, http.StatusConflict)
 		return
 	}
 	authReq := protocol.ExtensionInstallRequest{Principal: req.Principal, ExtensionID: req.ExtensionID, ExtType: extType,

@@ -411,10 +411,12 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				// （本包 CLAUDE.md：MUST NOT 将失败响应静默视为成功）。
 				slog.ErrorContext(ctx, "kernel: llm inference failed",
 					"agent_id", a.ID, "session", a.sCtx.SessionID,
-					"state", a.sm.Current(), "model_pool", llmEff.ModelPool, "err", inferErr)
+					"state", a.sm.Current(), "model_pool", llmEff.ModelPool,
+					"error_code", string(streamErrorCode(inferErr)), "error_type", fmt.Sprintf("%T", inferErr))
 				a.publishStreamEvent(types.AgentStreamEvent{
 					Type:       types.AgentStreamEventError,
-					Content:    "推理失败：" + inferErr.Error(),
+					Content:    streamErrorMessage(streamErrorCode(inferErr)),
+					ErrorCode:  string(streamErrorCode(inferErr)),
 					TaintLevel: a.sCtx.GlobalTaintLevel,
 				})
 				if errors.Is(inferErr, protocol.ErrAllProvidersFailed) {

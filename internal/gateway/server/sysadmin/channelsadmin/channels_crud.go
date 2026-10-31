@@ -124,7 +124,7 @@ func (h *ChannelsAdmin) HandleUpdateChannel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !updated {
-		http.Error(w, "not found", http.StatusNotFound)
+		httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 		return
 	}
 

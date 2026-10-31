@@ -119,7 +119,7 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 	// PolicyGate 是安全门，不允许 nil 跳过（fail-closed）。
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	var c types.MCPServerConfig
@@ -150,7 +150,7 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 		HasHooks:    false,
 	}
 	if err := h.InstallMgr.Authorize(r.Context(), installReq); err != nil {
-		http.Error(w, "policy denied: "+err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Policy denied", err, http.StatusForbidden)
 		return
 	}
 	installReq.BypassAuth = true // 上面已做同一授权，避免 InstallExtension 内重复评估
@@ -183,7 +183,7 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 		UpdatedAt:       now,
 	})
 	if err != nil {
-		http.Error(w, "db: "+err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "MCP server could not be updated", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -208,14 +208,14 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 	serverRow, err := h.ExtRepo.GetMCPServer(r.Context(), id)
 	if err != nil || serverRow == nil {
 		if err == nil {
-			http.Error(w, "not found", http.StatusNotFound)
+			httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 		} else {
 			httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		}
 		return
 	}
 	if serverRow.PluginID != "" {
-		http.Error(w, "plugin MCP cannot be updated independently; manage via PUT /v1/plugins/{id}", http.StatusMethodNotAllowed)
+		httputil.RespondError(w, "plugin MCP cannot be updated independently; manage via PUT /v1/plugins/{id}", nil, http.StatusMethodNotAllowed)
 		return
 	}
 	var c types.MCPServerConfig
@@ -225,7 +225,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	authCtxM := authcontext.FromContext(r.Context())
@@ -241,7 +241,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 		Publisher:   "user",
 		HasHooks:    false,
 	}); err != nil {
-		http.Error(w, "policy denied: "+err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Policy denied", err, http.StatusForbidden)
 		return
 	}
 
@@ -303,14 +303,14 @@ func (h *MCPAdmin) HandleDeleteMCPServer(w http.ResponseWriter, r *http.Request)
 	serverRow, err := h.ExtRepo.GetMCPServer(r.Context(), id)
 	if err != nil || serverRow == nil {
 		if err == nil {
-			http.Error(w, "not found", http.StatusNotFound)
+			httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 		} else {
 			httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		}
 		return
 	}
 	if serverRow.PluginID != "" {
-		http.Error(w, "plugin MCP cannot be deleted independently; uninstall the plugin via DELETE /v1/plugins/{catalogID}", http.StatusMethodNotAllowed)
+		httputil.RespondError(w, "plugin MCP cannot be deleted independently; uninstall the plugin via DELETE /v1/plugins/{catalogID}", nil, http.StatusMethodNotAllowed)
 		return
 	}
 	if h.MCPMgr != nil {

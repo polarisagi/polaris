@@ -4,11 +4,13 @@ type Intent struct {
 	Query      string
 	WorkingDir string
 	Env        map[string]string
+	TaintLevel TaintLevel `json:"-"`
 }
 
 type AgentResult struct {
-	Output    string
-	LatencyMs int64
+	Output     string
+	LatencyMs  int64
+	TaintLevel TaintLevel
 }
 
 type HeadlessOption func(*HeadlessOptions)

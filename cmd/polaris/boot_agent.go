@@ -51,6 +51,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/security/credential"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
@@ -246,7 +247,7 @@ func buildAgent(
 	a.InjectReplanExtensionActivationTimeout(
 		time.Duration(sb.Cfg.Thresholds.M4Kernel.ReplanExtensionActivationSecs) * time.Second,
 	)
-	a.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
+	a.InjectMemory(memory.NewSessionMemoryFacade(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem))))
 
 	a.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
 	// 进程单例（bootAgent 构造一次、进程关停时 Close）：此前每个会话 Agent 各建一个实例，
@@ -1151,7 +1152,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 docs/specs/04-Module-Boundary.md §B2）
 	memoryFacadeForAgent := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
-	memoryAgent := agents.NewMemoryAgent(memoryFacadeForAgent, agent.GetWhisperChan(), nil)
+	memoryAgent := agents.NewMemoryAgentWithAdmitter(memoryFacadeForAgent, agent.GetWhisperChan(), nil, sb.ResourceGov)
 	memoryAgent.SetCursorStore(repo.NewSQLiteConsumerCursorRepository(sb.Store.DB()))
 
 	// 注入 PII OpaqueToken 检测器与令牌库（M11 §5.1 语义闭环）
@@ -1404,15 +1405,16 @@ func (r *simpleSurpriseReader) CurrentSurprise() float64 {
 // 改动 AuditTrail 本身的公开签名（AuditTrail.RecordAudit 同时也是
 // dispatch.AuditInterceptor 的既有依赖，不能破坏性变更）。
 type auditTrailLogAdapter struct {
-	at interface {
-		RecordAudit(ctx context.Context, toolName string, payload []byte) error
-	}
+	at *security.AuditTrail
 }
 
 func (a auditTrailLogAdapter) Log(ctx context.Context, action string, meta map[string]any) error {
 	payload, err := json.Marshal(meta)
 	if err != nil {
-		payload = []byte("{}")
+		return apperr.Wrap(apperr.CodeInvalidInput, "auditTrailLogAdapter: serialize metadata", err)
+	}
+	if a.at == nil {
+		return apperr.New(apperr.CodeStorageUnavailable, "audit trail is not initialized")
 	}
 	if err := a.at.RecordAudit(ctx, action, payload); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "auditTrailLogAdapter.Log", err)

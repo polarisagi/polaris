@@ -69,7 +69,7 @@ type mcpOAuthPreregRequest struct {
 func (h *MCPAdmin) HandlePutMCPServerOAuth(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("serverID")
 	if h.ExtRepo == nil {
-		http.Error(w, "extension repo not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "extension repo not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	row, err := h.ExtRepo.GetMCPServer(r.Context(), id)
@@ -78,7 +78,7 @@ func (h *MCPAdmin) HandlePutMCPServerOAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if row == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 		return
 	}
 
@@ -174,7 +174,7 @@ func (h *MCPAdmin) resolveClientSecretEnc(existingOAuthRaw string, presence map[
 func (h *MCPAdmin) HandleDeleteMCPServerOAuthToken(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("serverID")
 	if h.ExtRepo == nil {
-		http.Error(w, "extension repo not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "extension repo not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	row, err := h.ExtRepo.GetMCPServer(r.Context(), id)
@@ -183,7 +183,7 @@ func (h *MCPAdmin) HandleDeleteMCPServerOAuthToken(w http.ResponseWriter, r *htt
 		return
 	}
 	if row == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 		return
 	}
 	if err := h.ExtRepo.DeleteMCPOAuthToken(r.Context(), id); err != nil {

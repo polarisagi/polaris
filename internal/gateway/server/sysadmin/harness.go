@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/learning/harnessoverlay"
 )
 
@@ -25,7 +26,7 @@ func (h *SysAdminHandler) HandleHarnessHistory(w http.ResponseWriter, r *http.Re
 
 	history, err := mgr.History(r.Context(), limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Harness data could not be loaded", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -64,11 +65,11 @@ func (h *SysAdminHandler) HandleHarnessRollback(w http.ResponseWriter, r *http.R
 		Version string `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request body", nil, http.StatusBadRequest)
 		return
 	}
 	if req.Version == "" {
-		http.Error(w, "version is required", http.StatusBadRequest)
+		httputil.RespondError(w, "version is required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -76,7 +77,7 @@ func (h *SysAdminHandler) HandleHarnessRollback(w http.ResponseWriter, r *http.R
 	mgr := harnessoverlay.New(overlayDir)
 
 	if err := mgr.Rollback(r.Context(), req.Version); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Harness version could not be loaded", err, http.StatusInternalServerError)
 		return
 	}
 

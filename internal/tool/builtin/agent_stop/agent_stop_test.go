@@ -22,6 +22,9 @@ func (m *mockStopMgr) AgentStatus(_ context.Context, _ []string) ([]types.Subage
 func (m *mockStopMgr) AgentResult(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
+func (m *mockStopMgr) AgentResultWithTaint(_ context.Context, _ string) (string, types.TaintLevel, error) {
+	return "", types.TaintHigh, nil
+}
 func (m *mockStopMgr) AgentMessage(_ context.Context, _, _ string) (string, error) {
 	return "", nil
 }

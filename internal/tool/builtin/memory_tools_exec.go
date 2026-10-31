@@ -56,15 +56,14 @@ func MakeMemoryWriteFn(writer *retrieval.ExclusiveWriter) sandbox.InProcessFn {
 			ID:          "ent_" + args.Name,
 			Name:        args.Name,
 			Type:        args.EntityType,
-			TaintLevel:  types.TaintMedium,
+			TaintLevel:  memoryWriteTaint(ctx, types.TaintHigh, types.TaintNone),
 			SyncVersion: time.Now().UnixNano(),
 			Confidence:  1.0,
 			Properties:  props,
 		}
 
-		if err := writer.UpsertFactExclusive(ctx, &ent, types.TaintHigh); err != nil {
-			// C-7：第三参数是 maxTaint，原传 TaintNone 导致 Agent 写入的记忆被错误降级为 TaintNone。
-			// 这里的内容来自用户输入（经 Agent 过滤），污点等级为 TaintHigh 是正确的。
+		if err := writer.UpsertFactExclusive(ctx, &ent, ent.TaintLevel); err != nil {
+			// 工具参数来自模型生成，最低按 Medium 处理；调用上下文污点只升不降。
 			metrics.RecordMemoryToolCall(ctx, "memory_write", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_write: upsert failed", err)
 		}
@@ -87,52 +86,70 @@ type memorySearchArgs struct {
 
 func MakeMemorySearchFn(retriever protocol.HybridRetriever) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
-		var args memorySearchArgs
-		if err := json.Unmarshal(input, &args); err != nil {
-			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
-			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: invalid args", err)
-		}
-		if retriever == nil {
-			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
-			b, _ := json.Marshal(map[string]string{"error": "memory unavailable"})
-			return b, nil
-		}
-		if args.Limit <= 0 || args.Limit > 20 {
-			args.Limit = 5
-		}
-
-		cfg := types.RetrievalConfig{
-			FinalTopK:    args.Limit,
-			RerankTopM:   args.Limit * 3,
-			BM25Weight:   0.3,
-			VectorWeight: 0.5,
-			GraphWeight:  0.2,
-			AsOf:         args.AsOf,
-		}
-
-		// 读取面 P6（ADR-0097 决策三修订）：情景记忆限定在调用方会话所属项目。项目 ID 由
-		// agent 随执行 ctx 注入；未注入（非 agent 调用）按默认项目处理，fail-closed。
-		scope := types.SearchScope{Type: "memory", ProjectID: protocol.ProjectIDFrom(ctx)}
-		if scope.ProjectID == "" {
-			scope.ProjectID = types.DefaultProjectID
-		}
-		if args.Layer != "" {
-			scope.Type = args.Layer
-		}
-		results, err := retriever.Search(ctx, args.Query, scope, cfg)
-		if err != nil {
-			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
-			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: search failed", err)
-		}
-
-		b, err := json.Marshal(results)
-		if err != nil {
-			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
-			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: encode response", err)
-		}
-		metrics.RecordMemoryToolCall(ctx, "memory_search", true)
-		return b, nil
+		output, _, err := memorySearch(ctx, retriever, input)
+		return output, err
 	}
+}
+
+func MakeMemorySearchRichFn(retriever protocol.HybridRetriever) sandbox.InProcessRichFn {
+	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+		output, resultTaint, err := memorySearch(ctx, retriever, spec.Input)
+		if err != nil {
+			return nil, err
+		}
+		return &types.ToolResult{Success: true, Output: output, TaintLevel: max(spec.TaintLevel, resultTaint)}, nil
+	}
+}
+
+func memorySearch(ctx context.Context, retriever protocol.HybridRetriever, input []byte) ([]byte, types.TaintLevel, error) {
+	var args memorySearchArgs
+	if err := json.Unmarshal(input, &args); err != nil {
+		metrics.RecordMemoryToolCall(ctx, "memory_search", false)
+		return nil, types.TaintHigh, apperr.Wrap(apperr.CodeInvalidInput, "memory_search: invalid args", err)
+	}
+	if retriever == nil {
+		metrics.RecordMemoryToolCall(ctx, "memory_search", false)
+		return nil, types.TaintHigh, apperr.New(apperr.CodeServiceUnavailable, "memory_search: retriever unavailable")
+	}
+	if args.Limit <= 0 || args.Limit > 20 {
+		args.Limit = 5
+	}
+
+	cfg := types.RetrievalConfig{
+		FinalTopK:    args.Limit,
+		RerankTopM:   args.Limit * 3,
+		BM25Weight:   0.3,
+		VectorWeight: 0.5,
+		GraphWeight:  0.2,
+		AsOf:         args.AsOf,
+	}
+
+	// 读取面 P6（ADR-0097 决策三修订）：情景记忆限定在调用方会话所属项目。项目 ID 由
+	// agent 随执行 ctx 注入；未注入（非 agent 调用）按默认项目处理，fail-closed。
+	scope := types.SearchScope{Type: "memory", ProjectID: protocol.ProjectIDFrom(ctx)}
+	if scope.ProjectID == "" {
+		scope.ProjectID = types.DefaultProjectID
+	}
+	if args.Layer != "" {
+		scope.Type = args.Layer
+	}
+	results, err := retriever.Search(ctx, args.Query, scope, cfg)
+	if err != nil {
+		metrics.RecordMemoryToolCall(ctx, "memory_search", false)
+		return nil, types.TaintHigh, apperr.Wrap(apperr.CodeOf(err), "memory_search: search failed", err)
+	}
+
+	b, err := json.Marshal(results)
+	if err != nil {
+		metrics.RecordMemoryToolCall(ctx, "memory_search", false)
+		return nil, types.TaintHigh, apperr.Wrap(apperr.CodeInternal, "memory_search: encode response", err)
+	}
+	resultTaint := types.TaintHigh
+	for _, fragment := range results {
+		resultTaint = max(resultTaint, fragment.TaintLevel)
+	}
+	metrics.RecordMemoryToolCall(ctx, "memory_search", true)
+	return b, resultTaint, nil
 }
 
 type memoryAppendArgs struct {
@@ -180,14 +197,24 @@ func MakeMemoryAppendFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		ent.Properties[args.PropKey] = args.PropValue
 		ent.Properties["source_type"] = "user_stated"
 		ent.SyncVersion = time.Now().UnixNano()
+		ent.TaintLevel = memoryWriteTaint(ctx, types.TaintMedium, ent.TaintLevel)
 
-		if err := writer.UpsertFact(ctx, *ent, types.TaintNone); err != nil {
+		if err := writer.UpsertFact(ctx, *ent, ent.TaintLevel); err != nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_append", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_append: upsert failed", err)
 		}
 		metrics.RecordMemoryToolCall(ctx, "memory_append", true)
 		return []byte(`{"status":"success"}`), nil
 	}
+}
+
+// memoryWriteTaint 为记忆工具设置写入下限，保留调用链及已有实体的更高污点。
+func memoryWriteTaint(ctx context.Context, floor, existing types.TaintLevel) types.TaintLevel {
+	ctxTaint, ok := ctx.Value(protocol.CtxTaintLevelKey{}).(types.TaintLevel)
+	if !ok {
+		ctxTaint = types.TaintHigh
+	}
+	return types.PropagateTaint(floor, ctxTaint, existing)
 }
 
 type memoryExpireArgs struct {

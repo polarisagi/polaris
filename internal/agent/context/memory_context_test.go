@@ -284,6 +284,83 @@ func TestBuildPerceiveContext_TaintInjection(t *testing.T) {
 	}
 }
 
+func TestMemoryWhisperProjectScopeAndTaint(t *testing.T) {
+	newMemory := func() *mockMemory {
+		return &mockMemory{episodic: &mockEpisodicMem{}, working: &mockWorkingMem{immutable: &mockImmutableCore{}}}
+	}
+	run := func(w protocol.MemoryWhisper, projectID string, recall *fsm.TurnRecall) (*fsm.StateContext, []types.Message) {
+		t.Helper()
+		ch := make(chan protocol.MemoryWhisper, 1)
+		ch <- w
+		sCtx := &fsm.StateContext{ProjectID: projectID, WhisperChan: ch, TurnRecall: recall}
+		msgs, err := BuildPerceiveContext(context.Background(), newMemory(), sCtx, nil)
+		if err != nil {
+			t.Fatalf("BuildPerceiveContext: %v", err)
+		}
+		return sCtx, msgs
+	}
+
+	t.Run("memory whisper rejects another project", func(t *testing.T) {
+		sCtx, msgs := run(protocol.MemoryWhisper{
+			Source: protocol.MemoryWhisperSourceMemoryAgent, Content: "PROJECT-A-SECRET", Salience: 0.9,
+			ProjectID: "project-a", TaintLevel: types.TaintHigh, MetadataValid: true,
+		}, types.DefaultProjectID, nil)
+		if strings.Contains(allContent(msgs), "PROJECT-A-SECRET") || sCtx.GlobalTaintLevel != types.TaintNone {
+			t.Fatalf("cross-project whisper must be dropped without raising session taint: taint=%v", sCtx.GlobalTaintLevel)
+		}
+	})
+
+	t.Run("memory whisper preserves high taint", func(t *testing.T) {
+		sCtx, msgs := run(protocol.MemoryWhisper{
+			Source: protocol.MemoryWhisperSourceMemoryAgent, Content: "HIGH-TAINT-DEFAULT", Salience: 0.9,
+			ProjectID: types.DefaultProjectID, TaintLevel: types.TaintHigh, MetadataValid: true,
+		}, "", nil)
+		if !strings.Contains(allContent(msgs), "UNTRUSTED_DATA_") || sCtx.GlobalTaintLevel != types.TaintHigh {
+			t.Fatalf("default whisper should stay high-taint and spotlighted: global=%v", sCtx.GlobalTaintLevel)
+		}
+	})
+
+	t.Run("planner whisper zero-value metadata remains compatible", func(t *testing.T) {
+		sCtx, msgs := run(protocol.MemoryWhisper{Source: "planner_pool", Content: "PLANNER-RESULT", Salience: 0.9}, "project-a", nil)
+		if !strings.Contains(allContent(msgs), "PLANNER-RESULT") || sCtx.GlobalTaintLevel != types.TaintMedium {
+			t.Fatalf("planner whisper compatibility changed: global=%v", sCtx.GlobalTaintLevel)
+		}
+	})
+
+	t.Run("planner whisper high taint is preserved", func(t *testing.T) {
+		sCtx, msgs := run(protocol.MemoryWhisper{
+			Source: "planner_pool", Content: "HIGH-TAINT-PLANNER-RESULT", Salience: 0.9, TaintLevel: types.TaintUserReviewed,
+		}, "project-a", nil)
+		if !strings.Contains(allContent(msgs), "UNTRUSTED_DATA_") || sCtx.GlobalTaintLevel != types.TaintUserReviewed {
+			t.Fatalf("planner whisper taint must propagate to session: global=%v", sCtx.GlobalTaintLevel)
+		}
+	})
+
+	t.Run("perceive recall taint raises global floor", func(t *testing.T) {
+		recall := &fsm.TurnRecall{Text: "CACHED-HIGH-RECALL", Taint: types.TaintHigh, EpisodicDone: true, GoalDone: true}
+		sCtx, msgs := run(protocol.MemoryWhisper{}, types.DefaultProjectID, recall)
+		if !strings.Contains(allContent(msgs), "CACHED-HIGH-RECALL") || sCtx.GlobalTaintLevel != types.TaintHigh {
+			t.Fatalf("recall taint must raise session taint: global=%v", sCtx.GlobalTaintLevel)
+		}
+	})
+}
+
+func TestBuildPlanContext_RecallTaintRaisesGlobalFloor(t *testing.T) {
+	mem := &mockMemory{episodic: &mockEpisodicMem{}, working: &mockWorkingMem{immutable: &mockImmutableCore{}}}
+	sCtx := &fsm.StateContext{
+		ProjectID:  types.DefaultProjectID,
+		TaskModel:  &fsm.TaskModel{Goal: "goal"},
+		TurnRecall: &fsm.TurnRecall{Text: "CACHED-HIGH-PLAN-RECALL", Taint: types.TaintHigh, EpisodicDone: true, GoalDone: true},
+	}
+	msgs, err := BuildPlanContext(context.Background(), mem, sCtx, nil, nil)
+	if err != nil {
+		t.Fatalf("BuildPlanContext: %v", err)
+	}
+	if !strings.Contains(allContent(msgs), "CACHED-HIGH-PLAN-RECALL") || sCtx.GlobalTaintLevel != types.TaintHigh {
+		t.Fatalf("plan recall taint must raise session taint: global=%v", sCtx.GlobalTaintLevel)
+	}
+}
+
 // TestBuildPerceiveContext_ExtensionInjection_S02 验证 S-02 修复：
 // sCtx.InstalledExtensionsInfo 中的注入载荷必须落入 external_catalog 块（被
 // Spotlighting 包裹），不得混入 ZoneImmutable 的可信指令消息。回归锚点：修复前

@@ -373,9 +373,8 @@ func TestExecuteTransferToAgent_MCPTargetForcesTaintHighOnResume(t *testing.T) {
 	}
 }
 
-// TestExecuteTransferToAgent_NonMCPTargetDoesNotForceHighTaint 验证本地角色
-// 委派（非 mcp: 前缀）不受 A1 强制高污点规则影响，保持既有行为。
-func TestExecuteTransferToAgent_NonMCPTargetDoesNotForceHighTaint(t *testing.T) {
+// TestExecuteTransferToAgent_NonMCPTargetUsesStoredResultFloor 验证结果污点未知时的保守地板。
+func TestExecuteTransferToAgent_NonMCPTargetUsesStoredResultFloor(t *testing.T) {
 	a := newTestHandoffAgent(t)
 	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
 	a.InjectHandoffPoster(poster)
@@ -390,8 +389,8 @@ func TestExecuteTransferToAgent_NonMCPTargetDoesNotForceHighTaint(t *testing.T) 
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if res.TaintLevel != types.TaintLow {
-		t.Errorf("expected TaintLevel unchanged (TaintLow) for non-mcp target, got %v", res.TaintLevel)
+	if res.TaintLevel != types.TaintHigh {
+		t.Errorf("expected unknown stored result taint to fail closed as High, got %v", res.TaintLevel)
 	}
 }
 

@@ -45,6 +45,7 @@ import (
 	memretrieval "github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/security/checkpoint"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/policy"
@@ -203,7 +204,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
 	}
-	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, &inlineTokenVerifier{})
+	var executionAuditor protocol.ExecutionAuditor
+	if sb.AuditTrail != nil {
+		executionAuditor = security.NewExecutionAuditGate(auditTrailLogAdapter{at: sb.AuditTrail})
+	}
+	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, &inlineTokenVerifier{}).
+		WithExecutionAuditor(executionAuditor)
 	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
 
 	// hooks.json 引擎（ADR-0103 决策六）：来源提供者（用户级 / 项目级 / 插件）依赖的仓库与
@@ -226,7 +232,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 
 	hookRunner := hook.NewRunner(hook.Deps{Registry: hookRegistry, Policy: sb.Gate, Wrapper: toolsb.NewRustArgvWrapper(),
-		HTTPClient: sb.SafeHTTPClient, PII: piiDetector, PIIDesens: piiDesens})
+		HTTPClient: sb.SafeHTTPClient, PII: piiDetector, PIIDesens: piiDesens, Auditor: executionAuditor})
 	envelope.SetHookFirer(hookRunner)
 	slog.Info("polaris: hooks.json engine wired into ExecEnvelope")
 
@@ -624,8 +630,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if containerSandbox != nil {
 		skillRunner = containerSandbox
 	}
+	skillInjector := &skill.SkillInjector{Wrapper: toolsb.NewRustArgvWrapper(), Policy: sb.Gate, Trust: extRepo, Auditor: executionAuditor}
 	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, skillRunner, nil).WithPolicy(sb.Gate).WithPluginContext(pluginVars).
-		WithInjector(&skill.SkillInjector{Wrapper: toolsb.NewRustArgvWrapper(), Policy: sb.Gate, Trust: extRepo})
+		WithInjector(skillInjector).WithExecutionAuditor(executionAuditor)
 
 	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry + InProcessSandbox，
 	// 注册的执行函数委托至 skillExecutor（唯一实现，禁止重复渲染 instructions）。
@@ -785,7 +792,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	disp := dispatch.New(compCatalog, toolReg, skillExecutor)
 	disp.Use(dispatch.SchemaValidateInterceptor())
-	disp.Use(dispatch.AuditInterceptor(sb.AuditTrail))
 
 	return &ToolBundle{
 		TTSBridge:             ttsBr,

@@ -1,3 +1,5 @@
+import { readHTTPError } from './http_error.mjs'
+
 /**
  * SSE 客户端：fetch 流式读取 + 断线续传 + Alpine store 驱动
  * 对齐 M13-Interface-WebUI.md §3 协议
@@ -139,14 +141,8 @@ export class SSEClient {
   }
 
   async #httpError(resp) {
-    let code = `http_${resp.status}`
-    let message = `HTTP ${resp.status}`
-    try {
-      const j = JSON.parse(await resp.text())
-      if (j.code) code = j.code
-      if (j.message) message = j.message
-    } catch { /* 非 JSON 错误体 */ }
-    return { code, message }
+    const error = await readHTTPError(resp)
+    return { code: error.code || `http_${resp.status}`, message: error.message }
   }
 
   /**

@@ -1,8 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -64,17 +67,19 @@ func (h *fakeHooks) StopFailure(context.Context, string, string) { h.record("Sto
 func (h *fakeHooks) SessionEnd(context.Context, string, string)  { h.record("SessionEnd") }
 
 type fakePersistence struct {
-	mu        sync.Mutex
-	sessions  map[string]bool
-	history   []types.Message
-	saved     []savedMessage
-	titled    string
-	touched   bool
-	projects  map[string]string // sessionID → 首次绑定的 projectID（ADR-0097）
-	nextMsgID int64
-	appViews  []AppView
-	linkedTo  map[string]int64 // viewID → messageID（LinkAppViewsToMessage 断言用）
-	modelCtx  map[string]map[string]json.RawMessage
+	mu         sync.Mutex
+	ensureErr  error
+	historyErr error
+	sessions   map[string]bool
+	history    []types.Message
+	saved      []savedMessage
+	titled     string
+	touched    bool
+	projects   map[string]string // sessionID → 首次绑定的 projectID（ADR-0097）
+	nextMsgID  int64
+	appViews   []AppView
+	linkedTo   map[string]int64 // viewID → messageID（LinkAppViewsToMessage 断言用）
+	modelCtx   map[string]map[string]json.RawMessage
 }
 
 type savedMessage struct {
@@ -93,6 +98,9 @@ func (p *fakePersistence) EnsureSession(ctx context.Context, sessionID string) e
 }
 
 func (p *fakePersistence) EnsureSessionInProject(ctx context.Context, sessionID, projectID string) error {
+	if p.ensureErr != nil {
+		return p.ensureErr
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sessions[sessionID] = true
@@ -106,7 +114,7 @@ func (p *fakePersistence) EnsureSessionInProject(ctx context.Context, sessionID,
 }
 
 func (p *fakePersistence) ListMessages(ctx context.Context, sessionID string) ([]types.Message, error) {
-	return p.history, nil
+	return p.history, p.historyErr
 }
 
 func (p *fakePersistence) SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) (int64, error) {
@@ -447,6 +455,206 @@ func TestRunTurn_Interactive_HookBlocked(t *testing.T) {
 	}
 	if !sink.hasKind(KindError) {
 		t.Error("expected KindError event for hook_blocked")
+	}
+}
+
+func TestRunTurn_InteractiveFailureEventsHideSourceErrors(t *testing.T) {
+	old := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	marker := "private-path-and-token-sentinel"
+	baseErr := func(code apperr.Code) error {
+		return apperr.Wrap(code, "database /private/path", errors.New(marker))
+	}
+	cases := []struct {
+		name    string
+		setup   func(*fakePersistence, *fakeAgentPool)
+		kind    string
+		code    apperr.Code
+		message string
+	}{
+		{"ensure", func(p *fakePersistence, _ *fakeAgentPool) { p.ensureErr = baseErr(apperr.CodeStorageUnavailable) }, "session_error", apperr.CodeStorageUnavailable, "会话初始化失败，请稍后重试"},
+		{"history", func(p *fakePersistence, _ *fakeAgentPool) { p.historyErr = baseErr(apperr.CodeStorageUnavailable) }, "history_error", apperr.CodeStorageUnavailable, "会话历史读取失败，请稍后重试"},
+		{"acquire", func(_ *fakePersistence, p *fakeAgentPool) { p.acquireErr = baseErr(apperr.CodeServiceUnavailable) }, "agent_pool_error", apperr.CodeServiceUnavailable, "会话 Agent 暂不可用，请稍后重试"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs.Reset()
+			persistence := newFakePersistence()
+			pool := &fakeAgentPool{}
+			tc.setup(persistence, pool)
+			orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool)
+			sink := &recordingSink{}
+			if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s-safe", Input: "hi", Channel: "web"}, sink); err != nil {
+				t.Fatalf("RunTurn error: %v", err)
+			}
+			if len(sink.events) == 0 {
+				t.Fatal("expected an error event")
+			}
+			found := false
+			for _, ev := range sink.events {
+				encoded, err := json.Marshal(ev)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if bytes.Contains(encoded, []byte(marker)) {
+					t.Fatalf("source marker leaked through event: %s", encoded)
+				}
+				if ev.Kind != KindError {
+					continue
+				}
+				found = true
+				if ev.Payload["code"] != string(tc.code) || ev.Payload["kind"] != tc.kind || ev.Payload["message"] != tc.message {
+					t.Fatalf("unexpected public error: %#v", ev.Payload)
+				}
+				var appErr *apperr.Error
+				if !errors.As(ev.Err, &appErr) || appErr.Cause != nil || strings.Contains(appErr.Error(), marker) {
+					t.Fatalf("Event.Err must contain a safe, cause-free error: %#v", ev.Err)
+				}
+			}
+			if !found {
+				t.Fatal("expected KindError")
+			}
+			if strings.Contains(logs.String(), marker) {
+				t.Fatalf("source marker leaked through ordinary logs: %s", logs.String())
+			}
+		})
+	}
+}
+
+func TestRunTurn_InteractiveProviderErrorCodeAndEventPrivacy(t *testing.T) {
+	old := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	marker := "provider-token-sentinel"
+	ctrl := newFakeAgentController()
+	ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventError, Content: "provider failed at /private/model: " + marker, ErrorCode: string(apperr.CodeProviderExhausted)}
+	ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	pool := &fakeAgentPool{ctrl: ctrl}
+	orc := newTestOrchestrator(t, newFakePersistence(), &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool)
+	sink := &recordingSink{}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s-provider", Input: "hi", Channel: "web"}, sink); err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	var sawFSM, sawEmpty bool
+	for _, ev := range sink.events {
+		encoded, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, []byte(marker)) {
+			t.Fatalf("provider marker leaked through session sink: %s", encoded)
+		}
+		if ev.Kind != KindError {
+			continue
+		}
+		if ev.Payload["code"] != string(apperr.CodeProviderExhausted) || ev.Err == nil {
+			t.Fatalf("provider code was not preserved safely: %#v", ev)
+		}
+		switch ev.Payload["kind"] {
+		case "fsm_error":
+			sawFSM = true
+		case "empty_response":
+			sawEmpty = true
+		}
+	}
+	if !sawFSM || !sawEmpty {
+		t.Fatalf("expected typed FSM and final error events, got %#v", sink.events)
+	}
+	if strings.Contains(logs.String(), marker) {
+		t.Fatalf("provider marker leaked through session logs: %s", logs.String())
+	}
+}
+
+func TestRunTurnTurnHubReplayRetainsOnlySafeError(t *testing.T) {
+	marker := "history-path-token-sentinel"
+	persistence := newFakePersistence()
+	persistence.historyErr = apperr.Wrap(apperr.CodeStorageUnavailable, "query /private/path", errors.New(marker))
+	orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{})
+	hub := NewTurnHub(TurnHubConfig{})
+	turn, state := hub.Begin("s-turn-safe", func() {})
+	if state != BeginOK {
+		t.Fatalf("Begin = %v, want BeginOK", state)
+	}
+	sub := turn.Subscribe(0)
+	defer sub.Close()
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s-turn-safe", Input: "hi", Channel: "web"}, turn); err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	turn.Finish()
+	var ev SeqEvent
+	for {
+		next, ok, _ := sub.Poll()
+		if !ok {
+			break
+		}
+		if next.Event.Kind == KindError {
+			ev = next
+			break
+		}
+	}
+	if ev.Event.Kind != KindError {
+		t.Fatalf("expected replayable KindError, got %#v", ev)
+	}
+	encoded, err := json.Marshal(ev.Event)
+	if err != nil || bytes.Contains(encoded, []byte(marker)) {
+		t.Fatalf("TurnHub cached unsafe error: %s (%v)", encoded, err)
+	}
+	var appErr *apperr.Error
+	if !errors.As(ev.Event.Err, &appErr) || appErr.Code != apperr.CodeStorageUnavailable || appErr.Cause != nil {
+		t.Fatalf("TurnHub replay did not retain safe typed error: %#v", ev.Event.Err)
+	}
+	hub.Shutdown(context.Background())
+}
+
+func TestRunTurn_HeadlessHookReasonIsPrivate(t *testing.T) {
+	old := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	marker := "hook-reason-sentinel"
+	hooks := &fakeHooks{blockBefore: map[string]string{"UserPromptSubmit": marker}}
+	orc := newTestOrchestrator(t, newFakePersistence(), hooks, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{})
+	sink := &recordingSink{}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s-headless", Input: "hi", Headless: true, Channel: "workflow"}, sink); err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if len(sink.events) != 1 || sink.events[0].Payload["code"] != string(apperr.CodeForbidden) || sink.events[0].Payload["kind"] != "hook_blocked" {
+		t.Fatalf("unexpected hook block event: %#v", sink.events)
+	}
+	encoded, _ := json.Marshal(sink.events[0])
+	if strings.Contains(string(encoded), marker) || strings.Contains(logs.String(), marker) {
+		t.Fatalf("hook reason leaked: event=%s logs=%s", encoded, logs.String())
+	}
+}
+
+func TestRunTurn_HeadlessPreservesSafeAgentErrorCode(t *testing.T) {
+	marker := "headless-private-provider-sentinel"
+	pool := &fakeAgentPool{headlessErr: apperr.Wrap(apperr.CodeProviderExhausted, "provider failed", errors.New(marker))}
+	orc := newTestOrchestrator(t, newFakePersistence(), &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool)
+	_, err := orc.RunTurn(context.Background(), Request{SessionID: "s-headless-error", Input: "hi", Headless: true, Channel: "workflow"}, &recordingSink{})
+	if apperr.CodeOf(err) != apperr.CodeProviderExhausted || !strings.Contains(err.Error(), "provider failed") {
+		t.Fatalf("headless error chain should preserve safe typed source diagnostics, got %v", err)
+	}
+}
+
+func TestRunTurn_ResourceExhaustionKeepsRetryNotice(t *testing.T) {
+	pool := &fakeAgentPool{acquireErr: apperr.New(apperr.CodeResourceExhausted, "private load details")}
+	orc := newTestOrchestrator(t, newFakePersistence(), &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool)
+	sink := &recordingSink{}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "s-retry", Input: "hi", Channel: "web"}, sink); err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if len(sink.events) == 0 || sink.events[len(sink.events)-1].Kind != KindSystemNotice || sink.events[len(sink.events)-1].Payload["retry"] != true {
+		t.Fatalf("resource exhaustion must keep the retry notice, got %#v", sink.events)
+	}
+	if sink.hasKind(KindError) {
+		t.Fatalf("resource exhaustion must not be remapped to KindError: %#v", sink.events)
 	}
 }
 

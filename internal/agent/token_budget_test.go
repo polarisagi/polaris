@@ -64,7 +64,7 @@ type budgetDialer struct{ net.Dialer }
 func budgetRegistry(t *testing.T) *tool.InMemoryToolRegistry {
 	t.Helper()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	reg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(budgetGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	reg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(budgetGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil).WithExecutionAuditor(testExecutionAuditor{}), config.DefaultThresholds().M7Tool)
 	var d protocol.SafeDialer = &budgetDialer{}
 	must := func(err error) {
 		t.Helper()

@@ -3,11 +3,14 @@ package consolidation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"maps"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -23,16 +26,24 @@ import (
 //
 // LLM 路径: provider 非 nil → 用 100 token prompt 让 LLM 归纳 JSON。
 // 规则 fallback: provider 为 nil → 统计工具频率 + 收集近期摘要。
+//
+//nolint:gocyclo // Filtering and generation fallback remain in the single profile-write boundary.
 func (p *ConsolidationPipeline) synthesizeUserProfile(
 	ctx context.Context,
 	events []types.ScoredEvent,
 ) error {
-	if p.semantic == nil {
+	// 全局画像仅接纳有效默认项目的低污点非空事件。先过滤再访问存储，
+	// 确保不合格轨迹既不会进入画像，也不会触发读取或模型调用。
+	events = filterGlobalProfileEvents(events)
+	if p.semantic == nil || len(events) < 10 {
 		return nil
 	}
 
 	// 读取现有画像（确定是否需要更新）
-	current, _ := p.semantic.GetUserProfile(ctx, "default")
+	current, err := p.semantic.GetUserProfile(ctx, types.GlobalUserProfileKey)
+	if err != nil && !apperr.IsCode(err, apperr.CodeNotFound) {
+		return apperr.Wrap(apperr.CodeOf(err), "consolidation: get global profile", err)
+	}
 
 	// 若 events 最新时间戳距上次合成 < 1 分钟，跳过（防重复合成）
 	if current != nil && len(events) > 0 {
@@ -71,7 +82,7 @@ func (p *ConsolidationPipeline) synthesizeUserProfile(
 	}
 
 	profile := types.UserProfile{
-		ProfileKey:         "default",
+		ProfileKey:         types.GlobalUserProfileKey,
 		StableFacts:        make(map[string]any),
 		BehavioralPatterns: make(map[string]any),
 		LastEventTS:        latestTS,
@@ -89,6 +100,21 @@ func (p *ConsolidationPipeline) synthesizeUserProfile(
 	}
 
 	return p.semantic.UpsertUserProfile(ctx, profile) //nolint:wrapcheck
+}
+
+func filterGlobalProfileEvents(events []types.ScoredEvent) []types.ScoredEvent {
+	filtered := make([]types.ScoredEvent, 0, len(events))
+	for _, scored := range events {
+		event := scored.EventPtr()
+		if event == nil || len(strings.TrimSpace(string(event.Payload))) == 0 {
+			continue
+		}
+		if event.EffectiveProjectID() != types.DefaultProjectID || event.TaintLevel > types.TaintLow {
+			continue
+		}
+		filtered = append(filtered, scored)
+	}
+	return filtered
 }
 
 // llmSynthesizeProfile 通过 LLM 合成用户画像（100 token prompt，输出 JSON）。
@@ -136,12 +162,14 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 		"Events":      sb.String(),
 	})
 	if err != nil {
+		logProfileFallback(ctx, "template_render", err)
 		p.ruleSynthesizeProfile(events, out)
 		return
 	}
 
 	respContent, err := p.summarizer.InferRaw(ctx, promptText, 512)
 	if err != nil {
+		logProfileFallback(ctx, "provider_infer", err)
 		p.ruleSynthesizeProfile(events, out)
 		return
 	}
@@ -160,6 +188,7 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 		BehavioralPatterns map[string]any `json:"behavioral_patterns"`
 	}
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		logProfileFallback(ctx, "response_decode", err)
 		p.ruleSynthesizeProfile(events, out)
 		return
 	}
@@ -172,6 +201,15 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 	if parsed.BehavioralPatterns != nil {
 		out.BehavioralPatterns = parsed.BehavioralPatterns
 	}
+}
+
+func logProfileFallback(ctx context.Context, operation string, err error) {
+	slog.WarnContext(ctx, "consolidation: profile synthesis fell back to rules",
+		"operation", operation,
+		"code", apperr.CodeOf(err),
+		"error_type", fmt.Sprintf("%T", err),
+		"fallback", "rule",
+	)
 }
 
 // ruleSynthesizeProfile 规则 fallback：统计工具频率 + 收集近期事件摘要。

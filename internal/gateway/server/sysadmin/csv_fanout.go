@@ -34,13 +34,13 @@ func (s sysadminCSVEventLogger) Append(ctx context.Context, ev types.Event) erro
 // HandleCSVFanout 触发 CSV Fan-out 任务
 func (h *SysAdminHandler) HandleCSVFanout(w http.ResponseWriter, r *http.Request) {
 	if h.Blackboard == nil {
-		http.Error(w, "Blackboard is not available", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Blackboard is not available", nil, http.StatusServiceUnavailable)
 		return
 	}
 
 	var job orchestrator.CSVFanoutJob
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request body", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -48,7 +48,7 @@ func (h *SysAdminHandler) HandleCSVFanout(w http.ResponseWriter, r *http.Request
 
 	res, err := orchestrator.RunCSVFanout(r.Context(), h.Blackboard, job)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "CSV fanout task could not be submitted", err, http.StatusInternalServerError)
 		return
 	}
 

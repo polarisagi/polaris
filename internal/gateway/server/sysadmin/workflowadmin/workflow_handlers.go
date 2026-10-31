@@ -118,7 +118,7 @@ func (h *WorkflowAdmin) HandleGetWorkflow(w http.ResponseWriter, r *http.Request
 		&wf.ResultAction, &wf.DeliverFrom, &wf.Source,
 	)
 	if err != nil {
-		http.Error(w, "workflow not found", http.StatusNotFound)
+		httputil.RespondError(w, "workflow not found", nil, http.StatusNotFound)
 		return
 	}
 	wf.Enabled = enabledInt == 1
@@ -151,18 +151,18 @@ func validateCreateWorkflowRequest(w http.ResponseWriter, reqType *string, name 
 		*reqType = "chain"
 	}
 	if *reqType != "chain" && *reqType != "dag" {
-		http.Error(w, "type must be 'chain' or 'dag'", http.StatusBadRequest)
+		httputil.RespondError(w, "type must be 'chain' or 'dag'", nil, http.StatusBadRequest)
 		return false
 	}
 	if strings.TrimSpace(name) == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		httputil.RespondError(w, "name is required", nil, http.StatusBadRequest)
 		return false
 	}
 	if *triggerType == "" {
 		*triggerType = "manual"
 	}
 	if *triggerType == "cron" && strings.TrimSpace(cronSchedule) == "" {
-		http.Error(w, "cron_schedule required for trigger_type=cron", http.StatusBadRequest)
+		httputil.RespondError(w, "cron_schedule required for trigger_type=cron", nil, http.StatusBadRequest)
 		return false
 	}
 	return true
@@ -438,7 +438,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := validateStepRetryCompensation(req.Steps); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Invalid workflow request", err, http.StatusBadRequest)
 		return
 	}
 
@@ -494,14 +494,14 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 		&cur.ID, &cur.Type, &cur.Name, &cur.Description, &cur.TriggerType, &cur.CronSchedule, &enabledInt,
 		&cur.ResultAction, &cur.DeliverFrom, &cur.Source,
 	); err != nil {
-		http.Error(w, "workflow not found: "+err.Error(), http.StatusNotFound)
+		httputil.RespondError(w, "Workflow not found", err, http.StatusNotFound)
 		return
 	}
 	cur.Enabled = enabledInt == 1
 
 	if req.Type != nil {
 		if *req.Type != "chain" && *req.Type != "dag" {
-			http.Error(w, "type must be 'chain' or 'dag'", http.StatusBadRequest)
+			httputil.RespondError(w, "type must be 'chain' or 'dag'", nil, http.StatusBadRequest)
 			return
 		}
 		cur.Type = *req.Type
@@ -551,7 +551,7 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 
 	if req.Steps != nil {
 		if err := validateStepRetryCompensation(req.Steps); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			httputil.RespondError(w, "Invalid workflow request", err, http.StatusBadRequest)
 			return
 		}
 		if fieldErrs := h.validatePipelineSteps(cur.Name, cur.Description, cur.TriggerType, cur.CronSchedule, cur.ResultAction, cur.DeliverFrom, req.Steps); len(fieldErrs) > 0 {

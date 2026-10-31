@@ -186,7 +186,7 @@ func injectOpenAIShim(html string) string {
 // body: {"session_id":"..."}（插件设置视图不带 session_id，ADR-0125）。
 func (s *Server) handleMCPAppsViewDocument(w http.ResponseWriter, r *http.Request) {
 	if !s.appsSandboxCfg.Enabled || s.mcpMgr == nil {
-		http.Error(w, "mcp apps disabled", http.StatusNotImplemented)
+		httputil.RespondError(w, "MCP Apps are unavailable", nil, http.StatusNotImplemented)
 		return
 	}
 	viewID := r.PathValue("viewID")

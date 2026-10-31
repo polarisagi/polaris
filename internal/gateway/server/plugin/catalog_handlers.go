@@ -89,7 +89,7 @@ func (h *PluginHandler) HandleListPluginCatalog(w http.ResponseWriter, r *http.R
 // POST /v1/plugins/install
 func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo,nestif
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -99,7 +99,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.CatalogID == "" {
-		http.Error(w, "catalog_id is required", http.StatusBadRequest)
+		httputil.RespondError(w, "catalog_id is required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -110,17 +110,17 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 		`SELECT trust_tier, payload FROM extension_catalog WHERE id=?`, req.CatalogID).
 		Scan(&trustTier, &payload)
 	if err != nil {
-		http.Error(w, "catalog entry not found: "+req.CatalogID, http.StatusNotFound)
+		httputil.RespondError(w, "Catalog entry not found", err, http.StatusNotFound)
 		return
 	}
 	if trustTier == 0 {
-		http.Error(w, "untrusted entry, installation rejected", http.StatusForbidden)
+		httputil.RespondError(w, "untrusted entry, installation rejected", nil, http.StatusForbidden)
 		return
 	}
 
 	var entry protocol.RegistryEntry
 	if err := json.Unmarshal([]byte(payload), &entry); err != nil {
-		http.Error(w, "malformed catalog entry", http.StatusInternalServerError)
+		httputil.RespondError(w, "malformed catalog entry", nil, http.StatusInternalServerError)
 		return
 	}
 
@@ -130,11 +130,11 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 		`SELECT COUNT(*) FROM extension_instances WHERE catalog_id=?`, req.CatalogID).
 		Scan(&existCount)
 	if errExist != nil {
-		http.Error(w, "failed to check existing installation", http.StatusInternalServerError)
+		httputil.RespondError(w, "failed to check existing installation", nil, http.StatusInternalServerError)
 		return
 	}
 	if existCount > 0 {
-		http.Error(w, "already installed", http.StatusConflict)
+		httputil.RespondError(w, "already installed", nil, http.StatusConflict)
 		return
 	}
 
@@ -143,7 +143,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 
 	// PolicyGate 是安全门，不允许 nil 跳过（fail-closed）。
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	authCtx := authcontext.FromContext(r.Context())
@@ -217,7 +217,7 @@ func (h *PluginHandler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Req
 	catalogID := r.PathValue("catalogID")
 
 	if h.InstallMgr == nil {
-		http.Error(w, "marketplace manager not initialized", http.StatusInternalServerError)
+		httputil.RespondError(w, "marketplace manager not initialized", nil, http.StatusInternalServerError)
 		return
 	}
 
@@ -277,7 +277,7 @@ func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	if err := h.InstallMgr.AuthorizeAction(r.Context(), requestPrincipal(r), "plugin:manage", nil); err != nil {
@@ -297,7 +297,7 @@ func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Requ
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	} else if exist != nil {
-		http.Error(w, "marketplace already added: "+exist.Name, http.StatusConflict)
+		httputil.RespondError(w, "Marketplace is already added", nil, http.StatusConflict)
 		return
 	}
 	req.IsBuiltin, req.TrustTier, req.Enabled = 0, 2, 1 // 用户添加的市场按 Community 信任
@@ -332,7 +332,7 @@ func (h *PluginHandler) HandleDeleteMarketplace(w http.ResponseWriter, r *http.R
 		return
 	}
 	if !deleted {
-		http.Error(w, "marketplace not found or is builtin", http.StatusForbidden)
+		httputil.RespondError(w, "marketplace not found or is builtin", nil, http.StatusForbidden)
 		return
 	}
 	httputil.WriteJSON(w, map[string]string{"status": "deleted"})

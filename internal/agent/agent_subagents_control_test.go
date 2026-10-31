@@ -14,6 +14,8 @@ import (
 type mockHandoffPosterWithEvents struct {
 	mu          sync.Mutex
 	tasks       map[string]*types.TaskSnapshot
+	peekErrors  map[string]bool
+	nilTaskIDs  map[string]bool
 	failTaskIDs map[string]bool
 	failCalls   []string
 	postedTasks []*types.TaskEntry
@@ -25,6 +27,8 @@ type mockHandoffPosterWithEvents struct {
 func newMockHandoffPoster() *mockHandoffPosterWithEvents {
 	return &mockHandoffPosterWithEvents{
 		tasks:       make(map[string]*types.TaskSnapshot),
+		peekErrors:  make(map[string]bool),
+		nilTaskIDs:  make(map[string]bool),
 		failTaskIDs: make(map[string]bool),
 		eventsMap:   make(map[string][]types.AgentStreamEvent),
 		controlsMap: make(map[string][]types.TaskControl),
@@ -51,10 +55,62 @@ func (m *mockHandoffPosterWithEvents) PostTask(_ context.Context, task *types.Ta
 func (m *mockHandoffPosterWithEvents) PeekTask(_ context.Context, taskID string) (*types.TaskSnapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.peekErrors[taskID] {
+		return nil, fmt.Errorf("temporary lookup failure: %s", taskID)
+	}
+	if m.nilTaskIDs[taskID] {
+		return nil, nil
+	}
 	if snap, ok := m.tasks[taskID]; ok {
 		return snap, nil
 	}
 	return nil, fmt.Errorf("task not found: %s", taskID)
+}
+
+func TestSpawnAgents_PeekTaskFailureConservativelyConsumesQuota(t *testing.T) {
+	for _, mode := range []string{"error", "nil"} {
+		t.Run(mode, func(t *testing.T) {
+			a := newTestHandoffAgent(t)
+			poster := newMockHandoffPoster()
+			a.InjectHandoffPoster(poster)
+			initial := make([]types.SpawnTaskSpec, 6)
+			for i := range initial {
+				initial[i] = types.SpawnTaskSpec{Prompt: fmt.Sprintf("initial %d", i), Role: "worker"}
+			}
+			ids, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{Tasks: initial, Wait: "none"})
+			if err != nil || len(ids) != 6 {
+				t.Fatalf("initial spawn: ids=%d err=%v", len(ids), err)
+			}
+
+			poster.mu.Lock()
+			if mode == "error" {
+				poster.peekErrors[ids[0]] = true
+			} else {
+				poster.nilTaskIDs[ids[0]] = true
+			}
+			poster.mu.Unlock()
+
+			_, err = a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{
+				Tasks: []types.SpawnTaskSpec{{Prompt: "one more", Role: "worker"}}, Wait: "none",
+			})
+			if err == nil || !apperr.IsCode(err, apperr.CodeForbidden) {
+				t.Fatalf("uncertain task status must conservatively consume quota, got %v", err)
+			}
+
+			// 一旦查库恢复并明确返回终态，该任务才可释放本地名额。
+			poster.mu.Lock()
+			delete(poster.peekErrors, ids[0])
+			delete(poster.nilTaskIDs, ids[0])
+			poster.tasks[ids[0]].Status = types.TaskDone
+			poster.mu.Unlock()
+			_, err = a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{
+				Tasks: []types.SpawnTaskSpec{{Prompt: "after confirmed terminal", Role: "worker"}}, Wait: "none",
+			})
+			if err != nil {
+				t.Fatalf("confirmed terminal child should release quota: %v", err)
+			}
+		})
+	}
 }
 
 func (m *mockHandoffPosterWithEvents) Subscribe(_ context.Context) (<-chan types.BlackboardEvent, error) {

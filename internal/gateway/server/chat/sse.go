@@ -40,7 +40,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if strings.TrimSpace(req.Input) == "" && len(req.Attachments) == 0 && len(req.ImageParts) == 0 {
-		http.Error(w, "input required", http.StatusBadRequest)
+		httputil.RespondError(w, "Input is required", nil, http.StatusBadRequest)
 		return
 	}
 

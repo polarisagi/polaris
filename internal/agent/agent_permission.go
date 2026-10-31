@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	protorepo "github.com/polarisagi/polaris/internal/protocol/repo"
@@ -127,6 +128,9 @@ func (a *Agent) grantFor(toolName string, args []byte) (protocol.PermissionGrant
 func (a *Agent) AuthorizeCall(ctx context.Context, tool types.Tool, args []byte, taint types.TaintLevel) (protocol.PermissionGrant, string, bool) {
 	if a.perm.modes == nil {
 		return protocol.GrantNone, "permission mode source not configured", false
+	}
+	if err := schemavalidate.ValidateAgainstStrict(tool.InputSchema, args); err != nil {
+		return protocol.GrantNone, "tool arguments failed schema validation", false
 	}
 	mode, err := a.perm.modes.GetPermissionMode(ctx)
 	if err != nil {

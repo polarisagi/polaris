@@ -18,7 +18,7 @@ type AgentDefinitionLister interface {
 // HandleListAgents GET /v1/agents：全部可委派子 Agent 及解析诊断（含"已解析但不适用"的字段）。
 func (h *PluginHandler) HandleListAgents(w http.ResponseWriter, r *http.Request) {
 	if h.AgentDefs == nil {
-		http.Error(w, "agent definitions not configured", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "agent definitions not configured", nil, http.StatusServiceUnavailable)
 		return
 	}
 	defs, diags, err := h.AgentDefs.ListAgentDefinitions(r.Context())

@@ -114,12 +114,12 @@ func (h *SysAdminHandler) HandleListToolSchemas(w http.ResponseWriter, r *http.R
 // POST /v1/tools/{name}/execute
 func (h *SysAdminHandler) HandleExecuteTool(w http.ResponseWriter, r *http.Request) {
 	if h.ToolExec == nil {
-		http.Error(w, "tool executor not available", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "tool executor not available", nil, http.StatusServiceUnavailable)
 		return
 	}
 	name := r.PathValue("name")
 	if name == "" {
-		http.Error(w, "missing tool name", http.StatusBadRequest)
+		httputil.RespondError(w, "missing tool name", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -144,7 +144,7 @@ func (h *SysAdminHandler) HandleExecuteTool(w http.ResponseWriter, r *http.Reque
 // POST /v1/skills/install
 func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Request) {
 	if h.SkillReg == nil {
-		http.Error(w, "skill registry not available", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "skill registry not available", nil, http.StatusServiceUnavailable)
 		return
 	}
 

@@ -53,13 +53,13 @@ const (
 )
 
 // Event 领域事件。Text 用于 KindDelta 增量文本；Payload 用于 KindStatus /
-// KindContextWarning / KindComplete 的结构化载荷；Err 仅 KindError 携带，
-// 供 Sink 侧映射 HTTP 状态码/错误 code。
+// KindContextWarning / KindComplete 的结构化载荷；Err 仅 KindError 携带安全错误，
+// 源错误链留在独立内部返回值或诊断记录中。
 type Event struct {
 	Kind    EventKind
 	Text    string
 	Payload map[string]any
-	Err     error
+	Err     error `json:"-"`
 }
 
 // Sink 领域事件出口。HTTP/SSE、非流式（bufferSink）、Headless 各实现一个。

@@ -46,6 +46,9 @@ func (a *Agent) withJITCapability(ctx context.Context, toolName string, args []b
 	if _, ok := (*calls)[toolCallKey(toolName, args)]; !ok {
 		return ctx, func() {}, apperr.New(apperr.CodeForbidden, "agent: tool call not in validated plan, refusing to mint capability token for "+toolName)
 	}
+	ctx = a.withTaskScopeCtx(ctx)
+	// Envelope hook 可能在本次 JIT 校验后改参；将既有授权器传到物理边界重新判定。
+	ctx = protocol.WithToolCallAuthorizer(ctx, a)
 	// 凭据与模式每次覆盖写入（含 GrantNone）：不继承外层 ctx（如 code_act 外层调用）的凭据。
 	grant, mode := a.grantFor(toolName, args)
 	ctx = protocol.WithPermissionMode(protocol.WithPermissionGrant(ctx, grant), mode)

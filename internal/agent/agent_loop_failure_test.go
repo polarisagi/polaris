@@ -1,13 +1,16 @@
 package agent
 
 import (
+	"bytes"
 	"context"
-	"fmt"
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -33,9 +36,14 @@ func (p *errorLoopProvider) ModelID() string                      { return "erro
 // 且正常收尾并发出错误事件，不抛出 "unknown next state: S_FAILED"（R2-13）。
 func TestAgenticLoop_ProviderFailure_TerminalStateAndErrorEvent(t *testing.T) {
 	t.Setenv("POLARIS_LOOP_MODE", "agentic")
+	old := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	marker := "provider-path-token-sentinel"
 	agent := NewAgentWithDefaults("test-loop-failure")
 	prov := &errorLoopProvider{
-		err: fmt.Errorf("upstream provider network timeout"),
+		err: apperr.Wrap(apperr.CodeProviderExhausted, "provider network failed", errors.New(marker)),
 	}
 	agent.InjectProvider(prov)
 	agent.InjectPolicyGate(&allowPolicyGate{})
@@ -75,6 +83,7 @@ func TestAgenticLoop_ProviderFailure_TerminalStateAndErrorEvent(t *testing.T) {
 	// 3. 验证流中收到错误事件且不含 "unknown next state"
 	var gotErrorEvent bool
 	var errorContents []string
+	var gotErrorCode string
 drain:
 	for {
 		select {
@@ -82,6 +91,7 @@ drain:
 			if ev.Type == types.AgentStreamEventError {
 				gotErrorEvent = true
 				errorContents = append(errorContents, ev.Content)
+				gotErrorCode = ev.ErrorCode
 			}
 		default:
 			break drain
@@ -90,9 +100,18 @@ drain:
 	if !gotErrorEvent {
 		t.Fatal("期望收到 AgentStreamEventError 事件，实际未收到")
 	}
+	if gotErrorCode != string(apperr.CodeProviderExhausted) {
+		t.Fatalf("AgentStreamEventError code = %q, want %q", gotErrorCode, apperr.CodeProviderExhausted)
+	}
+	if strings.Contains(logs.String(), marker) {
+		t.Fatalf("Provider error leaked to ordinary logs: %s", logs.String())
+	}
 	for _, content := range errorContents {
 		if strings.Contains(content, "unknown next state") {
 			t.Fatalf("错误事件中不应包含未识别状态错误，实际内容: %q", content)
+		}
+		if strings.Contains(content, marker) {
+			t.Fatalf("错误事件中不得包含 Provider 原文，实际内容: %q", content)
 		}
 	}
 }

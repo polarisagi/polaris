@@ -127,7 +127,14 @@ func (f *MemoryFacadeImpl) AddWorkingContext(_ context.Context, text string) err
 }
 
 func (f *MemoryFacadeImpl) ImmutableCore() protocol.ImmutableCore {
-	return f.sys.Mem().Working().Immutable()
+	if f == nil || f.sys == nil || f.sys.MemImpl == nil {
+		return nil
+	}
+	working := f.sys.Mem().Working()
+	if isNilInterface(working) {
+		return nil
+	}
+	return working.Immutable()
 }
 
 // ListCoreMemory 读取核心工作记忆块（UP-03 ZoneCoreMemory 注入源）。

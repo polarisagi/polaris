@@ -162,7 +162,15 @@ func hardLimit(op operation, taint types.TaintLevel, ctx Context) (Decision, boo
 // reachesNetwork 操作是否可能把数据送出本机。
 func (o operation) reachesNetwork() bool {
 	if o.kind == opShell {
-		return o.cmd.Network
+		if o.cmd.Network || o.cmd.Class == CmdUnknown {
+			return true
+		}
+		for _, segment := range o.cmd.Segments {
+			if segment.Network || segment.Class == CmdUnknown {
+				return true
+			}
+		}
+		return false
 	}
 	return o.netCap
 }

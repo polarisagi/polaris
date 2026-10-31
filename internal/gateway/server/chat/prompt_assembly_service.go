@@ -19,6 +19,7 @@ type ToolIndexer interface {
 type PromptAssemblyService struct {
 	PromptMgr               protocol.PromptFacade
 	SoulMDContent           *string
+	SoulMDMu                *sync.RWMutex
 	ContextRefExpander      *authcontext.ContextRefExpander
 	BaseSystemPromptTpl     string
 	ActivatedSystemPromptMu sync.RWMutex
@@ -84,6 +85,20 @@ func (s *PromptAssemblyService) ReadActivatedSystemPrompt() string {
 	s.ActivatedSystemPromptMu.RLock()
 	defer s.ActivatedSystemPromptMu.RUnlock()
 	return s.ActivatedSystemPrompt
+}
+
+func (s *PromptAssemblyService) readSoulMDContent() (string, bool) {
+	if s.SoulMDContent == nil {
+		return "", false
+	}
+	if s.SoulMDMu == nil {
+		return *s.SoulMDContent, true
+	}
+
+	s.SoulMDMu.RLock()
+	content := *s.SoulMDContent
+	s.SoulMDMu.RUnlock()
+	return content, true
 }
 
 // ExpandContextRefs 满足 session.PromptAssembler 接口（A-03 Step2）。

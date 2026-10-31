@@ -24,7 +24,7 @@ type skillInjectionView struct {
 // GET /v1/skills/injections
 func (h *PluginHandler) HandleListSkillInjections(w http.ResponseWriter, r *http.Request) {
 	if h.SkillReg == nil {
-		http.Error(w, "skill registry not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "skill registry not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	skills, err := h.SkillReg.List(r.Context(), types.SkillFilter{})
@@ -65,16 +65,16 @@ func (h *PluginHandler) HandleTrustSkillInjection(w http.ResponseWriter, r *http
 		Digest string `json:"digest"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Skill == "" || body.Digest == "" {
-		http.Error(w, "skill and digest required", http.StatusBadRequest)
+		httputil.RespondError(w, "skill and digest required", nil, http.StatusBadRequest)
 		return
 	}
 	meta, err := h.SkillReg.Get(r.Context(), body.Skill, "")
 	if err != nil || meta == nil {
-		http.Error(w, "skill not found", http.StatusNotFound)
+		httputil.RespondError(w, "skill not found", nil, http.StatusNotFound)
 		return
 	}
 	if pluginspec.InjectionDigest(pluginspec.FindInjections(meta.Instructions)) != body.Digest {
-		http.Error(w, "skill commands changed since review; reload and review again", http.StatusConflict)
+		httputil.RespondError(w, "skill commands changed since review; reload and review again", nil, http.StatusConflict)
 		return
 	}
 	if err := h.ExtRepo.SaveHookTrust(r.Context(), skill.InjectionTrustKey(body.Skill), body.Digest); err != nil {

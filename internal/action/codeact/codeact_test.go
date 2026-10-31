@@ -85,6 +85,15 @@ func defaultMockTokenManager() *mockTokenManager { return &mockTokenManager{} }
 
 type mockToolExecutor struct{}
 
+type mockExecutionAuditor struct{}
+
+func (mockExecutionAuditor) BeginExecution(context.Context, protocol.ExecutionAuditIntent) (string, error) {
+	return "test-execution", nil
+}
+func (mockExecutionAuditor) CompleteExecution(context.Context, string, bool, string) error {
+	return nil
+}
+
 func (m *mockToolExecutor) Execute(_ context.Context, _ types.ToolCallRequest) (*types.ToolResult, error) {
 	return nil, nil
 }
@@ -325,7 +334,7 @@ func TestExecute_SandboxLevelTooLow(t *testing.T) {
 	wasm := &mockSandbox{level: 2, result: &types.ToolResult{Output: []byte("wasm"), Success: true}}
 	run := func(hwTier int) error {
 		router := sandbox.NewSandboxRouter(nil, nil, wasm, "linux", hwTier) // 只有 Wasm 可用
-		envelope := sandbox.NewExecEnvelope(gate, router, hwTier, "linux", nil)
+		envelope := sandbox.NewExecEnvelope(gate, router, hwTier, "linux", nil).WithExecutionAuditor(mockExecutionAuditor{})
 		ca := NewCodeAct(envelope, &mockToolExecutor{},
 			WithGovernanceAgent(&mockGovAgent{}),
 			WithTokenManager(defaultMockTokenManager()),
@@ -351,7 +360,7 @@ func TestExecute_Success(t *testing.T) {
 	runner := &fakeCmdRunner{out: []byte("hello")}
 	container := sandbox.NewContainerSandbox("", "linux", 1, runner, config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(nil, container, nil, "linux", 1)
-	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil)
+	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil).WithExecutionAuditor(mockExecutionAuditor{})
 	exec := &mockToolExecutor{}
 	ca := NewCodeAct(envelope, exec,
 		WithGovernanceAgent(&mockGovAgent{}),
@@ -410,7 +419,7 @@ func TestExecute_L4PersistentSession_StatePersistsAcrossCalls(t *testing.T) {
 	})
 	defer persistent.Shutdown()
 	router.WithPersistent(persistent)
-	envelope := sandbox.NewExecEnvelope(gate, router, 2, "linux", nil)
+	envelope := sandbox.NewExecEnvelope(gate, router, 2, "linux", nil).WithExecutionAuditor(mockExecutionAuditor{})
 	ca := NewCodeAct(envelope, &mockToolExecutor{},
 		WithGovernanceAgent(&mockGovAgent{}),
 		WithTokenManager(defaultMockTokenManager()),
@@ -455,7 +464,7 @@ func TestExecute_StatefulSessionWithoutL4_FallsBackToPickleWrap(t *testing.T) {
 	gate := &mockPolicyGate{allowed: true}
 	container := sandbox.NewContainerSandbox("", "linux", 1, &fakeCmdRunner{out: []byte("ok")}, config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(nil, container, nil, "linux", 1) // 未 WithPersistent：L4 不可用 → 回落 Container
-	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil)
+	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil).WithExecutionAuditor(mockExecutionAuditor{})
 	tmpDir := t.TempDir()
 	ca := NewCodeAct(envelope, &mockToolExecutor{},
 		WithGovernanceAgent(&mockGovAgent{}),

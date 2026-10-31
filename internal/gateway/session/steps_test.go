@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -300,10 +301,10 @@ func TestStepRecorder_FailMarksSummaryAndPersistsErrorStep(t *testing.T) {
 	sink := &recordingSink{}
 	st := &fakeTurnStore{}
 	r := newStepRecorder(context.Background(), sink, st, "s", "turn_f")
-	r.fail("empty_response", "模型没有返回内容", "推理返回空内容")
-	r.fail("empty_response", "第二次应被忽略", "x")
+	r.fail("empty_response", apperr.CodeProviderExhausted, "模型没有返回内容", "推理返回空内容")
+	r.fail("empty_response", apperr.CodeProviderExhausted, "第二次应被忽略", "x")
 	sum := r.finalize(true)
-	if !sum.Failed || sum.Error != "模型没有返回内容" || sum.ErrorCode != "empty_response" {
+	if !sum.Failed || sum.Error != "模型没有返回内容" || sum.ErrorCode != "empty_response" || sum.ErrorClass != string(apperr.CodeProviderExhausted) {
 		t.Fatalf("summary = %+v", sum)
 	}
 	var sawErrStep, sawSummary bool
@@ -322,6 +323,58 @@ func TestStepRecorder_FailMarksSummaryAndPersistsErrorStep(t *testing.T) {
 	if !sawErrStep || !sawSummary {
 		t.Errorf("sawErrStep=%v sawSummary=%v", sawErrStep, sawSummary)
 	}
+}
+
+func TestFinishTurnMetaKeepsFailureDetailsPrivateInTurnReplay(t *testing.T) {
+	marker := "complete-summary-private-token-sentinel"
+	store := &fakeTurnStore{}
+	rec := newStepRecorder(context.Background(), nil, store, "s-private", "turn_private")
+	rec.fail("empty_response", apperr.CodeProviderExhausted, "模型没有返回内容", marker)
+	orc := &orchestrator{turns: store}
+	meta := orc.finishTurnMeta(context.Background(), rec, "turn_private", 0, 0, true)
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), marker) || strings.Contains(string(encoded), "error_detail") || strings.Contains(string(encoded), "error_class") {
+		t.Fatalf("complete summary contains private diagnostic: %s", encoded)
+	}
+
+	var persistedDiagnostic bool
+	for _, row := range store.snapshot() {
+		if row.Kind != stepKindSummary {
+			continue
+		}
+		persistedDiagnostic = strings.Contains(string(row.Data), marker)
+	}
+	if !persistedDiagnostic {
+		t.Fatal("private failure detail was not retained in the existing internal summary row")
+	}
+
+	hub := NewTurnHub(TurnHubConfig{})
+	turn, state := hub.Begin("s-private", func() {})
+	if state != BeginOK {
+		t.Fatalf("Begin = %v, want BeginOK", state)
+	}
+	sub := turn.Subscribe(0)
+	defer sub.Close()
+	_ = turn.Emit(Event{Kind: KindComplete, Payload: meta})
+	turn.Finish()
+	for {
+		replay, ok, _ := sub.Poll()
+		if !ok {
+			break
+		}
+		if replay.Event.Kind != KindComplete {
+			continue
+		}
+		encoded, err := json.Marshal(replay.Event)
+		if err != nil || strings.Contains(string(encoded), marker) {
+			t.Fatalf("TurnHub replay leaked complete summary: %s (%v)", encoded, err)
+		}
+		break
+	}
+	hub.Shutdown(context.Background())
 }
 
 // 端到端：模型空输出 → 回合失败 → 用户消息被挂上回合 ID（供历史显示占位），且没有任何助手消息落库。

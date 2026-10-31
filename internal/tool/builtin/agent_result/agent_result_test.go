@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -22,6 +23,10 @@ func (m *mockResultMgr) AgentStatus(_ context.Context, _ []string) ([]types.Suba
 func (m *mockResultMgr) AgentResult(_ context.Context, id string) (string, error) {
 	m.requestedID = id
 	return "result for " + id, nil
+}
+func (m *mockResultMgr) AgentResultWithTaint(_ context.Context, id string) (string, types.TaintLevel, error) {
+	m.requestedID = id
+	return "result for " + id, types.TaintUserReviewed, nil
 }
 func (m *mockResultMgr) AgentMessage(_ context.Context, _, _ string) (string, error) {
 	return "", nil
@@ -47,6 +52,19 @@ func TestAgentResult_Fn(t *testing.T) {
 	}
 	if res["agent_id"] != "sub-42" || res["result"] != "result for sub-42" {
 		t.Errorf("unexpected output: %v", res)
+	}
+}
+
+func TestAgentResult_RichPreservesReviewedChildTaint(t *testing.T) {
+	fn := MakeAgentResultRichFn()
+	mgr := &mockResultMgr{}
+	ctx := context.WithValue(context.Background(), protocol.CtxSubagentManagerKey{}, mgr)
+	result, err := fn(ctx, sandbox.SandboxSpec{Input: []byte(`{"id":"sub-42"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaintLevel != types.TaintUserReviewed {
+		t.Fatalf("agent_result rich output must preserve child review taint, got %v", result.TaintLevel)
 	}
 }
 

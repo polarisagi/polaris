@@ -16,6 +16,7 @@ type Blackboard interface {
 	ClaimTask(ctx context.Context, taskID, agentID string) (bool, error)
 	StartExecution(ctx context.Context, taskID, agentID string) error
 	CompleteTask(ctx context.Context, taskID, agentID string, result []byte) error
+	CompleteTaskWithTaint(ctx context.Context, taskID, agentID string, result []byte, taint types.TaintLevel) error
 	FailTask(ctx context.Context, taskID, agentID string, errBytes []byte) error
 	RenewLease(ctx context.Context, taskID, agentID string) error
 	SuspendForHITL(ctx context.Context, taskID, agentID string, timeout int64) error

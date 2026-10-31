@@ -21,7 +21,7 @@ type PluginChannelManager interface {
 // HandleListPluginChannels GET /v1/plugins/channels：插件声明的 channel 及启用/能力状态。
 func (h *PluginHandler) HandleListPluginChannels(w http.ResponseWriter, r *http.Request) {
 	if h.Channels == nil {
-		http.Error(w, "plugin channels not configured", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "plugin channels not configured", nil, http.StatusServiceUnavailable)
 		return
 	}
 	bindings, err := h.Channels.ListBindings(r.Context())
@@ -39,7 +39,7 @@ func (h *PluginHandler) HandleListPluginChannels(w http.ResponseWriter, r *http.
 // 启用会让外部消息进入 Agent 会话、转发会让远程通道裁决审批，须 plugin:manage 授权。
 func (h *PluginHandler) HandleSetPluginChannel(w http.ResponseWriter, r *http.Request) {
 	if h.Channels == nil || h.InstallMgr == nil {
-		http.Error(w, "plugin channels not configured", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "plugin channels not configured", nil, http.StatusServiceUnavailable)
 		return
 	}
 	principal := authcontext.FromContext(r.Context()).UserID
@@ -57,7 +57,7 @@ func (h *PluginHandler) HandleSetPluginChannel(w http.ResponseWriter, r *http.Re
 		PermissionRelay bool   `json:"permission_relay"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PluginID == "" || body.Server == "" {
-		http.Error(w, "plugin_id and server required", http.StatusBadRequest)
+		httputil.RespondError(w, "plugin_id and server required", nil, http.StatusBadRequest)
 		return
 	}
 	st := types.PluginChannelState{PluginID: body.PluginID, Server: body.Server, Enabled: body.Enabled,

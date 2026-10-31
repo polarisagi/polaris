@@ -23,6 +23,9 @@ func TestWithJITCapability_OneShot(t *testing.T) {
 	if !ok || tok == nil {
 		t.Fatal("令牌必须经 CtxCapabilityTokenKey 注入本次调用的 ctx")
 	}
+	if protocol.ToolCallAuthorizerFromContext(ctx) != a {
+		t.Fatal("validated tool context must carry the Agent call authorizer for hook reauthorization")
+	}
 	if err := action.GetTokenManager().Verify(tok); err != nil {
 		t.Fatalf("调用期间令牌应可被执行闸门验签通过: %v", err)
 	}

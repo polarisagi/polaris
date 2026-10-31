@@ -80,7 +80,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 		next, nextErr := o.agentPool.AcquireHeadless(ctx, types.Intent{Query: "<stop-hook>\n" + v.Reason + "\n</stop-hook>",
 			WorkingDir: req.WorkingDir}, headlessOpts...)
 		if nextErr != nil {
-			slog.Warn("session: headless stop-hook continuation failed", "session", sessionID, "err", nextErr)
+			slog.Warn("session: headless stop-hook continuation failed", "session", sessionID, "error_meta", safeErrorSummary(nextErr))
 			break
 		}
 		res, isFirstTurn = next, false
@@ -106,8 +106,7 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 	}
 	hookContext, reason := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
 	if reason != "" {
-		slog.Info("session: headless turn blocked by hook", "session", sessionID, "channel", req.Channel, "reason", reason)
-		_ = sink.Emit(Event{Kind: KindError, Payload: map[string]any{"code": "hook_blocked", "message": reason}})
+		o.emitError(ctx, sink, "hook_blocked", apperr.CodeForbidden, sessionID, nil)
 		return false, "", &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 
@@ -122,7 +121,7 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 		userMessage = "[工作目录: " + req.WorkingDir + "]\n\n" + req.Input
 	}
 	if _, err := o.persistence.SaveMessage(ctx, sessionID, "user", userMessage, "", "", 0); err != nil {
-		slog.Warn("session: headless saveMessage user failed", "session", sessionID, "err", err)
+		slog.Warn("session: headless saveMessage user failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 
 	return isFirstTurn, hookContext, nil, nil
@@ -144,7 +143,7 @@ func (o *orchestrator) finishHeadlessTurn(ctx context.Context, req Request, sess
 		// （AcquireHeadless 同步返回最终 Output），不产生 tool_ui 事件，故不涉及
 		// MCP Apps 视图关联（M8f-1 范围限定见 orchestrator_fsm.go 顶部注释）。
 		if _, err := o.persistence.SaveMessage(ctx, sessionID, "assistant", reply, "", "", res.LatencyMs); err != nil {
-			slog.Warn("session: headless saveMessage assistant failed", "session", sessionID, "err", err)
+			slog.Warn("session: headless saveMessage assistant failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 	}
 	o.persistence.SampleAndScoreReply(sessionID, req.Input, reply)
@@ -155,11 +154,11 @@ func (o *orchestrator) finishHeadlessTurn(ctx context.Context, req Request, sess
 			titleHint = req.Input
 		}
 		if err := o.persistence.UpdateSessionTitle(ctx, sessionID, titleHint); err != nil {
-			slog.Warn("session: headless update session title failed", "session", sessionID, "err", err)
+			slog.Warn("session: headless update session title failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 	}
 	if err := o.persistence.TouchSession(ctx, sessionID); err != nil {
-		slog.Warn("session: headless touch session failed", "session", sessionID, "err", err)
+		slog.Warn("session: headless touch session failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 
 	return reply
@@ -175,7 +174,7 @@ func (o *orchestrator) ensureHeadlessSession(ctx context.Context, sessionID, pro
 			return nil
 		}
 		slog.Warn("session: headless project binding failed, falling back to default project",
-			"session", sessionID, "project", projectID, "err", err)
+			"session", sessionID, "project", projectID, "error_meta", safeErrorSummary(err))
 	}
 	return o.persistence.EnsureSession(ctx, sessionID) //nolint:wrapcheck // 调用方统一包装
 }

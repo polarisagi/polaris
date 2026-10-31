@@ -5,14 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/mesh"
 	"github.com/polarisagi/polaris/internal/gateway/server/meshapi"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
@@ -30,6 +33,28 @@ func isLoopback(ip string) bool {
 	ip = strings.Trim(ip, "[]")
 	parsed := net.ParseIP(ip)
 	return parsed != nil && parsed.IsLoopback()
+}
+
+// writeMiddlewareError 在路由 handler 之前返回错误时，保留 OpenAI 客户端要求的 envelope。
+func writeMiddlewareError(w http.ResponseWriter, r *http.Request, message string, status int) {
+	if r.URL.Path == "/v1/chat/completions" {
+		errorType := "server_error"
+		switch status {
+		case http.StatusUnauthorized:
+			errorType = "authentication_error"
+		case http.StatusForbidden:
+			errorType = "permission_error"
+		case http.StatusTooManyRequests:
+			errorType = "rate_limit_error"
+		case http.StatusBadRequest, http.StatusUnprocessableEntity:
+			errorType = "invalid_request_error"
+		}
+		httputil.WriteJSONStatus(w, status, map[string]any{
+			"error": map[string]string{"message": message, "type": errorType},
+		})
+		return
+	}
+	httputil.RespondError(w, message, nil, status)
 }
 
 // peerIP 返回 TCP 对端 IP，只取 r.RemoteAddr，**不看任何请求头**。
@@ -214,7 +239,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 
 	if authManager.IsLocked(clientIP) {
 		w.Header().Set("Retry-After", "300")
-		http.Error(w, "429 Too Many Requests - Auth Cooldown", http.StatusTooManyRequests)
+		writeMiddlewareError(w, r, "Authentication temporarily rate limited", http.StatusTooManyRequests)
 		return ctx, false
 	}
 
@@ -225,7 +250,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		if err != nil {
 			authManager.RecordFailure(clientIP)
 			slog.Warn("http: peer token rejected", "ip", clientIP, "path", r.URL.Path, "err", err)
-			http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+			writeMiddlewareError(w, r, "Unauthorized", http.StatusUnauthorized)
 			return ctx, false
 		}
 		authManager.RecordSuccess(clientIP)
@@ -258,7 +283,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 	if presented != "" {
 		authManager.RecordFailure(clientIP)
 	}
-	http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+	writeMiddlewareError(w, r, "Unauthorized", http.StatusUnauthorized)
 	return ctx, false
 }
 
@@ -312,38 +337,38 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 		clientIP := extractIP(r)
 		isAPI := strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/healthz"
+		traceID := ""
 
 		sealedException := r.URL.Path == "/_admin/unseal"
 		if metrics.GlobalKillswitchStage.Load() >= 3 && !sealedException &&
 			r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metrics" {
 			w.Header().Set("Retry-After", "3600")
-			http.Error(w, "503 Service Unavailable: emergency stop active", http.StatusServiceUnavailable)
+			writeMiddlewareError(w, r, "Service is temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
-
-		// [P0修复] panic recovery：防止单个 handler panic 导致整个服务崩溃。
-		// 捕获 panic 后返回 500，并记录堆栈，服务继续运行。
-		defer func() {
-			if rec := recover(); rec != nil {
-				slog.Error("http: handler panic recovered", "method", r.Method, "path", r.URL.Path, "ip", clientIP, "panic", rec)
-				// 仅在 Header 尚未写出时写 500，避免重复写头
-				if lrw.statusCode == http.StatusOK {
-					http.Error(w, "internal server error", http.StatusInternalServerError)
-				}
-			}
-		}()
 
 		defer func() {
 			if !isAPI {
 				return
 			}
 			if lrw.statusCode >= 500 {
-				slog.Error("http: request failed", "method", r.Method, "path", r.URL.Path, "ip", clientIP, "status", lrw.statusCode, "error", strings.TrimSpace(string(lrw.body)))
+				slog.Error("http: request failed", "method", r.Method, "path", r.URL.Path, "status", lrw.statusCode, "trace_id", traceID)
 			} else if lrw.statusCode >= 400 {
-				slog.Warn("http: bad request", "method", r.Method, "path", r.URL.Path, "ip", clientIP, "status", lrw.statusCode, "error", strings.TrimSpace(string(lrw.body)))
+				slog.Warn("http: bad request", "method", r.Method, "path", r.URL.Path, "status", lrw.statusCode, "trace_id", traceID)
 			}
 		}()
 
+		// 恢复先于状态日志执行，使 panic 转换出的 500 也能被统一记录。
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("http: handler panic recovered",
+					"method", r.Method, "path", r.URL.Path, "trace_id", traceID,
+					"panic_type", fmt.Sprintf("%T", rec), "stack", string(debug.Stack()))
+				if !lrw.wroteHeader {
+					writeMiddlewareError(w, r, "Internal server error", http.StatusInternalServerError)
+				}
+			}
+		}()
 		// CORS
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -355,6 +380,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		}
 
 		ctx, ok := s.checkAuth(w, r, clientIP, expectedKey, authManager)
+		traceID = authcontext.FromContext(ctx).TraceID
 		if !ok {
 			return
 		}
@@ -369,7 +395,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		// 不得触及 /_admin/kill、/v1/system/update、Provider 配置等任何其他路由。
 		if clientType == authcontext.ClientTypePeer && !meshapi.PeerAllowedPath(r.URL.Path) {
 			slog.Warn("http: peer token used outside mesh routes", "ip", clientIP, "path", r.URL.Path, "peer", authCtx.PeerName)
-			http.Error(w, "403 Forbidden: peer tokens may only access /a2a/v1 and /mcp", http.StatusForbidden)
+			writeMiddlewareError(w, r, "Forbidden", http.StatusForbidden)
 			return
 		}
 
@@ -397,13 +423,13 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 		if !limiter.Allow(clientIP+":"+string(clientType), string(clientType)) {
 			w.Header().Set("Retry-After", "30")
-			http.Error(w, "429 Too Many Requests", http.StatusTooManyRequests)
+			writeMiddlewareError(w, r, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 
 		if s.rateLimiter != nil && !s.rateLimiter.Allow() {
 			w.Header().Set("Retry-After", "5")
-			http.Error(w, "429 Too Many Requests: global API limit exceeded", http.StatusTooManyRequests)
+			writeMiddlewareError(w, r, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 
@@ -438,7 +464,7 @@ func (s *Server) checkLocalToken(w http.ResponseWriter, r *http.Request, present
 	if c, err := r.Cookie(localTokenCookie); err == nil && tokenEqual(c.Value, localToken) {
 		if !checkOrigin(r) {
 			slog.Warn("http: 拒绝跨源 Cookie 鉴权", "origin", r.Header.Get("Origin"), "host", r.Host, "path", r.URL.Path)
-			http.Error(w, "403 Forbidden: cross-origin request rejected", http.StatusForbidden)
+			writeMiddlewareError(w, r, "Forbidden", http.StatusForbidden)
 			return ctx, false, true
 		}
 		recordSuccess()

@@ -30,17 +30,21 @@ type codeActHTTPResponse struct {
 // 同步执行 LLM 生成代码（强制 Sbx-L3），返回标准输出。
 func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 	if s.codeActEngine == nil || !s.codeActEngine.CodeActAvailable() {
-		http.Error(w, `{"error":"codeact engine not initialized"}`, http.StatusServiceUnavailable)
+		err := apperr.New(apperr.CodeServiceUnavailable, "codeact engine not initialized")
+		status := apperr.HTTPStatus(apperr.CodeOf(err))
+		httputil.RespondError(w, "", err, status)
 		return
 	}
 
 	var req codeActHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		err = apperr.Wrap(apperr.CodeInvalidInput, "invalid request body", err)
+		httputil.RespondError(w, "invalid request body", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 	if req.Language == "" || req.Code == "" || req.CapabilityID == "" {
-		http.Error(w, `{"error":"language, code, capability_id are required"}`, http.StatusBadRequest)
+		err := apperr.New(apperr.CodeInvalidInput, "language, code, capability_id are required")
+		httputil.RespondError(w, "language, code, capability_id are required", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 
@@ -55,7 +59,7 @@ func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := apperr.CodeOf(err)
 		status := apperr.HTTPStatus(code)
-		httputil.WriteJSONStatus(w, status, map[string]string{"error": err.Error()})
+		httputil.RespondError(w, "", err, status)
 		return
 	}
 

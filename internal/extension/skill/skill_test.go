@@ -88,7 +88,7 @@ func TestScriptSkillExecutor_ExecuteSkill(t *testing.T) {
 	runner := &mockScriptRunner{response: []byte("success")}
 	loader := &mockScriptLoader{path: "/path/to/script"}
 
-	exec := NewScriptSkillExecutor(reg, runner, loader).WithPolicy(allowAllPolicyGate{})
+	exec := NewScriptSkillExecutor(reg, runner, loader).WithPolicy(allowAllPolicyGate{}).WithExecutionAuditor(&fakeSkillExecutionAuditor{})
 	resp, err := exec.ExecuteSkill(ctx, "skill:exec", []byte("input"))
 	if err != nil {
 		t.Fatalf("err: %v", err)

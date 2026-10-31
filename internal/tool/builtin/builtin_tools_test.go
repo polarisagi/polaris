@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +29,12 @@ import (
 
 type dummyDialer struct{ net.Dialer }
 
+type localTestDialer struct{ address string }
+
+func (d localTestDialer) DialContext(ctx context.Context, network, _ string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, d.address)
+}
+
 var dummyDialerPtr = &dummyDialer{}
 
 type dummyPolicyGate struct{}
@@ -42,6 +50,20 @@ type dummyTokenVerifier struct{}
 
 func (dummyTokenVerifier) Verify(_ *token.Token) error { return nil }
 
+type builtinTestExecutionAuditor struct{}
+
+func (builtinTestExecutionAuditor) BeginExecution(context.Context, protocol.ExecutionAuditIntent) (string, error) {
+	return "builtin-test-execution", nil
+}
+func (builtinTestExecutionAuditor) CompleteExecution(context.Context, string, bool, string) error {
+	return nil
+}
+
+func newBuiltinTestEnvelope(sbx *sandbox.InProcessSandbox, verifier sandbox.TokenVerifier) *sandbox.ExecEnvelope {
+	return sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", verifier).
+		WithExecutionAuditor(builtinTestExecutionAuditor{})
+}
+
 func regBuiltin(sbx *sandbox.InProcessSandbox, reg *tool.InMemoryToolRegistry, paths []string, d protocol.SafeDialer, deps web_fetch.Deps) error {
 	if d == nil {
 		d = dummyDialerPtr
@@ -49,11 +71,47 @@ func regBuiltin(sbx *sandbox.InProcessSandbox, reg *tool.InMemoryToolRegistry, p
 	return RegisterBuiltinTools(sbx, reg, paths, d, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil, nil, nil, deps, policy.StandardPolicy(), "", nil, nil, nil, nil)
 }
 
+func TestBuiltinTaintedWebFetchPropagatesExternalOutputFloor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("external result"))
+	}))
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	registerBuiltinSandboxFunction(sbx, "web_fetch", web_fetch.MakeWebFetchFn(web_fetch.Deps{Dialer: localTestDialer{address: address}}))
+	input, err := json.Marshal(map[string]any{"url": server.URL, "mode": "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := sbx.Run(context.Background(), sandbox.SandboxSpec{ToolName: "web_fetch", Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success || !strings.Contains(string(result.Output), "external result") {
+		t.Fatalf("local fixture did not reach the real web_fetch handler: %#v", result)
+	}
+	if result.TaintLevel != types.TaintHigh {
+		t.Fatalf("external web content must have High taint, got %v", result.TaintLevel)
+	}
+}
+
+func TestBuiltinOutputTaintClassification(t *testing.T) {
+	for _, name := range []string{"web_fetch", "feed_fetch", "web_search", "bash", "run_command", "job_output", "session_search", "session_read"} {
+		if got := builtinOutputTaint(name); got != types.TaintHigh {
+			t.Errorf("%s output taint=%v, want High", name, got)
+		}
+	}
+	if got := builtinOutputTaint("read_file"); got != types.TaintNone {
+		t.Fatalf("workspace read floor changed unexpectedly: %v", got)
+	}
+}
+
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool) // 无 PolicyGate，只测工具逻辑
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, nil), config.DefaultThresholds().M7Tool) // 只测试工具执行与可信依赖契约
 	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -82,7 +140,7 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, nil), config.DefaultThresholds().M7Tool)
 	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -104,7 +162,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, nil), config.DefaultThresholds().M7Tool)
 	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -140,7 +198,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
 	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -172,7 +230,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 // TestBuiltinTools_WebFetch_SSRFGuard 验证 web_fetch 阻断私有地址（由 SafeDialer 拦截）。
 func TestBuiltinTools_WebFetch_SSRFGuard(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, nil), config.DefaultThresholds().M7Tool)
 	sd := network.NewSafeDialer(0, nil, config.M11PolicyThresholds{})
 	if err := regBuiltin(sbx, toolReg, nil, sd, web_fetch.Deps{Dialer: sd}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
@@ -201,7 +259,7 @@ func TestBuiltinTools_WebFetch_SSRFGuard(t *testing.T) {
 // TestBuiltinTools_WebFetch_PublicURL 验证 web_fetch 放行公共 URL（MVP stub 模式）。
 func TestBuiltinTools_WebFetch_PublicURL(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, nil), config.DefaultThresholds().M7Tool)
 	if err := regBuiltin(sbx, toolReg, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -230,7 +288,7 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 	runGit("config", "user.name", "polaris-test")
 
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
 	if err := regBuiltin(sbx, toolReg, []string{tmpDir}, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -320,7 +378,7 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 // TestBuiltinTools_TemplateRender 覆盖 template_render：验证 Go text/template 渲染与截断逻辑。
 func TestBuiltinTools_TemplateRender(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(newBuiltinTestEnvelope(sbx, nil), config.DefaultThresholds().M7Tool)
 	if err := regBuiltin(sbx, toolReg, nil, nil, web_fetch.Deps{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}

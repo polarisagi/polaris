@@ -54,7 +54,7 @@ func (h *SysAdminHandler) HandleGetPrompt(w http.ResponseWriter, r *http.Request
 	name := r.PathValue("name")
 	filename, ok := allowedUserPrompts()[name]
 	if !ok {
-		http.Error(w, "unknown prompt: "+name, http.StatusNotFound)
+		httputil.RespondError(w, "Prompt not found", nil, http.StatusNotFound)
 		return
 	}
 
@@ -76,7 +76,7 @@ func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request
 	name := r.PathValue("name")
 	filename, ok := allowedUserPrompts()[name]
 	if !ok {
-		http.Error(w, "unknown prompt: "+name, http.StatusNotFound)
+		httputil.RespondError(w, "Prompt not found", nil, http.StatusNotFound)
 		return
 	}
 
@@ -88,19 +88,19 @@ func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if len(req.Value) > 32*1024 {
-		http.Error(w, "prompt too large (max 32KB)", http.StatusBadRequest)
+		httputil.RespondError(w, "prompt too large (max 32KB)", nil, http.StatusBadRequest)
 		return
 	}
 
 	if err := h.PromptMgr.WriteUserPrompt(filename, req.Value); err != nil {
-		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Prompt could not be saved", err, http.StatusInternalServerError)
 		return
 	}
 
 	// 热更新 ImmutableCore（本次写入的变更在下一轮 injectSystemPrompt 生效；
 	// 此处同步更新 soulMDContent 以支持立即生效）
 	if name == "identity" {
-		(*h.SoulMDContent) = req.Value
+		h.updateSoulMDContent(req.Value)
 	}
 
 	httputil.WriteJSON(w, map[string]string{"status": "ok", "name": name})
@@ -112,18 +112,18 @@ func (h *SysAdminHandler) HandleResetPrompt(w http.ResponseWriter, r *http.Reque
 	name := r.PathValue("name")
 	filename, ok := allowedUserPrompts()[name]
 	if !ok {
-		http.Error(w, "unknown prompt: "+name, http.StatusNotFound)
+		httputil.RespondError(w, "Prompt not found", nil, http.StatusNotFound)
 		return
 	}
 
 	if err := h.PromptMgr.DeleteUserPrompt(filename); err != nil {
-		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Prompt could not be deleted", err, http.StatusInternalServerError)
 		return
 	}
 
 	// 热更新：恢复到内置默认
 	if name == "identity" {
-		(*h.SoulMDContent) = h.PromptMgr.GetSoulMD() // 重新走三层加载（文件删除后回落到 embedded）
+		h.updateSoulMDContent(h.PromptMgr.GetSoulMD()) // 重新走三层加载（文件删除后回落到 embedded）
 	}
 
 	defaultVal := h.PromptMgr.ReadPromptDefault(filename)
@@ -133,4 +133,18 @@ func (h *SysAdminHandler) HandleResetPrompt(w http.ResponseWriter, r *http.Reque
 		"restored_to":   "default",
 		"default_value": defaultVal,
 	})
+}
+
+func (h *SysAdminHandler) updateSoulMDContent(content string) {
+	if h.SoulMDContent == nil {
+		return
+	}
+	if h.SoulMDMu == nil {
+		*h.SoulMDContent = content
+		return
+	}
+
+	h.SoulMDMu.Lock()
+	*h.SoulMDContent = content
+	h.SoulMDMu.Unlock()
 }

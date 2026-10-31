@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -64,7 +66,27 @@ func ctxWithToken() context.Context {
 func newAllowRegistry() (*InMemoryToolRegistry, *sandbox.InProcessSandbox) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0)
-	return NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil), config.DefaultThresholds().M7Tool), sbx
+	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", testTokenVerifier{}).
+		WithExecutionAuditor(testExecutionAuditor{})
+	return NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool), sbx
+}
+
+type testTokenVerifier struct{}
+
+func (testTokenVerifier) Verify(tok *token.Token) error {
+	if tok == nil {
+		return apperr.New(apperr.CodeUnauthorized, "test capability token missing")
+	}
+	return nil
+}
+
+type testExecutionAuditor struct{}
+
+func (testExecutionAuditor) BeginExecution(context.Context, protocol.ExecutionAuditIntent) (string, error) {
+	return "tool-test-execution", nil
+}
+func (testExecutionAuditor) CompleteExecution(context.Context, string, bool, string) error {
+	return nil
 }
 
 // ─── 注册/查找/列举 ──────────────────────────────────────────────────────────
@@ -305,7 +327,8 @@ func TestExecuteTool_TaintPropagation(t *testing.T) {
 func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, sbx, "linux", 0) // hwTier=0 拒绝 L3
-	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil)
+	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", testTokenVerifier{}).
+		WithExecutionAuditor(testExecutionAuditor{})
 	r := NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
 
 	shellTool := types.Tool{
@@ -320,7 +343,8 @@ func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 		return []byte("ls_output"), nil
 	})
 
-	res, err := r.ExecuteTool(ctxWithToken(), "run-sh", []byte("ls"), types.TaintNone)
+	ctx := context.WithValue(ctxWithToken(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
+	res, err := r.ExecuteTool(ctx, "run-sh", []byte("ls"), types.TaintNone)
 	if err != nil {
 		t.Fatalf("shell 工具 ExecuteTool 不应 panic/error: %v", err)
 	}

@@ -83,6 +83,58 @@ type fixture struct {
 	self  *mesh.Identity
 }
 
+func TestMCPUnsupportedHTTPMethodRetainsTransportStatusOnly(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	(&mcpServer{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, MCPPath, nil))
+	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("MCP method contract changed: status=%d allow=%q", recorder.Code, recorder.Header().Get("Allow"))
+	}
+	if strings.Contains(recorder.Body.String(), `"jsonrpc"`) || strings.Contains(recorder.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("transport-level method error was rewritten as JSON-RPC: headers=%v body=%s", recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestProtocolTaskProjectionHidesFailureDiagnosticsAndKeepsSuccessResult(t *testing.T) {
+	const secret = "private-path=/var/private/token=fixture-secret"
+	base := mesh.Task{ID: "task-fixture", ContextID: "ctx-fixture", State: mesh.StateFailed,
+		StatusMessage: secret, Result: secret, CreatedAt: time.Now(), UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+
+	mcp := (&mcpServer{}).taskState(&base)
+	a2aBody, err := json.Marshal(toA2ATask(&base, "node-fixture", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpBody, err := json.Marshal(mcp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{"A2A": a2aBody, "MCP": mcpBody, "MCP task description": []byte(describeTask(&base))} {
+		if strings.Contains(string(body), secret) || strings.Contains(string(body), "/var/private") || strings.Contains(string(body), "fixture-secret") {
+			t.Errorf("%s exposed stored failure diagnostic: %s", name, body)
+		}
+	}
+	if !strings.Contains(string(mcpBody), "Task failed") || !strings.Contains(string(a2aBody), "Task failed") {
+		t.Fatalf("protocol projections must retain a fixed public failure message: A2A=%s MCP=%s", a2aBody, mcpBody)
+	}
+	if !strings.Contains(string(mcpBody), `"code":-32603`) {
+		t.Fatalf("MCP failure numeric code was lost: %s", mcpBody)
+	}
+
+	base.State, base.StatusMessage, base.Result = mesh.StateCompleted, "", "successful business result"
+	mcp = (&mcpServer{}).taskState(&base)
+	a2aBody, err = json.Marshal(toA2ATask(&base, "node-fixture", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpBody, err = json.Marshal(mcp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(a2aBody), "successful business result") || !strings.Contains(string(mcpBody), "successful business result") {
+		t.Fatalf("successful task result was changed: A2A=%s MCP=%s", a2aBody, mcpBody)
+	}
+}
+
 // newFixture 起一个只挂委派门面的测试服务器。鉴权中间件的最小等价物：对端令牌 → ClientTypePeer，
 // 与生产 checkAuth 的对端分支同一判定（真实中间件的路由白名单另见 server 包测试）。
 func newFixture(t *testing.T, complete func(*types.TaskEntry) (types.TaskStatus, string)) *fixture {

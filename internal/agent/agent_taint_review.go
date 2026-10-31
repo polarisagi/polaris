@@ -152,3 +152,12 @@ func (a *Agent) elevateGlobalTaintLevel(level types.TaintLevel) {
 		a.sCtx.GlobalTaintLevel = level
 	}
 }
+
+func (a *Agent) globalTaintLevel() types.TaintLevel {
+	if a.sCtx == nil {
+		return types.TaintHigh
+	}
+	a.sCtx.Mu.Lock()
+	defer a.sCtx.Mu.Unlock()
+	return a.sCtx.GlobalTaintLevel
+}

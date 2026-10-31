@@ -23,6 +23,9 @@ func (m *mockMessageMgr) AgentStatus(_ context.Context, _ []string) ([]types.Sub
 func (m *mockMessageMgr) AgentResult(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
+func (m *mockMessageMgr) AgentResultWithTaint(_ context.Context, _ string) (string, types.TaintLevel, error) {
+	return "", types.TaintHigh, nil
+}
 func (m *mockMessageMgr) AgentMessage(_ context.Context, id, text string) (string, error) {
 	m.sentID = id
 	m.sentText = text

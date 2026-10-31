@@ -176,7 +176,7 @@ func (em *EpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, minS
 	}
 
 	rows, err := sqlStore.QueryContext(ctx, `
-		SELECT id, session_id, content, salience, COALESCE(occurred_at, timestamp)
+		SELECT id, session_id, content, salience, COALESCE(occurred_at, timestamp), COALESCE(event_uuid, '')
 		FROM episodic_events
 		WHERE archived = 0 AND salience >= ? AND id > ?
 		ORDER BY id ASC LIMIT ?
@@ -184,20 +184,73 @@ func (em *EpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, minS
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "episodic_mem: scan high salience failed", err)
 	}
-	defer rows.Close()
-
-	var results []types.SalienceEvent //nolint:prealloc
+	type rowSnapshot struct {
+		event     types.SalienceEvent
+		eventUUID string
+	}
+	var snapshots []rowSnapshot //nolint:prealloc
 	for rows.Next() {
-		var e types.SalienceEvent
-		if scanErr := rows.Scan(&e.ID, &e.SessionID, &e.Content, &e.Salience, &e.OccurredAt); scanErr != nil {
-			continue
+		var snapshot rowSnapshot
+		if scanErr := rows.Scan(&snapshot.event.ID, &snapshot.event.SessionID, &snapshot.event.Content,
+			&snapshot.event.Salience, &snapshot.event.OccurredAt, &snapshot.eventUUID); scanErr != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				return nil, apperr.Wrap(apperr.CodeInternal, "episodic_mem: close high salience rows failed", closeErr)
+			}
+			return nil, apperr.Wrap(apperr.CodeInternal, "episodic_mem: scan high salience row failed", scanErr)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "episodic_mem: close high salience rows failed", closeErr)
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "EpisodicMem salience scan iterate", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "episodic_mem: close high salience rows failed", err)
+	}
+
+	// KV 元数据读取必须在 SQL 游标释放后执行：Tier0 reader 可能只有一个连接。
+	var results []types.SalienceEvent //nolint:prealloc
+	for _, snapshot := range snapshots {
+		e := snapshot.event
+		e, reason := em.salienceEventMetadata(ctx, e, snapshot.eventUUID)
+		if reason != "" {
+			slog.WarnContext(ctx, "episodic_mem: salience row metadata unavailable; whisper publication must skip",
+				"event_id", e.ID, "reason", reason)
 		}
 		results = append(results, e)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "EpisodicMem salience scan iterate", err)
-	}
 	return results, nil
+}
+
+func (em *EpisodicMem) salienceEventMetadata(ctx context.Context, event types.SalienceEvent, eventUUID string) (types.SalienceEvent, string) {
+	switch eventUUID {
+	case "":
+		return event, "missing_event_uuid"
+	}
+
+	raw, err := em.store.Get(ctx, []byte("episodic:"+eventUUID))
+	if err != nil {
+		return event, "event_metadata_read_error"
+	}
+	if len(raw) == 0 {
+		return event, "event_metadata_missing"
+	}
+	var metadata types.Event
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return event, "event_metadata_invalid"
+	}
+	if metadata.ID != eventUUID {
+		return event, "event_uuid_mismatch"
+	}
+	if metadata.TaintLevel < types.TaintNone || metadata.TaintLevel > types.TaintUserReviewed {
+		return event, "event_taint_invalid"
+	}
+	event.ProjectID = metadata.EffectiveProjectID()
+	event.TaintLevel = metadata.TaintLevel
+	event.MetadataValid = true
+	return event, ""
 }
 
 func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, error) {

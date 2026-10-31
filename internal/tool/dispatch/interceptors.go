@@ -20,21 +20,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// AuditInterceptor 在工具执行后写入审计轨迹（不阻断响应；写入失败仅记录 WARN）。
-// at 为 nil 时该拦截器整体跳过（不影响放行/拒绝语义）。
-func AuditInterceptor(at AuditLogger) Interceptor {
-	return func(ctx context.Context, entry protocol.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
-		res, err := next(ctx, entry, args)
-		if at == nil {
-			return res, err
-		}
-		if auditErr := at.RecordAudit(ctx, entry.Name, args); auditErr != nil {
-			slog.WarnContext(ctx, "dispatch: audit record failed", "tool", entry.Name, "err", auditErr)
-		}
-		return res, err
-	}
-}
-
 // SchemaValidateInterceptor 按工具注册的 Parameters（JSON Schema）校验参数。
 //
 // GD-14-003：原实现只检查 JSON 语法，缺必填字段/类型错误的参数穿透到沙箱执行层

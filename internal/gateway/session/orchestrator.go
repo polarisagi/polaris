@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -108,18 +110,76 @@ func (o *orchestrator) resolveSessionID(req Request) (sessionID string, isNewSes
 	return sessionID, isNewSession, nil
 }
 
-// emitError 统一的错误事件出口：按 code 分级日志（部分 code 视为预期内的
-// 降级路径，用 Warn 而非 Error，行为与原 chat.WriteSSEError 完全等价）+
-// 经 sink 推送 KindError 事件。
-func (o *orchestrator) emitError(sink Sink, code, message, sessionID string, err error) {
-	if code == "hook_blocked" || code == "empty_response" || code == "no_provider" {
-		slog.Warn("session: turn error", "code", code, "session", sessionID, "message", message, "err", err)
-	} else {
-		slog.Error("session: turn error", "code", code, "session", sessionID, "message", message, "err", err)
+// emitError 统一错误出口：日志只记安全元数据，事件携带固定公开摘要和无 Cause 的分类错误。
+func (o *orchestrator) emitError(ctx context.Context, sink Sink, kind string, fallback apperr.Code, sessionID string, err error) {
+	code := fallback
+	if err != nil {
+		code = publicErrorCodeFor(err)
 	}
+	code = publicErrorCode(string(code))
+	message := publicTurnErrorMessage(kind)
+	level := slog.LevelError
+	if kind == "hook_blocked" || kind == "empty_response" || kind == "no_provider" {
+		level = slog.LevelWarn
+	}
+	slog.LogAttrs(ctx, level, "session: turn error",
+		slog.String("operation", kind),
+		slog.String("code", string(code)),
+		slog.String("session", sessionID),
+		slog.String("error_type", safeErrorType(err)))
 	_ = sink.Emit(Event{
-		Kind:    KindError,
-		Payload: map[string]any{"code": code, "message": message},
-		Err:     err,
+		Kind: KindError,
+		Payload: map[string]any{
+			"code":    string(code),
+			"kind":    kind,
+			"message": message,
+		},
+		Err: apperr.New(code, message),
 	})
+}
+
+func publicTurnErrorMessage(kind string) string {
+	switch kind {
+	case "hook_blocked":
+		return "请求被安全策略拦截"
+	case "no_provider":
+		return "当前没有可用模型，请检查模型配置"
+	case "no_agent":
+		return "会话服务暂不可用，请稍后重试"
+	case "session_error":
+		return "会话初始化失败，请稍后重试"
+	case "history_error":
+		return "会话历史读取失败，请稍后重试"
+	case "agent_pool_error":
+		return "会话 Agent 暂不可用，请稍后重试"
+	case "empty_response", "fsm_error":
+		return "模型调用失败，请稍后重试"
+	default:
+		return "请求处理失败，请稍后重试"
+	}
+}
+
+func publicErrorCode(raw string) apperr.Code {
+	return apperr.NormalizeErrorCode(apperr.Code(raw))
+}
+
+func publicErrorCodeFor(err error) apperr.Code {
+	if errors.Is(err, context.Canceled) {
+		return apperr.CodeCancelled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apperr.CodeTimeout
+	}
+	return publicErrorCode(string(apperr.CodeOf(err)))
+}
+
+func safeErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("%T", err)
+}
+
+func safeErrorSummary(err error) string {
+	return fmt.Sprintf("code=%s type=%s", publicErrorCodeFor(err), safeErrorType(err))
 }

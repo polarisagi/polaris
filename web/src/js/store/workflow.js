@@ -1,5 +1,6 @@
 import Alpine from 'alpinejs'
 import { authHeaders } from '../utils.js'
+import { readHTTPError } from '../http_error.mjs'
 
 // ══════════════════════════════════════════════════════════════════════════
 // store: workflow（工作流管理）
@@ -275,26 +276,21 @@ Alpine.store('workflow', {
       }
 
       if (!r.ok) {
-        if (r.status === 400) {
-          try {
-            const errData = await r.json()
-            if (errData.errors && Array.isArray(errData.errors)) {
-              errData.errors.forEach(fe => {
-                const m = (fe.path || '').match(/steps\[(\d+)\]/)
-                if (m && m[1]) {
-                  const stepIdx = parseInt(m[1], 10)
-                  if (this.form.steps[stepIdx]) {
-                    this.form.steps[stepIdx].config_error = (fe.path || '') + ': ' + (fe.message || '')
-                  }
-                }
-              })
-              throw new Error(`校验失败: ${errData.errors.map(e => e.message).join('; ')}`)
+        const error = await readHTTPError(r)
+        if (r.status === 400 && Array.isArray(error.payload?.errors)) {
+          const errors = error.payload.errors
+          errors.forEach(fe => {
+            const m = (fe.path || '').match(/steps\[(\d+)\]/)
+            if (m && m[1]) {
+              const stepIdx = parseInt(m[1], 10)
+              if (this.form.steps[stepIdx]) {
+                this.form.steps[stepIdx].config_error = (fe.path || '') + ': ' + (fe.message || '')
+              }
             }
-          } catch (jsonErr) {
-            if (jsonErr.message.startsWith('校验失败:')) throw jsonErr
-          }
+          })
+          throw new Error(`校验失败: ${errors.map(e => e.message).join('; ')}`)
         }
-        throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+        throw new Error(error.message)
       }
 
       this.showModal = false

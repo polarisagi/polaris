@@ -99,7 +99,8 @@ type Server struct {
 
 	ks *security.KillSwitch // [B1] KillSwitch
 
-	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
+	// identity 支持热更新，独立锁避免聊天读取与管理端写入竞态。
+	soulMDMu            sync.RWMutex
 	soulMDContent       string                // ~/.polaris/config/SOUL.md 内容
 	serverPlatform      string                // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
 	promptMgr           protocol.PromptFacade // 提示词管理器（接口）
@@ -559,7 +560,10 @@ func (s *Server) PluginHandler() *plugin.PluginHandler {
 
 func (s *Server) SetPromptManager(mgr protocol.PromptFacade) {
 	s.promptMgr = mgr
-	s.soulMDContent = s.promptMgr.GetSoulMD()
+	soulMDContent := s.promptMgr.GetSoulMD()
+	s.soulMDMu.Lock()
+	s.soulMDContent = soulMDContent
+	s.soulMDMu.Unlock()
 
 	// 初始化 system_prompt_template
 	prefs, _ := s.systemRepo.ListPreferences(context.Background())
@@ -583,6 +587,9 @@ func (s *Server) SetPromptManager(mgr protocol.PromptFacade) {
 	if s.chatHandler != nil && s.chatHandler.PromptService != nil {
 		s.chatHandler.PromptService.PromptMgr = mgr
 		s.chatHandler.PromptService.BaseSystemPromptTpl = s.baseSystemPromptTpl
+	}
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.PromptMgr = mgr
 	}
 }
 

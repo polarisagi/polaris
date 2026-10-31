@@ -62,7 +62,7 @@ func (o *orchestrator) buildUserMessage(req Request) (finalInput string, userMsg
 			// 视频大小门控：超过 Gemini inlineData 上限（20MB）直接拒绝，避免 OOM
 			fi, statErr := os.Stat(localPath)
 			if statErr != nil {
-				slog.Warn("session: failed to stat video attachment", "uri", att.URI, "err", statErr)
+				slog.Warn("session: failed to stat video attachment", "uri", att.URI, "error_meta", safeErrorSummary(statErr))
 				continue
 			}
 			if fi.Size() > maxVideoInlineBytes {
@@ -79,7 +79,7 @@ func (o *orchestrator) buildUserMessage(req Request) (finalInput string, userMsg
 
 		raw, err := os.ReadFile(localPath)
 		if err != nil {
-			slog.Warn("session: failed to read media attachment", "uri", att.URI, "err", err)
+			slog.Warn("session: failed to read media attachment", "uri", att.URI, "error_meta", safeErrorSummary(err))
 			continue
 		}
 

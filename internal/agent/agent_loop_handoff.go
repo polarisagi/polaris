@@ -199,7 +199,7 @@ func (a *Agent) fetchSubagentsResults(ctx context.Context, handoffTaskIDs []stri
 			continue
 		}
 		role := strings.TrimPrefix(snap.Type, "agent_handoff:")
-		roleTaint := resolveHandoffResultTaint(role, a.sCtx.GlobalTaintLevel)
+		roleTaint := max(resolveHandoffResultTaint(role, a.sCtx.GlobalTaintLevel), types.EffectiveTaskResultTaint(snap.ResultTaint))
 		if roleTaint > highestTaint {
 			highestTaint = roleTaint
 		}

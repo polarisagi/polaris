@@ -38,7 +38,7 @@ func isLocalOrigin(origin string) bool {
 func requireLocalOrigin(w http.ResponseWriter, r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin != "" && !isLocalOrigin(origin) {
-		http.Error(w, "403 Forbidden: cross-origin requests not allowed for update endpoints", http.StatusForbidden)
+		httputil.RespondError(w, "403 Forbidden: cross-origin requests not allowed for update endpoints", nil, http.StatusForbidden)
 		return false
 	}
 	return true
@@ -65,7 +65,7 @@ func (h *SysAdminHandler) HandleTriggerUpdate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.Updater == nil {
-		http.Error(w, "updater not configured", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "updater not configured", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -73,12 +73,12 @@ func (h *SysAdminHandler) HandleTriggerUpdate(w http.ResponseWriter, r *http.Req
 		Version string `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Version == "" {
-		http.Error(w, "request body must contain {\"version\": \"v1.x.x\"}", http.StatusBadRequest)
+		httputil.RespondError(w, "request body must contain {\"version\": \"v1.x.x\"}", nil, http.StatusBadRequest)
 		return
 	}
 
 	if err := h.Updater.TriggerUpdate(r.Context(), body.Version); err != nil {
-		httputil.RespondError(w, err.Error(), err, http.StatusBadRequest)
+		httputil.RespondError(w, "Update request failed", err, http.StatusBadRequest)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "update_started", "version": body.Version})

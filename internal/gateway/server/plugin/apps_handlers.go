@@ -27,7 +27,7 @@ func (h *PluginHandler) HandleListPluginApps(w http.ResponseWriter, r *http.Requ
 // HandleBindPluginApp PUT /v1/plugins/{id}/apps/{alias}：{"server_id": "..."} 绑定到本地连接器，空串解绑。
 func (h *PluginHandler) HandleBindPluginApp(w http.ResponseWriter, r *http.Request) {
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	principal := authcontext.FromContext(r.Context()).UserID
@@ -42,7 +42,7 @@ func (h *PluginHandler) HandleBindPluginApp(w http.ResponseWriter, r *http.Reque
 		ServerID string `json:"server_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid body", nil, http.StatusBadRequest)
 		return
 	}
 	b, err := lifecycle.BindApp(r.Context(), h.ExtRepo, r.PathValue("id"), r.PathValue("alias"), body.ServerID)

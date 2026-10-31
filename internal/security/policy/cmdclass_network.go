@@ -157,6 +157,8 @@ func (c *cc) nested(code string) verdict {
 	if sub.network {
 		c.w.network = true
 	}
+	c.w.selfHit = c.w.selfHit || sub.selfHit
+	c.w.sensReason = strongerReason(c.w.sensReason, sub.sensReason)
 	c.w.mark(sub.worst, sub.reason)
 	return verdict{delegated: true}
 }

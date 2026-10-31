@@ -224,7 +224,7 @@ func (h *ProviderHandler) HandleTestProvider(w http.ResponseWriter, r *http.Requ
 	id := r.PathValue("providerID")
 	p, err := h.ProviderRepo.GetProvider(r.Context(), id)
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 		return
 	}
 	var modelID string

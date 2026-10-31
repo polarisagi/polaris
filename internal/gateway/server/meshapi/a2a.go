@@ -283,6 +283,7 @@ func fromA2AState(s a2a.TaskState) (mesh.State, error) {
 // toA2ATask 委派任务 → A2A Task。结果放在名为 result 的 Artifact 里；状态说明放在
 // status.message（ROLE_AGENT）。时间戳 UTC 毫秒精度。
 func toA2ATask(t *mesh.Task, selfNodeID string, historyLength *int) *a2a.Task {
+	t = publicTaskProjection(t)
 	ts := t.UpdatedAt.UTC().Truncate(time.Millisecond)
 	out := &a2a.Task{
 		ID:        a2a.TaskID(t.ID),
@@ -323,11 +324,11 @@ func toA2AError(err error) error {
 	case apperr.CodeConflict:
 		return a2a.NewError(a2a.ErrTaskNotCancelable, "task is already in a terminal state")
 	case apperr.CodeForbidden:
-		return a2a.NewError(a2a.ErrUnauthorized, err.Error())
+		return a2a.NewError(a2a.ErrUnauthorized, "request forbidden")
 	case apperr.CodeUnauthorized:
 		return a2a.ErrUnauthenticated
 	case apperr.CodeInvalidInput:
-		return a2a.NewError(a2a.ErrInvalidParams, err.Error())
+		return a2a.NewError(a2a.ErrInvalidParams, "invalid request parameters")
 	default:
 		return a2a.NewError(a2a.ErrInternalError, "internal error")
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 type recorderCtxKey struct{}
@@ -54,7 +55,7 @@ func (o *orchestrator) awaitTurnUsage(ctx context.Context, turnID string) TurnUs
 	for i := 0; ; i++ {
 		cur, err := o.turns.TurnUsage(ctx, turnID)
 		if err != nil {
-			slog.Warn("session: turn usage query failed", "turn", turnID, "err", err)
+			slog.Warn("session: turn usage query failed", "turn", turnID, "error_meta", safeErrorSummary(err))
 			return cur
 		}
 		if i > 0 && cur.Calls == prev.Calls {
@@ -80,7 +81,8 @@ func (o *orchestrator) finishTurnMeta(ctx context.Context, rec *stepRecorder, tu
 		return extra
 	}
 	summary := rec.finalize(aborted)
-	extra["steps"] = summary
+	// finalize 已把完整诊断写入私有步骤存储；complete 事件只发安全投影。
+	extra["steps"] = publicStepSummary(summary)
 	u := o.awaitTurnUsage(ctx, turnID)
 	usage := map[string]any{
 		"input": u.Input, "cache_hit": u.CacheHit, "output": u.Output,
@@ -91,7 +93,7 @@ func (o *orchestrator) finishTurnMeta(ctx context.Context, rec *stepRecorder, tu
 		raw, err := json.Marshal(usage)
 		if err == nil {
 			if err := o.turns.AttachTurnMeta(ctx, messageID, turnID, string(raw)); err != nil {
-				slog.Warn("session: attach turn meta failed", "message_id", messageID, "turn", turnID, "err", err)
+				slog.Warn("session: attach turn meta failed", "message_id", messageID, "turn", turnID, "error_meta", safeErrorSummary(err))
 			}
 		}
 	}
@@ -134,14 +136,14 @@ func friendlyTurnError(_, detail string) string {
 // 使会话历史能在该用户消息之后显示"本轮失败"占位（否则失败回合只剩一条孤零零的用户消息，
 // 重发后看起来像同一问题被提交了两次）。userMsgID<=0（用户消息未落库）时只记步骤。
 // 这里写的全是展示数据：不触碰 chat_messages 的内容列，不进入模型历史。
-func (o *orchestrator) failTurn(ctx context.Context, rec *stepRecorder, turnID string, userMsgID int64, code, detail string) {
+func (o *orchestrator) failTurn(ctx context.Context, rec *stepRecorder, turnID string, userMsgID int64, kind string, errorClass apperr.Code, detail string) {
 	if rec == nil {
 		return
 	}
-	rec.fail(code, friendlyTurnError(code, detail), detail)
+	rec.fail(kind, errorClass, friendlyTurnError(kind, detail), detail)
 	if o.turns != nil && userMsgID > 0 {
 		if err := o.turns.AttachTurnMeta(context.WithoutCancel(ctx), userMsgID, turnID, ""); err != nil {
-			slog.Warn("session: attach failed turn to user message", "message_id", userMsgID, "turn", turnID, "err", err)
+			slog.Warn("session: attach failed turn to user message", "message_id", userMsgID, "turn", turnID, "error_meta", safeErrorSummary(err))
 		}
 	}
 }

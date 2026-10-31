@@ -75,6 +75,7 @@ type Dependencies struct {
 	TranscriptDir         string
 	PromptMgr             protocol.PromptFacade
 	SoulMDContent         *string
+	SoulMDMu              *sync.RWMutex
 	Hooks                 HookRunner
 	DataDir               string
 	Registry              protocol.LLMRegistry
@@ -136,6 +137,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		deps.ActivatedSystemPrompt,
 	)
 	prompt.ContextRefExpander = deps.ContextRefExpander
+	prompt.SoulMDMu = deps.SoulMDMu
 
 	slashRouter := NewSlashCommandRouter(deps.CompressionService, deps.ChatRepo)
 	if deps.Hooks != nil {

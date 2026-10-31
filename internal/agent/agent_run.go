@@ -164,7 +164,8 @@ func (a *Agent) Run(ctx context.Context) error {
 					case a.effectDone <- result:
 					case <-execCtx.Done():
 						if result.Err != nil {
-							slog.WarnContext(execCtx, "agent: effect result dropped on ctx cancel", "err", result.Err)
+							slog.WarnContext(execCtx, "agent: effect result dropped on ctx cancel",
+								"error_code", string(streamErrorCode(result.Err)), "error_type", fmt.Sprintf("%T", result.Err))
 						}
 					}
 				})
@@ -186,7 +187,8 @@ func (a *Agent) Run(ctx context.Context) error {
 				// pool.go 那层打一条不含错误来源阶段的 warn。
 				slog.WarnContext(ctx, "kernel: effect failed",
 					"agent_id", a.ID, "session", a.sCtx.SessionID,
-					"state", a.sm.Current(), "err", result.Err)
+					"state", a.sm.Current(), "error_code", string(streamErrorCode(result.Err)),
+					"error_type", fmt.Sprintf("%T", result.Err))
 			}
 			if done, err := a.handleEffectResult(ctx, result); done || err != nil {
 				return err

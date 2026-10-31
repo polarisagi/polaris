@@ -17,7 +17,7 @@ import (
 // GET /v1/elicitations?session_id=
 func (s *Server) handleGetElicitations(w http.ResponseWriter, r *http.Request) {
 	if s.elicitationBroker == nil {
-		http.Error(w, "elicitation broker not enabled", http.StatusNotImplemented)
+		httputil.RespondError(w, "Elicitation is unavailable", nil, http.StatusNotImplemented)
 		return
 	}
 	sessionID := r.URL.Query().Get("session_id")
@@ -30,7 +30,7 @@ func (s *Server) handleGetElicitations(w http.ResponseWriter, r *http.Request) {
 // POST /v1/elicitations/{id}  body: {"action":"accept|decline|cancel","content":{...}}
 func (s *Server) handleRespondElicitation(w http.ResponseWriter, r *http.Request) {
 	if s.elicitationBroker == nil {
-		http.Error(w, "elicitation broker not enabled", http.StatusNotImplemented)
+		httputil.RespondError(w, "Elicitation is unavailable", nil, http.StatusNotImplemented)
 		return
 	}
 

@@ -37,7 +37,8 @@ func TestCallTool_MintsTokenOnlyForA2AContractTools(t *testing.T) {
 	inProc := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 2)
 	verifier := &acceptVerifier{revoked: map[string]bool{}}
-	env := sandbox.NewExecEnvelope(&tokenGate{}, router, 2, runtime.GOOS, verifier)
+	env := sandbox.NewExecEnvelope(&tokenGate{}, router, 2, runtime.GOOS, verifier).
+		WithExecutionAuditor(mcpTestExecutionAuditor{})
 	mgr := NewMCPManager(inProc, testSafeHTTP(nil), &mockPolicyGate{})
 	mgr.SetEnvelope(env)
 	mgr.SetCatalog(newFakeCatalog())

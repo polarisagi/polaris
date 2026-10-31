@@ -1,4 +1,5 @@
 import Alpine from 'alpinejs'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 
 const GITHUB_API = 'https://api.github.com/repos/polarisagi/polaris/releases/latest'
 // 轮询间隔：页面加载 10s 后首检，此后每 30 分钟一次
@@ -88,7 +89,7 @@ Alpine.store('update', {
       })
       if (!resp.ok) {
         this.status = 'error'
-        this.error  = await resp.text()
+        this.error  = await readHTTPErrorMessage(resp)
         return
       }
       this._pollStatus()

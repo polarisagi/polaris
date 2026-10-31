@@ -37,7 +37,16 @@ func newRawDump(dir string, req *OpenAIRequest) *rawDump {
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		slog.Warn("llm raw dump: mkdir failed", "dir", dir, "err", err)
+		slog.Warn("llm raw dump: mkdir failed; dump disabled", "err", err)
+		return nil
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		slog.Warn("llm raw dump: diagnostic path is not a directory; dump disabled", "err", err)
+		return nil
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		slog.Warn("llm raw dump: secure directory failed; dump disabled", "err", err)
 		return nil
 	}
 	// CreateTemp 保证文件名唯一（并发流不会撞名），且权限固定 0600。

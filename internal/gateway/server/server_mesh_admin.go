@@ -25,7 +25,7 @@ import (
 func (s *Server) meshAdmin(w http.ResponseWriter) *mesh.Service {
 	st := s.mesh.Load()
 	if st == nil || !s.a2aConf().Enabled {
-		http.Error(w, "cross-node delegation is disabled (a2a.enabled=false)", http.StatusNotFound)
+		httputil.RespondError(w, "Cross-node delegation is disabled", nil, http.StatusNotFound)
 		return nil
 	}
 	return st.svc
@@ -375,7 +375,7 @@ func (s *Server) probePeers(ctx context.Context, svc *mesh.Service, peers []mesh
 			_, ferr := mesh.GetVerifiedCard(ctx, s.httpClient, p.URL, pub)
 			msg := ""
 			if ferr != nil {
-				msg = ferr.Error()
+				msg = "Peer unavailable"
 			}
 			svc.Peers().MarkSeen(ctx, p.Name, msg)
 			mu.Lock()
@@ -425,22 +425,6 @@ func (s *Server) runMeshReconnect(ctx context.Context) {
 
 // writeAppErr apperr → HTTP 状态码。
 func writeAppErr(w http.ResponseWriter, err error) {
-	code := http.StatusInternalServerError
-	switch apperr.CodeOf(err) {
-	case apperr.CodeInvalidInput:
-		code = http.StatusBadRequest
-	case apperr.CodeNotFound:
-		code = http.StatusNotFound
-	case apperr.CodeForbidden:
-		code = http.StatusForbidden
-	case apperr.CodeAlreadyExists, apperr.CodeConflict:
-		code = http.StatusConflict
-	case apperr.CodeNetworkUnavailable:
-		code = http.StatusBadGateway
-	}
-	if code == http.StatusInternalServerError {
-		httputil.RespondError(w, "", err, code)
-		return
-	}
-	httputil.WriteJSONStatus(w, code, map[string]string{"error": err.Error()})
+	code := apperr.CodeOf(err)
+	httputil.RespondError(w, "", err, apperr.HTTPStatus(code))
 }

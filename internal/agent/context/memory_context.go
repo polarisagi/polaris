@@ -69,13 +69,19 @@ func BuildPerceiveContext( //nolint:gocyclo
 	}
 	var retrieved strings.Builder
 	retrieved.WriteString(recalled)
+	whisperTaint := types.TaintNone
 
 	// 耳语线索：消费 channel，必须留在主路径（召回 goroutine 不得触碰 sCtx）。
 	if sCtx.WhisperChan != nil {
 		select {
 		case w := <-sCtx.WhisperChan:
+			if w.Source == protocol.MemoryWhisperSourceMemoryAgent && (!w.MetadataValid || w.ProjectID == "" ||
+				w.ProjectID != scopeProjectID(sCtx) || w.TaintLevel < types.TaintNone || w.TaintLevel > types.TaintUserReviewed) {
+				break
+			}
 			if w.Salience >= 0.5 {
 				fmt.Fprintf(&retrieved, "## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content)
+				whisperTaint = types.PropagateTaint(whisperTaint, w.TaintLevel)
 			}
 		default:
 		}
@@ -88,17 +94,15 @@ func BuildPerceiveContext( //nolint:gocyclo
 	}
 
 	if retrieved.Len() > 0 {
-		// 召回数据携带 TaintMedium，需反馈到会话全局污点（只升不降）
-		if types.TaintMedium > sCtx.GlobalTaintLevel {
-			sCtx.GlobalTaintLevel = types.TaintMedium
-		}
+		// 召回与耳语污点反馈到会话全局，只升不降。
+		sCtx.GlobalTaintLevel = types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel, recallTaint, whisperTaint)
 		// 附加等级必须取 max(自身, 会话全局, 已装入召回项)（L-03）：写死 TaintMedium 时，
 		// 若本会话已因更脏的来源升到 TaintHigh、或召回项本身是 TaintHigh（如工具输出事件），
 		// 这段召回文本会被重新标成 Medium，等于凭一次拼接把污点降级。与 BuildReflectContext 里
 		// execute_result 的处置保持一致。
 		b.WriteUserData(taint.NewTaintedString(
 			retrieved.String(),
-			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel, recallTaint)},
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel, recallTaint, whisperTaint)},
 			"retrieved_memory"))
 	}
 
@@ -201,9 +205,7 @@ func writePlanRecall(
 	retrieved.WriteString(recalled)
 
 	if retrieved.Len() > 0 {
-		if types.TaintMedium > sCtx.GlobalTaintLevel {
-			sCtx.GlobalTaintLevel = types.TaintMedium
-		}
+		sCtx.GlobalTaintLevel = types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel, recallTaint)
 		// 同 BuildPerceiveContext：附加等级取 max(自身, 会话全局, 已装入召回项)，禁写死常量（L-03）。
 		b.WriteUserData(taint.NewTaintedString(
 			retrieved.String(),

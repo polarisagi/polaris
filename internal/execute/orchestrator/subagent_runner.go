@@ -74,6 +74,7 @@ type SubagentRequest struct {
 	AgentName       string // general-purpose / 空 = 通用 Agent
 	Profile         *types.AgentProfileSpec
 	Prompt          string
+	InputTaint      types.TaintLevel
 	Options         []types.HeadlessOption // SpawnDepth / Namespace / EventCallback 等透传
 	Entry           string                 // SubagentEntry*：运行记录的入口标识
 	TaskID          string                 // 委派入口的 tasks.task_id，其余入口为空
@@ -81,14 +82,23 @@ type SubagentRequest struct {
 
 // Run 执行子 Agent 并返回最终输出。
 func (r *SubagentRunner) Run(ctx context.Context, req SubagentRequest) (string, error) {
+	result, err := r.RunWithTaint(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return result.Output, nil
+}
+
+//nolint:gocyclo // The single runner owns hook, continuation and taint aggregation semantics.
+func (r *SubagentRunner) RunWithTaint(ctx context.Context, req SubagentRequest) (*types.AgentResult, error) {
 	if r == nil || r.pool == nil {
-		return "", apperr.New(apperr.CodeInternal, "subagent runner: agent pool not configured")
+		return nil, apperr.New(apperr.CodeInternal, "subagent runner: agent pool not configured")
 	}
 	profile := req.Profile
 	if profile == nil {
 		p, err := r.resolve(ctx, req.AgentName)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		profile = p
 	}
@@ -117,19 +127,25 @@ func (r *SubagentRunner) Run(ctx context.Context, req SubagentRequest) (string, 
 	}
 	r.recordStart(ctx, req, agentType, resolved.SessionID)
 
-	out, err := r.acquire(ctx, query, opts)
+	inputTaint := types.EffectiveTaskResultTaint(req.InputTaint)
+	out, err := r.acquire(ctx, query, inputTaint, opts)
 	continuations := 0
 	for i := 0; err == nil && withHooks && i < maxSubagentStopContinuations; i++ {
-		reason := r.hooks.FireSubagentStop(ctx, req.ParentSessionID, req.AgentID, agentType, out, i > 0)
+		reason := r.hooks.FireSubagentStop(ctx, req.ParentSessionID, req.AgentID, agentType, out.Output, i > 0)
 		if reason == "" {
 			break
 		}
 		continuations++
 		// 每次 headless 执行都是全新内核实例（无跨轮历史），续跑须带上原任务与上一版输出。
-		out, err = r.acquire(ctx, req.Prompt+"\n\n<previous_answer>\n"+out+"\n</previous_answer>\n\n<subagent-stop-hook>\n"+
-			reason+"\n</subagent-stop-hook>", opts)
+		inputTaint = max(inputTaint, types.EffectiveTaskResultTaint(out.TaintLevel))
+		out, err = r.acquire(ctx, req.Prompt+"\n\n<previous_answer>\n"+out.Output+"\n</previous_answer>\n\n<subagent-stop-hook>\n"+
+			reason+"\n</subagent-stop-hook>", inputTaint, opts)
 	}
-	r.recordFinish(ctx, req.AgentID, out, err, continuations)
+	output := ""
+	if out != nil {
+		output = out.Output
+	}
+	r.recordFinish(ctx, req.AgentID, output, err, continuations)
 	return out, err
 }
 
@@ -171,12 +187,15 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, parentSessionID, agent
 	return r.Run(ctx, SubagentRequest{ParentSessionID: parentSessionID, AgentName: agent, Prompt: prompt, Entry: SubagentEntryForkSkill})
 }
 
-func (r *SubagentRunner) acquire(ctx context.Context, query string, opts []types.HeadlessOption) (string, error) {
-	res, err := r.pool.AcquireHeadless(ctx, types.Intent{Query: query}, opts...)
+func (r *SubagentRunner) acquire(ctx context.Context, query string, taintLevel types.TaintLevel, opts []types.HeadlessOption) (*types.AgentResult, error) {
+	res, err := r.pool.AcquireHeadless(ctx, types.Intent{Query: query, TaintLevel: taintLevel}, opts...)
 	if err != nil {
-		return "", apperr.Wrap(apperr.CodeOf(err), "subagent", err)
+		return nil, apperr.Wrap(apperr.CodeOf(err), "subagent", err)
 	}
-	return res.Output, nil
+	if res == nil {
+		return nil, apperr.New(apperr.CodeInternal, "subagent: agent pool returned nil result")
+	}
+	return res, nil
 }
 
 // resolve 未知名称报错（Claude：未知 subagent_type 报错）——静默按通用 Agent 执行会让

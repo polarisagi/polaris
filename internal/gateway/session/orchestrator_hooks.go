@@ -52,7 +52,7 @@ func withMCPAppContext(input string, mcpAppContext map[string]json.RawMessage) s
 	}
 	payload, err := json.Marshal(mcpAppContext)
 	if err != nil {
-		slog.Warn("session: encode mcp app model context failed", "err", err)
+		slog.Warn("session: encode mcp app model context failed", "error_meta", safeErrorSummary(err))
 		return input
 	}
 	return input + "\n\n<mcp-app-context>\n" + string(payload) + "\n</mcp-app-context>"
@@ -74,13 +74,13 @@ func (o *orchestrator) continueOnStopHooks(
 		}
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if _, err := o.persistence.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
-			slog.Error("session: saveMessage assistant before stop-hook continuation", "session", sessionID, "err", err)
+			slog.Error("session: saveMessage assistant before stop-hook continuation", "session", sessionID, "error_meta", safeErrorSummary(err))
 		}
 		cancel()
 		history = append(history, types.Message{Role: "assistant", Content: reply})
 		agentCtrl.SetConversationHistory(o.withTurnDigests(ctx, sessionID, history))
 		slog.Info("session: Stop hook requested continuation", "session", sessionID, "round", i+1)
-		next, inferErr, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
+		next, inferErr, _, aborted, viewIDs := o.runFSMTurn(ctx, sink, sessionID, agentCtrl,
 			"<stop-hook>\n"+v.Reason+"\n</stop-hook>", types.TaintHigh) // hook 文本不是 owner 的输入
 		allViewIDs = append(allViewIDs, viewIDs...)
 		if aborted || inferErr != "" || next == "" {

@@ -19,6 +19,7 @@ type mockAgentPool struct {
 	mu          sync.Mutex
 	queries     []string
 	replyOutput string
+	replyTaint  types.TaintLevel
 	failWith    error
 }
 
@@ -33,7 +34,7 @@ func (p *mockAgentPool) AcquireHeadless(ctx context.Context, intent types.Intent
 	if p.failWith != nil {
 		return nil, p.failWith
 	}
-	return &types.AgentResult{Output: p.replyOutput}, nil
+	return &types.AgentResult{Output: p.replyOutput, TaintLevel: p.replyTaint}, nil
 }
 
 func (p *mockAgentPool) queriesForTest() []string {
@@ -84,6 +85,47 @@ func TestDefaultTaskWorker_ClaimsAndExecutesOrphanedTask(t *testing.T) {
 	if len(queries) != 1 || queries[0] != "what is the weather" {
 		t.Fatalf("expected AcquireHeadless called once with the task's Intent, got %v", queries)
 	}
+}
+
+func TestDefaultTaskWorkerPersistsHeadlessResultTaintThroughSQLite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	db := newSchemaBackedDB(t)
+	defer db.Close()
+	bb := NewSQLiteBlackboard(db)
+	pool := &mockAgentPool{replyOutput: "reviewed result", replyTaint: types.TaintUserReviewed}
+	worker := NewDefaultTaskWorker(bb, pool, "workflow_step")
+	go func() { _ = worker.RunLoop(ctx) }()
+	time.Sleep(20 * time.Millisecond) // allow the worker to subscribe before posting
+
+	if err := bb.PostTask(ctx, &types.TaskEntry{
+		ID: "task-taint-4", Type: "agent_query", Intent: []byte("offline fixture"), IntentTaint: types.TaintHigh,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, err := bb.PeekTask(context.Background(), "task-taint-4")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Status == types.TaskDone {
+			if string(snapshot.Result) != "reviewed result" {
+				t.Fatalf("unexpected durable result %q", snapshot.Result)
+			}
+			if snapshot.ResultTaint != types.TaintUserReviewed {
+				t.Fatalf("DefaultTaskWorker persisted taint=%v want TaintUserReviewed(4)", snapshot.ResultTaint)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	snapshot, err := bb.PeekTask(context.Background(), "task-taint-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("worker did not persist task completion: status=%v", snapshot.Status)
 }
 
 // TestDefaultTaskWorker_SkipsExcludedType 验证 excludeTypes 生效：属于专用

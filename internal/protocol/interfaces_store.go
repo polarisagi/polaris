@@ -281,6 +281,11 @@ type
 AuditRepository interface {
 	AppendAuditEvent(ctx context.Context, row types.AuditEventRow) error
 	ListAuditEvents(ctx context.Context, limit int, before string) ([]types.AuditEventRow, error)
+	// ListAuditTail 按 events 物理追加顺序倒序分页；beforeID 是上页最后一行的事件 ID。
+	// 空串从最新行开始，避免 created_at 毫秒精度造成同时间戳行被跳过。
+	ListAuditTail(ctx context.Context, limit int, beforeID string) ([]types.AuditEventRow, error)
+	// GetAuditEvent 按唯一事件 ID 精确读回，用于确认提交结果不确定的审计写入。
+	GetAuditEvent(ctx context.Context, id string) (*types.AuditEventRow, error)
 	DeleteAuditEventsBefore(ctx context.Context, before string) (int64, error)
 }
 

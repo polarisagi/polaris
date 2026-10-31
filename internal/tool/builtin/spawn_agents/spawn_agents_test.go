@@ -30,6 +30,9 @@ func (m *mockSubagentMgr) AgentStatus(_ context.Context, _ []string) ([]types.Su
 func (m *mockSubagentMgr) AgentResult(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
+func (m *mockSubagentMgr) AgentResultWithTaint(_ context.Context, _ string) (string, types.TaintLevel, error) {
+	return "", types.TaintHigh, nil
+}
 func (m *mockSubagentMgr) AgentMessage(_ context.Context, _, _ string) (string, error) {
 	return "", nil
 }

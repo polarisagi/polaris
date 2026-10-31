@@ -123,8 +123,9 @@ var (
 	// [M8f-1] MCP Apps（io.modelcontextprotocol/ui）App 发起工具调用可观测性。
 	// mcp_server 取值为已连接 server 的用户配置名（数量有界，随服务器连接数增长，
 	// 非任意外部输入）；outcome 固定枚举 "success"/"error"。
-	InstrMCPAppToolCallsTotal   metric.Int64Counter // labels: mcp_server, outcome
-	InstrMCPAppViewTicketsTotal metric.Int64Counter // labels: outcome
+	InstrMCPAppToolCallsTotal       metric.Int64Counter // labels: mcp_server, outcome
+	InstrMCPAppViewTicketsTotal     metric.Int64Counter // labels: outcome
+	InstrExecutionAuditRecordsTotal metric.Int64Counter // labels: phase=intent|completion, status=success|failure
 
 	// [ADR-0115 / WP3] 模型路由与回退可观测性
 	InstrAgentModelRouteTotal     metric.Int64Counter

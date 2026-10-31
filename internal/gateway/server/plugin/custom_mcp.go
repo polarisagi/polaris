@@ -41,7 +41,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 	extID := util.GenerateHumanReadableID("ext", req.Name)
 
 	if h.InstallMgr == nil {
-		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "install manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	authCtx3 := authcontext.FromContext(r.Context())
@@ -134,7 +134,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 		UpdatedAt: now,
 	})
 	if err != nil {
-		http.Error(w, "mcp_servers insert: "+err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Failed to create MCP server", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -152,7 +152,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq3); err != nil {
 		// 回滚 mcp_servers
 		h.ExtRepo.DeleteMCPServer(r.Context(), mcpID) //nolint:errcheck
-		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Failed to register extension", err, http.StatusInternalServerError)
 		return
 	}
 

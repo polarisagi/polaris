@@ -63,6 +63,7 @@ func TestAllCodes(t *testing.T) {
 		apperr.CodeUnauthorized, apperr.CodeForbidden, apperr.CodeTimeout, apperr.CodeCancelled,
 		apperr.CodeResourceExhausted, apperr.CodeInternal, apperr.CodeProviderExhausted,
 		apperr.CodeNetworkUnavailable, apperr.CodeTaintViolation,
+		apperr.CodeServiceUnavailable, apperr.CodeStorageUnavailable,
 	}
 	for _, code := range codes {
 		err := apperr.New(code, "test")
@@ -127,6 +128,25 @@ func TestCodeOf(t *testing.T) {
 	}
 }
 
+func TestNormalizeErrorCode(t *testing.T) {
+	for _, tc := range []struct {
+		code apperr.Code
+		want apperr.Code
+	}{
+		{apperr.CodeProviderExhausted, apperr.CodeProviderExhausted},
+		{apperr.CodeStorageUnavailable, apperr.CodeStorageUnavailable},
+		{apperr.CodeCancelled, apperr.CodeCancelled},
+		{apperr.CodeTimeout, apperr.CodeTimeout},
+		{apperr.CodeOK, apperr.CodeInternal},
+		{"", apperr.CodeInternal},
+		{"private-token-sentinel", apperr.CodeInternal},
+	} {
+		if got := apperr.NormalizeErrorCode(tc.code); got != tc.want {
+			t.Errorf("NormalizeErrorCode(%q) = %q, want %q", tc.code, got, tc.want)
+		}
+	}
+}
+
 func TestHTTPStatus(t *testing.T) {
 	cases := []struct {
 		code Code
@@ -148,6 +168,8 @@ func TestHTTPStatus(t *testing.T) {
 		{apperr.CodeCancelled, 504},
 		{apperr.CodeTaintViolation, 403},
 		{apperr.CodeSandboxTier0Limit, 503},
+		{apperr.CodeStorageUnavailable, 503},
+		{apperr.CodeServiceUnavailable, 503},
 	}
 	for _, tc := range cases {
 		if got := apperr.HTTPStatus(tc.code); got != tc.want {

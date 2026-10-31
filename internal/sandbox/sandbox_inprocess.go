@@ -128,8 +128,8 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (result *t
 			res = &types.ToolResult{}
 		}
 		res.LatencyMs = latency
-		// 回填注册时的污点等级（富工具函数通常不感知 taint，由注册层统一设置）
-		if res.TaintLevel == 0 {
+		// 注册地板保护工具来源，函数结果可再携带更高的逐任务污点。
+		if res.TaintLevel < taint {
 			res.TaintLevel = taint
 		}
 		return res, nil

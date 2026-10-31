@@ -62,7 +62,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "missing file in form data", http.StatusBadRequest)
+		httputil.RespondError(w, "missing file in form data", nil, http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -74,7 +74,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 	}
 	if err := os.MkdirAll(vfsRoot, 0755); err != nil {
 		slog.Error("vfs: mkdir error", "err", err)
-		http.Error(w, "server error", http.StatusInternalServerError)
+		httputil.RespondError(w, "server error", nil, http.StatusInternalServerError)
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 	dst, err := os.Create(filePath)
 	if err != nil {
 		slog.Error("vfs: create file error", "err", err)
-		http.Error(w, "server error", http.StatusInternalServerError)
+		httputil.RespondError(w, "server error", nil, http.StatusInternalServerError)
 		return
 	}
 	defer dst.Close()
@@ -105,7 +105,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 	size, err := io.Copy(dst, tee)
 	if err != nil {
 		slog.Error("vfs: save file error", "err", err)
-		http.Error(w, "server error", http.StatusInternalServerError)
+		httputil.RespondError(w, "server error", nil, http.StatusInternalServerError)
 		return
 	}
 

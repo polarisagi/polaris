@@ -15,7 +15,7 @@ import (
 func (h *MCPAdmin) HandleTestMCPServer(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("serverID")
 	if h.MCPMgr == nil {
-		http.Error(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "mcp manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -23,11 +23,11 @@ func (h *MCPAdmin) HandleTestMCPServer(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.MCPMgr.StartFromDB(ctx, id); err != nil {
 		if apperr.IsCode(err, apperr.CodeNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			httputil.RespondError(w, "not found", nil, http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "MCP server connection failed"}) //nolint:errcheck
 		return
 	}
 
@@ -63,12 +63,12 @@ func (h *MCPAdmin) HandleMCPNetworkApproval(w http.ResponseWriter, r *http.Reque
 		Approved bool `json:"approved"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Invalid request body", err, http.StatusBadRequest)
 		return
 	}
 
 	if h.MCPMgr == nil {
-		http.Error(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "mcp manager not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 

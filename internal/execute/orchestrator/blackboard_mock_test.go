@@ -45,11 +45,16 @@ func (b *mockBlackboard) StartExecution(ctx context.Context, taskID, agentID str
 	return nil
 }
 func (b *mockBlackboard) CompleteTask(ctx context.Context, taskID, agentID string, result []byte) error {
+	return b.CompleteTaskWithTaint(ctx, taskID, agentID, result, types.TaintHigh)
+}
+func (b *mockBlackboard) CompleteTaskWithTaint(_ context.Context, taskID, _ string, result []byte, resultTaint types.TaintLevel) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	entry := b.tasks[taskID]
 	if entry != nil {
 		entry.Status = types.TaskDone
+		entry.Result = append([]byte(nil), result...)
+		entry.ResultTaint = types.EffectiveTaskResultTaint(resultTaint)
 	}
 	return nil
 }

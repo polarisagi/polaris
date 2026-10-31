@@ -87,7 +87,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		// Operator 显式指定配置文件：从文件系统读取，路径可为绝对路径或相对路径。
 		raw, err = os.ReadFile(cfgPath)
 		if err != nil {
-			http.Error(w, config.EnvPolarisConfig+" file not readable: "+err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Configuration file could not be read", err, http.StatusInternalServerError)
 			return
 		}
 		source = cfgPath
@@ -97,7 +97,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		raw, err = configs.FS.ReadFile("defaults.toml")
 		if err != nil {
 			// embedded FS 读取失败属于编译期资产问题，用 500 而非 404。
-			http.Error(w, "embedded config not readable: "+err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Embedded configuration could not be read", err, http.StatusInternalServerError)
 			return
 		}
 		source = "embedded:configs/defaults.toml"
@@ -115,7 +115,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // 2026-07-14（ADR-0062 关联接线）：路由注册见 server_routes.go。
 func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
 	if s.evalRunner == nil {
-		http.Error(w, "eval runner not available", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Evaluation service is unavailable", nil, http.StatusServiceUnavailable)
 		return
 	}
 	var req struct {
@@ -149,7 +149,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(req.Input) == "" {
-		http.Error(w, "input must not be empty", http.StatusBadRequest)
+		httputil.RespondError(w, "Input must not be empty", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -195,7 +195,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.blackboard.PostTask(r.Context(), task); err != nil {
 		slog.Error("handleAgentQuery: PostTask failed", "error", err)
-		http.Error(w, "failed to submit task", http.StatusInternalServerError)
+		httputil.RespondError(w, "Failed to submit task", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -210,23 +210,23 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
 	if taskID == "" {
-		http.Error(w, "taskID is required", http.StatusBadRequest)
+		httputil.RespondError(w, "Task ID is required", nil, http.StatusBadRequest)
 		return
 	}
 
 	if s.blackboard == nil {
-		http.Error(w, "blackboard not available", http.StatusNotImplemented)
+		httputil.RespondError(w, "Task service is unavailable", nil, http.StatusNotImplemented)
 		return
 	}
 
 	snap, err := s.blackboard.PeekTask(r.Context(), taskID)
 	if err != nil {
 		slog.Error("handleGetAgentTask: PeekTask system error", "task_id", taskID, "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal server error", err, http.StatusInternalServerError)
 		return
 	}
 	if snap == nil {
-		http.Error(w, "task not found", http.StatusNotFound)
+		httputil.RespondError(w, "Task not found", nil, http.StatusNotFound)
 		return
 	}
 
@@ -298,7 +298,7 @@ func (s *Server) handleGetAudioStatus(w http.ResponseWriter, r *http.Request) {
 // handleEmbeddingRebench 触发重新基准测定与档位评估（POST /v1/embedding/rebench，ADR-0109）。
 func (s *Server) handleEmbeddingRebench(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		httputil.RespondError(w, "Method not allowed", nil, http.StatusMethodNotAllowed)
 		return
 	}
 	if s.rebenchFn == nil {

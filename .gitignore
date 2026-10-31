@@ -8,6 +8,9 @@
 /bin/
 /dist/
 
+# 防止本地规划材料进入公开树。
+local_playground/
+
 # Go
 *.test
 *.out

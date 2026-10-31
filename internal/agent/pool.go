@@ -135,7 +135,8 @@ func (p *Pool) newPoolEntry(sessionID string) *poolEntry {
 	ag.InjectSubagentController(p)
 	concurrent.SafeGo(ag.ctx, "agent-pool.kernel."+sessionID, func(ctx context.Context) {
 		if err := ag.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Warn("agent pool: kernel Run() exited with error", "session", sessionID, "err", err)
+			slog.WarnContext(ctx, "agent pool: kernel Run() exited with error", "session", sessionID,
+				"error_code", string(streamErrorCode(err)), "error_type", fmt.Sprintf("%T", err))
 			if p.killGate != nil {
 				p.killGate.ReportError()
 			}
@@ -318,7 +319,8 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInvalidInput, "failed to marshal intent", err)
 	}
-	agent.SetTaskIntent(taint.NewTaintedString(string(intentBytes), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
+	intentTaint := max(types.TaintHigh, intent.TaintLevel)
+	agent.SetTaskIntent(taint.NewTaintedString(string(intentBytes), taint.TaintSource{OriginTaintLevel: intentTaint}, "sys"))
 
 	stream := agent.SubscribeStream(ctx)
 	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
@@ -331,10 +333,15 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 		return nil, err
 	}
 	finalOutput = scanHeadlessOutput(sessionID, finalOutput)
+	resultTaint := types.TaintHigh
+	if taintReader, ok := agent.(interface{ globalTaintLevel() types.TaintLevel }); ok {
+		resultTaint = taintReader.globalTaintLevel()
+	}
 
 	return &types.AgentResult{
-		Output:    finalOutput,
-		LatencyMs: time.Since(start).Milliseconds(),
+		Output:     finalOutput,
+		LatencyMs:  time.Since(start).Milliseconds(),
+		TaintLevel: resultTaint,
 	}, nil
 }
 
@@ -353,14 +360,21 @@ func applyHeadlessOptions(agent protocol.AgentController, opt *types.HeadlessOpt
 func (p *Pool) consumeHeadlessStream(stream <-chan types.AgentStreamEvent, opt *types.HeadlessOptions) (string, error) {
 	var finalOutput string
 	for ev := range stream {
-		if opt.EventCallback != nil {
-			opt.EventCallback(ev)
-		}
 		if ev.Type == types.AgentStreamEventError {
 			if p.killGate != nil {
 				p.killGate.ReportError()
 			}
-			return "", apperr.New(apperr.CodeInternal, ev.Content)
+			code := apperr.NormalizeErrorCode(apperr.Code(ev.ErrorCode))
+			message := streamErrorMessage(code)
+			if opt.EventCallback != nil {
+				ev.Content = message
+				ev.ErrorCode = string(code)
+				opt.EventCallback(ev)
+			}
+			return "", apperr.New(code, message)
+		}
+		if opt.EventCallback != nil {
+			opt.EventCallback(ev)
 		}
 		if ev.Type == types.AgentStreamEventToken {
 			finalOutput += ev.Content

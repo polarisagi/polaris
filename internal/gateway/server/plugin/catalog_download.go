@@ -22,7 +22,7 @@ type CatalogInstaller interface {
 // HandlePrunePlugins POST /v1/plugins/prune：卸载作为依赖自动安装、已无插件依赖的插件（Claude plugin prune）。
 func (h *PluginHandler) HandlePrunePlugins(w http.ResponseWriter, r *http.Request) {
 	if h.Catalog == nil || h.InstallMgr == nil {
-		http.Error(w, "installer not initialized", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "installer not initialized", nil, http.StatusServiceUnavailable)
 		return
 	}
 	if err := h.InstallMgr.AuthorizeAction(r.Context(), requestPrincipal(r), "plugin:manage", nil); err != nil {

@@ -108,10 +108,10 @@ func (h *ChatHandler) HandleGetTurnSteps(w http.ResponseWriter, r *http.Request)
 	var summary json.RawMessage
 	for _, row := range rows {
 		if row.Seq == 0 {
-			summary = json.RawMessage(row.Data)
+			summary = safeStepSummary(row.Data)
 			continue
 		}
-		steps = append(steps, json.RawMessage(row.Data))
+		steps = append(steps, safeStepRecord(row.Data))
 	}
 	httputil.WriteJSON(w, map[string]any{"session_id": sessionID, "turn_id": turnID, "summary": summary, "steps": steps})
 }
@@ -136,19 +136,134 @@ func failedTurnError(summary json.RawMessage) json.RawMessage {
 		return nil
 	}
 	var s struct {
-		Failed      bool   `json:"failed"`
-		ErrorCode   string `json:"error_code"`
-		Error       string `json:"error"`
-		ErrorDetail string `json:"error_detail"`
+		Failed     bool   `json:"failed"`
+		ErrorCode  string `json:"error_code"`
+		ErrorClass string `json:"error_class"`
+		Error      string `json:"error"`
 	}
 	if json.Unmarshal(summary, &s) != nil || !s.Failed {
 		return nil
 	}
-	out, err := json.Marshal(map[string]string{"code": s.ErrorCode, "message": s.Error, "detail": s.ErrorDetail})
+	kind := safeFailureKind(s.ErrorCode)
+	out, err := json.Marshal(map[string]string{
+		"code":    string(apperr.NormalizeErrorCode(apperr.Code(s.ErrorClass))),
+		"kind":    kind,
+		"message": safeFailureMessage(kind),
+	})
 	if err != nil {
 		return nil
 	}
 	return out
+}
+
+func safeStepSummary(raw []byte) json.RawMessage {
+	var shape map[string]json.RawMessage
+	if json.Unmarshal(raw, &shape) != nil || shape == nil {
+		return json.RawMessage(`{}`)
+	}
+	var summary session.StepSummary
+	if json.Unmarshal(raw, &summary) != nil {
+		return json.RawMessage(`{}`)
+	}
+	hasFailureMetadata := summary.Failed || summary.Error != "" || summary.ErrorCode != "" || summary.ErrorClass != ""
+	if !hasFailureMetadata && len(shape["error_detail"]) == 0 && len(shape["error_class"]) == 0 {
+		safe, err := json.Marshal(summary)
+		if err != nil {
+			return json.RawMessage(`{}`)
+		}
+		return safe
+	}
+	var projection map[string]any
+	encoded, err := json.Marshal(summary)
+	if err != nil || json.Unmarshal(encoded, &projection) != nil {
+		return json.RawMessage(`{}`)
+	}
+	delete(projection, "error_detail")
+	delete(projection, "error_class")
+	if hasFailureMetadata {
+		kind := safeFailureKind(summary.ErrorCode)
+		projection["kind"] = kind
+		projection["error_code"] = string(apperr.NormalizeErrorCode(apperr.Code(summary.ErrorClass)))
+		projection["error"] = safeFailureMessage(kind)
+	}
+	safe, err := json.Marshal(projection)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return safe
+}
+
+func safeStepRecord(raw []byte) json.RawMessage {
+	var shape map[string]json.RawMessage
+	if json.Unmarshal(raw, &shape) != nil || shape == nil {
+		return json.RawMessage(`{}`)
+	}
+	var step session.Step
+	if json.Unmarshal(raw, &step) != nil {
+		return json.RawMessage(`{}`)
+	}
+	if step.Kind != session.StepKindError && step.Status != session.StepStatusError &&
+		step.Status != session.StepStatusDenied && step.Status != session.StepStatusCancelled {
+		safe, err := json.Marshal(step)
+		if err != nil {
+			return json.RawMessage(`{}`)
+		}
+		return safe
+	}
+	if step.Kind == session.StepKindError {
+		step.Title = "模型调用失败"
+	}
+	step.ResultPreview = safeFailedStepMessage(step)
+	safe, err := json.Marshal(step)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return safe
+}
+
+func safeFailureKind(kind string) string {
+	switch kind {
+	case "session_error", "history_error", "agent_pool_error", "empty_response", "fsm_error",
+		"hook_blocked", "no_provider", "no_agent":
+		return kind
+	default:
+		return "turn_error"
+	}
+}
+
+func safeFailureMessage(kind string) string {
+	switch safeFailureKind(kind) {
+	case "hook_blocked":
+		return "请求被安全策略拦截"
+	case "no_provider":
+		return "当前没有可用模型，请检查模型配置"
+	case "no_agent":
+		return "会话服务暂不可用，请稍后重试"
+	case "session_error":
+		return "会话初始化失败，请稍后重试"
+	case "history_error":
+		return "会话历史读取失败，请稍后重试"
+	case "agent_pool_error":
+		return "会话 Agent 暂不可用，请稍后重试"
+	case "empty_response", "fsm_error":
+		return "模型调用失败，请稍后重试"
+	default:
+		return "本轮执行失败，请稍后重试"
+	}
+}
+
+func safeFailedStepMessage(step session.Step) string {
+	if step.Kind == session.StepKindError {
+		return "模型调用失败，请稍后重试"
+	}
+	switch step.Status {
+	case session.StepStatusDenied:
+		return "操作未获批准"
+	case session.StepStatusCancelled:
+		return "操作已取消"
+	default:
+		return "工具执行失败"
+	}
 }
 
 // turnMeta 决定一条历史消息携带的回合信息。用户消息上的 turn_id 只表示"这一轮失败了"
@@ -158,7 +273,7 @@ func turnMeta(role, turnID string, summaries map[string]json.RawMessage) (id str
 		return "", nil, nil
 	}
 	if role != "user" {
-		return turnID, summaries[turnID], nil
+		return turnID, safeStepSummary(summaries[turnID]), nil
 	}
 	if te := failedTurnError(summaries[turnID]); te != nil {
 		return turnID, nil, te

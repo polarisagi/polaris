@@ -2,12 +2,16 @@ package session
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -41,25 +45,25 @@ func TestOrchestrator_FSMSlidingWindowLeak(t *testing.T) {
 	o.handleFSMEvent(context.Background(), sink, "sess-1", types.AgentStreamEvent{
 		Type:    types.AgentStreamEventToken,
 		Content: "alpha ",
-	}, g, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
+	}, g, &replyBuilder, &errBuilder, new(apperr.Code), &leakWindow, windowSize, &viewIDs)
 	require.Equal(t, "alpha ", string(replyBuilder))
 
 	o.handleFSMEvent(context.Background(), sink, "sess-1", types.AgentStreamEvent{
 		Type:    types.AgentStreamEventToken,
 		Content: "beta ",
-	}, g, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
+	}, g, &replyBuilder, &errBuilder, new(apperr.Code), &leakWindow, windowSize, &viewIDs)
 	require.Equal(t, "alpha beta ", string(replyBuilder))
 
 	o.handleFSMEvent(context.Background(), sink, "sess-1", types.AgentStreamEvent{
 		Type:    types.AgentStreamEventToken,
 		Content: "gamma",
-	}, g, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
+	}, g, &replyBuilder, &errBuilder, new(apperr.Code), &leakWindow, windowSize, &viewIDs)
 	require.Equal(t, "alpha beta ", string(replyBuilder))
 
 	o.handleFSMEvent(context.Background(), sink, "sess-1", types.AgentStreamEvent{
 		Type:    types.AgentStreamEventToken,
 		Content: " normal text",
-	}, g, &replyBuilder, &errBuilder, &leakWindow, windowSize, &viewIDs)
+	}, g, &replyBuilder, &errBuilder, new(apperr.Code), &leakWindow, windowSize, &viewIDs)
 	require.Equal(t, "alpha beta  normal text", string(replyBuilder))
 
 	// Turn 2
@@ -67,7 +71,7 @@ func TestOrchestrator_FSMSlidingWindowLeak(t *testing.T) {
 	o.handleFSMEvent(context.Background(), sink, "sess-1", types.AgentStreamEvent{
 		Type:    types.AgentStreamEventToken,
 		Content: "gamma",
-	}, g, &replyBuilder, &errBuilder, &leakWindowTurn2, windowSize, &viewIDs)
+	}, g, &replyBuilder, &errBuilder, new(apperr.Code), &leakWindowTurn2, windowSize, &viewIDs)
 	require.Equal(t, "alpha beta  normal textgamma", string(replyBuilder))
 }
 
@@ -97,7 +101,7 @@ func TestOrchestrator_ToolResultWithUIEmitsToolUIStatus(t *testing.T) {
 			ToolResult:  []byte(`{"content":[{"type":"text","text":"ok"}]}`),
 		},
 	}
-	stop := o.handleFSMEvent(context.Background(), sink, "sess-1", ev, g, &replyBuilder, &errBuilder, &leakWindow, 64, &viewIDs)
+	stop := o.handleFSMEvent(context.Background(), sink, "sess-1", ev, g, &replyBuilder, &errBuilder, new(apperr.Code), &leakWindow, 64, &viewIDs)
 	require.False(t, stop)
 
 	// 常规 tool_result + 新增 tool_ui 两条状态事件都要出现。
@@ -124,4 +128,34 @@ func TestOrchestrator_ToolResultWithUIEmitsToolUIStatus(t *testing.T) {
 	require.Len(t, persistence.appViews, 1)
 	require.Equal(t, "view-1", persistence.appViews[0].ViewID)
 	require.Equal(t, []string{"view-1"}, viewIDs)
+}
+
+func TestHandleFSMErrorUsesKnownCodeAndSafeMessage(t *testing.T) {
+	o := &orchestrator{}
+	sink := &fakeSink{}
+	g := guard.NewSystemPromptGuard(3)
+	var reply []byte
+	var inferErr string
+	var errorCode apperr.Code
+	var leakWindow []byte
+	var viewIDs []string
+	marker := "provider-path-token-sentinel"
+	o.handleFSMEvent(context.Background(), sink, "session-safe", types.AgentStreamEvent{
+		Type: types.AgentStreamEventError, Content: marker, ErrorCode: "not_an_apperr_code",
+	}, g, &reply, &inferErr, &errorCode, &leakWindow, 64, &viewIDs)
+	if len(sink.events) != 1 {
+		t.Fatalf("expected one error event, got %d", len(sink.events))
+	}
+	ev := sink.events[0]
+	if ev.Payload["code"] != string(apperr.CodeInternal) || ev.Payload["kind"] != "fsm_error" || ev.Payload["message"] != "模型调用失败，请稍后重试" {
+		t.Fatalf("unexpected error payload: %#v", ev.Payload)
+	}
+	encoded, err := json.Marshal(ev)
+	if err != nil || strings.Contains(string(encoded), marker) {
+		t.Fatalf("unsafe error event serialization %q: %v", encoded, err)
+	}
+	var ae *apperr.Error
+	if !errors.As(ev.Err, &ae) || ae.Code != apperr.CodeInternal || ae.Cause != nil {
+		t.Fatalf("Event.Err must retain only a cause-free safe error: %#v", ev.Err)
+	}
 }

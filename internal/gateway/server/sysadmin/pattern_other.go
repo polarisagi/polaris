@@ -11,7 +11,7 @@ import (
 // HandleMapReduceRun 触发一条 MapReduce 编排任务。
 func (h *SysAdminHandler) HandleMapReduceRun(w http.ResponseWriter, r *http.Request) {
 	if h.MapReduceExec == nil {
-		http.Error(w, "MapReduce executor not enabled", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "MapReduce executor not enabled", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -20,13 +20,13 @@ func (h *SysAdminHandler) HandleMapReduceRun(w http.ResponseWriter, r *http.Requ
 		SubTasks     []types.TaskEntry `json:"sub_tasks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request format", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request format", nil, http.StatusBadRequest)
 		return
 	}
 
 	res, err := h.MapReduceExec.Execute(r.Context(), req.ParentTaskID, req.SubTasks)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "MapReduce task failed", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -36,7 +36,7 @@ func (h *SysAdminHandler) HandleMapReduceRun(w http.ResponseWriter, r *http.Requ
 // HandleParallelRun 触发一条 Parallel 编排任务。
 func (h *SysAdminHandler) HandleParallelRun(w http.ResponseWriter, r *http.Request) {
 	if h.ParallelExec == nil {
-		http.Error(w, "Parallel executor not enabled", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Parallel executor not enabled", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -45,13 +45,13 @@ func (h *SysAdminHandler) HandleParallelRun(w http.ResponseWriter, r *http.Reque
 		SubTasks     []types.TaskEntry `json:"sub_tasks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request format", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request format", nil, http.StatusBadRequest)
 		return
 	}
 
 	err := h.ParallelExec.Execute(r.Context(), req.ParentTaskID, req.SubTasks)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Parallel task failed", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -61,7 +61,7 @@ func (h *SysAdminHandler) HandleParallelRun(w http.ResponseWriter, r *http.Reque
 // HandleSequentialRun 触发一条 Sequential 编排任务。
 func (h *SysAdminHandler) HandleSequentialRun(w http.ResponseWriter, r *http.Request) {
 	if h.SequentialExec == nil {
-		http.Error(w, "Sequential executor not enabled", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Sequential executor not enabled", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -70,13 +70,13 @@ func (h *SysAdminHandler) HandleSequentialRun(w http.ResponseWriter, r *http.Req
 		SubTasks     []types.TaskEntry `json:"sub_tasks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request format", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request format", nil, http.StatusBadRequest)
 		return
 	}
 
 	err := h.SequentialExec.Execute(r.Context(), req.ParentTaskID, req.SubTasks)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Sequential task failed", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -86,7 +86,7 @@ func (h *SysAdminHandler) HandleSequentialRun(w http.ResponseWriter, r *http.Req
 // HandleSwarmRun 触发一条 Swarm 编排任务。
 func (h *SysAdminHandler) HandleSwarmRun(w http.ResponseWriter, r *http.Request) {
 	if h.SwarmCoord == nil {
-		http.Error(w, "Swarm coordinator not enabled", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Swarm coordinator not enabled", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -97,13 +97,13 @@ func (h *SysAdminHandler) HandleSwarmRun(w http.ResponseWriter, r *http.Request)
 		Depth       int    `json:"depth"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request format", http.StatusBadRequest)
+		httputil.RespondError(w, "invalid request format", nil, http.StatusBadRequest)
 		return
 	}
 
 	err := h.SwarmCoord.Handoff(r.Context(), req.TaskID, req.AgentID, req.HandoffNote, req.Depth)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Swarm task failed", err, http.StatusInternalServerError)
 		return
 	}
 

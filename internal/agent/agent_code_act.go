@@ -17,6 +17,7 @@ import (
 
 // runCodeAct 执行代码执行沙箱节点，staged 与 agentic 模式共用（R3-02, R4-03）。
 func (a *Agent) runCodeAct(ctx context.Context, lang string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	ctx = a.withTaskScopeCtx(ctx)
 	if a.codeAct == nil {
 		return nil, apperr.New(apperr.CodeInternal,
 			"agent: codeAct engine not injected; cannot execute code_act node")

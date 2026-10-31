@@ -139,8 +139,7 @@ func cliRequest(method, path string, body any, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(resp.Body)
-		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		return apperr.New(apperr.CodeNetworkUnavailable, cliHTTPErrorText(resp))
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -609,8 +608,7 @@ func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		return "", apperr.New(apperr.CodeNetworkUnavailable, cliHTTPErrorText(resp))
 	}
 
 	var newSID string
@@ -832,8 +830,7 @@ func runExport(args []string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(resp.Body)
-		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("export: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		return apperr.New(apperr.CodeNetworkUnavailable, "export: "+cliHTTPErrorText(resp))
 	}
 
 	f, err := os.Create(outFile)
@@ -882,8 +879,7 @@ func runImport(args []string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(resp.Body)
-		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("import: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		return apperr.New(apperr.CodeNetworkUnavailable, "import: "+cliHTTPErrorText(resp))
 	}
 	var result map[string]any
 	json.NewDecoder(resp.Body).Decode(&result) //nolint:errcheck

@@ -129,6 +129,14 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 	if a.sCtx != nil {
 		if a.sCtx.SessionID != "" {
 			ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+			ctx = context.WithValue(ctx, protocol.CtxSessionIDKey{}, a.sCtx.SessionID)
+		}
+		agentID := a.sCtx.AgentID
+		if agentID == "" {
+			agentID = a.ID
+		}
+		if agentID != "" {
+			ctx = context.WithValue(ctx, protocol.CtxAgentIDKey{}, agentID)
 		}
 		if id := a.sCtx.CtxTurnID(); id != "" {
 			ctx = protocol.WithTurnID(ctx, id)

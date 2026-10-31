@@ -48,7 +48,7 @@ func newTestRunner(t *testing.T, sources ...Source) *Runner {
 	if err := reg.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return NewRunner(Deps{Registry: reg, Policy: allowPolicy{}, Wrapper: passthroughWrapper{}})
+	return NewRunner(Deps{Registry: reg, Policy: allowPolicy{}, Wrapper: passthroughWrapper{}, Auditor: &hookAuditFake{}})
 }
 
 func TestParseFile_ValidationAndMatcher(t *testing.T) {
@@ -193,7 +193,7 @@ func TestDispatch_PromptAndMCPHandlers(t *testing.T) {
 	reg := NewRegistry(staticProvider{src})
 	_ = reg.Reload(context.Background())
 	mcp := &fakeMCP{}
-	r := NewRunner(Deps{Registry: reg, Policy: allowPolicy{}, Prompt: fakePrompt{`sure: {"ok": false, "reason": "tests missing"}`}, MCP: mcp})
+	r := NewRunner(Deps{Registry: reg, Policy: allowPolicy{}, Prompt: fakePrompt{`sure: {"ok": false, "reason": "tests missing"}`}, MCP: mcp, Auditor: &hookAuditFake{}})
 	out := r.Dispatch(context.Background(), Input{HookEventName: EventStop})
 	if !out.Block || out.Reason != "tests missing" {
 		t.Fatalf("prompt verdict: %+v", out)

@@ -78,13 +78,12 @@ func shellOp(op operation, m map[string]any, ctx Context) operation {
 	op.netCap = true
 	env := CmdEnv{Roots: ctx.Roots, Home: ctx.Home}
 	cmd := argString(m, "command")
-	if wd := argString(m, "working_dir"); wd != "" {
-		w := newWalker(env)
-		if w.pathState(wd, false) == pathInside {
+	// 只有 run_command 契约声明 working_dir；bash 的额外字段不能改写分类基准。
+	if op.tool == "run_command" {
+		if wd := argString(m, "working_dir"); wd != "" {
+			// 即使 cwd 在可信根外也要以它为解析基准：相对写入会被
+			// ClassifyCommand 判为根外写入，同时仍检查自保护、灾难命令与网络。
 			env.Cwd = wd
-		} else {
-			op.cmd = CmdVerdict{Class: CmdUnknown, Reason: "working_dir_outside_workspace"}
-			return op
 		}
 	}
 	if cmd == "" {

@@ -52,11 +52,12 @@ func RegisterMemoryTools(
 	type entry struct {
 		tool types.Tool
 		fn   sandbox.InProcessFn
+		rich sandbox.InProcessRichFn
 	}
 
 	entries := []entry{
 		{tool: memoryWriteTool(), fn: MakeMemoryWriteFn(exclusiveWriter)},
-		{tool: memorySearchTool(), fn: MakeMemorySearchFn(retriever)},
+		{tool: memorySearchTool(), rich: MakeMemorySearchRichFn(retriever)},
 		{tool: memoryAppendTool(), fn: MakeMemoryAppendFn(semanticWriter)},
 		{tool: memoryExpireTool(), fn: MakeMemoryExpireFn(semanticWriter)},
 		{tool: memoryReflectTool(), fn: MakeMemoryReflectFn(reflection)},
@@ -66,7 +67,11 @@ func RegisterMemoryTools(
 	}
 
 	for _, e := range entries {
-		sbx.Register(e.tool.Name, e.fn)
+		if e.rich != nil {
+			sbx.RegisterRich(e.tool.Name, e.rich, types.TaintHigh)
+		} else {
+			sbx.Register(e.tool.Name, e.fn)
+		}
 		if err := toolReg.Register(e.tool); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("memory_tools: register %s", e.tool.Name), err)
 		}

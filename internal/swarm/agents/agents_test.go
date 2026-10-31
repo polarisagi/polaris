@@ -217,6 +217,69 @@ func TestMemoryAgent_Run_SkipsDistillUnderMemPressure(t *testing.T) {
 	ma.Run(ctx)
 }
 
+type testMemoryMaintenanceFacade struct {
+	protocol.MemoryFacade
+	scanCalls  int
+	pruneCalls int
+	scanErr    error
+	pruneErr   error
+	onScan     func()
+}
+
+func (f *testMemoryMaintenanceFacade) ScanHighSalienceEvents(context.Context, int64, float64, int) ([]types.SalienceEvent, error) {
+	f.scanCalls++
+	if f.onScan != nil {
+		f.onScan()
+	}
+	return nil, f.scanErr
+}
+
+func (f *testMemoryMaintenanceFacade) PruneMemoryGraph(context.Context) error {
+	f.pruneCalls++
+	return f.pruneErr
+}
+
+type testBackgroundAdmitter struct {
+	admitted   bool
+	admitCalls int
+	releases   int
+}
+
+func (a *testBackgroundAdmitter) AdmitBackground(string) (func(), bool) {
+	a.admitCalls++
+	return func() { a.releases++ }, a.admitted
+}
+
+func TestMemoryAgent_MaintenanceAdmissionDeniedSkipsCycle(t *testing.T) {
+	facade := &testMemoryMaintenanceFacade{}
+	admitter := &testBackgroundAdmitter{admitted: false}
+	ma := NewMemoryAgentWithAdmitter(facade, nil, nil, admitter)
+
+	ma.runMaintenanceCycle(context.Background())
+	if admitter.admitCalls != 1 || admitter.releases != 0 {
+		t.Fatalf("admission denied: calls=%d releases=%d", admitter.admitCalls, admitter.releases)
+	}
+	if facade.scanCalls != 0 || facade.pruneCalls != 0 {
+		t.Fatalf("denied maintenance must not run: scans=%d prunes=%d", facade.scanCalls, facade.pruneCalls)
+	}
+}
+
+func TestMemoryAgent_MaintenanceAdmissionReleasedAfterErrorsAndCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	facade := &testMemoryMaintenanceFacade{scanErr: errors.New("scan failed"), pruneErr: errors.New("prune failed")}
+	facade.onScan = cancel // simulate cancellation during an admitted cycle
+	admitter := &testBackgroundAdmitter{admitted: true}
+	ma := NewMemoryAgentWithAdmitter(facade, nil, nil, admitter)
+
+	ma.runMaintenanceCycle(ctx)
+	if admitter.admitCalls != 1 || admitter.releases != 1 {
+		t.Fatalf("admitted cycle must release exactly once: calls=%d releases=%d", admitter.admitCalls, admitter.releases)
+	}
+	if facade.scanCalls != 1 || facade.pruneCalls != 1 {
+		t.Fatalf("maintenance calls: scans=%d prunes=%d", facade.scanCalls, facade.pruneCalls)
+	}
+}
+
 // ── MemoryAgent 耳语高水位持久化 ────────────────────────────────────────────
 
 type fakeWhisperFacade struct {
@@ -249,7 +312,10 @@ func (s *memCursorStore) SaveCursor(_ context.Context, id string, seq int64) err
 }
 
 func TestMemoryAgent_CursorPersistence_ResumesAfterRebuild(t *testing.T) {
-	facade := &fakeWhisperFacade{events: []types.SalienceEvent{{ID: 1, Salience: 0.9}, {ID: 2, Salience: 0.9}}}
+	facade := &fakeWhisperFacade{events: []types.SalienceEvent{
+		{ID: 1, Salience: 0.9, ProjectID: types.DefaultProjectID, MetadataValid: true},
+		{ID: 2, Salience: 0.9, ProjectID: types.DefaultProjectID, MetadataValid: true},
+	}}
 	store := &memCursorStore{m: map[string]int64{}}
 	ctx := context.Background()
 
@@ -264,7 +330,7 @@ func TestMemoryAgent_CursorPersistence_ResumesAfterRebuild(t *testing.T) {
 	}
 
 	// 重建实例（模拟重启）+ 新增事件 3：只应推新事件。
-	facade.events = append(facade.events, types.SalienceEvent{ID: 3, Salience: 0.9})
+	facade.events = append(facade.events, types.SalienceEvent{ID: 3, Salience: 0.9, ProjectID: types.DefaultProjectID, MetadataValid: true})
 	ch2 := make(chan MemoryWhisper, 10)
 	ma2 := NewMemoryAgent(facade, ch2, nil)
 	ma2.SetCursorStore(store)
@@ -277,7 +343,7 @@ func TestMemoryAgent_CursorPersistence_ResumesAfterRebuild(t *testing.T) {
 }
 
 func TestMemoryAgent_CursorSaveFailure_DoesNotAbort(t *testing.T) {
-	facade := &fakeWhisperFacade{events: []types.SalienceEvent{{ID: 5, Salience: 0.9}}}
+	facade := &fakeWhisperFacade{events: []types.SalienceEvent{{ID: 5, Salience: 0.9, ProjectID: types.DefaultProjectID, MetadataValid: true}}}
 	store := &memCursorStore{m: map[string]int64{}, saveErr: errors.New("disk full")}
 	ch := make(chan MemoryWhisper, 4)
 	ma := NewMemoryAgent(facade, ch, nil)
@@ -287,5 +353,32 @@ func TestMemoryAgent_CursorSaveFailure_DoesNotAbort(t *testing.T) {
 	}
 	if len(ch) != 1 {
 		t.Fatalf("耳语仍应推送: %d", len(ch))
+	}
+}
+
+func TestMemoryAgent_SkipsOutOfScopeAndUnknownMetadataButAdvancesCursor(t *testing.T) {
+	facade := &fakeWhisperFacade{events: []types.SalienceEvent{
+		{ID: 1, Salience: 0.9, ProjectID: types.DefaultProjectID, TaintLevel: types.TaintHigh, MetadataValid: true},
+		{ID: 2, Salience: 0.9, ProjectID: "project-a", TaintLevel: types.TaintHigh, MetadataValid: true},
+		{ID: 3, Salience: 0.9, ProjectID: types.DefaultProjectID, MetadataValid: false},
+		{ID: 4, Salience: 0.9, Content: "four", ProjectID: types.DefaultProjectID, TaintLevel: types.TaintMedium, MetadataValid: true},
+		{ID: 5, Salience: 0.9, ProjectID: types.DefaultProjectID, TaintLevel: types.TaintLevel(99), MetadataValid: true},
+	}}
+	ch := make(chan MemoryWhisper, 8)
+	store := &memCursorStore{m: map[string]int64{}}
+	ma := NewMemoryAgent(facade, ch, nil)
+	ma.SetCursorStore(store)
+	if err := ma.scanHighSalienceEvents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(ch) != 2 || store.m[whisperCursorID] != 5 {
+		t.Fatalf("only valid default events should publish while all rows advance cursor: whispers=%d cursor=%d", len(ch), store.m[whisperCursorID])
+	}
+	first, second := <-ch, <-ch
+	if first.ProjectID != types.DefaultProjectID || first.TaintLevel != types.TaintHigh || !first.MetadataValid {
+		t.Fatalf("high-taint event metadata not carried into whisper: %+v", first)
+	}
+	if second.Content != "[ID:4] four" || second.TaintLevel != types.TaintMedium {
+		t.Fatalf("valid default event 4 should publish with its taint: %+v", second)
 	}
 }

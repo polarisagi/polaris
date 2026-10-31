@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -173,7 +174,7 @@ func (s *LogStore) Unsubscribe(id int) {
 // GET /v1/logs/stream?level=warn（可选过滤最低级别）
 func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	if s.logStore == nil {
-		http.Error(w, "log store not available", http.StatusServiceUnavailable)
+		httputil.RespondError(w, "Log stream is unavailable", nil, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -184,7 +185,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		httputil.RespondError(w, "Streaming is unavailable", nil, http.StatusInternalServerError)
 		return
 	}
 

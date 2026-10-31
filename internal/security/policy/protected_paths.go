@@ -38,6 +38,10 @@ func selfLayouts() []config.DataLayout {
 	if l, err := config.DefaultDataLayout(); err == nil {
 		out = append(out, l)
 	}
+	// 配置可重定向数据根及受保护子目录；运行时实际布局必须与默认路径并集保护。
+	if cfg := config.Get(); cfg != nil {
+		out = append(out, cfg.Layout())
+	}
 	// 环境变量重定向数据根时，默认布局之外的真实数据根同样受保护
 	if d := os.Getenv(config.EnvPolarisDataDir); d != "" {
 		out = append(out, config.NewDataLayout(config.ExpandHome(d), config.DirsConfig{}))

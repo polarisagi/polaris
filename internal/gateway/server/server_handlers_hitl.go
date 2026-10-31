@@ -31,7 +31,7 @@ import (
 // handleGetPendingApprovals 获取待审批任务。
 func (s *Server) handleGetPendingApprovals(w http.ResponseWriter, r *http.Request) {
 	if s.hitlGateway == nil {
-		http.Error(w, "HITL not enabled", http.StatusNotImplemented)
+		httputil.RespondError(w, "Approvals are unavailable", nil, http.StatusNotImplemented)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	// GR-9.1-001：限流键与全局中间件同一命名空间（clientIP:clientType，M13 §1.5）；
 	// 裸 IP 会让同 IP 不同 clientType 共用首个访问者配额创建的桶。
 	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP+":"+string(clientType), string(clientType)) {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		httputil.RespondError(w, "Rate limit exceeded", nil, http.StatusTooManyRequests)
 		return
 	}
 
@@ -144,14 +144,14 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	isAdmin := authCtx.Authenticated && (authCtx.UserID == "admin" || authCtx.UserID == "system")
 	isLocalWebUI := authCtx.ClientType.IsLocalTrusted()
 	if !isAdmin && !isLocalWebUI {
-		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
+		httputil.RespondError(w, "Forbidden", nil, http.StatusForbidden)
 		return
 	}
 
 	// M13 §1.2.5 单 task 防抖：同一 task 30s 内重复中断 → 429。按 task 计而非按
 	// 客户端计——多个客户端对同一任务连点中断同样会造成状态机抖动。
 	if _, dup := s.interruptDebounce.LoadOrStore(taskID, struct{}{}); dup {
-		http.Error(w, "interrupt for this task already in progress, retry later", http.StatusTooManyRequests)
+		httputil.RespondError(w, "Task interruption is already in progress", nil, http.StatusTooManyRequests)
 		return
 	}
 	time.AfterFunc(interruptDebounceWindow, func() { s.interruptDebounce.Delete(taskID) })
@@ -218,13 +218,13 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 // handleResolveApproval 提交审批结果。
 func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 	if s.hitlGateway == nil {
-		http.Error(w, "HITL not enabled", http.StatusNotImplemented)
+		httputil.RespondError(w, "Approvals are unavailable", nil, http.StatusNotImplemented)
 		return
 	}
 
 	pathParts := strings.Split(r.URL.Path, "/")
 	if len(pathParts) < 5 || pathParts[4] != "resolve" {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		httputil.RespondError(w, "Invalid path", nil, http.StatusBadRequest)
 		return
 	}
 	approvalID := pathParts[3]

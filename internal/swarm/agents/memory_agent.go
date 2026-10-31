@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 type MemoryWhisper = protocol.MemoryWhisper
@@ -23,6 +24,7 @@ type MemoryAgent struct {
 	mem          protocol.MemoryFacade
 	whisperChan  chan<- MemoryWhisper
 	memPressure  *atomic.Int32
+	admitter     BackgroundAdmitter
 	scanInterval time.Duration
 	lastSeenID   int64 // 高水位标记：只推送新增事件，防止同批事件每轮重复刷爆耳语通道
 	schedulers   []SyncScheduler
@@ -44,11 +46,23 @@ type SyncScheduler interface {
 	Start(ctx context.Context) error
 }
 
+// BackgroundAdmitter 是 MemoryAgent 周期维护使用的资源准入端口。
+// @producer: internal/automation.ResourceGovernor
+type BackgroundAdmitter interface {
+	AdmitBackground(work string) (release func(), admitted bool)
+}
+
 func NewMemoryAgent(mem protocol.MemoryFacade, whisperChan chan<- MemoryWhisper, memPressure *atomic.Int32) *MemoryAgent {
+	return NewMemoryAgentWithAdmitter(mem, whisperChan, memPressure, nil)
+}
+
+// NewMemoryAgentWithAdmitter 将周期维护接入宿主已有的后台资源准入器。
+func NewMemoryAgentWithAdmitter(mem protocol.MemoryFacade, whisperChan chan<- MemoryWhisper, memPressure *atomic.Int32, admitter BackgroundAdmitter) *MemoryAgent {
 	return &MemoryAgent{
 		mem:          mem,
 		whisperChan:  whisperChan,
 		memPressure:  memPressure,
+		admitter:     admitter,
 		scanInterval: 60 * time.Second,
 	}
 }
@@ -97,17 +111,33 @@ func (ma *MemoryAgent) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if ma.memPressure != nil && ma.memPressure.Load() >= 2 {
-				continue
-			}
-			if err := ma.scanHighSalienceEvents(ctx); err != nil {
-				slog.Error("memory_agent: scan failed", "err", err)
-			}
-			if ma.mem != nil {
-				if err := ma.mem.PruneMemoryGraph(ctx); err != nil {
-					slog.Error("memory_agent: prune failed", "err", err)
-				}
-			}
+			ma.runMaintenanceCycle(ctx)
+		}
+	}
+}
+
+func (ma *MemoryAgent) runMaintenanceCycle(ctx context.Context) {
+	if ma.memPressure != nil && ma.memPressure.Load() >= 2 {
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	if ma.admitter != nil {
+		release, admitted := ma.admitter.AdmitBackground("memory_agent_maintenance")
+		if !admitted {
+			return
+		}
+		if release != nil {
+			defer release()
+		}
+	}
+	if err := ma.scanHighSalienceEvents(ctx); err != nil {
+		slog.Error("memory_agent: scan failed", "err", err)
+	}
+	if ma.mem != nil {
+		if err := ma.mem.PruneMemoryGraph(ctx); err != nil {
+			slog.Error("memory_agent: prune failed", "err", err)
 		}
 	}
 }
@@ -130,14 +160,18 @@ func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
 		if e.ID > ma.lastSeenID {
 			ma.lastSeenID = e.ID
 		}
-		if ma.whisperChan == nil {
+		if ma.whisperChan == nil || !e.MetadataValid || e.ProjectID != types.DefaultProjectID ||
+			e.TaintLevel < types.TaintNone || e.TaintLevel > types.TaintUserReviewed {
 			continue
 		}
 		select {
 		case ma.whisperChan <- MemoryWhisper{
-			Source:   "memory_agent",
-			Salience: e.Salience,
-			Content:  fmt.Sprintf("[ID:%d] %s", e.ID, e.Content),
+			Source:        protocol.MemoryWhisperSourceMemoryAgent,
+			Salience:      e.Salience,
+			Content:       fmt.Sprintf("[ID:%d] %s", e.ID, e.Content),
+			ProjectID:     e.ProjectID,
+			TaintLevel:    e.TaintLevel,
+			MetadataValid: true,
 		}:
 		default:
 			// 通道满：丢弃（耳语是尽力而为的辅助信号，不阻塞主流程）

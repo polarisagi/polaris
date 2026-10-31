@@ -11,9 +11,8 @@ import (
 //
 // [A-03 Step4] ChatHandler.WriteSSEError（原 error 事件写入 + 分级日志封装）
 // 已随 HandleAgentStream 瘦身一并移除：唯一调用方是原 281 行版本的
-// HandleAgentStream 自身，日志分级逻辑已等价迁入
-// session.orchestrator.emitError（见 internal/gateway/session/orchestrator.go），
-// error 事件写入经 sseSink.Emit(KindError) 统一收口，不留孤儿方法。
+// HandleAgentStream 自身；日志与安全错误构造现由 session.orchestrator.emitError
+// 统一处理，SSE 适配器只投影安全 Payload，不序列化 Event.Err。
 func WriteSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, payload any) {
 	data, _ := json.Marshal(payload)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)

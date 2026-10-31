@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -110,6 +111,15 @@ func (f *fakeCatalog) Unregister(name string)                                   
 func (f *fakeCatalog) Invalidate()                                                 {}
 func (f *fakeCatalog) Schemas(context.Context, types.TrustTier) []types.ToolSchema { return nil }
 
+type mcpTestExecutionAuditor struct{}
+
+func (mcpTestExecutionAuditor) BeginExecution(context.Context, protocol.ExecutionAuditIntent) (string, error) {
+	return "mcp-test-execution", nil
+}
+func (mcpTestExecutionAuditor) CompleteExecution(context.Context, string, bool, string) error {
+	return nil
+}
+
 // newAppsTestManager 构造一个可真正执行 InProcess 工具（经 ExecEnvelope）的
 // MCPManager：MCP 工具的 AssignSandboxTier 恒为 InProcess（assign.go），
 // 因此 router 无需 Container/Wasm/Remote 即可完整路由。
@@ -123,7 +133,8 @@ func newAppsTestManagerWithRegistry(t *testing.T) (*MCPManager, *fakeCatalog, *t
 	t.Helper()
 	inProc := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 2)
-	env := sandbox.NewExecEnvelope(&mockPolicyGate{}, router, 2, runtime.GOOS, nil)
+	env := sandbox.NewExecEnvelope(&mockPolicyGate{}, router, 2, runtime.GOOS, &acceptVerifier{}).
+		WithExecutionAuditor(mcpTestExecutionAuditor{})
 
 	mgr := NewMCPManager(inProc, testSafeHTTP(nil), &mockPolicyGate{})
 	mgr.SetEnvelope(env)
@@ -175,7 +186,7 @@ func TestVisibility_AppOnlyExcludedFromModelCatalogButCallable(t *testing.T) {
 		t.Fatal("model-only tool must still be in model catalog")
 	}
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{Claims: token.TokenClaims{TokenID: "mcp-app-test"}})
 	// 模型路径（ExecuteTool）调不到 app-only 工具，也在注册表列表里看不到
 	if _, err := reg.ExecuteTool(ctx, MCPToolName("srv1", "widget_refresh"), []byte(`{}`), types.TaintLow); apperr.CodeOf(err) != apperr.CodeNotFound {
 		t.Fatalf("model path must not reach app-only tool, got %v", err)

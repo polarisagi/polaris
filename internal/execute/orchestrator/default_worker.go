@@ -272,14 +272,14 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 		return
 	}
 
-	if err := w.bb.CompleteTask(context.Background(), taskID, defaultTaskWorkerAgentID, []byte(output)); err != nil {
+	if err := w.bb.CompleteTaskWithTaint(context.Background(), taskID, defaultTaskWorkerAgentID, []byte(output.Output), types.EffectiveTaskResultTaint(output.TaintLevel)); err != nil {
 		slog.Warn("default task worker: CompleteTask failed", "task_id", taskID, "err", err)
 	}
 }
 
 // execute 委派任务（agent_handoff:<name>）经 SubagentRunner 按角色执行；其余任务为一次性 headless 查询。
 // hook 的 session_id 取任务 Namespace：委派方未配置协同命名空间时即其 SessionID（agent_handoff.go）。
-func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapshot, prompt string, opts []types.HeadlessOption, spec *types.SpawnTaskSpec) (string, error) {
+func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapshot, prompt string, opts []types.HeadlessOption, spec *types.SpawnTaskSpec) (*types.AgentResult, error) {
 	if name, ok := strings.CutPrefix(snap.Type, handoffTypePrefix); ok && w.subagents != nil {
 		req := SubagentRequest{
 			ParentSessionID: snap.Namespace,
@@ -289,11 +289,12 @@ func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapsho
 			Options:         opts,
 			Entry:           SubagentEntryDelegation,
 			TaskID:          snap.ID,
+			InputTaint:      types.EffectiveTaskResultTaint(snap.IntentTaint),
 			Profile:         w.buildDelegationProfile(ctx, name, spec),
 		}
-		out, err := w.subagents.Run(ctx, req)
+		out, err := w.subagents.RunWithTaint(ctx, req)
 		if err != nil {
-			return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: subagent", err)
+			return nil, apperr.Wrap(apperr.CodeOf(err), "default task worker: subagent", err)
 		}
 		return out, nil
 	}
@@ -307,11 +308,14 @@ func (w *DefaultTaskWorker) execute(ctx context.Context, snap *types.TaskSnapsho
 			AllowDelegation: true,
 		}))
 	}
-	res, err := w.pool.AcquireHeadless(ctx, types.Intent{Query: prompt}, opts...)
+	res, err := w.pool.AcquireHeadless(ctx, types.Intent{Query: prompt, TaintLevel: types.EffectiveTaskResultTaint(snap.IntentTaint)}, opts...)
 	if err != nil {
-		return "", apperr.Wrap(apperr.CodeOf(err), "default task worker: headless", err)
+		return nil, apperr.Wrap(apperr.CodeOf(err), "default task worker: headless", err)
 	}
-	return res.Output, nil
+	if res == nil {
+		return nil, apperr.New(apperr.CodeInternal, "default task worker: agent pool returned nil result")
+	}
+	return res, nil
 }
 
 func (w *DefaultTaskWorker) buildDelegationProfile(ctx context.Context, name string, spec *types.SpawnTaskSpec) *types.AgentProfileSpec {

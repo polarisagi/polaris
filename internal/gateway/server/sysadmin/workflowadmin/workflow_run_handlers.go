@@ -22,7 +22,7 @@ func (h *WorkflowAdmin) HandleTriggerWorkflow(w http.ResponseWriter, r *http.Req
 		FROM workflows WHERE id=?`, wfID).Scan(
 		&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 	); err != nil {
-		http.Error(w, "workflow not found", http.StatusNotFound)
+		httputil.RespondError(w, "workflow not found", nil, http.StatusNotFound)
 		return
 	}
 	wf.Enabled = enabledInt == 1
@@ -118,7 +118,7 @@ func (h *WorkflowAdmin) HandleGetRunStepData(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if status == "" && len(dataJSON) == 0 {
-		http.Error(w, "step data not found", http.StatusNotFound)
+		httputil.RespondError(w, "step data not found", nil, http.StatusNotFound)
 		return
 	}
 
@@ -160,11 +160,11 @@ func (h *WorkflowAdmin) HandleResumeWorkflowRun(w http.ResponseWriter, r *http.R
 
 	var wfID, status string
 	if err := h.DB.QueryRowContext(ctx, `SELECT workflow_id, status FROM workflow_runs WHERE id=?`, runID).Scan(&wfID, &status); err != nil {
-		http.Error(w, "workflow run not found", http.StatusNotFound)
+		httputil.RespondError(w, "workflow run not found", nil, http.StatusNotFound)
 		return
 	}
 	if status != "interrupted" && status != "error" {
-		http.Error(w, "run is not resumable (status="+status+")", http.StatusConflict)
+		httputil.RespondError(w, "Workflow run cannot be resumed", nil, http.StatusConflict)
 		return
 	}
 
@@ -175,12 +175,12 @@ func (h *WorkflowAdmin) HandleResumeWorkflowRun(w http.ResponseWriter, r *http.R
 		FROM workflows WHERE id=?`, wfID).Scan(
 		&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 	); err != nil {
-		http.Error(w, "workflow deleted", http.StatusConflict)
+		httputil.RespondError(w, "workflow deleted", nil, http.StatusConflict)
 		return
 	}
 	wf.Enabled = enabledInt == 1
 	if !wf.Enabled {
-		http.Error(w, "workflow disabled", http.StatusConflict)
+		httputil.RespondError(w, "workflow disabled", nil, http.StatusConflict)
 		return
 	}
 
@@ -191,7 +191,7 @@ func (h *WorkflowAdmin) HandleResumeWorkflowRun(w http.ResponseWriter, r *http.R
 		return
 	}
 	if !resumed {
-		http.Error(w, "run is not resumable", http.StatusConflict)
+		httputil.RespondError(w, "run is not resumable", nil, http.StatusConflict)
 		return
 	}
 

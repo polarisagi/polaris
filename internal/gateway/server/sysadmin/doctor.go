@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -129,7 +130,7 @@ func (h *SysAdminHandler) HandleGetMMDCanvas(w http.ResponseWriter, r *http.Requ
 	}
 	sessionID := r.URL.Query().Get("session_id")
 	if sessionID == "" {
-		http.Error(w, "session_id query parameter required", http.StatusBadRequest)
+		httputil.RespondError(w, "session_id query parameter required", nil, http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

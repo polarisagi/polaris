@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 func newTestSystemRepo(t *testing.T) *repo.SQLiteSystemRepository {
@@ -26,6 +27,14 @@ func newTestSystemRepo(t *testing.T) *repo.SQLiteSystemRepository {
 		t.Fatalf("create preferences table: %v", err)
 	}
 	return repo.NewSQLiteSystemRepository(db)
+}
+
+func TestAuditTrailLogAdapter_RejectsUnserializableMetadata(t *testing.T) {
+	adapter := auditTrailLogAdapter{}
+	err := adapter.Log(context.Background(), "execution_audit", map[string]any{"unsupported": make(chan int)})
+	if !apperr.IsCode(err, apperr.CodeInvalidInput) {
+		t.Fatalf("unserializable metadata must fail instead of recording an empty object, got %v", err)
+	}
 }
 
 // TestResolveNotionToken_EnvFallbackThenPersisted 验证 Notion token 解析优先级

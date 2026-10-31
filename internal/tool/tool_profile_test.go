@@ -35,7 +35,9 @@ func (dummyTokenVerifier) Verify(_ *token.Token) error { return nil }
 func newTestRegistry() (*InMemoryToolRegistry, *sandbox.InProcessSandbox) {
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0).WithAllowTrustedInProcessFallback(true)
-	return NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool), sbx
+	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", dummyTokenVerifier{}).
+		WithExecutionAuditor(testExecutionAuditor{})
+	return NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool), sbx
 }
 
 func TestToolRegistry_FullProfile_TaintEgressAuditOnly(t *testing.T) {

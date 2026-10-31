@@ -144,7 +144,7 @@ func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter,
 		return
 	}
 	if req.CatalogID == "" {
-		http.Error(w, "catalog_id required", http.StatusBadRequest)
+		httputil.RespondError(w, "catalog_id required", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -156,14 +156,14 @@ func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter,
 		   FROM sys_providers WHERE id=?`, req.CatalogID,
 	).Scan(&cat.ID, &cat.DisplayName, &cat.ProviderType, &cat.DefaultBaseURL, &isLocal)
 	if err != nil {
-		http.Error(w, "catalog provider not found: "+req.CatalogID, http.StatusNotFound)
+		httputil.RespondError(w, "Catalog provider not found", err, http.StatusNotFound)
 		return
 	}
 	cat.IsLocal = isLocal == 1
 
 	// 非本地厂商必须提供 api_key
 	if !cat.IsLocal && req.APIKey == "" {
-		http.Error(w, "api_key required for non-local provider", http.StatusBadRequest)
+		httputil.RespondError(w, "api_key required for non-local provider", nil, http.StatusBadRequest)
 		return
 	}
 

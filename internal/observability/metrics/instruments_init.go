@@ -379,6 +379,11 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("MCP Apps 视图文档票据事件数 (label: outcome: issued/hit/miss/expired/full)"),
 	)
 	ie.capture("polaris.mcp_apps.view_tickets_total", err)
+	InstrExecutionAuditRecordsTotal, err = meter.Int64Counter(
+		"polaris.audit.execution_records_total",
+		metric.WithDescription("Physical execution audit record attempts (labels: phase, status)"),
+	)
+	ie.capture("polaris.audit.execution_records_total", err)
 
 	// 网页抓取可观测性（ADR-0114）
 	InstrWebFetchesTotal, err = meter.Int64Counter(

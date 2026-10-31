@@ -1,6 +1,7 @@
 import Alpine from 'alpinejs'
 import { newTurn, applyStep } from './steps.js'
 import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
+import { readHTTPErrorMessage } from '../http_error.mjs'
 import { SSEClient, dedupeRunID } from '../sse.js'
 import { mcpAppsHost } from '../mcp_apps.js'
 import { WavRecorder } from '../audio/wav_recorder.js'
@@ -279,17 +280,7 @@ const chatStore = {
 
   // 读取服务端错误文本：优先 JSON 的 message/error 字段，否则取纯文本；失败返回空串。
   async _readErrMessage(resp) {
-    try {
-      const raw = await resp.text();
-      try {
-        const j = JSON.parse(raw);
-        return j.message || j.error || raw;
-      } catch {
-        return raw;
-      }
-    } catch {
-      return '';
-    }
+    return readHTTPErrorMessage(resp)
   },
 
   // 语音资产门控（kind: 'stt'|'tts'）。返回 true 表示现在即可使用（ready，或 loading——请求会等待加载完成）。

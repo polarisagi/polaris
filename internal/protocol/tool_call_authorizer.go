@@ -6,8 +6,10 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// ToolCallAuthorizer 对 code_act 工具桥内层调用做统一权限判定（ADR-0121 决策六）。
-// ok=true 时 grant 为该次调用的授权凭据；ok=false 时 reason 回给脚本。
+// ToolCallAuthorizer 对 code_act 工具桥和执行前 Hook 改参调用做统一权限判定
+// （ADR-0121 决策六）。实现须先校验 tool.InputSchema，再按本次 args/taint 执行
+// policy.Decide；不允许把外层调用的 grant 作为内层授权。ok=true 时 grant 是该次
+// 参数的授权凭据；ok=false 时 reason 可返回给调用方。Ask 必须返回 ok=false。
 type ToolCallAuthorizer interface {
 	AuthorizeCall(ctx context.Context, tool types.Tool, args []byte, taint types.TaintLevel) (grant PermissionGrant, reason string, ok bool)
 }
