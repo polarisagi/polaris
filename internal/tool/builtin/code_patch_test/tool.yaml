@@ -1,0 +1,13 @@
+name: code_patch_test
+description: "在断网 Rust 沙箱的固定本地仓库副本中执行基线与候选测试。"
+version: "1.0.0"
+capability: write-local
+risk_level: high
+sandbox: in-process
+side_effects:
+  - file-write
+  - process-spawn
+tags:
+  - benchmark
+  - code-patch
+  - eval

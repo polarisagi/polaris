@@ -48,8 +48,19 @@ EvalRunReport struct {
 	// 注入，或 Judge 调用失败。非 P0 用例此时沿用字符串检查结果，因此这个数字是
 	// "本次报告里有多少条结论其实没经过语义评判"——不单独计数的话，一份
 	// pass_count 很高的报告可能实际上一条都没真正评过（2026-08-11 补）。
-	L4Unjudged int    `json:"l4_unjudged,omitempty"`
-	Status     string `json:"status"`
+	L4Unjudged int                    `json:"l4_unjudged,omitempty"`
+	Status     string                 `json:"status"`
+	CodePatch  *CodePatchEvalMetadata `json:"code_patch,omitempty"`
+}
+
+type CodePatchEvalMetadata struct {
+	Model              string `json:"model,omitempty"`
+	Calls              int    `json:"calls"`
+	DurationMs         int64  `json:"duration_ms"`
+	InputTokens        int    `json:"input_tokens"`
+	OutputTokens       int    `json:"output_tokens"`
+	CostAvailable      bool   `json:"cost_available"`
+	ManualIntervention bool   `json:"manual_intervention"`
 }
 
 type

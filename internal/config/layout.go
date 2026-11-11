@@ -178,7 +178,6 @@ func (l DataLayout) Migrate() {
 	migrations := []mv{
 		// 数据库：根目录 → data/
 		{filepath.Join(l.Root, SQLiteDBFileName), l.SQLiteDB},
-		{filepath.Join(l.Root, "surreal_rust.db"), l.SurrealDB},
 		// 日志：根目录 → logs/
 		{filepath.Join(l.Root, "polaris.log"), filepath.Join(l.Logs, "polaris.log")},
 		{filepath.Join(l.Root, "polaris.error.log"), filepath.Join(l.Logs, "polaris.error.log")},

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"runtime"
 	"time"
@@ -19,17 +20,20 @@ import (
 // 语义合并 stdout/stderr 且无 stdin，无法承载该协议；此处与 MCP stdio、L4 持久会话一样
 // 经 ArgvWrapper 取得 Rust 沙箱封装后的 argv 自行启动进程（ADR-0103 决策六）。
 type StdioRequest struct {
-	CallerType   string   // protocol.SandboxCallerType
-	Command      string   // shell 形式（bash -c）；与 ExecPath 二选一
-	ExecPath     string   // exec 形式：可执行文件 + Args，不经 shell（参数中的变量值不会被 shell 再解析）
-	Args         []string // exec 形式参数
-	Stdin        []byte
-	Env          []string // KEY=VALUE，叠加在沙箱 preset 之上
-	WorkDir      string
-	AllowedPaths []string
-	AllowNet     bool
-	Timeout      time.Duration
-	MaxOutput    int // stdout / stderr 各自上限（字节）；0 = 1MiB
+	CallerType      string   // protocol.SandboxCallerType
+	Command         string   // shell 形式（bash -c）；与 ExecPath 二选一
+	ExecPath        string   // exec 形式：可执行文件 + Args，不经 shell（参数中的变量值不会被 shell 再解析）
+	Args            []string // exec 形式参数
+	Stdin           []byte
+	Env             []string // KEY=VALUE，叠加在沙箱 preset 之上
+	WorkDir         string
+	AllowedPaths    []string
+	DenyPaths       []string
+	DenyWritePaths  []string
+	RequirePhysical bool
+	AllowNet        bool
+	Timeout         time.Duration
+	MaxOutput       int // stdout / stderr 各自上限（字节）；0 = 1MiB
 }
 
 // StdioResult 进程结果。TimedOut 时 ExitCode 为 -1。
@@ -50,11 +54,13 @@ func RunStdio(ctx context.Context, wrapper ArgvWrapper, req StdioRequest) (Stdio
 		return StdioResult{}, errStdioWrapperMissing
 	}
 	sctx := protocol.SandboxContext{
-		CallerType:    req.CallerType,
-		Workdir:       req.WorkDir,
-		AllowedPaths:  req.AllowedPaths,
-		EnvExtra:      req.Env,
-		NetworkPolicy: protocol.NetPolicyDeny,
+		CallerType:     req.CallerType,
+		Workdir:        req.WorkDir,
+		AllowedPaths:   req.AllowedPaths,
+		DenyPaths:      req.DenyPaths,
+		DenyWritePaths: req.DenyWritePaths,
+		EnvExtra:       req.Env,
+		NetworkPolicy:  protocol.NetPolicyDeny,
 	}
 	if req.AllowNet {
 		sctx.NetworkPolicy = protocol.NetPolicyAllow
@@ -71,6 +77,12 @@ func RunStdio(ctx context.Context, wrapper ArgvWrapper, req StdioRequest) (Stdio
 	if err != nil {
 		return StdioResult{}, apperr.Wrap(apperr.CodeForbidden, "stdio process: sandbox wrap failed, refusing to spawn unsandboxed", err)
 	}
+	if wrapped == nil || wrapped.Executable == "" {
+		return StdioResult{}, apperr.New(apperr.CodeForbidden, "stdio process: sandbox wrapper returned an incomplete argv result")
+	}
+	if req.RequirePhysical && wrapped.SandboxMethod != "bwrap" && wrapped.SandboxMethod != "seatbelt" {
+		return StdioResult{}, apperr.New(apperr.CodeForbidden, "stdio process: physical bwrap/Seatbelt isolation required")
+	}
 	return runWrapped(ctx, wrapped, req)
 }
 
@@ -86,7 +98,9 @@ func runWrapped(ctx context.Context, wrapped *protocol.WrapArgvResult, req Stdio
 		limit = 1 << 20
 	}
 	cmd := exec.CommandContext(runCtx, wrapped.Executable, wrapped.Argv...) //nolint:gosec // argv 来自 Rust 沙箱封装
-	cmd.SysProcAttr = setPdeathsig(cmd.SysProcAttr)
+	cmd.SysProcAttr = setStdioProcessGroup(setPdeathsig(cmd.SysProcAttr))
+	cmd.Cancel = func() error { return killStdioProcessGroup(cmd) }
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = req.WorkDir
 	if !wrapped.EnvInArgv {
 		cmd.Env = wrapped.Env
@@ -100,9 +114,18 @@ func runWrapped(ctx context.Context, wrapped *protocol.WrapArgvResult, req Stdio
 	start := time.Now()
 	runErr := cmd.Run()
 	res := StdioResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Method: wrapped.SandboxMethod, Duration: time.Since(start)}
+	if req.RequirePhysical {
+		if cleanupErr := killStdioProcessGroup(cmd); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrProcessDone) {
+			return res, apperr.Wrap(apperr.CodeInternal, "stdio process: clean up physical sandbox process group", cleanupErr)
+		}
+	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		res.TimedOut, res.ExitCode = true, -1
 		return res, nil
+	}
+	if errors.Is(runCtx.Err(), context.Canceled) {
+		res.ExitCode = -1
+		return res, apperr.Wrap(apperr.CodeCancelled, "stdio process: execution cancelled", runCtx.Err())
 	}
 	var exitErr *exec.ExitError
 	switch {

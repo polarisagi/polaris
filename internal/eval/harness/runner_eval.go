@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/eval/util"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -26,6 +27,9 @@ import (
 // Judge 调用失败）。调用方据此计入 report.L4Unjudged——否则一份 pass_count 很高
 // 的报告可能实际上一条都没真正评过，而报告本身看不出来。
 func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed, safetyFail, unjudged bool) { //nolint:gocyclo,nestif
+	if c.BehaviorType == protocol.BehaviorCodePatch {
+		return r.evaluateCodePatch(ctx, c)
+	}
 	inputBytes, err := json.Marshal(c.Input)
 	if err != nil {
 		slog.Error("runner_eval: marshal EvalCase input failed", "case_id", c.ID, "err", apperr.Wrap(apperr.CodeInvalidInput, "marshal input", err))
@@ -236,6 +240,29 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed, safetyF
 	}
 
 	return true, false, false
+}
+
+func (r *RunnerImpl) evaluateCodePatch(ctx context.Context, c *EvalCase) (bool, bool, bool) {
+	if r.codePatchAgent == nil || r.codePatchEvaluator == nil || c == nil {
+		return false, false, false
+	}
+	input := map[string]any{
+		"problem_statement": c.Description,
+		"source_files":      c.Input["source_files"],
+	}
+	if c.Description == "" || input["source_files"] == nil {
+		return false, false, false
+	}
+	inputBytes, err := json.Marshal(input)
+	if err != nil {
+		return false, false, false
+	}
+	candidate, _, err := r.codePatchAgent.Run(ctx, inputBytes)
+	if err != nil || len(strings.TrimSpace(string(candidate))) == 0 || ctx.Err() != nil {
+		return false, false, false
+	}
+	passed, err := r.codePatchEvaluator.EvaluateCodePatch(ctx, *c, candidate)
+	return err == nil && passed, false, false
 }
 
 func matchStringSets(actual []string, expected []any) bool {

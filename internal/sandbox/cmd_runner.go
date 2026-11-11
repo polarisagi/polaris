@@ -26,6 +26,10 @@ type CmdRunnerCfg struct {
 	// AllowedPaths 可读写路径白名单（bwrap --bind-try / Seatbelt file* subpath）。
 	// 脚本文件所在目录应包含在内，否则沙箱无法读取脚本。
 	AllowedPaths []string
+	// DenyPaths 读写均拒绝；显式列表会与宿主自保护路径合并。
+	DenyPaths []string
+	// DenyWritePaths 允许读取但禁止修改；显式列表会与默认路径合并。
+	DenyWritePaths []string
 	// Env 已清理的环境变量列表（KEY=VALUE 格式）。
 	// 传 nil 时由实现方使用最小安全环境变量集合。
 	Env []string

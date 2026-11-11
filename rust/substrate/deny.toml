@@ -37,3 +37,9 @@ allow = [
     "MPL-2.0",
     "AGPL-3.0-or-later"
 ]
+
+# SurrealKV 当前通过 xxhash-rust 使用 Boost BSL-1.0；仅对复核过的该精确版本放行。
+[[licenses.exceptions]]
+name = "xxhash-rust"
+version = "=0.8.19"
+allow = ["BSL-1.0"]

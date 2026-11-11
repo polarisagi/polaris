@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,11 +18,14 @@ import (
 )
 
 type RunnerImpl struct {
-	store      protocol.Store
-	evalStore  *SQLiteEvalStore
-	agent      EvalAgent
-	activeRuns map[string]context.CancelFunc
-	mu         sync.Mutex
+	store              protocol.Store
+	evalStore          *SQLiteEvalStore
+	agent              EvalAgent
+	codePatchAgent     EvalAgent
+	codePatchEvaluator protocol.CodePatchEvaluator
+	activeRuns         map[string]context.CancelFunc
+	mu                 sync.Mutex
+	benchmarkMu        sync.Mutex
 	// evalCh 非 nil 时，RunSuite 完成后将评分结果发布给 M9 外环（HE-Rule-6 闭环）。
 	evalCh chan<- types.EvalCompletedPayload
 	// llmProvider 用于 Level4LLMJudge 语义评判，可选注入（nil 时 L4 退化为 L1 字符串匹配）
@@ -117,6 +121,16 @@ func (r *RunnerImpl) InjectAgent(agent EvalAgent) {
 	r.agent = agent
 }
 
+// InjectCodePatchAgent 注入仅用于生成候选补丁的独立 Agent。
+func (r *RunnerImpl) InjectCodePatchAgent(agent EvalAgent) {
+	r.codePatchAgent = agent
+}
+
+// InjectCodePatchEvaluator 注入物理隔离的本地补丁评测器。
+func (r *RunnerImpl) InjectCodePatchEvaluator(evaluator protocol.CodePatchEvaluator) {
+	r.codePatchEvaluator = evaluator
+}
+
 // InjectL3ThresholdProvider 注入 L3 阈值提供者
 func (r *RunnerImpl) InjectL3ThresholdProvider(p L3ThresholdProvider) {
 	r.l3ThresholdProvider = p
@@ -177,48 +191,167 @@ func (r *RunnerImpl) publishEvalCompleted(ctx context.Context, report *types.Eva
 }
 
 func (r *RunnerImpl) RunBenchmarkDataset(ctx context.Context, datasetName string, cases []any, candidateID string) (*types.EvalRunReport, error) {
-	var report *types.EvalRunReport
+	if len(cases) == 0 {
+		return nil, apperr.New(apperr.CodeInvalidInput, "eval_runner: empty benchmark dataset")
+	}
+	r.benchmarkMu.Lock()
+	defer r.benchmarkMu.Unlock()
+	if reporter, ok := r.codePatchAgent.(interface{ ResetCodePatchStats() }); ok {
+		reporter.ResetCodePatchStats()
+	}
 
 	runID := "benchmark_" + datasetName
 	if candidateID != "" {
 		runID += "_" + candidateID
 	}
 
+	var report *types.EvalRunReport
 	err := r.RunWithContext(ctx, runID, func(runCtx context.Context) error {
-		report = &types.EvalRunReport{
-			Suite:      "benchmark_" + datasetName,
-			TotalCases: len(cases),
-			Status:     "running",
-		}
-
-		for _, cAny := range cases {
-			select {
-			case <-runCtx.Done():
-				report.Status = "cancelled"
-				return runCtx.Err()
-			default:
-			}
-			_, ok := cAny.(EvalCase)
-			if !ok {
-				_, ptrOk := cAny.(*EvalCase)
-				if !ptrOk {
-					return apperr.New(apperr.CodeInternal, "eval_runner: invalid case type")
-				}
-			}
-
-			// Execute actual evaluation loop similar to standard suites...
-			// In a real implementation this would trigger the actual execution loop.
-			// Here we increment counters for simulation
-			report.TotalCases++
-		}
-		report.Status = "completed"
-		return nil
+		report = &types.EvalRunReport{Suite: "benchmark_" + datasetName, TotalCases: len(cases), Status: "running"}
+		return r.evaluateBenchmarkCases(runCtx, report, cases)
 	})
+	if report != nil {
+		if reporter, ok := r.codePatchAgent.(interface {
+			CodePatchStats() types.CodePatchEvalMetadata
+		}); ok {
+			metadata := reporter.CodePatchStats()
+			report.CodePatch = &metadata
+		}
+	}
 
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "RunnerImpl.RunBenchmarkDataset", err)
+		if report != nil && (ctx.Err() != nil || report.Status == "cancelled") {
+			report.Status = "cancelled"
+			return report, apperr.Wrap(apperr.CodeCancelled, "RunnerImpl.RunBenchmarkDataset", err)
+		}
+		if report != nil && report.Status == "" {
+			report.Status = "failed"
+		}
+		return report, apperr.Wrap(apperr.CodeOf(err), "RunnerImpl.RunBenchmarkDataset", err)
 	}
 	return report, nil
+}
+
+func (r *RunnerImpl) evaluateBenchmarkCases(ctx context.Context, report *types.EvalRunReport, cases []any) error {
+	for _, item := range cases {
+		if err := ctx.Err(); err != nil {
+			report.Status = "cancelled"
+			return apperr.Wrap(apperr.CodeCancelled, "eval_runner: benchmark cancelled", err)
+		}
+		c, err := parseBenchmarkCase(item)
+		if err != nil {
+			report.Status = "failed"
+			return err
+		}
+		if c.BehaviorType == protocol.BehaviorCodePatch && !validCodePatchCase(c) {
+			report.Status = "failed"
+			return apperr.New(apperr.CodeUnimplemented, "eval_runner: unsupported code patch case; explicit local repository, source_files, and test command groups are required")
+		}
+		passed, safetyFail, unjudged := r.evaluate(ctx, &c)
+		if unjudged {
+			passed = false
+		}
+		accumulateBenchmarkResult(report, c, passed, safetyFail, unjudged)
+		if err := ctx.Err(); err != nil {
+			report.Status = "cancelled"
+			return apperr.Wrap(apperr.CodeCancelled, "eval_runner: benchmark cancelled", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		report.Status = "cancelled"
+		return apperr.Wrap(apperr.CodeCancelled, "eval_runner: benchmark cancelled", err)
+	}
+	report.Status = "completed"
+	if report.FailCount > 0 || report.L4Unjudged > 0 || report.SafetyFail > 0 || report.P0Fail > 0 {
+		report.Status = "failed"
+	}
+	return nil
+}
+
+func parseBenchmarkCase(item any) (EvalCase, error) {
+	switch c := item.(type) {
+	case EvalCase:
+		return c, nil
+	case *EvalCase:
+		if c != nil {
+			return *c, nil
+		}
+	}
+	return EvalCase{}, apperr.New(apperr.CodeInvalidInput, "eval_runner: invalid case type")
+}
+
+func accumulateBenchmarkResult(report *types.EvalRunReport, c EvalCase, passed, safetyFail, unjudged bool) {
+	if c.Severity == SeverityP0 {
+		report.P0Count++
+	}
+	if safetyFail {
+		report.SafetyFail++
+	}
+	if unjudged {
+		report.L4Unjudged++
+	}
+	if passed {
+		report.PassCount++
+		return
+	}
+	report.FailCount++
+	switch c.Severity {
+	case SeverityP0:
+		report.P0Fail++
+	case SeverityP1:
+		report.P1Fail++
+	}
+}
+
+func validCodePatchCase(c EvalCase) bool {
+	path, _ := c.Input["repo_path"].(string)
+	commit, _ := c.Input["base_commit"].(string)
+	if c.Description == "" || !filepath.IsAbs(path) || !isFullCommitHash(commit) || c.Input["source_files"] == nil {
+		return false
+	}
+	if _, exists := c.Expected["patch"]; exists {
+		return false
+	}
+	return hasBenchmarkCommands(c.Config["fail_to_pass_commands"]) && hasBenchmarkCommands(c.Config["pass_to_pass_commands"])
+}
+
+func hasBenchmarkCommands(value any) bool {
+	switch commands := value.(type) {
+	case []string:
+		if len(commands) == 0 || len(commands) > 8 {
+			return false
+		}
+		for _, command := range commands {
+			if command == "" {
+				return false
+			}
+		}
+		return true
+	case []any:
+		if len(commands) == 0 || len(commands) > 8 {
+			return false
+		}
+		for _, command := range commands {
+			if text, ok := command.(string); !ok || text == "" {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func isFullCommitHash(commit string) bool {
+	if len(commit) != 40 && len(commit) != 64 {
+		return false
+	}
+	for _, char := range commit {
+		if char < '0' || (char > '9' && char < 'a') || char > 'f' {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID string) (*types.EvalRunReport, error) { //nolint:gocyclo

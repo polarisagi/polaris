@@ -1,7 +1,7 @@
 package benchmark
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -52,15 +52,12 @@ func (a *SWEBenchLiteAdapter) Load(_ context.Context, datasetPath string) ([]pro
 			ID:          inst.InstanceID,
 			Description: inst.ProblemStatement,
 			Input: map[string]any{
-				"repo":        inst.Repo,
-				"base_commit": inst.BaseCommit,
-				"test_patch":  inst.TestPatch,
+				"repo":               inst.Repo,
+				"base_commit":        inst.BaseCommit,
+				"test_patch":         inst.TestPatch,
+				"unsupported_reason": "官方 SWE-bench 未提供本地 repo 路径、源代码上下文与安全测试命令映射",
 			},
-			Expected: map[string]any{
-				"patch":        inst.Patch,
-				"fail_to_pass": inst.FailToPass,
-				"pass_to_pass": inst.PassToPass,
-			},
+			Expected:            map[string]any{},
 			BehaviorType:        protocol.BehaviorCodePatch,
 			Level:               protocol.Level3Trajectory,
 			FalsifiabilityScore: 0.9,
@@ -81,33 +78,30 @@ func (a *SWEBenchLiteJSONLAdapter) Name() string { return "swe-bench-jsonl" }
 
 // Load 读取 JSONL 格式 SWE-bench 数据集。
 func (a *SWEBenchLiteJSONLAdapter) Load(_ context.Context, datasetPath string) ([]protocol.EvalCase, error) {
-	f, err := os.Open(datasetPath)
+	data, err := readBoundedDataset(datasetPath)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInvalidInput, "SWEBenchLiteJSONLAdapter: open dataset", err)
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "SWEBenchLiteJSONLAdapter: read dataset", err)
 	}
-	defer f.Close()
 
 	var cases []protocol.EvalCase
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
-	for scanner.Scan() {
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
 		var inst sweBenchInstance
-		if err := json.Unmarshal(scanner.Bytes(), &inst); err != nil {
+		if err := json.Unmarshal(line, &inst); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInvalidInput, "SWEBenchLiteJSONLAdapter: parse line", err)
 		}
 		cases = append(cases, protocol.EvalCase{
 			ID:          inst.InstanceID,
 			Description: inst.ProblemStatement,
 			Input: map[string]any{
-				"repo":        inst.Repo,
-				"base_commit": inst.BaseCommit,
-				"test_patch":  inst.TestPatch,
+				"repo":               inst.Repo,
+				"base_commit":        inst.BaseCommit,
+				"test_patch":         inst.TestPatch,
+				"unsupported_reason": "官方 SWE-bench 未提供本地 repo 路径、源代码上下文与安全测试命令映射",
 			},
-			Expected: map[string]any{
-				"patch":        inst.Patch,
-				"fail_to_pass": inst.FailToPass,
-				"pass_to_pass": inst.PassToPass,
-			},
+			Expected:            map[string]any{},
 			BehaviorType:        protocol.BehaviorCodePatch,
 			Level:               protocol.Level3Trajectory,
 			FalsifiabilityScore: 0.9,
@@ -116,9 +110,5 @@ func (a *SWEBenchLiteJSONLAdapter) Load(_ context.Context, datasetPath string) (
 			Tags:                []string{"benchmark", "swe-bench", "coding"},
 		})
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "SWEBenchLiteJSONLAdapter: scan", err)
-	}
-
 	return cases, nil
 }

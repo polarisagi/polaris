@@ -2,10 +2,61 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
+
+func TestNormalizeSurrealBackend(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		want       string
+		deprecated bool
+		wantErr    bool
+	}{
+		{name: "empty keeps direct API memory default", input: "", want: "mem"},
+		{name: "memory", input: "mem", want: "mem"},
+		{name: "surrealkv", input: "surrealkv", want: "surrealkv"},
+		{name: "legacy rocksdb", input: "rocksdb", want: "surrealkv", deprecated: true},
+		{name: "unknown", input: "unknown", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, deprecated, err := NormalizeSurrealBackend(test.input)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("NormalizeSurrealBackend(%q) error=%v, wantErr=%v", test.input, err, test.wantErr)
+			}
+			if err == nil && (got != test.want || deprecated != test.deprecated) {
+				t.Fatalf("NormalizeSurrealBackend(%q)=(%q,%t), want (%q,%t)", test.input, got, deprecated, test.want, test.deprecated)
+			}
+		})
+	}
+}
+
+func TestOpenSurrealDBCoreRejectsUnknownBackendBeforeLoadingFFI(t *testing.T) {
+	if _, err := OpenSurrealDBCore("unknown", "", 3, 2); apperr.CodeOf(err) != apperr.CodeInvalidInput {
+		t.Fatalf("unknown backend error=%v, want invalid input before FFI load", err)
+	}
+	if _, err := OpenSurrealDBCore("surrealkv", "", 3, 2); apperr.CodeOf(err) != apperr.CodeInvalidInput {
+		t.Fatalf("empty persistent path error=%v, want invalid input before FFI load", err)
+	}
+}
+
+func TestCheckSurrealStorageVersion(t *testing.T) {
+	for _, version := range []uint32{3, 4, 5} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			err := checkSurrealStorageVersion(version)
+			if version == expectedSurrealStorageVersion && err != nil {
+				t.Fatalf("storage version %d rejected: %v", version, err)
+			}
+			if version != expectedSurrealStorageVersion && err == nil {
+				t.Fatalf("storage version %d accepted, want mismatch rejection", version)
+			}
+		})
+	}
+}
 
 func TestSurrealStore_BasicOps(t *testing.T) {
 	s, err := OpenSurrealDBCore("mem", "", 3, 2)

@@ -58,7 +58,7 @@ pub unsafe extern "C" fn surreal_graph_relate(
         // type::record('edges', $ek) 确定性 ID = edges:(from\x1fet\x1fto)
         // UPSERT 保证同一条边最多一条记录，同时支持 weight 更新
         let edge_key = edge_record_key(&from, &et, &to);
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             guard
                 .db
                 .query(
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn surreal_graph_delete_edges(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             if et.is_empty() {
                 guard
                     .db
@@ -209,7 +209,7 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
             }
 
             let sql = "SELECT from_id, to_id, weight FROM edges WHERE from_id IN $nodes";
-            let all_edges: Vec<EdgeRow> = match guard.rt.block_on(async {
+            let all_edges: Vec<EdgeRow> = match guard.block_on(async {
                 let mut resp = guard.db.query(sql).bind(("nodes", active_nodes)).await?;
                 resp.take(0)
             }) {
@@ -333,7 +333,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
                 "SELECT to_id FROM edges WHERE from_id IN $frontier AND edge_type = $et".to_string()
             };
             // 查询出错时返回 SURREAL_ERR_QUERY，不以空结果伪装"无可达节点"
-            let next: Vec<String> = match guard.rt.block_on(async {
+            let next: Vec<String> = match guard.block_on(async {
                 let mut resp = guard
                     .db
                     .query(&sql)

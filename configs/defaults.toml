@@ -264,13 +264,15 @@ timeout_sec = 0
 
 [cognition]
 # SurrealDB 认知存储后端（运行时选择，不影响编译）。
-# "rocksdb" = kv-rocksdb 持久化（默认），数据落盘 data/surreal.db，RSS ~200MB。
+# "surrealkv" = kv-surrealkv 持久化（默认），数据落盘 data/surreal.db。
 #             系统自动根据内存降级：
 #               TotalRAM < 2GB  → SurrealDB 完全跳过，cognitive axis → SQLite
 #               2GB ≤ RAM < 4GB → 强制降级为 "mem"（进程重启数据丢失）
-#               TotalRAM ≥ 4GB  → 使用本配置值（默认 "rocksdb"，持久化）
+#               TotalRAM ≥ 4GB  → 使用本配置值（默认 "surrealkv"，持久化）
 # "mem"     = kv-mem 进程内存，重启丢失，可手动设置强制 mem 模式（如低配 VPS）。
-surreal_backend = "rocksdb"
+# 旧配置名 "rocksdb" 会兼容映射为 "surrealkv" 并记录弃用提示。
+# 旧的非空 SurrealDB 目录不会自动迁移到新格式；升级前由用户自行处理旧目录。
+surreal_backend = "surrealkv"
 surreal_db_path = ""
 # Tokio 运行时工作线程数（影响 SurrealDB 并发写入吞吐与内存占用）。
 # 0  = auto（min(CPU 核心数, 4)）—— ≥8GB 机器自动选择。

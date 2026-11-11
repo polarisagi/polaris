@@ -5,9 +5,18 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::sync::{Arc, RwLock};
 
-use super::{STORE, SURREAL_ERR_PANIC, SURREAL_OK, SurrealStore, WORKER_THREADS};
+use super::{
+    STORE, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK, SurrealStore,
+    WORKER_THREADS, disk_guard::SURREAL_STORAGE_VERSION,
+};
 
 use std::sync::atomic::Ordering;
+
+/// 返回当前 Surreal 磁盘格式能力版本，不触碰存储目录。
+#[unsafe(no_mangle)]
+pub extern "C" fn surreal_storage_version() -> u32 {
+    SURREAL_STORAGE_VERSION
+}
 
 // ─── surreal_set_worker_threads ────────────────────────────────────────────────
 
@@ -27,7 +36,7 @@ pub extern "C" fn surreal_set_worker_threads(n: c_int) -> c_int {
 // ─── surreal_open ──────────────────────────────────────────────────────────────
 
 /// 初始化全局 SurrealStore（幂等，多次调用安全）。
-/// backend: "mem"（默认, kv-mem, 任意内存大小可用）或 "rocksdb"（持久化，推荐大内存服务器）。
+/// backend: "mem"（任意内存大小可用）或 "surrealkv"（持久化）。
 /// vec_dim: HNSW 向量维度，须与实际嵌入模型一致（典型值 1536 或 768）。
 ///
 /// # Safety
@@ -44,11 +53,14 @@ pub unsafe extern "C" fn surreal_open(
     let bk = if backend.is_null() {
         "mem".to_string()
     } else {
-        unsafe { CStr::from_ptr(backend) }
-            .to_str()
-            .unwrap_or("mem")
-            .to_string()
+        match unsafe { CStr::from_ptr(backend) }.to_str() {
+            Ok(value) => value.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        }
     };
+    if !matches!(bk.as_str(), "" | "mem" | "surrealkv") {
+        return SURREAL_ERR_QUERY;
+    }
     let path = if db_path.is_null() {
         "".to_string()
     } else {

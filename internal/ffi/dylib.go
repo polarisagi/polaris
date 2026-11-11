@@ -40,7 +40,8 @@ const ExpectedABIMajor uint16 = 3
 // minor 是加法变更计数：Go 侧 RegisterLibFunc 的符号集合随 minor 单调增长，
 // 新增导出符号必须同步递增（tools/ffi_symbol_check.go 的快照对账会拦截忘记递增的情况）。
 // 4：新增 surreal_vec_dimension / surreal_vec_clear。
-const ExpectedABIMinor uint16 = 4
+// 5：新增 surreal_storage_version，供存储入口拒绝不兼容的旧数据格式。
+const ExpectedABIMinor uint16 = 5
 
 var (
 	libHandle uintptr

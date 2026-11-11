@@ -1,6 +1,6 @@
-// surreal_store — SurrealDB v3 统一认知存储引擎 FFI
+// surreal_store — SurrealDB v4 统一认知存储引擎 FFI
 //
-// 后端运行时选择: kv-mem（默认，任意机器，含 2GB VPS）/ kv-rocksdb（显式，大内存服务器）
+// 后端运行时选择: kv-mem（任意机器，含 2GB VPS）/ kv-surrealkv（持久化）
 // 向量维度 vec_dim 由调用方传入（典型值 1536 或 768）。
 // 架构: docs/arch/M02-Storage-Fabric.md §10，ADR-0003
 //
@@ -18,10 +18,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use surrealdb::Surreal;
-use surrealdb::engine::local::{Db, Mem, RocksDb};
+use surrealdb::engine::local::{Db, Mem, SurrealKv};
 use surrealdb::types::SurrealValue;
 use tokio::runtime::Runtime;
 
+mod disk_guard;
 mod fts;
 mod graph;
 mod kv;
@@ -41,6 +42,30 @@ pub(super) const SURREAL_ERR_QUERY: c_int = -4;
 // kv-mem 后端 2 个线程已足够；VPS 建议 2，大内存服务器可设 0（自动）。
 pub(super) static WORKER_THREADS: AtomicU32 = AtomicU32::new(0);
 
+// ─── 栈保护 ────────────────────────────────────────────────────────────────────
+// block_on 在调用方线程上轮询 future，FFI 调用方是 Go 线程，其栈大小取决于平台
+// （macOS/Linux glibc ≈8MiB，Windows amd64 2MiB，musl 仅 128KiB），不受本库控制。
+// 实测 SurrealDB v4 单次调用栈峰值：release ≈384KiB，debug 超 2MiB（未优化的
+// async 状态机）。剩余栈低于 RED_ZONE 时由 stacker 切到新分配的 STACK 段执行，
+// 使栈安全不再依赖调用方线程；正常 8MiB 线程上不触发分配，热路径零开销。
+#[cfg(not(debug_assertions))]
+const BLOCK_ON_RED_ZONE: usize = 1024 * 1024;
+#[cfg(not(debug_assertions))]
+const BLOCK_ON_STACK_SIZE: usize = 8 * 1024 * 1024;
+#[cfg(debug_assertions)]
+const BLOCK_ON_RED_ZONE: usize = 8 * 1024 * 1024;
+#[cfg(debug_assertions)]
+const BLOCK_ON_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+// tokio 默认工作线程栈 2MiB；SurrealDB 后台任务（索引构建、surrealkv 压缩）跑在
+// 工作线程上，放大到 8MiB 留足余量。仅为虚拟地址预留，按需提交，不增加常驻内存。
+const WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// 所有同步桥接必须经由此函数，禁止直接调用 `Runtime::block_on`。
+pub(super) fn block_on<F: std::future::Future>(rt: &Runtime, fut: F) -> F::Output {
+    stacker::maybe_grow(BLOCK_ON_RED_ZONE, BLOCK_ON_STACK_SIZE, || rt.block_on(fut))
+}
+
 // ─── 存储类型 ──────────────────────────────────────────────────────────────────
 
 pub(super) struct SurrealStore {
@@ -52,6 +77,10 @@ pub(super) struct SurrealStore {
 }
 
 impl SurrealStore {
+    pub(super) fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
+        block_on(&self.rt, fut)
+    }
+
     pub(super) fn new(
         backend: &str,
         db_path: &str,
@@ -71,17 +100,21 @@ impl SurrealStore {
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(threads)
+            .thread_stack_size(WORKER_STACK_SIZE)
             .enable_all()
             .build()?;
 
-        let db = rt.block_on(async {
-            if backend == "rocksdb" && !db_path.is_empty() {
-                Surreal::new::<RocksDb>(db_path).await
-            } else {
-                Surreal::new::<Mem>(()).await
+        let db = match backend {
+            "" | "mem" => block_on(&rt, async { Surreal::new::<Mem>(()).await })?,
+            "surrealkv" => {
+                disk_guard::prepare_v4_directory(db_path)?;
+                block_on(&rt, async { Surreal::new::<SurrealKv>(db_path).await })?
             }
+            other => return Err(format!("unsupported SurrealDB backend: {other}").into()),
+        };
+        block_on(&rt, async {
+            db.use_ns("polaris").use_db("cognition").await
         })?;
-        rt.block_on(async { db.use_ns("polaris").use_db("cognition").await })?;
 
         let base_ddl = "DEFINE TABLE IF NOT EXISTS kv SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS k ON kv TYPE string; \
@@ -102,14 +135,18 @@ impl SurrealStore {
              DEFINE ANALYZER IF NOT EXISTS ascii_lower TOKENIZERS class FILTERS lowercase; \
              DEFINE INDEX IF NOT EXISTS fts_idx ON docs FIELDS body FULLTEXT ANALYZER ascii_lower BM25;";
 
-        rt.block_on(async {
-            if let Err(e) = db.query(base_ddl).await {
+        block_on(&rt, async {
+            let base_result = db.query(base_ddl).await;
+            if let Err(e) = base_result.and_then(|response| response.check()) {
                 eprintln!("[surreal_store] Base DDL error (fatal): {e}");
                 return Err(Box::new(e) as Box<dyn std::error::Error>);
             }
 
             // 检查 meta:vector_index 是否存在已落库维度（ADR-0109 P4）
-            let meta_row: Option<MetaRow> = match db.query("SELECT dim FROM type::record('meta', 'vector_index')").await {
+            let meta_row: Option<MetaRow> = match db
+                .query("SELECT dim FROM type::record('meta', 'vector_index')")
+                .await
+            {
                 Ok(mut resp) => {
                     let rows: Vec<MetaRow> = resp.take(0).unwrap_or_default();
                     rows.into_iter().next()
@@ -121,7 +158,9 @@ impl SurrealStore {
                 Some(row) => {
                     let stored_dim = row.dim as u32;
                     if stored_dim != vec_dim {
-                        eprintln!("[surreal_store] HNSW dimension changed from {stored_dim} to {vec_dim}. Rebuilding index...");
+                        eprintln!(
+                            "[surreal_store] HNSW dimension changed from {stored_dim} to {vec_dim}. Rebuilding index..."
+                        );
                         true
                     } else {
                         false
@@ -129,17 +168,26 @@ impl SurrealStore {
                 }
                 None => {
                     // 无元数据（老库或全新库）：检查现有 vectors 表任一条推断维度
-                    let vec_len: Option<u32> = match db.query("SELECT array::len(embed) AS len FROM vectors LIMIT 1").await {
+                    let vec_len: Option<u32> = match db
+                        .query("SELECT array::len(embed) AS len FROM vectors LIMIT 1")
+                        .await
+                    {
                         Ok(mut resp) => {
                             let rows: Vec<VectorLenRow> = resp.take(0).unwrap_or_default();
-                            rows.into_iter().next().and_then(|r| r.len.map(|l| l as u32))
+                            rows.into_iter()
+                                .next()
+                                .and_then(|r| r.len.map(|l| l as u32))
                         }
                         Err(_) => None,
                     };
 
-                    if let Some(inferred) = vec_len && inferred > 0 {
+                    if let Some(inferred) = vec_len
+                        && inferred > 0
+                    {
                         if inferred != vec_dim {
-                            eprintln!("[surreal_store] Legacy HNSW dimension mismatch: inferred={inferred}, target={vec_dim}. Rebuilding index...");
+                            eprintln!(
+                                "[surreal_store] Legacy HNSW dimension mismatch: inferred={inferred}, target={vec_dim}. Rebuilding index..."
+                            );
                             true
                         } else {
                             false
@@ -164,17 +212,24 @@ impl SurrealStore {
                 }
             }
 
-            let define_idx = format!("DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EFC 64;");
-            if let Err(e) = db.query(&define_idx).await {
+            let define_idx = format!(
+                "DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EFC 64;"
+            );
+            let define_idx_result = db.query(&define_idx).await;
+            if let Err(e) = define_idx_result.and_then(|response| response.check()) {
                 eprintln!("[surreal_store] Define HNSW index error (fatal): {e}");
                 return Err(Box::new(e) as Box<dyn std::error::Error>);
             }
 
             // 写入或更新 meta:vector_index
-            let _ = db
+            let meta_result = db
                 .query("UPSERT type::record('meta', 'vector_index') SET dim = $dim")
                 .bind(("dim", vec_dim as i64))
                 .await;
+            if let Err(e) = meta_result.and_then(|response| response.check()) {
+                eprintln!("[surreal_store] Save HNSW dimension error (fatal): {e}");
+                return Err(Box::new(e) as Box<dyn std::error::Error>);
+            }
 
             Ok(())
         })?;
@@ -321,9 +376,9 @@ mod tests {
         surreal_graph_traverse,
     };
     use super::kv::{surreal_kv_delete, surreal_kv_get, surreal_kv_put, surreal_kv_scan};
-    use super::store::surreal_open;
+    use super::store::{surreal_open, surreal_storage_version};
     use super::vector::{surreal_vec_delete, surreal_vec_knn, surreal_vec_upsert};
-    use super::{SURREAL_OK, bytes_to_hex};
+    use super::{SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK, bytes_to_hex};
 
     // D2 回归：hex 解码必须严格——奇数长度/非 hex 返回 None，不静默产生半损坏字节。
     #[test]
@@ -350,8 +405,26 @@ mod tests {
     #[test]
     fn test_surreal_store_all_features() {
         unsafe {
+            assert_eq!(surreal_storage_version(), 4);
+            assert!(super::STORE.get().is_none());
+
+            let rocksdb = CString::new("rocksdb").unwrap();
+            assert_eq!(
+                surreal_open(rocksdb.as_ptr(), std::ptr::null(), 3),
+                SURREAL_ERR_QUERY
+            );
+            let invalid_backend = [0xff_u8 as c_char, 0];
+            assert_eq!(
+                surreal_open(invalid_backend.as_ptr(), std::ptr::null(), 3),
+                SURREAL_ERR_UTF8
+            );
+
             let rc = surreal_open(std::ptr::null(), std::ptr::null(), 3);
             assert_eq!(rc, SURREAL_OK);
+            assert_eq!(
+                surreal_open(rocksdb.as_ptr(), std::ptr::null(), 3),
+                SURREAL_ERR_QUERY
+            );
 
             // 1. KV
             let key = b"test_key";
@@ -493,6 +566,37 @@ mod tests {
     }
 
     #[test]
+    fn backend_validation_and_mem_leave_disk_path_untouched() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "polaris_test_surreal_mem_guard_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let sentinel = temp_dir.join("legacy.sst");
+        std::fs::write(&sentinel, b"legacy data").unwrap();
+        let before_names = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+
+        assert!(super::SurrealStore::new("rocksdb", temp_dir.to_str().unwrap(), 3).is_err());
+        let store = super::SurrealStore::new("mem", temp_dir.to_str().unwrap(), 3)
+            .expect("memory backend opens independently of disk path");
+        drop(store);
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"legacy data");
+        let after_names = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(after_names, before_names);
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
     fn test_hnsw_dimension_migration() {
         let temp_dir = std::env::temp_dir().join(format!(
             "polaris_test_surreal_mig_{}",
@@ -505,10 +609,10 @@ mod tests {
 
         // 1. 模拟旧库：以 2560 维打开并写入 2560 维向量
         {
-            let store1 =
-                super::SurrealStore::new("rocksdb", path, 2560).expect("init store with 2560 dim");
+            let store1 = super::SurrealStore::new("surrealkv", path, 2560)
+                .expect("init store with 2560 dim");
             let v2560 = vec![0.1f32; 2560];
-            let q_res = store1.rt.block_on(async {
+            let q_res = store1.block_on(async {
                 store1
                     .db
                     .query("UPSERT type::record('vectors', 'doc1') SET embed = $embed")
@@ -517,8 +621,18 @@ mod tests {
             });
             assert!(q_res.is_ok(), "insert 2560 dim vector failed");
 
+            let kv_res = store1.block_on(async {
+                store1
+                    .db
+                    .query(
+                        "UPSERT type::record('kv', 'persistent') SET k = 'persistent', v = 'value'",
+                    )
+                    .await
+            });
+            assert!(kv_res.is_ok(), "insert persistent kv row failed");
+
             // 验证 meta 表已记录 2560
-            let meta_dim: Option<i64> = store1.rt.block_on(async {
+            let meta_dim: Option<i64> = store1.block_on(async {
                 let mut resp = store1
                     .db
                     .query("SELECT dim FROM type::record('meta', 'vector_index')")
@@ -531,7 +645,7 @@ mod tests {
 
             let super::SurrealStore { db, rt, .. } = store1;
             drop(db);
-            rt.block_on(async {
+            super::block_on(&rt, async {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             });
             drop(rt);
@@ -541,11 +655,11 @@ mod tests {
 
         // 2. 模拟升级：以 512 维重新打开同一路径
         {
-            let store2 =
-                super::SurrealStore::new("rocksdb", path, 512).expect("reopen store with 512 dim");
+            let store2 = super::SurrealStore::new("surrealkv", path, 512)
+                .expect("reopen store with 512 dim");
 
             // 验证旧向量已清空（HNSW 索引重建，旧维度不兼容数据被清除）
-            let vec_count: Option<i64> = store2.rt.block_on(async {
+            let vec_count: Option<i64> = store2.block_on(async {
                 let mut resp = store2
                     .db
                     .query("SELECT count() AS count FROM vectors GROUP ALL")
@@ -561,7 +675,7 @@ mod tests {
             );
 
             // 验证 meta 表已更新为 512
-            let meta_dim: Option<i64> = store2.rt.block_on(async {
+            let meta_dim: Option<i64> = store2.block_on(async {
                 let mut resp = store2
                     .db
                     .query("SELECT dim FROM type::record('meta', 'vector_index')")
@@ -576,9 +690,20 @@ mod tests {
                 "meta:vector_index must be updated to 512"
             );
 
+            let persisted_value: Option<String> = store2.block_on(async {
+                let mut response = store2
+                    .db
+                    .query("SELECT v FROM type::record('kv', 'persistent')")
+                    .await
+                    .ok()?;
+                let rows: Vec<super::VRow> = response.take(0).ok()?;
+                rows.into_iter().next().map(|row| row.v)
+            });
+            assert_eq!(persisted_value.as_deref(), Some("value"));
+
             // 验证可以正常写入 512 维新向量
             let v512 = vec![0.2f32; 512];
-            let q_res = store2.rt.block_on(async {
+            let q_res = store2.block_on(async {
                 store2
                     .db
                     .query("UPSERT type::record('vectors', 'doc2') SET embed = $embed")

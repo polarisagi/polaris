@@ -77,6 +77,18 @@ func TestLazyActive_RequiresToolSearch(t *testing.T) {
 	}
 }
 
+func TestGitStatusIsDiscoverableInLazyIndex(t *testing.T) {
+	if brief := IndexBrief("git_status"); brief == "" || !strings.Contains(brief, "状态") {
+		t.Fatalf("git_status missing useful index brief: %q", brief)
+	}
+	aliases := SearchAliases("git_status")
+	for _, keyword := range []string{"状态", "暂存", "未跟踪", "git status"} {
+		if !strings.Contains(aliases, keyword) {
+			t.Errorf("git_status alias missing %q: %q", keyword, aliases)
+		}
+	}
+}
+
 func TestDefaultCoreSet_Bounded(t *testing.T) {
 	names := CoreToolNames()
 	if len(names) > 15 {

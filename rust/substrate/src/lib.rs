@@ -144,7 +144,8 @@ const SUBSTRATE_ABI_MAJOR: u16 = 3;
 ///    surreal_vec_clear（同维模型切换时清空向量表，commit d160503），均为 2026-10-03 加入；
 ///    此前这两个符号加入时 minor 未递增，旧 dylib 因此通过 verifyABI 却在
 ///    purego.RegisterLibFunc 处 dlsym 失败 panic。
-const SUBSTRATE_ABI_MINOR: u16 = 4;
+/// 5: 新增 surreal_storage_version，供 Go 确认 Surreal 磁盘格式能力与配置后端匹配。
+const SUBSTRATE_ABI_MINOR: u16 = 5;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
 /// Go 侧用 `(version >> 16) & 0xFFFF` 提取 major。

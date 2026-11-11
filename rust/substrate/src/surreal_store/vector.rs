@@ -47,7 +47,7 @@ pub unsafe extern "C" fn surreal_vec_upsert(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             // type::record('vectors', $id) → record ID = vectors:$id，幂等
             guard
                 .db
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             guard
                 .db
                 .query("DELETE type::record('vectors', $id)")
@@ -145,7 +145,7 @@ pub unsafe extern "C" fn surreal_vec_knn(
              FROM vectors WHERE embed <|{k},COSINE|> $q ORDER BY score DESC"
         );
         // 查询出错时返回 SURREAL_ERR_QUERY，不以空结果伪装"无匹配"
-        let rows_result: Result<Vec<VecRow>, surrealdb::Error> = guard.rt.block_on(async {
+        let rows_result: Result<Vec<VecRow>, surrealdb::Error> = guard.block_on(async {
             let mut resp = guard.db.query(&sql).bind(("q", q_vec)).await?;
             resp.take(0)
         });
@@ -204,9 +204,7 @@ pub extern "C" fn surreal_vec_clear() -> c_int {
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard
-            .rt
-            .block_on(async { guard.db.query("DELETE vectors;").await });
+        let q_res = guard.block_on(async { guard.db.query("DELETE vectors;").await });
         match q_res {
             Ok(resp) => match resp.check() {
                 Ok(_) => SURREAL_OK,

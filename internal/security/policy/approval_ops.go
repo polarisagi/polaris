@@ -52,6 +52,12 @@ func classifyOp(tool types.Tool, args []byte, ctx Context) operation {
 	cap := tool.EffectiveCapability()
 	op.netCap = cap.AllowsNetwork()
 	switch {
+	case tool.Name == "file_edit" && argString(m, "action") == "status":
+		op.kind = opRead
+		op.fillTargets(m, ctx)
+	case tool.Name == "project_preview" && argString(m, "action") == "status":
+		op.kind = opRead
+		op.fillTargets(m, ctx)
 	case tool.Name == "str_replace_editor" && argString(m, "command") == "view":
 		op.kind = opRead
 		op.fillTargets(m, ctx)

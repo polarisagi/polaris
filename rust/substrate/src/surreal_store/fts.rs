@@ -41,7 +41,7 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             // 原子 UPSERT，record ID = docs:$id，天然唯一
             guard
                 .db
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             guard
                 .db
                 .query("DELETE type::record('docs', $id)")
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn surreal_fts_search(
              WHERE body @0@ $q ORDER BY score DESC LIMIT {k}"
         );
         // 查询出错时返回 SURREAL_ERR_QUERY，不以空结果伪装"无匹配"
-        let rows_result: Result<Vec<DocScoreRow>, surrealdb::Error> = guard.rt.block_on(async {
+        let rows_result: Result<Vec<DocScoreRow>, surrealdb::Error> = guard.block_on(async {
             let mut resp = guard.db.query(&sql).bind(("q", q)).await?;
             resp.take(0)
         });
@@ -213,7 +213,7 @@ pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
             }
         };
 
-        let (kv_count, vec_count, doc_count, edge_count) = guard.rt.block_on(async {
+        let (kv_count, vec_count, doc_count, edge_count) = guard.block_on(async {
             let kv: i64 = guard
                 .db
                 .query("SELECT count() AS count FROM kv GROUP ALL")
@@ -310,6 +310,6 @@ pub unsafe extern "C" fn surreal_free_buf(ptr: *mut u8, len: usize) {
     }));
 }
 
-/// KV-mem 后端无法显式 purge，no-op 安全；kv-rocksdb 未来可调用 compact_range。
+/// 保留稳定 ABI；SurrealKV 不暴露底层 compact_range，因此此入口保持 no-op。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_purge() {}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "base_commit", "candidate_patch", "fail_to_pass_commands", "pass_to_pass_commands"],
+  "properties": {
+    "path": {"type": "string", "description": "允许项目根内的绝对本地仓库目录"},
+    "base_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "candidate_patch": {"type": "string", "minLength": 1, "maxLength": 262144},
+    "test_patch": {"type": "string", "maxLength": 262144},
+    "fail_to_pass_commands": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 4096}},
+    "pass_to_pass_commands": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+  }
+}

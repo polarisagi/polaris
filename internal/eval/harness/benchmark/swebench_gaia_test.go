@@ -45,13 +45,12 @@ func TestSWEBenchLiteAdapter_Load(t *testing.T) {
 	if _, ok := c.Input["base_commit"]; !ok {
 		t.Error("expected Input[base_commit] to be present")
 	}
-	// 验证 Expected 包含 patch 和 fail_to_pass
-	if _, ok := c.Expected["patch"]; !ok {
-		t.Error("expected Expected[patch] to be present")
+	// 官方数据没有本机命令映射，不能把金标补丁伪装成可执行候选。
+	if _, ok := c.Expected["patch"]; ok {
+		t.Error("gold patch must not be retained as a candidate input")
 	}
-	failToPass, ok := c.Expected["fail_to_pass"].([]string)
-	if !ok || len(failToPass) == 0 {
-		t.Error("expected non-empty Expected[fail_to_pass]")
+	if c.Input["unsupported_reason"] == nil {
+		t.Error("official SWE-bench must be explicitly unsupported for local execution")
 	}
 }
 

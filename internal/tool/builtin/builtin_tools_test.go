@@ -97,7 +97,7 @@ func TestBuiltinTaintedWebFetchPropagatesExternalOutputFloor(t *testing.T) {
 }
 
 func TestBuiltinOutputTaintClassification(t *testing.T) {
-	for _, name := range []string{"web_fetch", "feed_fetch", "web_search", "bash", "run_command", "job_output", "session_search", "session_read"} {
+	for _, name := range []string{"web_fetch", "feed_fetch", "web_search", "bash", "run_command", "job_output", "session_search", "session_read", "git_diff", "git_status"} {
 		if got := builtinOutputTaint(name); got != types.TaintHigh {
 			t.Errorf("%s output taint=%v, want High", name, got)
 		}

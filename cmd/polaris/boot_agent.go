@@ -734,6 +734,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	slog.Info("polaris: agent kernel & DAG executor initialized")
 
 	evalRunner.InjectAgent(&evalAgentAdapter{agent: agent})
+	evalRunner.InjectCodePatchAgent(newCodePatchCandidateAgent(sb.Router))
+	patchAllowedPaths := deduplicatePaths(append([]string{sb.Layout.Workspace}, sb.Cfg.Sandbox.AllowedPaths...))
+	evalRunner.InjectCodePatchEvaluator(newCodePatchEvaluator(patchAllowedPaths, tb.ToolReg, agent))
 	sched.SetAgentInvoker(&agentInvokerAdapter{agent: agent})
 
 	// ─── §10.3 M9 Self-Improvement Engine ────────────────────────────────────

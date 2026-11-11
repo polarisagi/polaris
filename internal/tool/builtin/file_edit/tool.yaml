@@ -1,0 +1,12 @@
+name: file_edit
+description: "Preview, apply, inspect, and recover bounded project file edits."
+version: "1.0.0"
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - file-write
+  - state-mutate
+tags:
+  - filesystem
+  - edit

@@ -327,9 +327,9 @@ func startCognitiveReplayerIfNeeded(ctx context.Context, sb *SubstrateBundle) {
 	}
 
 	// 键名与 Rust surreal_stats 返回的 JSON 对齐（doc_count，见 fts.rs surreal_stats）。
-	// 注意 backend 字段恒为 "surreal"（不区分 mem/rocksdb），不能作为判据；
+	// 注意 backend 字段恒为 "surreal"（不区分 mem/surrealkv），不能作为判据；
 	// 统一判据：认知轴 FTS 为空 && SQLite 真相源非空 → 需要重放
-	// （覆盖 kv-mem 重启丢失与 rocksdb 空库两种场景，FTSIndex 为幂等 UPSERT，重放安全）。
+	// （覆盖 kv-mem 重启丢失、mem/surrealkv 空库两种场景，FTSIndex 为幂等 UPSERT，重放安全）。
 	docCountF, _ := stats["doc_count"].(float64)
 
 	shouldReplay := false

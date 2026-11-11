@@ -1,0 +1,9 @@
+name: project_diagnostics
+description: Run a bounded native compiler or syntax diagnostic for a project inside the allowed workspace.
+version: 1.0.0
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - process-spawn
+  - file-write

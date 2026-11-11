@@ -22,6 +22,10 @@ func TestDefaultsTOML_Coverage(t *testing.T) {
 	if err := toml.Unmarshal(content, &parsed); err != nil {
 		t.Fatalf("Failed to parse defaults.toml: %v", err)
 	}
+	cognition, ok := parsed["cognition"].(map[string]any)
+	if !ok || cognition["surreal_backend"] != "surrealkv" {
+		t.Fatalf("default cognition.surreal_backend=%v, want surrealkv", cognition["surreal_backend"])
+	}
 
 	// 白名单：这些字段在 defaults.toml 中预期不存在或不需要强制对应
 	whitelist := map[string]bool{

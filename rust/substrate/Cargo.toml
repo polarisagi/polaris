@@ -1,6 +1,6 @@
 [package]
 name = "substrate"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 description = "Polaris — Rust performance-critical path (FFI/sidecar)"
@@ -24,7 +24,9 @@ bytemuck = "1"
 # Zero-copy serialization for Go<->Rust vector transfer
 capnp = "0.26.0"
 cedar-policy = "4.11.2"
-surrealdb = { version = "3", features = ["kv-mem", "kv-rocksdb"] }
+surrealdb = { version = "4.0.1", features = ["kv-mem", "kv-surrealkv"] }
+# 跨平台栈保护：FFI 调用方（Go 线程）栈大小不可控，block_on 前按需扩栈
+stacker = "0.1.25"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"

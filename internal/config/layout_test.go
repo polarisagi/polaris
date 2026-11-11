@@ -101,6 +101,14 @@ func TestMigrate(t *testing.T) {
 
 	oldSessions := filepath.Join(tmpDir, "transcripts")
 	os.MkdirAll(oldSessions, 0755)
+	legacySurreal := filepath.Join(tmpDir, "surreal_rust.db")
+	if err := os.MkdirAll(legacySurreal, 0700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(legacySurreal, "legacy-sentinel")
+	if err := os.WriteFile(sentinel, []byte("preserve old database"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	// Since layout.MkdirAll created layout.Sessions, migrate will skip Sessions if dst exists.
 	// Let's remove layout.Sessions to test directory migration
@@ -128,5 +136,11 @@ func TestMigrate(t *testing.T) {
 	}
 	if _, err := os.Stat(layout.Sessions); err != nil {
 		t.Errorf("New sessions dir not found")
+	}
+	if got, err := os.ReadFile(sentinel); err != nil || string(got) != "preserve old database" {
+		t.Errorf("legacy SurrealDB sentinel changed or moved: data=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(layout.SurrealDB, "legacy-sentinel")); !os.IsNotExist(err) {
+		t.Errorf("legacy SurrealDB directory was migrated: err=%v", err)
 	}
 }

@@ -68,6 +68,7 @@ const (
 	PurposeShadowJudge     = "shadow_judge"
 	PurposeSamplingScore   = "sampling_score"
 	PurposeEvalL4Judge     = "eval_l4_judge"
+	PurposeEvalCodePatch   = "eval_code_patch"
 
 	// ── 其他 ──
 	PurposeBackgroundLLMInfer = "background_llm_infer" // boot_tools llmInfer 的兜底用途，调用方可覆盖

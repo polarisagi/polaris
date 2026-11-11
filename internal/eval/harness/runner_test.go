@@ -3,6 +3,8 @@ package harness
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +24,22 @@ type mockAgent struct {
 
 func (m *mockAgent) Run(ctx context.Context, input []byte) ([]byte, []string, error) {
 	return m.output, m.tools, m.err
+}
+
+type inputRecordingAgent struct {
+	input  []byte
+	output []byte
+}
+
+func (a *inputRecordingAgent) Run(_ context.Context, input []byte) ([]byte, []string, error) {
+	a.input = append([]byte(nil), input...)
+	return a.output, nil, nil
+}
+
+type codePatchEvaluatorFunc func(context.Context, protocol.EvalCase, []byte) (bool, error)
+
+func (f codePatchEvaluatorFunc) EvaluateCodePatch(ctx context.Context, c protocol.EvalCase, patch []byte) (bool, error) {
+	return f(ctx, c, patch)
 }
 
 type mockProvider struct {
@@ -91,6 +109,104 @@ func TestRunner(t *testing.T) {
 	err = runner.Cancel(context.Background(), "run_2")
 	if err == nil {
 		t.Errorf("expected error canceling non-existent run")
+	}
+}
+
+func TestRunBenchmarkDataset_RealCodePatchAndCounters(t *testing.T) {
+	caseData := protocol.EvalCase{ID: "local-1", Description: "fix the bug", BehaviorType: protocol.BehaviorCodePatch,
+		Input:    map[string]any{"repo_path": "/tmp/local", "base_commit": strings.Repeat("a", 40), "source_files": map[string]any{"main.go": "package main"}, "test_patch": "SECRET TEST"},
+		Expected: map[string]any{"criteria": "SECRET EXPECTATION"}, Config: map[string]any{"fail_to_pass_commands": []string{"RUNNER_ONLY_FAIL_TO_PASS"}, "pass_to_pass_commands": []string{"RUNNER_ONLY_PASS_TO_PASS"}}}
+	candidate := &inputRecordingAgent{output: []byte("CANDIDATE PATCH")}
+	called := false
+	runner := NewRunner(nil, nil, config.DefaultThresholds(), config.EvalConfig{})
+	runner.InjectCodePatchAgent(candidate)
+	runner.InjectCodePatchEvaluator(codePatchEvaluatorFunc(func(_ context.Context, got protocol.EvalCase, patch []byte) (bool, error) {
+		called = true
+		if got.ID != caseData.ID || string(patch) != "CANDIDATE PATCH" {
+			t.Fatalf("unexpected evaluator args: %s %q", got.ID, patch)
+		}
+		return true, nil
+	}))
+	report, err := runner.RunBenchmarkDataset(context.Background(), "project", []any{caseData}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var modelInput map[string]any
+	if err := json.Unmarshal(candidate.input, &modelInput); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := modelInput["test_patch"]; ok {
+		t.Fatal("trusted test_patch was sent to candidate agent")
+	}
+	if strings.Contains(string(candidate.input), "SECRET EXPECTATION") {
+		t.Fatal("expected data was sent to candidate agent")
+	}
+	for _, hidden := range []string{"RUNNER_ONLY_FAIL_TO_PASS", "RUNNER_ONLY_PASS_TO_PASS"} {
+		if strings.Contains(string(candidate.input), hidden) {
+			t.Fatalf("test configuration leaked to candidate agent: %s", hidden)
+		}
+	}
+	if string(candidate.input) == "" || !called {
+		t.Fatal("candidate agent or evaluator was not called")
+	}
+	if report.TotalCases != 1 || report.PassCount != 1 || report.Status != "completed" {
+		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestRunBenchmarkDataset_RejectsEmptyAndUnsupported(t *testing.T) {
+	runner := NewRunner(nil, nil, config.DefaultThresholds(), config.EvalConfig{})
+	if _, err := runner.RunBenchmarkDataset(context.Background(), "empty", nil, ""); err == nil {
+		t.Fatal("empty dataset must fail")
+	}
+	report, err := runner.RunBenchmarkDataset(context.Background(), "unsupported", []any{protocol.EvalCase{BehaviorType: protocol.BehaviorCodePatch}}, "")
+	if err == nil || report == nil || report.Status != "failed" {
+		t.Fatalf("unsupported case must fail explicitly: report=%+v err=%v", report, err)
+	}
+	valid := protocol.EvalCase{ID: "no-executor", Description: "problem", BehaviorType: protocol.BehaviorCodePatch,
+		Input:  map[string]any{"repo_path": "/tmp/repo", "base_commit": strings.Repeat("d", 40), "source_files": map[string]any{"a.go": "package a"}},
+		Config: map[string]any{"fail_to_pass_commands": []string{"go test"}, "pass_to_pass_commands": []string{"go test"}}}
+	report, err = runner.RunBenchmarkDataset(context.Background(), "no-executor", []any{valid}, "")
+	if err != nil || report == nil || report.PassCount != 0 || report.FailCount != 1 || report.Status != "failed" {
+		t.Fatalf("missing candidate/evaluator must fail closed: report=%+v err=%v", report, err)
+	}
+}
+
+func TestRunBenchmarkDataset_CancelledAfterLastEvaluatorIsNotCompleted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := NewRunner(nil, nil, config.DefaultThresholds(), config.EvalConfig{})
+	runner.InjectCodePatchAgent(&inputRecordingAgent{output: []byte("candidate")})
+	runner.InjectCodePatchEvaluator(codePatchEvaluatorFunc(func(context.Context, protocol.EvalCase, []byte) (bool, error) {
+		cancel()
+		return true, nil
+	}))
+	caseData := protocol.EvalCase{ID: "cancel-last", Description: "problem", BehaviorType: protocol.BehaviorCodePatch,
+		Input:  map[string]any{"repo_path": "/tmp/repo", "base_commit": strings.Repeat("c", 40), "source_files": map[string]any{"a.go": "package a"}},
+		Config: map[string]any{"fail_to_pass_commands": []string{"go test"}, "pass_to_pass_commands": []string{"go test"}}}
+	report, err := runner.RunBenchmarkDataset(ctx, "project", []any{caseData}, "test")
+	if err == nil || report == nil || report.Status != "cancelled" {
+		t.Fatalf("cancelled final case was misreported: report=%+v err=%v", report, err)
+	}
+}
+
+func TestRunBenchmarkDataset_UnjudgedCaseFailsMixedRun(t *testing.T) {
+	runner := NewRunner(nil, nil, config.DefaultThresholds(), config.EvalConfig{})
+	runner.InjectCodePatchAgent(&inputRecordingAgent{output: []byte("candidate")})
+	runner.InjectCodePatchEvaluator(codePatchEvaluatorFunc(func(context.Context, protocol.EvalCase, []byte) (bool, error) {
+		return true, nil
+	}))
+	patchCase := protocol.EvalCase{ID: "known-pass", Description: "fix", BehaviorType: protocol.BehaviorCodePatch,
+		Input:  map[string]any{"repo_path": "/tmp/repo", "base_commit": strings.Repeat("b", 40), "source_files": map[string]any{"a.go": "package a"}},
+		Config: map[string]any{"fail_to_pass_commands": []string{"go test"}, "pass_to_pass_commands": []string{"go test"}}}
+	unjudgedCase := EvalCase{ID: "unjudged", Level: Level4LLMJudge, Severity: SeverityP1,
+		Input: map[string]any{"text": "ok"}, Expected: map[string]any{"output": "ok"}}
+	report, err := runner.RunBenchmarkDataset(context.Background(), "mixed-unjudged", []any{patchCase, unjudgedCase}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PassCount != 1 || report.FailCount != 1 || report.L4Unjudged != 1 || report.Status != "failed" {
+		t.Fatalf("unjudged mixed benchmark was not failed: %+v", report)
 	}
 }
 

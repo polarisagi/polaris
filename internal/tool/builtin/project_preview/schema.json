@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "title": "project_preview",
+  "properties": {
+    "action": {"type": "string", "enum": ["start", "status", "stop"]},
+    "path": {"type": "string", "description": "Absolute project root within the allowed workspace."},
+    "job_id": {"type": "string", "description": "Preview job identifier required for status and stop."},
+    "timeout": {"type": "integer", "minimum": 1, "maximum": 60, "default": 20}
+  },
+  "required": ["action", "path"]
+}

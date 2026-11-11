@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "git_status",
+  "description": "Show branch and changed files in a Git repository.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Repository root (within allowed paths)"
+    }
+  },
+  "required": ["path"]
+}

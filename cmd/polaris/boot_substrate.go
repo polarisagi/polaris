@@ -719,7 +719,7 @@ func loadGateCedarPolicies(gate *policy.Gate, cfg config.PolicyConfig) error {
 //
 //	TotalRAM < 2GB  → 完全跳过 SurrealDB，cognitive axis 降级到纯 SQLite
 //	2GB ≤ RAM < 4GB → 强制 "mem" 后端（无持久化，进程重启丢失）
-//	TotalRAM ≥ 4GB  → 使用 config 配置值（默认 "rocksdb"，持久化）
+//	TotalRAM ≥ 4GB  → 使用 config 配置值（默认 "surrealkv"，持久化）
 //
 // FeatureGate（可用 RAM < 512MB 时）提供运行时动态降级兜底。
 func initSurrealStore(
@@ -729,9 +729,8 @@ func initSurrealStore(
 	vecDim int,
 ) *sysstore.SurrealDBCoreStore {
 	const (
-		minRAMForSurreal   = 2 * 1024 * 1024 * 1024 // 2GB：以下完全跳过
-		memBackendRAMLimit = 4 * 1024 * 1024 * 1024 // 4GB：以下强制 mem 后端
-		largeRAMThreshold  = 8 * 1024 * 1024 * 1024 // 8GB：workerThreads 自动升档
+		minRAMForSurreal  = 2 * 1024 * 1024 * 1024 // 2GB：以下完全跳过
+		largeRAMThreshold = 8 * 1024 * 1024 * 1024 // 8GB：workerThreads 自动升档
 	)
 
 	if autoConf == nil {
@@ -753,14 +752,16 @@ func initSurrealStore(
 		return nil
 	}
 
-	// 确定实际后端：配置默认 "rocksdb"，低内存机器强制降级为 "mem"
-	backend := cfg.Cognition.SurrealBackend
-	if backend == "" {
-		backend = "rocksdb"
+	configuredBackend, backend, deprecatedBackend, err := resolveSurrealBackend(cfg.Cognition.SurrealBackend, autoConf.Probe.TotalRAM)
+	if err != nil {
+		slog.Warn("polaris: invalid SurrealDB backend; cognitive axis falls back to SQLite", "err", err)
+		return nil
 	}
-	if backend == "rocksdb" && autoConf.Probe.TotalRAM < memBackendRAMLimit {
-		backend = "mem"
-		slog.Info("polaris: SurrealDB backend downgraded rocksdb→mem (TotalRAM 2-4GB, no persistence)",
+	if deprecatedBackend {
+		slog.Warn("polaris: cognition.surreal_backend=rocksdb is deprecated; use surrealkv")
+	}
+	if configuredBackend == "surrealkv" && backend == "mem" {
+		slog.Info("polaris: SurrealDB backend downgraded surrealkv→mem (TotalRAM 2-4GB, no persistence)",
 			"total_ram_mb", autoConf.Probe.TotalRAM/(1024*1024),
 		)
 	}
@@ -774,7 +775,7 @@ func initSurrealStore(
 		vecDim = 1536
 	}
 
-	// ≥ 8GB 时 workerThreads 自动升档以匹配 rocksdb I/O 并发需求
+	// ≥ 8GB 时 workerThreads 自动升档以匹配 SurrealKV I/O 并发需求
 	workerThreads := cfg.Cognition.SurrealWorkerThreads
 	if workerThreads <= 2 && autoConf.Probe.TotalRAM >= largeRAMThreshold {
 		workerThreads = 0 // 0 = auto: min(CPU, 4)

@@ -1,0 +1,12 @@
+name: git_status
+description: "Show the current branch and working tree changes for a Git repository."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: container
+side_effects:
+  - process-spawn
+tags:
+  - git
+  - status
+  - vcs

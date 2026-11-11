@@ -105,6 +105,12 @@ type BenchmarkAdapter interface {
 	Load(ctx context.Context, datasetPath string) ([]EvalCase, error)
 }
 
+// CodePatchEvaluator 通过受控本地项目执行器验证候选补丁。
+// @consumer internal/eval/harness (CodePatch Runner)
+type CodePatchEvaluator interface {
+	EvaluateCodePatch(ctx context.Context, c EvalCase, candidate []byte) (bool, error)
+}
+
 // @consumer internal/eval/harness/eval.go (Trajectory Recorder/Replayer)
 type TrajectoryRecorder interface {
 	Record(ctx context.Context, sessionID string) (*TrajectoryTrace, error)

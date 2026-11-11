@@ -37,6 +37,8 @@ type grepMatch struct {
 }
 
 type grepRunner struct {
+	ctx       context.Context
+	paths     []string
 	re        *regexp.Regexp
 	args      grepArgs
 	mode      string
@@ -64,11 +66,8 @@ func (g *grepRunner) walk(path string, d os.DirEntry, walkErr error) error {
 	if d.IsDir() {
 		return nil
 	}
-	if d.Type()&os.ModeSymlink != 0 && g.protected != nil {
-		// 软链指向自保护路径时 ReadFile 会跟随读取，需按真实路径复核
-		if real, err := filepath.EvalSymlinks(path); err == nil && g.protected(real) {
-			return nil
-		}
+	if !grepPathReadable(g.ctx, path, g.paths) {
+		return nil
 	}
 	if g.truncated {
 		return filepath.SkipAll
@@ -86,6 +85,10 @@ func (g *grepRunner) walk(path string, d os.DirEntry, walkErr error) error {
 		return nil
 	}
 	return g.scanFile(path, strings.Split(string(data), "\n"))
+}
+
+func grepPathReadable(ctx context.Context, path string, allowedPaths []string) bool {
+	return guard.CheckReadablePath(ctx, path, allowedPaths) == nil
 }
 
 func (g *grepRunner) scanFile(path string, lines []string) error {
@@ -209,6 +212,8 @@ func MakeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 
 		grepClampArgs(&args)
 		runner := newGrepRunner(re, args)
+		runner.ctx = ctx
+		runner.paths = paths
 		runner.protected = guard.SelfProtectedMatcher()
 
 		for _, root := range searchRoots {

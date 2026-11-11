@@ -413,6 +413,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
+	if err := registerDevelopmentTools(sb, inProcSandbox, toolReg, allowedPaths); err != nil {
+		slog.Warn("polaris: development tool registration failed", "err", err)
+	}
 
 	if err := builtin.RegisterGoalTool(inProcSandbox, toolReg, repo.NewSQLiteGoalRepository(sb.Store.DB())); err != nil {
 		slog.Warn("polaris: goal tool registration failed", "err", err)

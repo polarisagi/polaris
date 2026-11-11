@@ -5,7 +5,7 @@
 // SurrealDBCoreStore — [Storage-SurrealDB-Core] 认知检索轴的 Go 封装。
 // 实现 protocol.Store + 扩展接口（VectorStore / GraphStore / FTSStore）。
 //
-// 后端选择: surreal-rocksdb（默认，持久化，≥4GB 机器）/ surreal-mem（低内存降级，kv-mem）。
+// 后端选择: surrealkv（默认，持久化，≥4GB 机器）/ mem（低内存降级，kv-mem）。
 // 降级规则由 boot_substrate.go initSurrealStore 按 TotalRAM 自动决定：<2GB 完全跳过，2-4GB 降为 mem。
 // kv-mem 进程重启后数据丢失；持久化由 SQLite Outbox 投影负责（M02 §2.5）。
 package store
@@ -33,6 +33,7 @@ var (
 	surrealErr  error
 
 	surrealSetWorkerThreads         func(n int32) int32
+	surrealStorageVersion           func() uint32
 	surrealOpen                     func(backend string, dbPath string, vecDim int32) int32
 	surrealKvGet                    func(key *byte, keyLen uintptr, outVal *uintptr, outLen *uintptr) int32
 	surrealKvPut                    func(key *byte, keyLen uintptr, val *byte, valLen uintptr) int32
@@ -64,6 +65,11 @@ func bindSurreal() error {
 			surrealErr = err
 			return
 		}
+		purego.RegisterLibFunc(&surrealStorageVersion, lib, "surreal_storage_version")
+		if err := checkSurrealStorageVersion(surrealStorageVersion()); err != nil {
+			surrealErr = err
+			return
+		}
 		// ABI_MINOR=1 新增：surreal_set_worker_threads / vec_delete / fts_delete / graph_delete_edges
 		purego.RegisterLibFunc(&surrealSetWorkerThreads, lib, "surreal_set_worker_threads")
 		purego.RegisterLibFunc(&surrealOpen, lib, "surreal_open")
@@ -90,6 +96,17 @@ func bindSurreal() error {
 		purego.RegisterLibFunc(&surrealPurge, lib, "surreal_purge")
 	})
 	return surrealErr
+}
+
+const expectedSurrealStorageVersion uint32 = 4
+
+func checkSurrealStorageVersion(version uint32) error {
+	if version != expectedSurrealStorageVersion {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf(
+			"surreal storage version mismatch: want=%d got=%d; refusing to open incompatible store",
+			expectedSurrealStorageVersion, version))
+	}
+	return nil
 }
 
 // ─── FFI 辅助 ─────────────────────────────────────────────────────────────────
@@ -162,17 +179,41 @@ type SurrealDBCoreStore struct{}
 
 var _ protocol.Store = (*SurrealDBCoreStore)(nil)
 
+// NormalizeSurrealBackend 验证 Go 到 Rust FFI 的后端名，并标记旧配置名。
+func NormalizeSurrealBackend(backend string) (string, bool, error) {
+	switch backend {
+	case "":
+		return "mem", false, nil
+	case "mem", "surrealkv":
+		return backend, false, nil
+	case "rocksdb":
+		return "surrealkv", true, nil
+	default:
+		return "", false, apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("surreal backend %q is unsupported; use mem or surrealkv", backend))
+	}
+}
+
 // OpenSurrealDBCore 初始化全局 SurrealCoreStore（幂等）。
-// backend: "mem"（默认，256MB+ 可用，含 VPS）或 "rocksdb"（持久化，dbPath 不可为空）。
+// backend: "mem"（空值也使用内存后端）或 "surrealkv"（持久化，dbPath 不可为空）。
 // vecDim: HNSW 向量维度，需与嵌入模型一致（典型值 1536 或 768）。
 // workerThreads: Tokio 运行时线程数；<= 0 表示 auto（min(CPU, 4)），VPS 建议传 2。
 func OpenSurrealDBCore(backend, dbPath string, vecDim, workerThreads int) (*SurrealDBCoreStore, error) {
+	normalized, deprecated, err := NormalizeSurrealBackend(backend)
+	if err != nil {
+		return nil, err
+	}
+	if deprecated {
+		slog.Warn("store: rocksdb backend name is deprecated; using surrealkv", "backend", backend)
+	}
+	if normalized == "surrealkv" && dbPath == "" {
+		return nil, apperr.New(apperr.CodeInvalidInput, "surreal: surrealkv backend requires a database path")
+	}
 	if err := bindSurreal(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "surreal load lib", err)
 	}
 	// 在 surreal_open 前设置线程数（只在首次初始化时生效）
 	surrealSetWorkerThreads(int32(workerThreads))
-	if rc := surrealOpen(backend, dbPath, int32(vecDim)); rc != 0 {
+	if rc := surrealOpen(normalized, dbPath, int32(vecDim)); rc != 0 {
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_open failed: code %d", rc))
 	}
 	return &SurrealDBCoreStore{}, nil
@@ -294,13 +335,13 @@ func (s *SurrealDBCoreStore) Close() error { return nil }
 // Purge 释放 SurrealDB 所有内存数据（kv + vec + graph + fts），
 // 供 OSMemoryGuard DegradationCritical 回调调用，快速腾出内存。
 // 认知轴数据丢失；SurrealDB 会在下次写入时重建（mem backend）
-// 或从 rocksdb 重新加载（rocksdb backend）。
+// 或从 SurrealKV 重新加载（surrealkv backend）。
 func (s *SurrealDBCoreStore) Purge() error {
 	// 通知 Rust 侧释放所有认知轴内存（kv + vec + graph + fts）。
 	// Rust surreal_purge() 是 no-op 安全：FFI 未加载时函数指针为 nil。
 	// 执行后 SurrealDB 内存引用清空；mem 后端数据丢失（可接受，OSMemoryGuard
 	// DegradationCritical 触发时已判定认知轴数据可牺牲）；
-	// rocksdb 后端数据持久化，重新 Open 可恢复。
+	// SurrealKV 后端数据持久化，重新 Open 可恢复。
 	SurrealPurge() // 调用已注册的 FFI：surreal_purge()
 	slog.Warn("surreal_store: Purge called — cognitive axis data cleared for memory pressure relief")
 	return nil

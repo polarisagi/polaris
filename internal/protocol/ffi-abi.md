@@ -66,20 +66,21 @@ Rust 导出 `substrate_abi_version() -> u32`（高16位=major, 低16位=minor）
 
 | 侧 | 当前值 |
 | Go `ExpectedABIMajor` | 3 |
-| Go `ExpectedABIMinor` | 4 |
+| Go `ExpectedABIMinor` | 5 |
 | Rust `SUBSTRATE_ABI_MAJOR` | 3 |
-| Rust `SUBSTRATE_ABI_MINOR` | 4 |
+| Rust `SUBSTRATE_ABI_MINOR` | 5 |
 
 ABI 1.1 新增：`surreal_set_worker_threads` / `surreal_vec_delete` / `surreal_fts_delete` / `surreal_graph_delete_edges`；`surreal_stats` 扩展四路计数字段；HNSW 替换 MTREE。
 ABI 3.3 新增：版本递增，同步 Rust 侧定义。
 ABI 3.4 新增：`surreal_vec_dimension` / `surreal_vec_clear`（2026-10-03 加入时漏递增 minor，2026-10-09 补）。
+ABI 3.5 新增：`surreal_storage_version() -> u32`（2026-11-11），不初始化数据库，返回本库支持的认知存储格式major 4。Go存储绑定要求该值为4，并将最低minor升为5；这样旧Rust库不能把新配置`surrealkv`当未知值静默落入mem。原C函数签名与错误码不变。
 
 minor 语义（2026-10-09 起）：dylib minor < Go 期望值 → `verifyABI` 返回"substrate dylib 过旧"错误（不 panic，提示 `make rust-build`）；dylib minor > 期望值 → 兼容，仅 Debug 日志。新增导出符号必须递增 minor，`tools/ffi_symbol_check.go` 用 `tools/baselines/ffi_exports.txt` 快照对账。
 
 ### 3.2 校验机制（`internal/ffi/dylib.go` `verifyABI`）
 
 - major 不匹配 → **panic**（fail-fast，防 silent ABI drift）
-- minor：Go < Rust → warn（dylib 更新，Go 未同步）；Go > Rust → warn（dylib 过旧）
+- minor（2026-10-09复核）：Go要求高于Rust库时返回“库过旧”错误；Rust库较新时兼容并记Debug。原双向warn规则已废弃，ABI3.5继续沿用拒绝旧库的规则。
 
 ### 3.3 升级条件
 
@@ -142,14 +143,14 @@ Rust 侧通过 `write_bytes(out_err_ptr, out_err_len, "message")` 写入，Go �
 - `cedar_policy_count` — 当前 PolicySet 策略数（健康检查用）
 - `cedar_free_bytes` — 释放 Rust 分配的 `(*mut u8, usize)` 字节块
 
-### SurrealDB（`surreal_store.rs`，21 函数）
+### SurrealDB（`rust/substrate/src/surreal_store/`，24 函数）
 - **生命周期**：`surreal_set_worker_threads`、`surreal_open`、`surreal_purge`
 - **KV**：`surreal_kv_get`、`surreal_kv_put`、`surreal_kv_delete`、`surreal_kv_scan`
-- **向量（HNSW）**：`surreal_vec_upsert`、`surreal_vec_delete`、`surreal_vec_knn`、`surreal_vec_set_mode`
+- **向量（HNSW）**：`surreal_vec_upsert`、`surreal_vec_delete`、`surreal_vec_knn`、`surreal_vec_set_mode`、`surreal_vec_dimension`、`surreal_vec_clear`
 - **图**：`surreal_graph_relate`、`surreal_graph_delete_edges`、`surreal_graph_traverse`、`surreal_graph_spreading_activation`
 - **全文（BM25）**：`surreal_fts_index`、`surreal_fts_delete`、`surreal_fts_search`
 - **内存管理**：`surreal_free_string`、`surreal_free_buf`
-- **诊断**：`surreal_stats`（JSON 四路计数：kv/vec/graph/fts）
+- **诊断**：`surreal_stats`（JSON 四路计数：kv/vec/graph/fts）、`surreal_storage_version`（存储major，不触发数据库初始化）
 
 ### native_sandbox（`native_sandbox.rs`，3 函数）
 - `native_sandbox_exec` — 在原生沙箱中执行命令（JSON 请求/响应）

@@ -105,15 +105,16 @@ func TestDoLoad_PathNotFound_ReturnsError(t *testing.T) {
 // 背景：minor 过旧意味着缺少 Go 侧新增绑定的符号，若放行会在 purego dlsym 处 panic，
 // 因此必须在 verifyABI 阶段以带修复指引的 error 拦下。
 func TestCheckMinor(t *testing.T) {
-	const want = uint16(4)
+	const want = ExpectedABIMinor
 	raw := func(minor uint16) uint32 { return uint32(ExpectedABIMajor)<<16 | uint32(minor) }
 
 	t.Run("过旧返回错误", func(t *testing.T) {
-		err := checkMinor(3, want, raw(3))
+		old := want - 1
+		err := checkMinor(old, want, raw(old))
 		if err == nil {
 			t.Fatal("got<want 应返回 error")
 		}
-		for _, s := range []string{"过旧", "make rust-build", "want minor=4", "got=3"} {
+		for _, s := range []string{"过旧", "make rust-build", "want minor=5", "got=4"} {
 			if !strings.Contains(err.Error(), s) {
 				t.Errorf("error 缺少 %q: %v", s, err)
 			}

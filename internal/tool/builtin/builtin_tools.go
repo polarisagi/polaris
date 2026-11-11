@@ -133,13 +133,9 @@ func RegisterBuiltinTools(
 
 		{"data_query", data_query.MakeDataQueryFn(allowedPaths)},
 
-		// git_diff/git_commit/template_render 实现见 git_text_tools.go
-		// （与本文件同属 package builtin，无需导入）；三者此前只有空壳
-		// metadata-less 占位文件（GR-5-008），已核实功能实现完整但从未
-		// 注册进 defs，导致 `make deadcode` 一直靠白名单掩盖——现补齐
-		// tool.yaml/schema.json（见 git_diff/、git_commit/、
-		// template_render/ 三个目录）并在此接线。
+		// Git 文本工具实现与 metadata 均在 builtin 子目录，通过同一注册链加载。
 		{"git_diff", MakeGitDiffFn(allowedPaths, sandboxEnabled, bwrapPath)},
+		{"git_status", MakeGitStatusFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"git_commit", MakeGitCommitFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"template_render", TemplateRenderFn},
 
@@ -229,7 +225,7 @@ func registerBuiltinSandboxFunction(sbx *sandbox.InProcessSandbox, name string, 
 
 func builtinOutputTaint(name string) types.TaintLevel {
 	switch name {
-	case "web_fetch", "feed_fetch", "web_search", "bash", "run_command", "job_output", "session_search", "session_read":
+	case "web_fetch", "feed_fetch", "web_search", "bash", "run_command", "job_output", "session_search", "session_read", "git_diff", "git_status":
 		// 这些输出来自外网或宿主进程，必须把不可信来源带到后续回合。
 		return types.TaintHigh
 	default:

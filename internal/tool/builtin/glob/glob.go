@@ -32,8 +32,8 @@ func MakeGlobFn(allowedPaths []string) sandbox.InProcessFn {
 		protected := guard.SelfProtectedMatcher()
 		for _, workDir := range guard.SearchRoots(ctx, allowedPaths) {
 			fsys := os.DirFS(workDir)
-			// os.DirFS 限定了根目录，doublestar.Glob 不会跨越边界
-			matches, err := doublestar.Glob(fsys, args.Pattern)
+			// WithNoFollow 阻止常规目录软链递归，结果仍需按真实目标复核边界。
+			matches, err := doublestar.Glob(fsys, args.Pattern, doublestar.WithNoFollow())
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "glob: error matching", err)
 			}
@@ -41,6 +41,9 @@ func MakeGlobFn(allowedPaths []string) sandbox.InProcessFn {
 				full := filepath.Join(workDir, m)
 				if protected(full) {
 					continue // 搜索根若是自保护目录的上层，匹配结果不得暴露其内部路径
+				}
+				if err := guard.CheckReadablePath(ctx, full, paths); err != nil {
+					continue
 				}
 				fullPaths = append(fullPaths, full)
 			}

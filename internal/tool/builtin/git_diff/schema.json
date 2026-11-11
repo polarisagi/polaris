@@ -10,15 +10,15 @@
     },
     "ref1": {
       "type": "string",
-      "description": "Start ref (e.g. HEAD~1)"
+      "description": "Optional starting ref (e.g. HEAD~1); cannot start with '-'"
     },
     "ref2": {
       "type": "string",
-      "description": "End ref, with ref1"
+      "description": "Optional end ref; requires ref1 and cannot start with '-'"
     },
     "file": {
       "type": "string",
-      "description": "Limit to one file (relative to path)"
+      "description": "Limit to one relative file path (no absolute or '..' path components)"
     },
     "staged": {
       "type": "boolean",

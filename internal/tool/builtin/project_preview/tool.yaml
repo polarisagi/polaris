@@ -1,0 +1,10 @@
+name: project_preview
+description: Start, inspect, or stop a local development preview bound to the current session and project.
+version: 1.0.0
+capability: write-local
+risk_level: high
+sandbox: in-process
+side_effects:
+  - process-spawn
+  - file-write
+  - state-mutate

@@ -43,7 +43,7 @@ pub unsafe extern "C" fn surreal_kv_get(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let res_result = guard.rt.block_on(async {
+        let res_result = guard.block_on(async {
             let mut resp = guard
                 .db
                 .query("SELECT v FROM kv WHERE k = $k LIMIT 1")
@@ -132,7 +132,7 @@ pub unsafe extern "C" fn surreal_kv_put(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             guard
                 .db
                 .query("UPSERT type::record('kv', $k) SET k = $k, v = $v")
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let q_res = guard.rt.block_on(async {
+        let q_res = guard.block_on(async {
             guard
                 .db
                 .query("DELETE type::record('kv', $k)")
@@ -226,7 +226,7 @@ pub unsafe extern "C" fn surreal_kv_scan(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let rows_result: Result<Vec<KvRow>, surrealdb::Error> = guard.rt.block_on(async {
+        let rows_result: Result<Vec<KvRow>, surrealdb::Error> = guard.block_on(async {
             let mut resp = guard
                 .db
                 .query("SELECT k, v FROM kv WHERE string::starts_with(k, $prefix) ORDER BY k")

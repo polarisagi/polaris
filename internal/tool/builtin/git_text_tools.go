@@ -19,6 +19,20 @@ import (
 
 // ─── git_diff ─────────────────────────────────────────────────────────────────
 
+type gitDiffArgs struct {
+	Path   string `json:"path"`
+	Ref1   string `json:"ref1"`
+	Ref2   string `json:"ref2"`
+	File   string `json:"file"`
+	Staged bool   `json:"staged"`
+}
+
+type gitDiffStat struct {
+	Path    string `json:"path"`
+	Added   int    `json:"lines_added"`
+	Removed int    `json:"lines_removed"`
+}
+
 // MakeGitDiffFn 返回 git_diff 工具实现。
 // 使用 bash.RunSandboxedArgv 以 argv 形式传参（非 bash -c 拼接字符串），
 // 无 shell 注入风险；path 受 allowedPaths 白名单约束。
@@ -27,99 +41,125 @@ func MakeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string)
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
 		paths := guard.ScopedPaths(ctx, allowedPaths)
-		var args struct {
-			Path   string `json:"path"`   // git 仓库根目录，必须在 paths 内
-			Ref1   string `json:"ref1"`   // 起始 ref（可选，如 "HEAD~1"、branch 名、commit hash）
-			Ref2   string `json:"ref2"`   // 结束 ref（可选；配合 ref1 使用）
-			File   string `json:"file"`   // 限定单文件（可选，相对于 path 的路径）
-			Staged bool   `json:"staged"` // 是否展示已 stage 的变更（--cached）
-		}
+		var args gitDiffArgs
 		if err := json.Unmarshal(input, &args); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "git_diff: invalid args", err)
+			return nil, apperr.Wrap(apperr.CodeInvalidInput, "git_diff: invalid args", err)
 		}
-		if args.Path == "" {
-			return nil, apperr.New(apperr.CodeInternal, "git_diff: path is required")
+		if err := validateGitDiffArgs(args); err != nil {
+			return nil, apperr.Wrap(apperr.CodeOf(err), "git_diff: validate args", err)
 		}
 		if err := guard.CheckReadablePath(ctx, args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "MakeGitDiffFn", err)
 		}
-		workDir := filepath.Clean(args.Path)
-
-		// 构造 diff 参数（全部独立传参，无 shell 拼接）
-		diffArgs := []string{"diff"}
-		if args.Staged {
-			diffArgs = append(diffArgs, "--cached")
-		}
-		if args.Ref1 != "" {
-			if args.Ref2 != "" {
-				diffArgs = append(diffArgs, args.Ref1, args.Ref2)
-			} else {
-				diffArgs = append(diffArgs, args.Ref1)
-			}
-		}
-		if args.File != "" {
-			// 防路径穿越：拒绝 ".." 分量
-			if strings.Contains(args.File, "..") {
-				return nil, apperr.New(apperr.CodeInternal, "git_diff: file path must not contain '..'")
-			}
-			diffArgs = append(diffArgs, "--", args.File)
-		}
-
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
-		// 1. 原始 unified diff（上限 1MB）
-		rawOut, err := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "git", diffArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
-		if err != nil {
-			// bash.RunSandboxedArgv 底层沙箱把 stdout/stderr 合并返回，rawOut 里就是 git 的
-			// 具体报错文本（如 "not a git repository"），带出来而不是只报一个空洞的
-			// "exit status N"，否则调用方排障时看不出失败原因。
-			return nil, apperr.Wrap(apperr.CodeInternal,
-				fmt.Sprintf("git_diff: failed: %s", strings.TrimSpace(string(rawOut))), err)
-		}
-		raw := string(rawOut)
-		truncated := false
-		if len(raw) > 1<<20 {
-			raw = raw[:1<<20]
-			truncated = true
-		}
-
-		// 2. 结构化统计（--numstat 输出：<added>\t<removed>\t<file>）
-		numstatArgs := append([]string{"diff", "--numstat"}, diffArgs[1:]...)
-		numstatOut, _ := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "git", numstatArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
-
-		type fileStat struct {
-			Path    string `json:"path"`
-			Added   int    `json:"lines_added"`
-			Removed int    `json:"lines_removed"`
-		}
-		var files []fileStat
-		totalAdded, totalRemoved := 0, 0
-		for _, line := range strings.Split(strings.TrimSpace(string(numstatOut)), "\n") {
-			if line == "" {
-				continue
-			}
-			parts := strings.SplitN(line, "\t", 3)
-			if len(parts) != 3 {
-				continue
-			}
-			var f fileStat
-			f.Path = parts[2]
-			fmt.Sscanf(parts[0], "%d", &f.Added)   //nolint:errcheck
-			fmt.Sscanf(parts[1], "%d", &f.Removed) //nolint:errcheck
-			totalAdded += f.Added
-			totalRemoved += f.Removed
-			files = append(files, f)
-		}
-
-		return json.Marshal(map[string]any{
-			"files":         files,
-			"lines_added":   totalAdded,
-			"lines_removed": totalRemoved,
-			"raw":           raw,
-			"truncated":     truncated,
-		})
+		return executeGitDiff(ctx, args, sandboxEnabled, bwrapPath)
 	}
+}
+
+func validateGitDiffArgs(args gitDiffArgs) error {
+	if args.Path == "" {
+		return apperr.New(apperr.CodeInvalidInput, "git_diff: path is required")
+	}
+	if args.Ref1 == "" && args.Ref2 != "" {
+		return apperr.New(apperr.CodeInvalidInput, "git_diff: ref2 requires ref1")
+	}
+	if strings.HasPrefix(args.Ref1, "-") || strings.HasPrefix(args.Ref2, "-") {
+		return apperr.New(apperr.CodeInvalidInput, "git_diff: refs must not start with '-'")
+	}
+	if args.File != "" && !validGitDiffFilePath(args.File) {
+		return apperr.New(apperr.CodeInvalidInput, "git_diff: file must be a relative path without '..' components")
+	}
+	return nil
+}
+
+func executeGitDiff(parent context.Context, args gitDiffArgs, sandboxEnabled bool, bwrapPath string) ([]byte, error) {
+	workDir := filepath.Clean(args.Path)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	rawOut, err := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "git", buildGitDiffArgs(args, false), workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal,
+			fmt.Sprintf("git_diff: failed: %s", strings.TrimSpace(string(rawOut))), err)
+	}
+	raw := string(rawOut)
+	truncated := len(raw) > 1<<20
+	if truncated {
+		raw = raw[:1<<20]
+	}
+	numstatOut, err := bash.RunSandboxedArgv(ctx, protocol.CallerBuiltin, "git", buildGitDiffArgs(args, true), workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal,
+			fmt.Sprintf("git_diff: numstat failed: %s", strings.TrimSpace(string(numstatOut))), err)
+	}
+	files, totalAdded, totalRemoved, err := parseGitNumstat(numstatOut)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeOf(err), "git_diff: parse numstat", err)
+	}
+	out, err := json.Marshal(map[string]any{"files": files, "lines_added": totalAdded, "lines_removed": totalRemoved, "raw": raw, "truncated": truncated})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "git_diff: encode result", err)
+	}
+	return out, nil
+}
+
+func parseGitNumstat(data []byte) ([]gitDiffStat, int, int, error) {
+	var files []gitDiffStat
+	totalAdded, totalRemoved := 0, 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			return nil, 0, 0, apperr.New(apperr.CodeInternal, "git_diff: malformed numstat record")
+		}
+		file := gitDiffStat{Path: parts[2]}
+		if parts[0] != "-" {
+			if _, err := fmt.Sscanf(parts[0], "%d", &file.Added); err != nil {
+				return nil, 0, 0, apperr.Wrap(apperr.CodeInternal, "git_diff: invalid numstat added count", err)
+			}
+		}
+		if parts[1] != "-" {
+			if _, err := fmt.Sscanf(parts[1], "%d", &file.Removed); err != nil {
+				return nil, 0, 0, apperr.Wrap(apperr.CodeInternal, "git_diff: invalid numstat removed count", err)
+			}
+		}
+		totalAdded += file.Added
+		totalRemoved += file.Removed
+		files = append(files, file)
+	}
+	return files, totalAdded, totalRemoved, nil
+}
+
+func buildGitDiffArgs(args gitDiffArgs, numstat bool) []string {
+	result := []string{"-c", "diff.external=", "-c", "core.fsmonitor=false", "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv"}
+	if args.Staged {
+		result = append(result, "--cached")
+	}
+	if args.Ref1 != "" {
+		result = append(result, args.Ref1)
+		if args.Ref2 != "" {
+			result = append(result, args.Ref2)
+		}
+	}
+	if numstat {
+		result = append(result, "--numstat")
+	}
+	if args.File != "" {
+		result = append(result, "--", args.File)
+	}
+	return result
+}
+
+func validGitDiffFilePath(path string) bool {
+	if filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
+		return false
+	}
+	for _, component := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if component == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // ─── git_commit ───────────────────────────────────────────────────────────────
