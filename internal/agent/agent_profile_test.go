@@ -72,6 +72,38 @@ func TestAgentProfile_DelegationTargetsAndCatalogView(t *testing.T) {
 	}
 }
 
+func TestAgentProfile_SpawnAgentsChecksEveryTarget(t *testing.T) {
+	a := NewAgentWithDefaults("profile-spawn")
+	a.SetAgentProfile(&types.AgentProfileSpec{Name: "lead", Tools: []string{"spawn_agents", "Agent(worker-a, worker-b)"}, AllowDelegation: true})
+	if err := a.checkProfileTool("spawn_agents", delegateTarget("spawn_agents", []byte(`{"tasks":[{"role":"worker-a"},{"role":"worker-b"}]}`))); err != nil {
+		t.Fatalf("allowed targets rejected: %v", err)
+	}
+	if err := a.checkProfileTool("spawn_agents", delegateTarget("spawn_agents", []byte(`{"tasks":[{"role":"worker-a"},{"role":"other"}]}`))); err == nil {
+		t.Fatal("expected mixed allowed and disallowed targets to be rejected")
+	}
+}
+
+func TestAgentProfile_EquivalentBindingKeepsSnapshot(t *testing.T) {
+	a := NewAgentWithDefaults("profile-snapshot")
+	p := &types.AgentProfileSpec{Name: "bundle:lead", Source: "plugin:pl_x", Instructions: "same", Tools: []string{"Read"}, AllowDelegation: true}
+	a.SetAgentProfile(p)
+	a.sCtx.SessionLayerSnapshot = []types.Message{{Role: "system", Content: "frozen"}}
+	a.sCtx.SessionLayerProfileDigest = a.sCtx.AgentProfileDigest
+	b := NewAgentWithDefaults("profile-snapshot-next-round")
+	b.inheritSessionLayer(a)
+	clone := *p
+	clone.Tools = append([]string(nil), p.Tools...)
+	b.SetAgentProfile(&clone)
+	if b.sCtx.SessionLayerSnapshot == nil {
+		t.Fatal("equivalent profile on next round should keep prefix cache")
+	}
+	clone.Instructions = "changed"
+	b.SetAgentProfile(&clone)
+	if b.sCtx.SessionLayerSnapshot != nil {
+		t.Fatal("changed profile must invalidate prefix cache")
+	}
+}
+
 // TestAgentProfile_PeerProfileHidesWritesAndMCPDelegation 对端委派任务的角色（只读 + 禁止再委派）：
 // 写类工具与 MCP 委派通道都不展示；含越权节点的计划在 S_VALIDATE 前段即被打回，不落到污点 → HITL。
 func TestAgentProfile_PeerProfileHidesWritesAndMCPDelegation(t *testing.T) {

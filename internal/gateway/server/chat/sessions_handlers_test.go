@@ -28,6 +28,8 @@ func TestHandleListSessions(t *testing.T) {
 			task_type TEXT,
 			is_pinned BOOLEAN,
 			thrashing_index REAL,
+			agent_profile TEXT NOT NULL DEFAULT '', agent_profile_source TEXT NOT NULL DEFAULT '', agent_profile_digest TEXT NOT NULL DEFAULT '',
+			expert_plugin_id TEXT NOT NULL DEFAULT '', expert_id TEXT NOT NULL DEFAULT '', expert_type TEXT NOT NULL DEFAULT '', expert_display_name TEXT NOT NULL DEFAULT '{}',
 			status TEXT,
 			created_at DATETIME,
 			updated_at DATETIME,

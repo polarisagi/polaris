@@ -6,6 +6,7 @@ import (
 )
 
 const RuleMCPShape = "mcp.manifest-shape"
+const RuleMCPMetadataShape = "polaris.mcpServerMetadata.shape"
 
 // loadMCPServers 默认文件先加载（.mcp.json：Claude/Codex；mcp.json：agent-plugins），
 // 再按清单优先级合并声明；同名后声明覆盖（Claude 合并语义）。
@@ -21,7 +22,59 @@ func loadMCPServers(root string, docs []manifestDoc, opts LoadOptions, ds *diagn
 			applyMCPDeclaration(root, doc.path, item, &set, ds)
 		}
 	}
-	return set.list(), set.bundleUserConfig
+	servers := set.list()
+	applyPolarisMCPServerMetadata(docs, servers, ds)
+	return servers, set.bundleUserConfig
+}
+
+func applyPolarisMCPServerMetadata(docs []manifestDoc, servers []MCPServer, ds *diagnostics) {
+	byName := make(map[string]int, len(servers))
+	for i := range servers {
+		byName[servers[i].Name] = i
+	}
+	for _, doc := range docs {
+		namespace, ok := doc.wire.Extensions[polarisNamespaceKey]
+		if !ok {
+			continue
+		}
+		var ext map[string]json.RawMessage
+		if err := json.Unmarshal(namespace, &ext); err != nil {
+			continue // namespace 对象形状已由清单解析器诊断。
+		}
+		metadataRaw, ok := ext["mcpServerMetadata"]
+		if !ok || len(metadataRaw) == 0 || string(metadataRaw) == "null" {
+			continue
+		}
+		var metadataByName map[string]json.RawMessage
+		if err := json.Unmarshal(metadataRaw, &metadataByName); err != nil {
+			ds.errorf("mcp", doc.path, RuleMCPMetadataShape, "mcpServerMetadata must be an object")
+			continue
+		}
+		for name, raw := range metadataByName {
+			var metadata struct {
+				OAuth json.RawMessage `json:"oauth"`
+			}
+			if err := json.Unmarshal(raw, &metadata); err != nil {
+				ds.errorf("mcp", doc.path, RuleMCPMetadataShape, "server metadata %q must be an object", name)
+				continue
+			}
+			index, exists := byName[name]
+			if !exists {
+				ds.warnf("mcp", doc.path, RuleMCPMetadataShape, "server metadata %q has no matching MCP server", name)
+				continue
+			}
+			srv := &servers[index]
+			if hasExplicitOAuth(srv.OAuth) || len(metadata.OAuth) == 0 || string(metadata.OAuth) == "null" {
+				continue // 显式 MCP OAuth 优先，防止迁移元数据覆盖连接器配置。
+			}
+			srv.OAuth = metadata.OAuth
+			parseMCPOAuth(srv, doc.path, ds)
+		}
+	}
+}
+
+func hasExplicitOAuth(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
 }
 
 // mcpDeclarations 把 "路径 / 内联映射 / 二者混合数组" 统一展开为声明项列表。

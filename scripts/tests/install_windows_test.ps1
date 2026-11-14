@@ -25,11 +25,16 @@ $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Ro
 if ($ParseErrors.Count) { throw ($ParseErrors | Out-String) }
 
 # 只加载待测函数，不运行安装主体或写入用户注册表。
-foreach ($Name in @('Update-SessionPath', 'Test-WorkingPython', 'Test-WorkingNode', 'Test-WorkingUv', 'Invoke-UvInstaller', 'Install-ManagedPython', 'Get-PolarisRuntimeStatus')) {
+foreach ($Name in @('Update-SessionPath', 'Test-WorkingPython', 'Test-WorkingNode', 'Test-WorkingUv', 'Install-ManagedPython', 'Get-PolarisRuntimeStatus', 'Test-ReleaseSignature', 'Get-PortableArtifactUrls', 'Get-FixedArtifact', 'Receive-VerifiedArtifact', 'Replace-DependencyDirectory', 'Expand-PortableGit', 'Install-PortableGit', 'Install-PortableUv', 'Install-PortableNode', 'Install-FFmpeg', 'Test-PortableGitRuntime', 'Test-PortableUvRuntime', 'Test-PortableNodeRuntime', 'Test-PortableFFmpegRuntime', 'Install-DependencyPackage')) {
     $FunctionAst = $Ast.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $_.Name -eq $Name } | Select-Object -First 1
     . ([scriptblock]::Create($FunctionAst.Extent.Text))
 }
+$PackageFunction = $Ast.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+    Where-Object { $_.Name -eq 'Install-DependencyPackage' } | Select-Object -First 1
+. ([scriptblock]::Create(($PackageFunction.Extent.Text -replace '^function Install-DependencyPackage', 'function Install-DependencyPackageActual')))
+$KeyBlock = [regex]::Match($Text, '(?ms)# RELEASE_PUBLIC_KEYS_BEGIN\n(.*?)\n# RELEASE_PUBLIC_KEYS_END').Groups[1].Value
+$script:ReleasePublicKeys = @([regex]::Matches($KeyBlock, "'([A-Za-z0-9+/=]+)'") | ForEach-Object { $_.Groups[1].Value })
 function Assert-True($Condition, $Message) { if (-not $Condition) { throw $Message } }
 $TestDir = Join-Path ([System.IO.Path]::GetTempPath()) ('polaris-win-test-' + [guid]::NewGuid().ToString('N'))
 $SavedPath = $env:Path
@@ -40,6 +45,39 @@ $SavedArch = $env:PROCESSOR_ARCHITECTURE
 $SavedNativeArch = $env:PROCESSOR_ARCHITEW6432
 try {
     New-Item -ItemType Directory -Path $TestDir | Out-Null
+    & {
+        # 显式指定的 npmrc 属于用户，即使它仍使用 npm 默认源也不能改写。
+        $SavedMirrorEnv = @{}
+        foreach ($Name in @('POLARIS_CONFIGURE_MIRRORS','NPM_CONFIG_REGISTRY','NPM_CONFIG_USERCONFIG','PIP_CONFIG_FILE','UV_CONFIG_FILE','APPDATA')) {
+            $SavedMirrorEnv[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+        }
+        try {
+            $MirrorBlockStart = $Text.IndexOf("if (`$env:POLARIS_CONFIGURE_MIRRORS -eq '1') {")
+            $MirrorBlockEnd = $Text.IndexOf('# 5. FFmpeg', $MirrorBlockStart)
+            Assert-True ($MirrorBlockStart -ge 0 -and $MirrorBlockEnd -gt $MirrorBlockStart) 'Mirror configuration block was not found'
+            $Npmrc = Join-Path $TestDir 'custom npmrc'
+            $AppDataFixture = Join-Path $TestDir 'appdata'
+            New-Item -ItemType Directory -Path $AppDataFixture -Force | Out-Null
+            Set-Content -LiteralPath $Npmrc -Value 'registry=https://registry.npmjs.org/'
+            $env:POLARIS_CONFIGURE_MIRRORS = '1'
+            $env:NPM_CONFIG_REGISTRY = $null
+            $env:NPM_CONFIG_USERCONFIG = $Npmrc
+            $env:PIP_CONFIG_FILE = Join-Path $TestDir 'pip.ini'
+            $env:UV_CONFIG_FILE = Join-Path $TestDir 'uv.toml'
+            $env:APPDATA = $AppDataFixture
+            $script:WorkingNpmCmd = 'MockNpmForMirrorTest'
+            $script:MirrorNpmCalls = 0
+            function Test-WorkingNode { return $true }
+            function Test-WorkingPython { return $false }
+            function Write-Msg { param($zh, $en, $Color) }
+            function MockNpmForMirrorTest { $script:MirrorNpmCalls++ }
+            . ([scriptblock]::Create($Text.Substring($MirrorBlockStart, $MirrorBlockEnd - $MirrorBlockStart)))
+            Assert-True ($script:MirrorNpmCalls -eq 0) 'Explicit custom npmrc was modified despite its default registry'
+            Assert-True ((Get-Content -LiteralPath $Npmrc -Raw).Trim() -eq 'registry=https://registry.npmjs.org/') 'Explicit npmrc bytes changed'
+        } finally {
+            foreach ($Name in $SavedMirrorEnv.Keys) { [Environment]::SetEnvironmentVariable($Name, $SavedMirrorEnv[$Name], 'Process') }
+        }
+    }
     & {
         # 直接执行安装和收尾片段，防止“进程已创建”被误报为“服务已就绪”。
         $Start = $Text.IndexOf('try {', $Text.IndexOf('function Get-PolarisRuntimeStatus'))
@@ -165,6 +203,7 @@ try {
         $OriginalPythonMirror = $env:UV_PYTHON_INSTALL_MIRROR
         try {
             $IsMainland = $true
+            $Region = 'cn'
             $ActiveProxy = 'https://mirror.invalid'
             function Write-Msg { param($zh, $en, $Color) }
             function uv {
@@ -178,121 +217,166 @@ try {
                 $env:UV_PYTHON_INSTALL_MIRROR = 'https://previous.invalid'
                 $script:PythonAttempts = New-Object 'System.Collections.Generic.List[string]'
                 Install-ManagedPython
-                Assert-True ($script:PythonAttempts.Count -eq 2) 'Python failure did not retry'
-                Assert-True ($script:PythonAttempts[0] -like 'https://mirror.invalid/*') 'Python mirror was not used'
-                Assert-True ([string]::IsNullOrEmpty($script:PythonAttempts[1])) 'Python retry did not use official source'
+                Assert-True ($script:PythonAttempts.Count -eq 1) 'Python install did not use a single selected mirror'
+                Assert-True ($script:PythonAttempts[0] -eq 'https://previous.invalid') 'Explicit Python mirror was not used first'
                 Assert-True ($env:UV_PYTHON_INSTALL_MIRROR -eq 'https://previous.invalid') 'Python mirror was not restored'
             }
+            $env:UV_PYTHON_INSTALL_MIRROR = ''
+            $script:PythonAttempts = New-Object 'System.Collections.Generic.List[string]'
+            Install-ManagedPython
+            Assert-True ($script:PythonAttempts.Count -eq 2) 'Default Python install did not try a fallback after mirror failure'
+            Assert-True ($script:PythonAttempts[0] -eq 'https://registry.npmmirror.com/-/binary/python-build-standalone') 'Mainland Python install did not prefer npmmirror'
+            Assert-True ($script:PythonAttempts[1] -match '^https://ghproxy\.net/') 'Python fallback did not use the fixed proxy mirror'
         } finally { $env:UV_PYTHON_INSTALL_MIRROR = $OriginalPythonMirror }
     }
+    $PinnedNode = Get-FixedArtifact 'node' 'amd64'
+    $PinnedGyan = Get-FixedArtifact 'ffmpeg' 'amd64'
+    $PinnedArmFfmpeg = Get-FixedArtifact 'ffmpeg' 'arm64'
+    $PinnedUvWheel = Get-FixedArtifact 'uv-wheel' 'amd64'
+    Assert-True ($PinnedNode.Name -eq 'node-v24.22.3-win-x64.zip' -and $PinnedNode.Hash -eq 'e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f') 'Node fixed artifact pin drifted'
+    Assert-True ($PinnedGyan.Url -match 'gyan\.dev' -and $PinnedGyan.Hash -eq '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba') 'Gyan fixed artifact pin drifted'
+    Assert-True ($PinnedArmFfmpeg.Name -match 'winarm64') 'ARM64 FFmpeg pin is not architecture-specific'
+    Assert-True ($PinnedUvWheel.Name -eq 'uv-0.13.7-py3-none-win_amd64.whl' -and $PinnedUvWheel.Hash -eq '2835e2ab397d0db86323b9975dce75ecd76aa9cfa0d6a2aea84734aae7f8c9b3') 'Aliyun uv wheel pin drifted'
     & {
-        # 用真实 ZIP 覆盖损坏包和缺文件包，验证替换前不会删除旧依赖。
+        # 临时归档模拟断网和镜像下载；不调用宿主包管理器或真实安装器。
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         function Write-Msg { param($zh, $en, $Color) }
-        function Add-UserPathFront { param($DirToAdd) }
+        function Add-UserPathFront { param($DirToAdd) $script:AddedPaths.Add($DirToAdd) }
         function Update-SessionPath { }
-        function Test-WorkingNode { $false }
-        function Get-Command {
-            param($Name)
-            if ($Name -ne 'winget') { Microsoft.PowerShell.Core\Get-Command $Name }
-        }
-        function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction) Copy-Item -LiteralPath $Fixture -Destination $OutFile -Force }
-        function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) "$FixtureHash  node-v24.1.0-win-x64.zip`r`n" }
-        $NodeStart = $Text.IndexOf('# 4. Node.js')
-        $NodeEnd = $Text.IndexOf('# 5. FFmpeg', $NodeStart)
-        $NodeInstall = [scriptblock]::Create($Text.Substring($NodeStart, $NodeEnd - $NodeStart))
+        function Test-WorkingGit { $true }
+        function Test-WorkingBash { $true }
+        function Test-WorkingUv { $true }
+        function Test-WorkingNode { $true }
+        function Test-WorkingFFmpeg { Test-Path (Join-Path $DepsDir 'ffmpeg/bin/ffmpeg.exe') }
+        function Test-PortableGitRuntime { param($Root) $true }
+        function Test-PortableUvRuntime { param($Root) $true }
+        function Test-PortableNodeRuntime { param($Root) $true }
+        function Test-PortableFFmpegRuntime { param($BinDirectory) (Test-Path (Join-Path $BinDirectory 'ffmpeg.exe')) -and (Test-Path (Join-Path $BinDirectory 'ffprobe.exe')) }
+        function Test-WorkingPython { $false }
+        function Install-DependencyPackage { param($WingetId, $ScoopId, $ChocoId) $false }
+        function Get-Command { param($Name, [switch]$All, $ErrorAction) if ($Name -eq 'winget') { return [pscustomobject]@{Name='winget'} }; return $null }
         function Expand-PortableGit { param($Archive, $Destination) Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force }
-        $GitLoop = $Ast.Find({ param($Node) $Node -is [System.Management.Automation.Language.ForEachStatementAst] -and $Node.Variable.VariablePath.UserPath -eq 'u' -and $Node.Condition.Extent.Text -eq '$GitUrls' }, $true)
-        $GitInstall = [scriptblock]::Create('$PortableGitZip = Join-Path $WorkDir "portable-git.exe"' + "`n" + $GitLoop.Extent.Text)
-        foreach ($Dependency in @('Node', 'Git')) {
-            foreach ($Scenario in @('corrupt', 'missing', 'valid')) {
-                $WorkDir = Join-Path $TestDir "$Dependency $Scenario [中文]"
-                $DepsDir = Join-Path $WorkDir 'deps'
-                $Dest = Join-Path $DepsDir $Dependency.ToLowerInvariant()
-                New-Item -ItemType Directory -Path $Dest -Force | Out-Null
-                $Sentinel = Join-Path $Dest 'old-install'
-                Set-Content -LiteralPath $Sentinel -Value 'keep'
-                $Fixture = Join-Path $WorkDir 'fixture.zip'
-                $Package = Join-Path $WorkDir 'package'
-                New-Item -ItemType Directory -Path $Package | Out-Null
-                if ($Scenario -eq 'corrupt') {
-                    Set-Content -LiteralPath $Fixture -Value 'not a ZIP'
-                } elseif ($Dependency -eq 'Node') {
-                    foreach ($Name in @('node.exe', 'npm.cmd')) { Set-Content -LiteralPath (Join-Path $Package $Name) -Value 'fixture' }
-                    if ($Scenario -eq 'valid') { Set-Content -LiteralPath (Join-Path $Package 'npx.cmd') -Value 'fixture' }
-                    [System.IO.Compression.ZipFile]::CreateFromDirectory($Package, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $true)
-                } else {
-                    $CmdDir = Join-Path $Package 'cmd'
-                    New-Item -ItemType Directory -Path $CmdDir | Out-Null
-                    $Name = if ($Scenario -eq 'valid') { 'git.exe' } else { 'missing.exe' }
-                    Set-Content -LiteralPath (Join-Path $CmdDir $Name) -Value 'fixture'
-                    $BinDir = Join-Path $Package 'bin'
-                    New-Item -ItemType Directory -Path $BinDir | Out-Null
-                    if ($Scenario -eq 'valid') { Set-Content -LiteralPath (Join-Path $BinDir 'bash.exe') -Value 'fixture' }
-                    [System.IO.Compression.ZipFile]::CreateFromDirectory($Package, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-                }
-                $FixtureHash = (Get-FileHash -LiteralPath $Fixture -Algorithm SHA256).Hash.ToLowerInvariant()
-                $GitHash = $FixtureHash
-                $GitUrls = @('https://download.invalid/git.zip')
-                $IsMainland = $false
-                $NodeVersion = '24'
-                $Arch = 'amd64'
-                if ($Dependency -eq 'Node') { . $NodeInstall } else { . $GitInstall }
-                Assert-True ((Test-Path -LiteralPath $Sentinel) -eq ($Scenario -ne 'valid')) "$Dependency $Scenario did not preserve/replace old install correctly"
-                if ($Scenario -eq 'valid') {
-                    $Required = if ($Dependency -eq 'Node') { 'npx.cmd' } else { 'cmd/git.exe' }
-                    Assert-True (Test-Path -LiteralPath (Join-Path $Dest $Required)) "$Dependency valid archive was not installed"
-                }
-            }
+        function Get-FixedArtifact {
+            param($Kind, $NativeArch)
+            if ($Kind -eq 'ffmpeg' -and $NativeArch -eq 'amd64') { return [pscustomobject]@{Name=$PinnedGyan.Name; Url=$PinnedGyan.Url; Hash=$script:FixtureArtifact.Hash} }
+            if ($Kind -eq 'ffmpeg-fallback' -and $NativeArch -eq 'amd64') { return [pscustomobject]@{Name='ffmpeg-N-128227-g4811625b5f-win64-lgpl.zip'; Url='https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-N-128227-g4811625b5f-win64-lgpl.zip'; Hash=$script:FixtureArtifact.Hash} }
+            if ($Kind -eq 'ffmpeg' -and $NativeArch -eq 'arm64') { return [pscustomobject]@{Name=$PinnedArmFfmpeg.Name; Url=$PinnedArmFfmpeg.Url; Hash=$script:FixtureArtifact.Hash} }
+            if ($Kind -eq 'uv-wheel') { return [pscustomobject]@{Name='uv-fixture.whl'; Url='https://mirrors.aliyun.com/pypi/uv-fixture.whl'; Hash=$script:FixtureArtifact.Hash} }
+            if ($Kind -eq 'uv') { return [pscustomobject]@{Name='uv-fixture.zip'; Url='https://github.com/example/release/uv-fixture.zip'; Hash=$script:FixtureArtifact.Hash} }
+            return $script:FixtureArtifact
         }
-    }
-    # 真实子进程覆盖 exit 和异常；失败必须回到父进程且能继续重试。
-    & {
-        $WorkDir = Join-Path $TestDir 'uv installer with spaces'
-        New-Item -ItemType Directory -Path $WorkDir | Out-Null
-        function Invoke-RestMethod { $script:MockUvInstaller }
-        foreach ($Scenario in @('exit 23', 'throw "mock uv download failure"', 'exit 0')) {
-            $script:MockUvInstaller = $Scenario
-            $Failed = $false
-            try { Invoke-UvInstaller } catch { $Failed = $true }
-            Assert-True ($Failed -eq ($Scenario -ne 'exit 0')) "Unexpected uv subprocess result: $Scenario"
+        function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) $script:MetadataCalls++; throw 'metadata endpoint is unreachable' }
+        function Invoke-WebRequest {
+            param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction, $Method)
+            $script:DownloadCalls.Add($Uri)
+            if ($script:FailUris -contains $Uri) { throw 'mock network failure' }
+            Copy-Item -LiteralPath $script:Fixture -Destination $OutFile -Force
         }
-    }
-    & {
-        $OriginalUvDir = $env:UV_INSTALL_DIR
-        $OriginalUvBase = $env:UV_INSTALLER_GITHUB_BASE_URL
-        try {
-            $env:UV_INSTALL_DIR = 'previous-uv-dir'
-            $env:UV_INSTALLER_GITHUB_BASE_URL = 'https://previous.invalid'
-            $LocalBinDir = $TestDir
-            $CargoBinDir = $TestDir
-            $IsMainland = $true
-            $ActiveProxy = 'https://mirror.invalid'
-            function Test-WorkingUv { $false }
-            function Write-Msg { param($zh, $en, $Color) }
-            function Add-UserPathFront { param($DirToAdd) }
-            function Update-SessionPath { }
-            function Invoke-UvInstaller {
-                $script:UvAttempts.Add([string]$env:UV_INSTALLER_GITHUB_BASE_URL)
-                Assert-True ($env:UV_INSTALL_DIR -eq $TestDir) 'uv install directory was not passed to child'
-                if ($script:UvAttempts.Count -eq 1 -or $script:FailUvRetry) { throw 'mock installer failure' }
+        $DownloadBase = 'https://cdn.invalid/releases'
+        $IsMainland = $true
+        $Region = 'cn'
+        $ActiveProxy = 'https://proxy-one.invalid'
+        $ProxyHosts = @('https://proxy-one.invalid', 'https://proxy-two.invalid')
+        $Arch = 'amd64'
+        $script:AddedPaths = New-Object 'System.Collections.Generic.List[string]'
+        $WorkDir = Join-Path $TestDir 'portable downloads'
+        $DepsDir = Join-Path $WorkDir 'deps'
+        $LocalBinDir = Join-Path $WorkDir 'local-bin'
+        New-Item -ItemType Directory -Path $DepsDir,$LocalBinDir -Force | Out-Null
+        $Package = Join-Path $WorkDir 'package'
+        $Fixture = Join-Path $WorkDir 'fixture.zip'
+        $script:Fixture = $Fixture
+
+        foreach ($Dependency in @('git', 'uv', 'node')) {
+            Remove-Item -LiteralPath $Package,$Fixture -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Path $Package -Force | Out-Null
+            if ($Dependency -eq 'git') {
+                New-Item -ItemType Directory -Path (Join-Path $Package 'cmd'),(Join-Path $Package 'bin') -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $Package 'cmd/git.exe') -Value 'fixture'
+                Set-Content -LiteralPath (Join-Path $Package 'bin/bash.exe') -Value 'fixture'
+            } elseif ($Dependency -eq 'uv') {
+                $UvScripts = Join-Path $Package 'uv-0.13.7.data/scripts'
+                $UvLicense = Join-Path $Package 'uv-0.13.7.dist-info/licenses'
+                New-Item -ItemType Directory -Path $UvScripts,$UvLicense -Force | Out-Null
+                foreach ($Name in @('uv.exe','uvw.exe','uvx.exe')) { Set-Content -LiteralPath (Join-Path $UvScripts $Name) -Value 'fixture' }
+                Set-Content -LiteralPath (Join-Path $UvLicense 'LICENSE-MIT') -Value 'fixture license'
+            } else {
+                $NodeRoot = Join-Path $Package 'node-v24.22.3-win-x64'
+                New-Item -ItemType Directory -Path $NodeRoot | Out-Null
+                foreach ($Name in @('node.exe','npm.cmd','npx.cmd')) { Set-Content -LiteralPath (Join-Path $NodeRoot $Name) -Value 'fixture' }
             }
-            $Start = $Text.IndexOf('# 2. uv 检查与自动安装')
-            $End = $Text.IndexOf('# 3. Python 3', $Start)
-            $InstallUv = [scriptblock]::Create($Text.Substring($Start, $End - $Start))
-            foreach ($script:FailUvRetry in @($false, $true)) {
-                $script:UvAttempts = New-Object 'System.Collections.Generic.List[string]'
-                . $InstallUv
-                Assert-True ($script:UvAttempts.Count -eq 2) 'uv failure did not trigger retry'
-                Assert-True ($script:UvAttempts[0] -eq 'https://mirror.invalid/https://github.com') 'Mirror was not used first'
-                Assert-True ([string]::IsNullOrEmpty($script:UvAttempts[1])) 'Retry did not clear mirror override'
-                Assert-True ($env:UV_INSTALL_DIR -eq 'previous-uv-dir') 'uv install directory was not restored'
-                Assert-True ($env:UV_INSTALLER_GITHUB_BASE_URL -eq 'https://previous.invalid') 'uv mirror override was not restored'
-            }
-        } finally {
-            $env:UV_INSTALL_DIR = $OriginalUvDir
-            $env:UV_INSTALLER_GITHUB_BASE_URL = $OriginalUvBase
+            [System.IO.Compression.ZipFile]::CreateFromDirectory($Package, $Fixture, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+            $FixtureHash = (Get-FileHash -LiteralPath $Fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+            $script:FixtureArtifact = [pscustomobject]@{Name='portable-fixture.zip'; Url='https://github.com/example/release/portable-fixture.zip'; Mainland='https://mirror.invalid/portable-fixture.zip'; Hash=$FixtureHash}
+            $Dest = Join-Path $DepsDir $Dependency
+            New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+            $Sentinel = Join-Path $Dest 'old-install'
+            Set-Content -LiteralPath $Sentinel -Value 'keep'
+            $script:DownloadCalls = New-Object 'System.Collections.Generic.List[string]'
+            $script:FailUris = if ($Dependency -eq 'uv') { @('https://cdn.invalid/releases/uv-fixture.whl') } else { @('https://cdn.invalid/releases/portable-fixture.zip','https://mirror.invalid/portable-fixture.zip','https://proxy-one.invalid/https://github.com/example/release/portable-fixture.zip') }
+            $Install = switch ($Dependency) { 'git' { 'Install-PortableGit' } 'uv' { 'Install-PortableUv' } 'node' { 'Install-PortableNode' } }
+            $Result = & $Install
+            Assert-True $Result "$Dependency fixed fixture did not install after mirror failures"
+            Assert-True ($script:DownloadCalls.Count -ge $(if ($Dependency -eq 'uv') {2} else {3})) "$Dependency did not continue through candidate sources: $($script:DownloadCalls -join ', ')"
+            Assert-True (-not (Test-Path -LiteralPath $Sentinel)) "$Dependency valid archive did not replace the old fixture"
+            Assert-True ($script:AddedPaths.Count -gt 0) "$Dependency did not add the installed location to session/user PATH"
+            if ($Dependency -eq 'uv') { Assert-True (Test-Path (Join-Path $DepsDir 'uv/uv-0.13.7.dist-info/licenses/LICENSE-MIT')) 'Aliyun uv wheel license metadata was discarded' }
         }
+
+        # 摘要错时不得解压或覆盖旧依赖；元数据端点全程保持不可用且未被请求。
+        $script:FixtureArtifact = [pscustomobject]@{Name='portable-fixture.zip'; Url='https://github.com/example/release/portable-fixture.zip'; Mainland=''; Hash=('0' * 64)}
+        $Dest = Join-Path $DepsDir 'node'
+        New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+        $Sentinel = Join-Path $Dest 'old-install'
+        Set-Content -LiteralPath $Sentinel -Value 'keep'
+        $script:FailUris = @()
+        $script:DownloadCalls = New-Object 'System.Collections.Generic.List[string]'
+        $script:MetadataCalls = 0
+        Assert-True (-not (Install-PortableNode)) 'Bad SHA-256 was accepted'
+        Assert-True (Test-Path -LiteralPath $Sentinel) 'Bad SHA-256 removed the prior Node installation'
+        Assert-True ($script:MetadataCalls -eq 0) 'Portable fallback queried GitHub API, astral installer, or Node SHASUMS metadata'
+
+        # 区域源排序和架构 pin 固定，Gyan 主站不经 GitHub 代理，ARM64 不取 Gyan x64。
+        $script:FixtureArtifact = $null
+        $NodeUrls = @(Get-PortableArtifactUrls $PinnedNode.Name $PinnedNode.Url $PinnedNode.Mainland)
+        Assert-True ($NodeUrls[0] -eq "$DownloadBase/$($PinnedNode.Name)" -and $NodeUrls[1] -eq $PinnedNode.Mainland) 'Node mirror ordering lost self-hosted/npmmirror priority'
+        $GyanUrls = @(Get-PortableArtifactUrls $PinnedGyan.Name $PinnedGyan.Url)
+        Assert-True ($GyanUrls[0] -eq "$DownloadBase/$($PinnedGyan.Name)" -and $GyanUrls[1] -eq $PinnedGyan.Url) 'Gyan main site was sent through a GitHub proxy'
+        Assert-True ($PinnedArmFfmpeg.Url -notmatch 'gyan\.dev') 'ARM64 selected the Gyan x64 archive'
+
+        # FFmpeg x64 使用 Gyan 主站；ARM64 使用固定原生归档代理候选。
+        $FFmpegRoot = Join-Path $Package 'ffmpeg-fixture'
+        $Bin = Join-Path $FFmpegRoot 'bin'
+        New-Item -ItemType Directory -Path $Bin -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $Bin 'ffmpeg.exe') -Value 'fixture'
+        Set-Content -LiteralPath (Join-Path $Bin 'ffprobe.exe') -Value 'fixture'
+        Set-Content -LiteralPath (Join-Path $FFmpegRoot 'LICENSE.txt') -Value 'fixture license'
+        Remove-Item -LiteralPath $Fixture -Force -ErrorAction SilentlyContinue
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($FFmpegRoot, $Fixture)
+        $script:FailUris = @()
+        $script:DownloadCalls = New-Object 'System.Collections.Generic.List[string]'
+        function Receive-VerifiedArtifact {
+            param([string[]]$Urls, [string]$Destination, [string]$Sha256)
+            $script:FFmpegUrls.Add(($Urls -join '|'))
+            if ($Arch -eq 'amd64' -and $script:FFmpegUrls.Count -eq 1) { return $false }
+            Copy-Item -LiteralPath $script:Fixture -Destination $Destination -Force
+            return $true
+        }
+        $Arch = 'amd64'
+        $script:FFmpegUrls = New-Object 'System.Collections.Generic.List[string]'
+        $null = Install-FFmpeg
+        Assert-True ($script:FFmpegUrls.Count -eq 2 -and $script:FFmpegUrls[0] -match 'gyan\.dev' -and $script:FFmpegUrls[1] -match 'FFmpeg-Builds') 'FFmpeg x64 did not fall back from Gyan to its pinned native archive'
+        Assert-True (Test-Path (Join-Path $DepsDir 'ffmpeg/LICENSE.txt')) 'FFmpeg install discarded archive license files'
+        Remove-Item -LiteralPath (Join-Path $DepsDir 'ffmpeg') -Recurse -Force
+        $Arch = 'arm64'
+        $script:FFmpegUrls = New-Object 'System.Collections.Generic.List[string]'
+        $null = Install-FFmpeg
+        Assert-True ($script:FFmpegUrls.Count -eq 1 -and $script:FFmpegUrls[0] -match 'winarm64' -and $script:FFmpegUrls[0] -match 'github\.com') "FFmpeg ARM64 did not use its architecture-specific candidate: $($script:FFmpegUrls[0])"
+
+        # 包管理器进度输出必须留在 host stream，调用方只接收 bool。
+        function winget { param([string]$Operation,[Alias('id')][string]$PackageId,[Alias('e')][switch]$Exact,[Alias('source')][string]$SourceName,[Alias('accept-package-agreements')][switch]$Agree,[Alias('accept-source-agreements')][switch]$SourceAgree,[switch]$silent,[Alias('disable-interactivity')][switch]$Disable) Write-Output 'mock package progress'; $global:LASTEXITCODE = 0 }
+        $PackageResult = Install-DependencyPackageActual 'Test.Package' 'test' 'test'
+        Assert-True ($PackageResult -is [bool] -and $PackageResult) 'Package manager output polluted the boolean result'
     }
     $InstallDir = $TestDir
     $LocalBinDir = $TestDir
@@ -306,6 +390,33 @@ try {
     $env:Path = $SessionOnly
     Update-SessionPath
     Assert-True (($env:Path -split ';') -contains $SessionOnly) 'Session-only PATH was discarded'
+
+    # 私有目录中的旧 Node 不可用时，应复用 PATH 后方的可用版本，并确保刷新 PATH 后它优先。
+    $NodeOldDir = Join-Path $TestDir 'node-old'
+    $NodePreferredDir = Join-Path $TestDir 'node-valid'
+    New-Item -ItemType Directory -Path $NodeOldDir,$NodePreferredDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $NodeOldDir 'node.ps1') -Value '$global:LASTEXITCODE = 1'
+    Set-Content -LiteralPath (Join-Path $NodePreferredDir 'node.ps1') -Value '$global:LASTEXITCODE = 0'
+    foreach ($Name in @('npm','npx')) { Set-Content -LiteralPath (Join-Path $NodePreferredDir "$Name.ps1") -Value '$global:LASTEXITCODE = 0' }
+    $script:PreferredNodeDir = ''
+    $InstallDir = Join-Path $TestDir 'unrelated-install'
+    $LocalBinDir = Join-Path $TestDir 'unrelated-local-bin'
+    $CargoBinDir = Join-Path $TestDir 'unrelated-cargo'
+    $DepsDir = Join-Path $TestDir 'unrelated-deps'
+    $env:Path = "$NodeOldDir;$NodePreferredDir"
+    $script:NodeFixtureDirs = @($NodeOldDir,$NodePreferredDir)
+    function Get-Command {
+        param($Name, [switch]$All, $ErrorAction)
+        $FileName = switch -Regex ($Name) { '^node$' { 'node.ps1'; break } '^npm\.cmd$' { 'npm.ps1'; break } '^npx\.cmd$' { 'npx.ps1'; break } default { return $null } }
+        foreach ($Directory in ($env:Path -split ';')) {
+            $Candidate = Join-Path $Directory $FileName
+            if (Test-Path -LiteralPath $Candidate) { [pscustomobject]@{Source=$Candidate} }
+        }
+    }
+    Assert-True (Test-WorkingNode) 'A valid Node candidate behind an incompatible private Node was not reused'
+    Assert-True ($script:PreferredNodeDir -eq $NodePreferredDir) 'The valid later Node directory was not preferred'
+    $SelectedNode = Get-Command 'node' -All | Select-Object -First 1
+    Assert-True ($SelectedNode.Source -eq (Join-Path $NodePreferredDir 'node.ps1')) 'Session PATH still selects the incompatible Node candidate'
 
     function Update-SessionPath { }
     $WorkingScript = Join-Path $TestDir 'working.ps1'
@@ -334,6 +445,43 @@ try {
     $script:Commands['uvx'] = [pscustomobject]@{Source=$WorkingScript}
     Assert-True (Test-WorkingUv) 'Working uv/uvx were rejected'
 
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        function ConvertTo-DerSignature([byte[]]$Raw) {
+            $Body = New-Object 'System.Collections.Generic.List[byte]'
+            foreach ($Start in @(0, 32)) {
+                $Integer = New-Object 'System.Collections.Generic.List[byte]'
+                for ($i = $Start; $i -lt $Start + 32; $i++) { $Integer.Add($Raw[$i]) }
+                while ($Integer.Count -gt 1 -and $Integer[0] -eq 0) { $Integer.RemoveAt(0) }
+                if (($Integer[0] -band 0x80) -ne 0) { $Integer.Insert(0, [byte]0) }
+                $Body.Add([byte]2); $Body.Add([byte]$Integer.Count)
+                foreach ($Value in $Integer) { $Body.Add($Value) }
+            }
+            $Der = New-Object 'System.Collections.Generic.List[byte]'
+            $Der.Add([byte]48); $Der.Add([byte]$Body.Count)
+            foreach ($Value in $Body) { $Der.Add($Value) }
+            return ,$Der.ToArray()
+        }
+        $SignatureKey = [Security.Cryptography.ECDsaCng]::new(256)
+        try {
+            $KeyBlob = $SignatureKey.Key.Export([Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)
+            [byte[]]$SpkiPrefix = @(0x30,0x59,0x30,0x13,0x06,0x07,0x2A,0x86,0x48,0xCE,0x3D,0x02,0x01,0x06,0x08,0x2A,0x86,0x48,0xCE,0x3D,0x03,0x01,0x07,0x03,0x42,0x00,0x04)
+            $TestSpki = [Convert]::ToBase64String([byte[]]($SpkiPrefix + $KeyBlob[8..71]))
+            $ChecksumPath = Join-Path $TestDir 'signature-checksum'
+            $SignaturePath = Join-Path $TestDir 'signature-checksum.sig'
+            [byte[]]$Payload = [Text.Encoding]::UTF8.GetBytes('release checksum fixture')
+            [IO.File]::WriteAllBytes($ChecksumPath, $Payload)
+            [IO.File]::WriteAllText($SignaturePath, [Convert]::ToBase64String((ConvertTo-DerSignature ($SignatureKey.SignData($Payload, [Security.Cryptography.HashAlgorithmName]::SHA256)))))
+            $script:ReleasePublicKeys = @('not-a-key', $TestSpki)
+            Assert-True (Test-ReleaseSignature $ChecksumPath $SignaturePath) 'CNG release signature failed with second rotation key'
+            [IO.File]::AppendAllText($ChecksumPath, 'tampered')
+            Assert-True (-not (Test-ReleaseSignature $ChecksumPath $SignaturePath)) 'CNG accepted a tampered checksum'
+            [IO.File]::WriteAllText($SignaturePath, 'not-base64')
+            $Rejected = $false
+            try { Test-ReleaseSignature $ChecksumPath $SignaturePath | Out-Null } catch { $Rejected = $true }
+            Assert-True $Rejected 'CNG accepted a malformed or stripped signature'
+        } finally { $SignatureKey.Dispose() }
+    }
+
     # x86 PowerShell 在 ARM64 Windows 上必须选择本机 arm64 发行包。
     $Start = $Text.IndexOf('$NativeArch =')
     $End = $Text.IndexOf('$ArchiveName =', $Start)
@@ -346,7 +494,7 @@ try {
     $Rejected = $false
     try { . $DetectArch } catch { $Rejected = $true }
     Assert-True $Rejected 'Unsupported x86 OS was accepted'
-    Write-Host 'PASS: service registration/fallback/readiness (12 scenarios), UTF-8 entry, scoped process stop, cleanup/preferences, legacy Node arguments, Python retry, Git/Node staging, uv subprocess/retry, parser, session PATH, Python aliases, Node shims, uvx, WOW64'
+    Write-Host 'PASS: service readiness, fixed portable dependency fallbacks, mirror/hash rejection, PATH, Python retry, Node shims, uvx, CNG signature, WOW64'
 } finally {
     $env:Path = $SavedPath
     $env:USERPROFILE = $SavedProfile

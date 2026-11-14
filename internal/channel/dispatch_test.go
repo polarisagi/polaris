@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 type mockRoundTripperFunc func(req *http.Request) *http.Response
@@ -31,24 +32,25 @@ func TestManager_SendReply_Coverage(t *testing.T) {
 	msg := protocol.ChannelMessage{ChatID: "c1", ReplyToken: "r1"}
 	text := "hello"
 
-	mgr.SendReply(ctx, "telegram", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "discord", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "slack", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "feishu", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "line", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "qqbot", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "whatsapp", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "dingtalk", "ch1", map[string]any{}, protocol.ChannelMessage{}, text) // missing ReplyToken
-	mgr.SendReply(ctx, "mattermost", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "email", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "matrix", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "signal", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "homeassistant", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "sms", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "teams", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "unknown", "ch1", map[string]any{}, msg, text)
+	// 1. Webhook channel sends reply
+	if err := mgr.SendReply(ctx, "webhook", "ch1", map[string]any{}, msg, text); err != nil {
+		t.Fatalf("webhook send failed: %v", err)
+	}
 
-	// test valid path for telegram
-	mgr.SendReply(ctx, "telegram", "ch1", map[string]any{"bot_token": "valid_token"}, msg, text)
-	// Some functions directly construct urls or use the client, we just need them to run to get coverage.
+	// 2. Unknown channel returns error (GR-10.2-001)
+	err := mgr.SendReply(ctx, "unknown", "ch1", map[string]any{}, msg, text)
+	if err == nil {
+		t.Fatal("expected error for unknown channel type")
+	}
+	if apperr.CodeOf(err) != apperr.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %s: %v", apperr.CodeOf(err), err)
+	}
+
+	// 3. 移至插件的第三方 IM 平台均返回 CodeInvalidInput
+	for _, platform := range []string{"telegram", "discord", "slack", "feishu", "wecom"} {
+		err := mgr.SendReply(ctx, platform, "ch1", map[string]any{}, msg, text)
+		if err == nil || apperr.CodeOf(err) != apperr.CodeInvalidInput {
+			t.Fatalf("migrated platform %s should return CodeInvalidInput, got %v", platform, err)
+		}
+	}
 }

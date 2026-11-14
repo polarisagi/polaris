@@ -389,6 +389,7 @@ func TestRunTurn_Interactive_EmptyReplyMarksTurnFailed(t *testing.T) {
 	orc := New(Deps{
 		Hooks: &fakeHooks{}, SlashRouter: &fakeSlash{}, Compression: &fakeCompression{}, Persistence: persistence,
 		Prompt: fakePrompt{}, Registry: fakeRegistry{}, AgentPool: pool,
+		Profiles:      fakeProfileBindingResolver{},
 		TranscriptDir: t.TempDir(), DataDir: t.TempDir(), Turns: store,
 	})
 	sink := &recordingSink{}

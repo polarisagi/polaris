@@ -16,6 +16,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 func TestChannels_WebhookReceive(t *testing.T) {
@@ -138,4 +139,34 @@ func TestDispatchChannelMessage_NilSessionOrch(t *testing.T) {
 func TestDispatchChannelMessage_NilRegistry(t *testing.T) {
 	h := &ChannelsAdmin{}
 	h.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, protocol.ChannelMessage{Text: "hi"})
+}
+
+func TestChannels_PluginChannelConflict(t *testing.T) {
+	h := &ChannelsAdmin{
+		PluginChannelConflict: func(ctx context.Context, channelType string) error {
+			if channelType == "telegram" {
+				return apperr.New(apperr.CodeConflict, "插件通道 tg/telegram 已启用，请先停用插件通道再启用内置通道")
+			}
+			return nil
+		},
+	}
+
+	// 1. Create conflicting channel enabled=true -> 409
+	createBody := bytes.NewBufferString(`{"name":"tg","type":"telegram","enabled":true,"config":{}}`)
+	req := httptest.NewRequest("POST", "/v1/channels", createBody)
+	w := httptest.NewRecorder()
+	h.HandleCreateChannel(w, req)
+	if w.Result().StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on create, got %d", w.Result().StatusCode)
+	}
+
+	// 2. Update conflicting channel enabled=true -> 409
+	updateBody := bytes.NewBufferString(`{"name":"tg","type":"telegram","enabled":true,"config":{}}`)
+	req = httptest.NewRequest("PUT", "/v1/channels/ch_tg", updateBody)
+	req.SetPathValue("channelID", "ch_tg")
+	w = httptest.NewRecorder()
+	h.HandleUpdateChannel(w, req)
+	if w.Result().StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on update, got %d", w.Result().StatusCode)
+	}
 }

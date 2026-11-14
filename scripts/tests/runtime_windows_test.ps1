@@ -4,7 +4,7 @@ $Text = [IO.File]::ReadAllText((Join-Path $Root 'scripts/install.ps1'))
 $Errors = $null
 $Ast = [Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$Errors)
 if ($Errors.Count) { throw ($Errors | Out-String) }
-foreach ($Name in @('Get-NativePowerShell', 'Invoke-PolarisLibraryProbe', 'Test-WorkingVisualC', 'Install-MicrosoftComponent', 'Install-VisualCRuntime', 'Assert-PolarisNativeRuntime', 'Test-WebView2Runtime', 'Install-WebView2Runtime', 'Test-WorkingBash', 'Test-WorkingFFmpeg', 'Install-FFmpeg', 'Test-PolarisHTTPHealth')) {
+foreach ($Name in @('Get-NativePowerShell', 'Invoke-PolarisLibraryProbe', 'Test-WorkingVisualC', 'Install-MicrosoftComponent', 'Install-VisualCRuntime', 'Assert-PolarisNativeRuntime', 'Test-WebView2Runtime', 'Install-WebView2Runtime', 'Test-WorkingBash', 'Test-WorkingFFmpeg', 'Install-FFmpeg', 'Test-PolarisHTTPHealth', 'Get-FixedArtifact', 'Get-PortableArtifactUrls')) {
     $Function = $Ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]}, $true) | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
     if (-not $Function) { throw "Missing installer function: $Name" }
     . ([scriptblock]::Create($Function.Extent.Text))
@@ -98,16 +98,32 @@ try {
     }
     & {
         function Test-WorkingFFmpeg { return $script:FFmpegReady }
-        function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) $script:MetadataCalls++; return [pscustomobject]@{assets=@()} }
+        function Install-DependencyPackage { param($WingetId, $ScoopId, $ChocoId) return $false }
+        function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) $script:MetadataCalls++; throw 'metadata endpoint must remain unused' }
+        function Receive-VerifiedArtifact { param([string[]]$Urls, [string]$Destination, [string]$Sha256) $script:Sources.Add(($Urls -join '|')); return $false }
         $script:FFmpegReady = $true
         $script:MetadataCalls = 0
+        $script:Sources = New-Object 'Collections.Generic.List[string]'
+        $WorkDir = $Temp
+        $DepsDir = $Temp
+        $DownloadBase = ''
+        $IsMainland = $true
+        $Region = 'cn'
+        $ActiveProxy = 'https://proxy.invalid'
+        $ProxyHosts = @('https://proxy.invalid')
         Install-FFmpeg
         Assert ($script:MetadataCalls -eq 0) 'Queried/downloaded existing FFmpeg'
         $script:FFmpegReady = $false
         $Arch = 'amd64'
         $Failed = $false
         try { Install-FFmpeg } catch { $Failed = $true }
-        Assert ($Failed -and $script:MetadataCalls -eq 1) 'Accepted FFmpeg asset without trusted metadata'
+        Assert (-not $Failed -and $script:MetadataCalls -eq 0) 'Optional FFmpeg failure blocked core installation or queried metadata'
+        Assert ($script:Sources.Count -eq 2 -and $script:Sources[0] -match 'gyan\.dev' -and $script:Sources[1] -match 'FFmpeg-Builds') 'FFmpeg x64 did not try Gyan then the fixed GitHub asset'
+        $script:Sources.Clear()
+        $Arch = 'arm64'
+        $Failed = $false
+        try { Install-FFmpeg } catch { $Failed = $true }
+        Assert (-not $Failed -and $script:Sources.Count -eq 1 -and $script:Sources[0] -match 'winarm64' -and $script:Sources[0] -match 'github\.com' -and $script:Sources[0] -notmatch 'gyan\.dev') 'FFmpeg ARM64 selected the wrong fixed source'
     }
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         $Valid = Join-Path $env:WINDIR 'System32\kernel32.dll'
@@ -118,5 +134,5 @@ try {
     }
     # 原生负向用例的退出码不能被 GitHub Actions 当成整个测试脚本失败。
     $global:LASTEXITCODE = 0
-    Write-Host 'PASS: dependency reuse, native architecture, Microsoft signature gate, install failure/timeout/reboot, native DLL repair boundaries, WebView2, FFmpeg metadata'
+    Write-Host 'PASS: dependency reuse, native architecture, Microsoft signature gate, install failure/timeout/reboot, native DLL repair boundaries, WebView2, FFmpeg fixed sources'
 } finally { Remove-Item -LiteralPath $Temp -Recurse -Force }

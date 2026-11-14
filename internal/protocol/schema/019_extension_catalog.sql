@@ -54,3 +54,72 @@ CREATE TABLE IF NOT EXISTS extension_catalog_overlay_meta (
     value      TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
+
+-- ============================================================================
+-- extension_doc_index: 说明文档集中索引（ADR-0123 2026-11-14 复核）
+-- ============================================================================
+-- 架构角色: 官方插件仓集中生成的 README 说明文档元数据索引（readmes/index.json）。
+--   按 catalog_id 关联，记录源文档不可变修订、哈希以及集中中文文档路径与校验哈希。
+--   与 extension_catalog_overlay 独立，只影响文档展示，不参与安装决策。
+-- 写入: marketplace.DocIndexSync 整份替换。
+-- 关联: M13-bis §5.6
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS extension_doc_index (
+    catalog_id          TEXT PRIMARY KEY,
+    marketplace_id      TEXT NOT NULL,
+    document_key        TEXT NOT NULL,
+    source_repo_url     TEXT NOT NULL DEFAULT '',
+    source_revision     TEXT NOT NULL DEFAULT '',
+    source_path         TEXT NOT NULL DEFAULT '',
+    source_kind         TEXT NOT NULL DEFAULT 'readme',
+    source_sha256       TEXT NOT NULL DEFAULT '',
+    source_base_url     TEXT NOT NULL DEFAULT '',
+    catalog_revision    TEXT NOT NULL DEFAULT '',
+    zh_path             TEXT NOT NULL DEFAULT '',
+    zh_sha256           TEXT NOT NULL DEFAULT '',
+    zh_origin           TEXT NOT NULL DEFAULT '',
+    zh_review           TEXT NOT NULL DEFAULT '',
+    zh_source_sha256    TEXT NOT NULL DEFAULT '',
+    generator_version   TEXT NOT NULL DEFAULT '',
+    provenance_path     TEXT NOT NULL DEFAULT '',
+    rights_id           TEXT NOT NULL DEFAULT '',
+    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS extension_doc_index_meta (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+-- ============================================================================
+-- extension_doc_translation_tasks: 自定义扩展按需翻译持久任务（State-in-DB）
+-- ============================================================================
+-- 架构角色: 记录用户自主添加扩展的按需翻译任务状态（queued, translating, ready, failed）。
+--   按 (principal_id, catalog_id, source_sha256, locale, generator_version) 幂等去重；
+--   正文缓存存储于文件系统受管目录，此处记录状态与缓存索引。
+-- 关联: ADR-0123 2026-11-14 复核
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS extension_doc_translation_tasks (
+    task_id             TEXT PRIMARY KEY,
+    principal_id        TEXT NOT NULL,
+    catalog_id          TEXT NOT NULL,
+    source_sha256       TEXT NOT NULL,
+    locale              TEXT NOT NULL,
+    generator_version   TEXT NOT NULL DEFAULT 'v1',
+    status              TEXT NOT NULL DEFAULT 'queued',
+    error_code          TEXT,
+    retry_after         INTEGER NOT NULL DEFAULT 0,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    result_cache_path   TEXT NOT NULL DEFAULT '',
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ext_doc_trans_idempotent
+ON extension_doc_translation_tasks(principal_id, catalog_id, source_sha256, locale, generator_version);
+
+CREATE INDEX IF NOT EXISTS idx_ext_doc_trans_status
+ON extension_doc_translation_tasks(status);

@@ -84,7 +84,6 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		RunID:           req.RunID,
 		ReasoningEffort: req.ReasoningEffort,
 	}
-
 	// 回合在 TurnHub 持有的 ctx 下后台运行（ADR-0116）；本连接只是第一个订阅者，
 	// 断开只退订、不取消回合。
 	turn := s.startTurn(w, r, sessionID, domainReq)

@@ -17,6 +17,10 @@ func (s stubAgentDefs) ListAgentDefinitions(context.Context) ([]lifecycle.AgentD
 	return s, []pluginspec.Diagnostic{{Severity: pluginspec.SeverityWarning, Component: "agent", Rule: pluginspec.RuleAgentNotApplied}}, nil
 }
 
+func (s stubAgentDefs) ListExperts(context.Context) ([]lifecycle.ExpertDefinition, []pluginspec.Diagnostic, error) {
+	return []lifecycle.ExpertDefinition{{PluginID: "pl_r", PluginName: "review", Expert: pluginspec.Expert{ID: "security", Type: "agent", EntryAgent: "security"}}}, nil, nil
+}
+
 func TestHandleListAgents(t *testing.T) {
 	h := &PluginHandler{}
 	w := httptest.NewRecorder()
@@ -34,5 +38,17 @@ func TestHandleListAgents(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil ||
 		len(out.Agents) != 1 || out.Agents[0].NotApplied[0] != "hooks" || len(out.Diagnostics) != 1 {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleListExperts(t *testing.T) {
+	h := &PluginHandler{AgentDefs: stubAgentDefs{}}
+	w := httptest.NewRecorder()
+	h.HandleListExperts(w, httptest.NewRequest("GET", "/v1/experts", nil))
+	var out struct {
+		Experts []lifecycle.ExpertDefinition `json:"experts"`
+	}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out.Experts) != 1 || out.Experts[0].ID != "security" {
+		t.Fatalf("experts: %d %s", w.Code, w.Body.String())
 	}
 }

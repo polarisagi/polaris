@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // Orchestrator 会话编排领域服务（GD-13-008，见 04-arch-refactor.md A-03）。
@@ -31,6 +32,11 @@ type Orchestrator interface {
 	RunTurn(ctx context.Context, req Request, sink Sink) (*Result, error)
 }
 
+// ProfileBindingResolver 在共享编排入口校验持久绑定，防止 headless/续跑旁路旧身份检查。
+type ProfileBindingResolver interface {
+	ResolveBoundProfile(ctx context.Context, sessionID string) (*types.AgentProfileSpec, error)
+}
+
 // Deps 构造 Orchestrator 所需的全部窄接口依赖（HE-3：接口在调用方/本包定义，
 // 不直接 import chat 包具体类型）。由 chat 包（SSE 入口）与 cmd/polaris 装配层
 // （Headless 入口）分别提供满足这些接口的具体实现适配器。
@@ -42,6 +48,7 @@ type Deps struct {
 	Prompt        PromptAssembler
 	Registry      protocol.LLMRegistry
 	AgentPool     protocol.AgentPool
+	Profiles      ProfileBindingResolver
 	TranscriptDir string
 	DataDir       string
 	WorkspaceDir  string
@@ -64,6 +71,18 @@ type orchestrator struct {
 	workspaceDir  string
 	turns         TurnStore
 	goals         GoalStore
+	profiles      ProfileBindingResolver
+}
+
+func (o *orchestrator) resolveBoundProfile(ctx context.Context, sessionID string) (*types.AgentProfileSpec, error) {
+	if o.profiles == nil {
+		return nil, apperr.New(apperr.CodeServiceUnavailable, "session profile binding resolver unavailable")
+	}
+	profile, err := o.profiles.ResolveBoundProfile(ctx, sessionID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeOf(err), "session profile binding", err)
+	}
+	return profile, nil
 }
 
 // New 构造 Orchestrator。
@@ -81,6 +100,7 @@ func New(d Deps) Orchestrator {
 		workspaceDir:  d.WorkspaceDir,
 		turns:         d.Turns,
 		goals:         d.Goals,
+		profiles:      d.Profiles,
 	}
 }
 

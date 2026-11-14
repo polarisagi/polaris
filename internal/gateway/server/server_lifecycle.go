@@ -30,17 +30,17 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	protorepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-// ============================================================================
 // NewServer 构造函数 + Start/Shutdown 生命周期管理（R7 拆分自 server_core.go）。
 // Server 结构体定义 + Set* 依赖注入方法见 server_core.go。
-// ============================================================================
 
 // NewServer 创建并初始化 HTTP 网关服务器。
 //
@@ -238,6 +238,20 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 	if s.chatHandler != nil && s.chatHandler.PersistenceService != nil {
 		s.pluginHandler.SetupStore = s.chatHandler.PersistenceService
 	}
+
+	safeHTTP := network.NewSafeHTTPClient(nil)
+	locator := marketplace.NewDocLocator(s.extRepo, safeHTTP, dataDir, "", "")
+	s.pluginHandler.DocLocator = locator
+	s.pluginHandler.DocIndex = marketplace.NewDocIndexSync(s.extRepo, safeHTTP)
+
+	var p protocol.Provider
+	if s.registry != nil {
+		p = s.registry.PickProvider("default")
+		if p == nil {
+			p = s.registry.PickProvider("general")
+		}
+	}
+	s.pluginHandler.DocTranslations = marketplace.NewDocTranslationService(s.extRepo, locator, p, dataDir)
 	mux := http.NewServeMux()
 
 	s.registerRoutes(mux)
@@ -329,6 +343,10 @@ func (s *Server) Start() error {
 		s.bootMarketplaceInit(ctx)
 	})
 
+	if s.pluginHandler != nil && s.pluginHandler.DocTranslations != nil {
+		s.pluginHandler.DocTranslations.Start(context.Background())
+	}
+
 	// MCP Apps Sandbox proxy 监听器（M8f-1）：AppsEnabled=false 时不启动，
 	// GET /v1/mcp-apps/config 相应返回 enabled=false（见 server_handlers_mcp_apps.go）。
 	// 绑定失败不阻断主服务启动——沙箱是 MCP Apps 专属能力，不是核心路径
@@ -352,7 +370,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.workflowStepWorkerCancel != nil {
 		s.workflowStepWorkerCancel()
 	}
-	s.channelMgr.StopAll()
+	if s.channelMgr != nil {
+		s.channelMgr.StopAll()
+	}
+	if s.pluginHandler != nil && s.pluginHandler.DocTranslations != nil {
+		s.pluginHandler.DocTranslations.Stop()
+	}
 	if s.chatHandler != nil {
 		// 后台回合不再随连接断开而结束，关停时须显式取消并等其落库已产出内容（ADR-0116）。
 		s.chatHandler.Shutdown(ctx)

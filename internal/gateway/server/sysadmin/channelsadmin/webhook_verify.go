@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -52,7 +52,7 @@ func (h *ChannelsAdmin) verifyWebhookSource(w http.ResponseWriter, r *http.Reque
 func (h *ChannelsAdmin) verifyLineWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) error {
 	channelSecret, _ := cfg["channel_secret"].(string)
 	sig := r.Header.Get("X-Line-Signature")
-	if !cadapter.LineVerifySignature(channelSecret, string(body), sig) {
+	if !lineVerifySignature(channelSecret, string(body), sig) {
 		return apperr.New(apperr.CodeUnauthorized, "line webhook: signature mismatch")
 	}
 	return nil
@@ -225,7 +225,7 @@ func (h *ChannelsAdmin) verifyFeishuWebhook(w http.ResponseWriter, r *http.Reque
 		ts := r.Header.Get("X-Lark-Request-Timestamp")
 		nonce := r.Header.Get("X-Lark-Request-Nonce")
 		sig := r.Header.Get("X-Lark-Signature")
-		if !cadapter.FeishuVerifyWebhookSignature(ts, nonce, encryptKey, string(body), sig) {
+		if !feishuVerifyWebhookSignature(ts, nonce, encryptKey, string(body), sig) {
 			return apperr.New(apperr.CodeUnauthorized, "feishu webhook: signature mismatch")
 		}
 		return apperr.New(apperr.CodeUnimplemented, "feishu webhook: encrypt_key 加密模式的事件体解密尚未实现，暂不支持（请改用仅 Verification Token 模式）")
@@ -257,4 +257,24 @@ func (h *ChannelsAdmin) verifyGenericHMAC(w http.ResponseWriter, r *http.Request
 		return apperr.New(apperr.CodeUnauthorized, "generic webhook: signature mismatch")
 	}
 	return nil
+}
+
+func lineVerifySignature(channelSecret, body, signatureHeader string) bool {
+	if channelSecret == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(channelSecret))
+	mac.Write([]byte(body))
+	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(signatureHeader))
+}
+
+func feishuVerifyWebhookSignature(timestamp, nonce, encryptKey, rawBody, signature string) bool {
+	if encryptKey == "" {
+		return false
+	}
+	data := timestamp + nonce + encryptKey + rawBody
+	h := sha256.Sum256([]byte(data))
+	computed := hex.EncodeToString(h[:])
+	return hmac.Equal([]byte(computed), []byte(signature))
 }

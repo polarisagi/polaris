@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -246,20 +247,19 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 	if err != nil {
 		return bridgeResponse{OK: false, Error: fmt.Sprintf("tool %q not found: %v", toolName, err)}
 	}
+	inputBytes, err := json.Marshal(args)
+	if err != nil {
+		return bridgeResponse{OK: false, Error: "marshal args failed: " + err.Error()}
+	}
 
 	// 角色权限判定：桥接执行前调用注入的 ProfileChecker（R2-15）；先于授权，角色不允许的工具无需再判定。
 	if s.profileChecker != nil {
-		if err := s.profileChecker.CheckProfileTool(toolName, ""); err != nil {
+		if err := s.profileChecker.CheckProfileTool(toolName, profileDelegateTarget(toolName, inputBytes)); err != nil {
 			return bridgeResponse{
 				OK:    false,
 				Error: fmt.Sprintf("profile check failed: %v", err),
 			}
 		}
-	}
-
-	inputBytes, err := json.Marshal(args)
-	if err != nil {
-		return bridgeResponse{OK: false, Error: "marshal args failed: " + err.Error()}
 	}
 
 	// 内层调用必须重新判定并覆盖外层 ctx 的凭据（Explicit/Auto/None 都显式写），不得继承。
@@ -291,6 +291,39 @@ func (s *BridgeServer) handleCall(ctx context.Context, toolName string, args map
 		parsed = string(res.Output)
 	}
 	return bridgeResponse{OK: true, Result: parsed}
+}
+
+func profileDelegateTarget(toolName string, args []byte) string {
+	if toolName == "transfer_to_agent" {
+		var in struct {
+			Target string `json:"target_agent_role"`
+		}
+		if json.Unmarshal(args, &in) != nil {
+			return ""
+		}
+		return in.Target
+	}
+	if toolName != "spawn_agents" {
+		return ""
+	}
+	var in struct {
+		Tasks []struct {
+			Role string `json:"role"`
+		} `json:"tasks"`
+	}
+	if json.Unmarshal(args, &in) != nil {
+		return ""
+	}
+	roles := make([]string, 0, len(in.Tasks))
+	for _, task := range in.Tasks {
+		role := strings.TrimSpace(task.Role)
+		if role == "" {
+			role = "general-purpose"
+		}
+		roles = append(roles, role)
+	}
+	encoded, _ := json.Marshal(roles)
+	return string(encoded)
 }
 
 // readOnlyViolation 无授权器时的兜底规则（R2-15 复用 policy.WritesState，对 MCP/Skill fail-closed）。

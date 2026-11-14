@@ -59,8 +59,9 @@ type ChannelsAdmin struct {
 	// 见 webhook_receive.go dispatchChannelMessage 注释）。
 	SessionOrch session.Orchestrator
 
-	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
-	BuildToolSchemas func() []types.ToolSchema
+	ToolExec              func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
+	BuildToolSchemas      func() []types.ToolSchema
+	PluginChannelConflict func(ctx context.Context, channelType string) error
 }
 
 // NewChannelsAdmin 构造 ChannelsAdmin。

@@ -7,11 +7,18 @@ ChatSessionRow struct {
 	ID    string
 	Title string
 	// ProjectID 所属项目（ADR-0097）。空串在写入侧按 "default" 处理。
-	ProjectID      string
-	ThrashingIndex float64
-	CreatedAt      string
-	UpdatedAt      string
-	MessageCount   int
+	ProjectID          string
+	ThrashingIndex     float64
+	AgentProfile       string
+	AgentProfileSource string
+	AgentProfileDigest string
+	ExpertPluginID     string
+	ExpertID           string
+	ExpertType         string
+	ExpertDisplayName  string
+	CreatedAt          string
+	UpdatedAt          string
+	MessageCount       int
 }
 
 type
@@ -164,6 +171,48 @@ ExtCatalogOverlayRow struct {
 	Featured      int
 	UpdatedAt     string
 }
+
+type (
+	// ExtDocIndexRow 对应 extension_doc_index 表一行（扩展说明文档索引，ADR-0123 2026-11-14 复核）。
+	ExtDocIndexRow struct {
+		CatalogID        string
+		MarketplaceID    string
+		DocumentKey      string
+		SourceRepoURL    string
+		SourceRevision   string
+		SourcePath       string
+		SourceKind       string
+		SourceSHA256     string
+		SourceBaseURL    string
+		CatalogRevision  string
+		ZhPath           string
+		ZhSHA256         string
+		ZhOrigin         string
+		ZhReview         string
+		ZhSourceSHA256   string
+		GeneratorVersion string
+		ProvenancePath   string
+		RightsID         string
+		UpdatedAt        string
+	}
+
+	// ExtDocTranslationTaskRow 对应 extension_doc_translation_tasks 表一行（自定义扩展中文翻译持久任务）。
+	ExtDocTranslationTaskRow struct {
+		TaskID           string
+		PrincipalID      string
+		CatalogID        string
+		SourceSHA256     string
+		Locale           string
+		GeneratorVersion string
+		Status           string
+		ErrorCode        string
+		RetryAfter       int
+		Attempts         int
+		ResultCachePath  string
+		CreatedAt        string
+		UpdatedAt        string
+	}
+)
 
 type
 

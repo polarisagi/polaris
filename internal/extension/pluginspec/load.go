@@ -32,6 +32,7 @@ type Plugin struct {
 
 	Skills         []*Skill               `json:"skills,omitempty"` // 含由 commands 转换的技能
 	Agents         []AgentFile            `json:"agents,omitempty"`
+	Experts        []Expert               `json:"experts,omitempty"`
 	Hooks          []HookSource           `json:"hooks,omitempty"`
 	MCPServers     []MCPServer            `json:"mcp_servers,omitempty"`
 	Apps           []AppBinding           `json:"apps,omitempty"`
@@ -77,7 +78,9 @@ func Load(root string, opts LoadOptions) (*Plugin, error) {
 	}
 	p := &Plugin{Root: abs, DefaultEnabled: true}
 	for _, d := range docs {
-		p.Formats = append(p.Formats, d.format)
+		if d.format != FormatPolaris {
+			p.Formats = append(p.Formats, d.format)
+		}
 	}
 	applyIdentity(p, docs, opts, &ds)
 	if !validPluginName(p.Name) {
@@ -101,6 +104,7 @@ func loadComponents(p *Plugin, docs []manifestDoc, opts LoadOptions, ds *diagnos
 	p.Skills = loadSkills(p.Root, p.Name, docs, ds)
 	p.Skills = append(p.Skills, loadCommands(p.Root, docs, ds)...)
 	p.Agents = loadAgents(p.Root, docs, ds)
+	p.Experts = loadExperts(docs, p.Agents, ds)
 	p.Hooks = loadHooks(p.Root, docs, ds)
 	var bundleOptions []UserConfigOption
 	p.MCPServers, bundleOptions = loadMCPServers(p.Root, docs, opts, ds)
@@ -116,7 +120,7 @@ func loadComponents(p *Plugin, docs []manifestDoc, opts LoadOptions, ds *diagnos
 }
 
 func (p *Plugin) isEmpty() bool {
-	return len(p.Skills) == 0 && len(p.Agents) == 0 && len(p.Hooks) == 0 && len(p.MCPServers) == 0 && len(p.Apps) == 0 && len(p.ScheduledTasks) == 0
+	return len(p.Skills) == 0 && len(p.Agents) == 0 && len(p.Experts) == 0 && len(p.Hooks) == 0 && len(p.MCPServers) == 0 && len(p.Apps) == 0 && len(p.ScheduledTasks) == 0
 }
 
 // HasErrors 是否存在组件级错误（UI 展示用；不影响其余组件的加载）。
@@ -149,7 +153,7 @@ func applyIdentity(p *Plugin, docs []manifestDoc, opts LoadOptions, ds *diagnost
 		if p.Interface == nil && w.Interface != nil {
 			p.Interface = w.Interface
 		}
-		if w.DefaultEnabled != nil && d.format == FormatClaude {
+		if w.DefaultEnabled != nil && (d.format == FormatClaude || d.format == FormatPolaris) {
 			p.DefaultEnabled = *w.DefaultEnabled
 		}
 	}

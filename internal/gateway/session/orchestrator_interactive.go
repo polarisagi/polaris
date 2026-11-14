@@ -37,6 +37,11 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		o.emitError(ctx, sink, "session_error", apperr.CodeInternal, sessionID, err)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
+	profile, err := o.resolveBoundProfile(ctx, sessionID)
+	if err != nil {
+		o.emitError(ctx, sink, "session_profile_error", apperr.CodeOf(err), sessionID, err)
+		return &Result{SessionID: sessionID, Aborted: true}, nil
+	}
 	// 会话 ID 此刻才对客户端可见：新会话前端须据此重连（ADR-0116）。
 	_ = sink.Emit(Event{Kind: KindSession, Payload: map[string]any{"session_id": sessionID}})
 	// SessionStart / UserPromptSubmit（hooks.json，ADR-0103 决策六）：阻断即拒绝本条消息，
@@ -76,7 +81,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	var release func()
 	if o.agentPool != nil {
 		var acquireOK bool
-		agentCtrl, release, acquireOK = o.acquireInteractiveAgent(ctx, sink, req, sessionID)
+		agentCtrl, release, acquireOK = o.acquireInteractiveAgent(ctx, sink, req, sessionID, profile)
 		if !acquireOK {
 			return &Result{SessionID: sessionID, Aborted: true}, nil
 		}
@@ -366,9 +371,10 @@ func (o *orchestrator) tryDispatchSlash(
 // 处理资源耗尽降级（原 chat/sse_stream_helpers.go acquireStreamAgent 迁入，
 // 行为不变）。ok=false 表示已经推送错误/降级提示，调用方应立即 return；
 // release 仅在 ok=true 时有效。
-func (o *orchestrator) acquireInteractiveAgent(ctx context.Context, sink Sink, req Request, sessionID string) (protocol.AgentController, func(), bool) {
+func (o *orchestrator) acquireInteractiveAgent(ctx context.Context, sink Sink, req Request, sessionID string, profile *types.AgentProfileSpec) (protocol.AgentController, func(), bool) {
 	agentCtrl, release, err := o.agentPool.Acquire(ctx, sessionID)
 	if err == nil {
+		agentCtrl.SetAgentProfile(profile)
 		return agentCtrl, release, true
 	}
 

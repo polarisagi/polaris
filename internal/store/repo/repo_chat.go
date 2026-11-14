@@ -36,13 +36,18 @@ func (r *SQLiteChatRepository) CreateSession(ctx context.Context, row types.Chat
 	if projectID == "" {
 		projectID = protorepo.DefaultProjectID
 	}
+	expertDisplayName := row.ExpertDisplayName
+	if expertDisplayName == "" {
+		expertDisplayName = "{}"
+	}
 	// INSERT ... SELECT 以项目存在且未归档为前提：归档项目不再接收新会话，
 	// 但其中已有会话照常可用（它们走 INSERT OR IGNORE 的"已存在"分支）。
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := r.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO chat_sessions(id, title, project_id, thrashing_index, created_at, updated_at)
-		 SELECT ?, ?, p.id, ?, ?, ? FROM projects p WHERE p.id = ? AND p.archived = 0`,
-		row.ID, row.Title, row.ThrashingIndex, now, now, projectID)
+		`INSERT OR IGNORE INTO chat_sessions(id, title, project_id, thrashing_index, agent_profile, agent_profile_source, agent_profile_digest, expert_plugin_id, expert_id, expert_type, expert_display_name, created_at, updated_at)
+		 SELECT ?, ?, p.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM projects p WHERE p.id = ? AND p.archived = 0`,
+		row.ID, row.Title, row.ThrashingIndex, row.AgentProfile, row.AgentProfileSource, row.AgentProfileDigest,
+		row.ExpertPluginID, row.ExpertID, row.ExpertType, expertDisplayName, now, now, projectID)
 	if err != nil {
 		if strings.Contains(err.Error(), "FOREIGN KEY") {
 			return apperr.Wrap(apperr.CodeNotFound, "project not found", err)
@@ -81,8 +86,9 @@ func (r *SQLiteChatRepository) explainNoInsert(ctx context.Context, sessionID, p
 func (r *SQLiteChatRepository) GetSession(ctx context.Context, id string) (*types.ChatSessionRow, error) {
 	var row types.ChatSessionRow
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, title, project_id, thrashing_index, created_at, updated_at FROM chat_sessions WHERE id=?`, id,
-	).Scan(&row.ID, &row.Title, &row.ProjectID, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt)
+		`SELECT id, title, project_id, thrashing_index, agent_profile, agent_profile_source, agent_profile_digest, expert_plugin_id, expert_id, expert_type, expert_display_name, created_at, updated_at FROM chat_sessions WHERE id=?`, id,
+	).Scan(&row.ID, &row.Title, &row.ProjectID, &row.ThrashingIndex, &row.AgentProfile, &row.AgentProfileSource, &row.AgentProfileDigest,
+		&row.ExpertPluginID, &row.ExpertID, &row.ExpertType, &row.ExpertDisplayName, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -104,7 +110,7 @@ func (r *SQLiteChatRepository) ListProjectSessions(ctx context.Context, projectI
 
 // listSessions projectID 为空 = 不按项目过滤。
 func (r *SQLiteChatRepository) listSessions(ctx context.Context, projectID string, limit int) ([]types.ChatSessionRow, error) {
-	q := `SELECT cs.id, cs.title, cs.project_id, cs.thrashing_index, cs.created_at, cs.updated_at, COUNT(cm.id) AS message_count
+	q := `SELECT cs.id, cs.title, cs.project_id, cs.thrashing_index, cs.agent_profile, cs.agent_profile_source, cs.agent_profile_digest, cs.expert_plugin_id, cs.expert_id, cs.expert_type, cs.expert_display_name, cs.created_at, cs.updated_at, COUNT(cm.id) AS message_count
 		FROM chat_sessions cs
 		LEFT JOIN chat_messages cm ON cm.session_id = cs.id `
 	args := []any{}
@@ -124,7 +130,8 @@ func (r *SQLiteChatRepository) listSessions(ctx context.Context, projectID strin
 	var result []types.ChatSessionRow
 	for rows.Next() {
 		var row types.ChatSessionRow
-		if err := rows.Scan(&row.ID, &row.Title, &row.ProjectID, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt, &row.MessageCount); err != nil {
+		if err := rows.Scan(&row.ID, &row.Title, &row.ProjectID, &row.ThrashingIndex, &row.AgentProfile, &row.AgentProfileSource, &row.AgentProfileDigest,
+			&row.ExpertPluginID, &row.ExpertID, &row.ExpertType, &row.ExpertDisplayName, &row.CreatedAt, &row.UpdatedAt, &row.MessageCount); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions scan", err)
 		}
 		result = append(result, row)

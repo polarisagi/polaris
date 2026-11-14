@@ -293,6 +293,64 @@ func TestLoad_RemoteBundleRequiresInstallerFetch(t *testing.T) {
 	}
 }
 
+func TestLoad_UserConfigAndChannelsAcrossFormats(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "multi-format")
+	writeFile(t, filepath.Join(root, "plugin.json"), `{
+  "name": "multi-format", "version": "1.0.0", "description": "testing formats",
+  "mcpServers": {"srv1": {"command": "x"}, "srv2": {"command": "y"}, "srv3": {"command": "z"}},
+  "userConfig": {
+    "cfg1": {"type": "string", "title": "C1", "description": "D1"},
+    "shared_cfg": {"type": "string", "title": "Base", "description": "Base"}
+  },
+  "channels": [{"server": "srv1", "displayName": "Server 1"}]
+}`)
+	writeFile(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{
+  "userConfig": {
+    "shared_cfg": {"type": "string", "title": "Overridden", "description": "Ignored"},
+    "cfg2": {"type": "string", "title": "C2", "description": "D2"}
+  },
+  "channels": [
+    {"server": "srv1", "displayName": "Duplicate Server 1"},
+    {"server": "srv2", "displayName": "Server 2"}
+  ]
+}`)
+	writeFile(t, filepath.Join(root, ".codex-plugin", "plugin.json"), `{
+  "userConfig": {
+    "cfg3": {"type": "string", "title": "C3", "description": "D3"}
+  },
+  "channels": [
+    {"server": "srv3", "displayName": "Server 3"}
+  ]
+}`)
+
+	p, err := Load(root, LoadOptions{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(p.UserConfig) != 4 {
+		t.Fatalf("expected 4 userConfig options, got %d: %+v", len(p.UserConfig), p.UserConfig)
+	}
+	if p.UserConfig[0].Key != "cfg1" || p.UserConfig[1].Key != "shared_cfg" || p.UserConfig[1].Title != "Base" {
+		t.Fatalf("userConfig ordering or deduplication failed: %+v", p.UserConfig)
+	}
+	if p.UserConfig[2].Key != "cfg2" || p.UserConfig[3].Key != "cfg3" {
+		t.Fatalf("userConfig remaining keys failed: %+v", p.UserConfig)
+	}
+
+	if len(p.Channels) != 3 {
+		t.Fatalf("expected 3 channels, got %d: %+v", len(p.Channels), p.Channels)
+	}
+	if p.Channels[0].Server != "srv1" || p.Channels[0].DisplayName != "Server 1" {
+		t.Fatalf("channels deduplication should keep first occurrence: %+v", p.Channels[0])
+	}
+	if p.Channels[1].Server != "srv2" || p.Channels[1].DisplayName != "Server 2" {
+		t.Fatalf("channel 1 mismatch: %+v", p.Channels[1])
+	}
+	if p.Channels[2].Server != "srv3" || p.Channels[2].DisplayName != "Server 3" {
+		t.Fatalf("channel 2 mismatch: %+v", p.Channels[2])
+	}
+}
+
 func writeZip(t *testing.T, path string, files map[string]string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

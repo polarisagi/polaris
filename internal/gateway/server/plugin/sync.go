@@ -76,9 +76,10 @@ func (h *PluginHandler) SyncAllMarketplaces(ctx context.Context, localOnly bool)
 		syncedCount += len(rows)
 		h.indexCatalogRows(rows)
 	}
-	// 覆盖层只在联网同步时拉取（localOnly 是启动时的离线快速重建）。
+	// 覆盖层与说明文档索引只在联网同步时拉取（localOnly 是启动时的离线快速重建）。
 	if !localOnly {
 		h.syncCatalogOverlay(ctx)
+		h.syncDocIndex(ctx)
 	}
 	return syncedCount, nil
 }

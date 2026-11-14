@@ -18,6 +18,8 @@ type AgentProfileSpec struct {
 	// AllowDelegation 子 Agent 能否继续委派。Claude 子 Agent 不能再派生子 Agent，
 	// Codex agents.max_depth 默认 1——两家默认均为 false。
 	AllowDelegation bool
+	// AllowedAgentTargets 防止团队入口借委派运行不属于其声明成员的角色。
+	AllowedAgentTargets []string
 	// SuppressHooks 本角色的工具调用不触发 hooks.json（agent 类型 hook 的评估子 Agent：
 	// 其工具调用再触发 hook 会无限递归）。亦不触发 SubagentStart/SubagentStop。
 	SuppressHooks bool

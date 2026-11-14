@@ -46,6 +46,7 @@ const chatStore = {
   _idle: idleDefaults(),
   _loadSeq: 0,
   sessionID: null,
+  expertBinding: null,
   messages: [],          // [{role, content, toolCalls, aborted}]
   thinkingOpen: true,
   _historyIdx: -1,
@@ -445,6 +446,7 @@ const chatStore = {
     this.runs[key] = newRun(key, this.sessionID, this.messages)
     this.viewKey = key
     const run = this.runs[key]
+    run.expertBinding = this.expertBinding ? { ...this.expertBinding } : null
     this.thinkingOpen = true
 
     const attachmentsPayload = [...this.attachments];
@@ -1011,6 +1013,21 @@ const chatStore = {
     this.messages = []   // 新数组；仍在运行的 run 持有旧数组的引用
     this._idle = idleDefaults()
     this.lastAbortedInput = null
+    this.expertBinding = null
+  },
+
+  bindExpertSession(data, expert) {
+    this._loadSeq++
+    this.clearView()
+    this.sessionID = data.session_id
+    this.expertBinding = {
+      pluginID: data.expert_plugin_id || expert.plugin_id,
+      expertID: data.expert_id || expert.id,
+      type: data.expert_type || expert.type,
+      displayName: data.expert_display_name || expert.displayName,
+    }
+    if (data.project_id) Alpine.store('projects').setCurrent(data.project_id)
+    try { localStorage.setItem('polaris_session_id', data.session_id) } catch { /* 私有窗口 */ }
   },
 
   newSession() {
@@ -1020,6 +1037,7 @@ const chatStore = {
     this._inputHistory = []
     this._historyIdx = -1
     localStorage.removeItem('polaris_session_id')
+    Alpine.store('experts')?.load(true)
   },
 
   historyUp(currentInput) {
@@ -1038,10 +1056,12 @@ const chatStore = {
     const seq = ++this._loadSeq
     this.clearView()
     this.sessionID = sessionID
+    try { localStorage.setItem('polaris_session_id', sessionID) } catch { /* 私有窗口 */ }
 
     // 该会话在本页仍有进行中的回合：直接接回视图（run 持有的 messages 已含用户消息与流式产物）
     const live = this.runs[sessionID]
     if (live && !live.finished) {
+      this.expertBinding = live.expertBinding ? { ...live.expertBinding } : null
       this.viewKey = live.key
       this.messages = live.messages
       return
@@ -1054,6 +1074,12 @@ const chatStore = {
       if (!r.ok) return
       const d = await r.json()
       if (seq !== this._loadSeq) return
+      this.expertBinding = d.expert_id ? {
+        pluginID: d.expert_plugin_id,
+        expertID: d.expert_id,
+        type: d.expert_type,
+        displayName: d.expert_display_name || {},
+      } : null
       // 归档项目不接收新会话：恢复其中的会话时不把它设为"当前项目"，否则随后点"新会话"会被拒。
       const proj = d.project_id ? Alpine.store('projects').byID(d.project_id) : null
       if (proj && !proj.archived) Alpine.store('projects').setCurrent(d.project_id)

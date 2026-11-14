@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -19,12 +20,14 @@ const (
 )
 
 const (
-	RuleMCPParse     = "mcp.parse"
-	RuleMCPType      = "mcp.type"
-	RuleMCPCommand   = "mcp.stdio.command"
-	RuleMCPURL       = "mcp.remote.url"
-	RuleMCPHTTPS     = "agent-plugins.mcp.https"
-	RuleMCPSSELegacy = "mcp.sse.deprecated"
+	RuleMCPParse          = "mcp.parse"
+	RuleMCPType           = "mcp.type"
+	RuleMCPCommand        = "mcp.stdio.command"
+	RuleMCPURL            = "mcp.remote.url"
+	RuleMCPHTTPS          = "agent-plugins.mcp.https"
+	RuleMCPPortableSchema = "agent-plugins.mcp.schema"
+	RuleMCPPortableType   = "agent-plugins.mcp.type"
+	RuleMCPSSELegacy      = "mcp.sse.deprecated"
 	// RuleMCPOAuthCallbackPort Claude oauth.callbackPort 在 Polaris 不适用：授权回调走网关
 	// （internal/extension/mcp 的 BeginAuthorization/CompleteAuthorization），不经本地端口。
 	RuleMCPOAuthCallbackPort = "mcp.oauth.callback-port"
@@ -135,6 +138,9 @@ func parseMCPFile(path string, set *mcpServerSet, ds *diagnostics) {
 		ds.errorf("mcp", path, RuleMCPParse, "invalid JSON: %v", err)
 		return
 	}
+	if filepath.Base(path) == "mcp.json" {
+		validatePortableMCPManifest(path, top, ds)
+	}
 	servers := top
 	if inner, ok := top["mcpServers"]; ok {
 		servers = nil
@@ -146,6 +152,40 @@ func parseMCPFile(path string, set *mcpServerSet, ds *diagnostics) {
 		delete(servers, "$schema")
 	}
 	parseMCPServerMap(servers, path, set, ds)
+}
+
+func validatePortableMCPManifest(path string, top map[string]json.RawMessage, ds *diagnostics) {
+	schemaRaw, hasSchema := top["$schema"]
+	if !hasSchema {
+		return // 无 schema 的 mcp.json 仍作为旧格式读取。
+	}
+	var schema string
+	if json.Unmarshal(schemaRaw, &schema) != nil || !strings.HasPrefix(schema, agentPluginsSchemaPrefix) ||
+		!strings.HasSuffix(schema, "/mcp.schema.json") {
+		ds.errorf("mcp", path, RuleMCPPortableSchema, "mcp.json $schema must reference an agent-plugins mcp.schema.json")
+	}
+	for key := range top {
+		if key != "$schema" && key != "mcpServers" {
+			ds.errorf("mcp", path, RuleMCPPortableSchema, "mcp.json field %q is not allowed by the portable schema", key)
+		}
+	}
+	var servers map[string]json.RawMessage
+	if err := json.Unmarshal(top["mcpServers"], &servers); err != nil {
+		ds.errorf("mcp", path, RuleMCPPortableSchema, "mcp.json mcpServers must be an object")
+		return
+	}
+	for name, raw := range servers {
+		var server map[string]json.RawMessage
+		if json.Unmarshal(raw, &server) != nil {
+			continue // 通用解析器会报告具体条目错误。
+		}
+		var kind string
+		if json.Unmarshal(server["type"], &kind) != nil ||
+			(kind != "stdio" && kind != "streamable-http" && kind != "sse") {
+			ds.errorf("mcp", path, RuleMCPPortableType,
+				"mcp server %q type must be explicitly stdio, streamable-http, or sse", name)
+		}
+	}
 }
 
 // parseMCPServerMap 解析 name→定义 映射；单个服务器出错只跳过该服务器。

@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     title           TEXT NOT NULL DEFAULT '',
     project_id      TEXT NOT NULL DEFAULT 'default' REFERENCES projects(id),
     thrashing_index REAL NOT NULL DEFAULT 0.0,
+    agent_profile TEXT NOT NULL DEFAULT '',
+    agent_profile_source TEXT NOT NULL DEFAULT '',
+    agent_profile_digest TEXT NOT NULL DEFAULT '',
+    expert_plugin_id TEXT NOT NULL DEFAULT '',
+    expert_id TEXT NOT NULL DEFAULT '',
+    expert_type TEXT NOT NULL DEFAULT '',
+    expert_display_name TEXT NOT NULL DEFAULT '{}',
     -- app_model_context: MCP Apps（apps_spec.mdx）View 模型上下文更新按
     -- server_id 为键的最新一份未消费内容，JSON 对象 {server_id: {content?, structuredContent?}}。
     -- 规范要求"只把最后一次更新送给模型"——每个 (session, server) 只保留最新一份，

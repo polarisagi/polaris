@@ -34,6 +34,14 @@ type AgentDefinition struct {
 	body       string
 }
 
+// ExpertDefinition 保留插件来源身份，避免同名角色跨插件合并。
+type ExpertDefinition struct {
+	PluginID   string `json:"plugin_id"`
+	PluginName string `json:"plugin_name"`
+	pluginspec.Expert
+	Agent AgentDefinition `json:"agent"`
+}
+
 // SkillContentLoader 读取技能渲染后的正文（Claude agents `skills` 字段：启动时注入完整技能内容）。
 // 由技能执行器提供，动态注入审阅、参数渲染规则与模型调用一致。
 type SkillContentLoader func(ctx context.Context, skillName string) (string, error)
@@ -118,6 +126,76 @@ func (p *AgentDefinitionProvider) pluginAgents(ctx context.Context) ([]AgentDefi
 		}
 	}
 	return out, diags, nil
+}
+
+// ListExperts 以清单声明作为发现边界，避免任意子 Agent 被自动公开。
+func (p *AgentDefinitionProvider) ListExperts(ctx context.Context) ([]ExpertDefinition, []pluginspec.Diagnostic, error) {
+	rows, err := p.extRepo.ListPlugins(ctx)
+	if err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeOf(err), "AgentDefinitionProvider.experts", err)
+	}
+	var out []ExpertDefinition
+	var diags []pluginspec.Diagnostic
+	for _, row := range rows {
+		if !row.Enabled {
+			continue
+		}
+		var spec pluginspec.Plugin
+		if err := json.Unmarshal([]byte(row.Manifest), &spec); err != nil {
+			continue
+		}
+		for _, expert := range spec.Experts {
+			canonical := row.Name + ":" + expert.EntryAgent
+			var def *AgentDefinition
+			for _, entry := range spec.Agents {
+				if entry.Name != expert.EntryAgent || !withinRoot(row.InstallPath, entry.File) {
+					continue
+				}
+				a, ds, ok := pluginspec.ParseAgentFile(entry.File, entry.Name, true)
+				diags = append(diags, ds...)
+				if !ok {
+					continue
+				}
+				x := definitionFrom(a, canonical, "plugin:"+row.ID, row.Name)
+				def = &x
+				break
+			}
+			if def == nil {
+				continue
+			}
+			out = append(out, ExpertDefinition{PluginID: row.ID, PluginName: row.Name, Expert: expert, Agent: *def})
+		}
+	}
+	return out, diags, nil
+}
+
+// ResolveNamedExpert 限定插件来源，避免同后缀角色跨插件回退或误绑定。
+func (p *AgentDefinitionProvider) ResolveNamedExpert(ctx context.Context, name string) (*types.AgentProfileSpec, *ExpertDefinition, error) {
+	experts, _, err := p.ListExperts(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range experts {
+		if experts[i].Agent.Name != name {
+			continue
+		}
+		instructions, err := p.withPreloadedSkills(ctx, experts[i].Agent)
+		if err != nil {
+			return nil, nil, err
+		}
+		profile := &types.AgentProfileSpec{Name: experts[i].Agent.Name, Source: experts[i].Agent.Source, Instructions: instructions,
+			InstructionTaint: definitionTaint(experts[i].Agent.Source), Tools: experts[i].Agent.Tools,
+			DisallowedTools: experts[i].Agent.Disallowed, ReadOnly: experts[i].Agent.ReadOnly,
+			MaxTurns: experts[i].Agent.MaxTurns, Model: experts[i].Agent.Model, Thinking: experts[i].Agent.Thinking,
+			AllowDelegation: experts[i].Type == "team"}
+		if experts[i].Type == "team" {
+			for _, member := range experts[i].Members {
+				profile.AllowedAgentTargets = append(profile.AllowedAgentTargets, experts[i].PluginName+":"+member)
+			}
+		}
+		return profile, &experts[i], nil
+	}
+	return nil, nil, apperr.New(apperr.CodeNotFound, fmt.Sprintf("unknown installed expert %q", name))
 }
 
 func withinRoot(root, file string) bool {

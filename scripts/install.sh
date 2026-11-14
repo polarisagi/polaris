@@ -13,8 +13,9 @@ PLIST_LABEL="com.polarisagi.polaris"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 PORT=28888
 
-# 自动安装固定主版本，补丁版本由官方 SHASUMS 清单选择。
-NODE_VERSION="24"
+# Pin 到经官方摘要核验的补丁版，避免安装时额外依赖动态摘要服务。
+NODE_VERSION="24.22.3"
+UV_VERSION="0.13.7"
 
 # 使用 ${VAR:-} 防止全新系统未设置 LC_ALL / LANGUAGE 时因 set -u 直接崩溃
 if [[ "${LANG:-}" == *"zh"* ]] || [[ "${LC_ALL:-}" == *"zh"* ]] || [[ "${LANGUAGE:-}" == *"zh"* ]]; then
@@ -65,6 +66,11 @@ case "$ARCH" in
         ;;
 esac
 
+if [ -n "${POLARIS_DOWNLOAD_BASE:-}" ] && [[ ! "$POLARIS_DOWNLOAD_BASE" =~ ^https://[^/?#[:space:]]+(/[^?#[:space:]]*)?$ ]]; then
+    msg "❌ POLARIS_DOWNLOAD_BASE 必须是有效的 HTTPS 基础目录。" "❌ POLARIS_DOWNLOAD_BASE must be a valid HTTPS base URL."
+    exit 1
+fi
+
 # ── 0.1 Linux 最小化系统基础包预检 (curl / tar / openssl / git) ─────────────
 # 在全新 Linux（如最小化 Debian/Ubuntu/CentOS 容器或 VPS）上，甚至可能缺少
 # curl / tar / openssl / ca-certificates / git。必须在网络探测（依赖 curl）前补齐。
@@ -72,8 +78,8 @@ install_linux_base_packages() {
     if [ "$OS" != "linux" ]; then
         return 0
     fi
-    local missing=()
-    for cmd in curl tar gzip openssl git bwrap; do
+    local missing=() packages=()
+    for cmd in curl tar gzip unzip openssl git bwrap; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing+=("$cmd")
         fi
@@ -84,6 +90,9 @@ install_linux_base_packages() {
     if [ ${#missing[@]} -eq 0 ]; then
         return 0
     fi
+    for cmd in "${missing[@]}"; do
+        case "$cmd" in bwrap) packages+=(bubblewrap) ;; *) packages+=("$cmd") ;; esac
+    done
 
     msg "📦 检测到缺少系统基础工具 (${missing[*]})，正在通过包管理器自动安装..." \
         "📦 Missing base tools (${missing[*]}), installing via system package manager..."
@@ -101,35 +110,23 @@ install_linux_base_packages() {
 
     if command -v apt-get >/dev/null 2>&1; then
         $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
-        $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y curl tar gzip openssl ca-certificates || true
-        $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y git || true
-        $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y bubblewrap || true
+        $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}" || true
     elif command -v dnf >/dev/null 2>&1; then
-        $sudo_cmd dnf install -y curl tar gzip openssl ca-certificates || true
-        $sudo_cmd dnf install -y git || true
-        $sudo_cmd dnf install -y bubblewrap || true
+        $sudo_cmd dnf install -y "${packages[@]}" || true
     elif command -v yum >/dev/null 2>&1; then
-        $sudo_cmd yum install -y curl tar gzip openssl ca-certificates || true
-        $sudo_cmd yum install -y git || true
-        $sudo_cmd yum install -y bubblewrap || true
+        $sudo_cmd yum install -y "${packages[@]}" || true
     elif command -v pacman >/dev/null 2>&1; then
-        $sudo_cmd pacman -S --noconfirm --needed curl tar gzip openssl ca-certificates || true
-        $sudo_cmd pacman -S --noconfirm --needed git || true
-        $sudo_cmd pacman -S --noconfirm --needed bubblewrap || true
+        $sudo_cmd pacman -S --noconfirm --needed "${packages[@]}" || true
     elif command -v apk >/dev/null 2>&1; then
-        $sudo_cmd apk add --no-cache curl tar gzip openssl ca-certificates || true
-        $sudo_cmd apk add --no-cache git || true
-        $sudo_cmd apk add --no-cache bubblewrap || true
+        $sudo_cmd apk add --no-cache "${packages[@]}" || true
     elif command -v zypper >/dev/null 2>&1; then
-        $sudo_cmd zypper --non-interactive install curl tar gzip openssl ca-certificates || true
-        $sudo_cmd zypper --non-interactive install git || true
-        $sudo_cmd zypper --non-interactive install bubblewrap || true
+        $sudo_cmd zypper --non-interactive install "${packages[@]}" || true
     fi
 }
 
 install_linux_base_packages || true
 
-for req_cmd in curl tar gzip openssl; do
+for req_cmd in curl tar gzip unzip openssl; do
     if ! command -v "$req_cmd" >/dev/null 2>&1; then
         msg "❌ 缺少必需的系统基础命令: $req_cmd。请先通过系统包管理器安装后重试。" \
             "❌ Required base command not found: $req_cmd. Please install it via your package manager and retry."
@@ -137,69 +134,8 @@ for req_cmd in curl tar gzip openssl; do
     fi
 done
 
-# ── 0.2 确定网络环境 (Network Detection) ─────────────────────────────────────
-PROXY_HOSTS=("https://ghproxy.net" "https://mirror.ghproxy.com")
-GH_PROXY=""
-IS_CN=false
-
-# 判断当前网络环境是否处于中国大陆
-is_mainland_china() {
-    local timeout=2
-    local country=""
-    
-    # 尝试 1: ipinfo.io
-    country=$(curl -sSf -m $timeout https://ipinfo.io/country 2>/dev/null | tr -d '[:space:]' || true)
-    if [ -n "$country" ]; then
-        [ "$country" = "CN" ] && return 0 || return 1
-    fi
-    
-    # 尝试 2: cloudflare trace
-    local cf_trace
-    cf_trace=$(curl -sSf -m $timeout https://1.1.1.1/cdn-cgi/trace 2>/dev/null || true)
-    if [ -n "$cf_trace" ] && echo "$cf_trace" | grep -q "loc="; then
-        if echo "$cf_trace" | grep -q "loc=CN"; then
-            return 0
-        else
-            return 1
-        fi
-    fi
-    
-    # 尝试 3: ip.sb
-    local ipsb
-    ipsb=$(curl -sSf -m $timeout https://api.ip.sb/geoip 2>/dev/null || true)
-    if [ -n "$ipsb" ] && echo "$ipsb" | grep -q 'country_code'; then
-        if echo "$ipsb" | grep -q '"country_code":"CN"' || echo "$ipsb" | grep -q '"country_code": "CN"'; then
-            return 0
-        else
-            return 1
-        fi
-    fi
-    
-    # 降级：如果所有 IP 接口都失败，测速 Github
-    if ! curl -sSf -I --max-time 1 "https://github.com" > /dev/null 2>&1; then
-        return 0 # Github 连不上或很慢，假设是大陆
-    else
-        return 1 # Github 能连上，假设非大陆
-    fi
-}
-
-msg "🌐 正在检测网络环境归属地及代理情况..." "🌐 Detecting network geolocation and VPN..."
-
-if ! is_mainland_china; then
-    msg "✅ 当前网络为海外 IP 或已开启全局代理，将使用直连。" \
-        "✅ Network is outside mainland China or VPN active. Using direct connection."
-else
-    IS_CN=true
-    msg "⚠️  检测到当前网络位于中国大陆且未全局代理，寻找镜像代理..." \
-        "⚠️  Mainland China network detected without VPN. Switching to proxy mirrors..."
-    for p in "${PROXY_HOSTS[@]}"; do
-        if curl -sSf -I --max-time 5 "$p" > /dev/null 2>&1; then
-            GH_PROXY="${p}/"
-            msg "   ✅ 选用镜像代理: $p" "   ✅ Using proxy: $p"
-            break
-        fi
-    done
-fi
+REGION="${POLARIS_REGION:-auto}"
+case "$REGION" in auto|cn|global) ;; *) msg "❌ POLARIS_REGION 必须为 auto/cn/global" "❌ POLARIS_REGION must be auto/cn/global"; exit 1 ;; esac
 
 
 # ── 1. 环境依赖预检与自动安装 (Dependencies) ──────────────────────────────────
@@ -223,38 +159,127 @@ has_working_git() {
 
 # 校验 python3 是否真实可用（同样排除 macOS 未装 CLT 时的 /usr/bin/python3 空壳桩程序）
 has_working_python() {
-    local py_bin
-    py_bin=$(command -v python3 2>/dev/null || true)
-    if [ -z "$py_bin" ]; then
-        return 1
-    fi
-    if [ "$OS" = "darwin" ] && [ "$py_bin" = "/usr/bin/python3" ] && ! xcode-select -p >/dev/null 2>&1; then
-        return 1
-    fi
-    "$py_bin" -c "import sys; sys.exit(0 if sys.version_info.major >= 3 else 1)" >/dev/null 2>&1
+    local entry py_bin
+    local -a path_entries
+    IFS=: read -r -a path_entries <<< "$PATH"
+    for entry in "${path_entries[@]}"; do
+        [ -n "$entry" ] || entry=.
+        py_bin="$entry/python3"
+        [ -x "$py_bin" ] || continue
+        if [ "$OS" = darwin ] && [ "$py_bin" = "/usr/bin/python3" ] && ! xcode-select -p >/dev/null 2>&1; then continue; fi
+        if "$py_bin" -c "import sys; sys.exit(0 if sys.version_info.major >= 3 else 1)" >/dev/null 2>&1; then
+            WORKING_PYTHON="$py_bin"
+            PATH="$entry:$PATH"; export PATH
+            return 0
+        fi
+    done
+    return 1
 }
 
 # 校验 node 与 npx 是否真实可用
 has_working_node() {
-    node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' >/dev/null 2>&1 &&
-        npm --version >/dev/null 2>&1 && npx --version >/dev/null 2>&1
+    local entry node_bin
+    local -a path_entries
+    IFS=: read -r -a path_entries <<< "$PATH"
+    for entry in "${path_entries[@]}"; do
+        [ -n "$entry" ] || entry=.
+        node_bin="$entry/node"
+        [ -x "$node_bin" ] || continue
+        if "$node_bin" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' >/dev/null 2>&1 &&
+           [ -x "$entry/npm" ] && "$entry/npm" --version >/dev/null 2>&1 &&
+           [ -x "$entry/npx" ] && "$entry/npx" --version >/dev/null 2>&1; then
+            WORKING_NODE_DIR="$entry"
+            PATH="$entry:$PATH"; export PATH
+            return 0
+        fi
+    done
+    return 1
 }
+
+has_working_uv() {
+    local entry
+    local -a path_entries
+    IFS=: read -r -a path_entries <<< "$PATH"
+    for entry in "${path_entries[@]}"; do
+        [ -n "$entry" ] || entry=.
+        if [ -x "$entry/uv" ] && [ -x "$entry/uvx" ] &&
+           "$entry/uv" --version >/dev/null 2>&1 && "$entry/uvx" --version >/dev/null 2>&1; then
+            PATH="$entry:$PATH"; export PATH
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 包管理器维护依赖与摘要；不替用户安装另一个包管理器或改系统源。
+install_dependency_package() {
+    local brew_name="$1" port_name="$2" linux_name="$3"
+    local sudo_cmd="" manager="" prefix=""
+    if [ "$OS" = darwin ]; then
+        if command -v brew >/dev/null 2>&1 && brew install "$brew_name"; then
+            prefix=$(brew --prefix 2>/dev/null || true)
+            [ -z "$prefix" ] || PATH="$prefix/bin:$PATH"
+            if [ "$brew_name" = node@24 ] && [ -x "$prefix/opt/node@24/bin/node" ]; then PATH="$prefix/opt/node@24/bin:$PATH"; fi
+            export PATH; hash -r; return 0
+        fi
+        if command -v port >/dev/null 2>&1; then
+            if [ "$(id -u)" -ne 0 ]; then command -v sudo >/dev/null 2>&1 || return 1; sudo_cmd=sudo; fi
+            if $sudo_cmd port install "$port_name"; then PATH="/opt/local/bin:/opt/local/sbin:$PATH"; export PATH; hash -r; return 0; fi
+        fi
+        return 1
+    fi
+    [ "$OS" = linux ] && [ -n "$linux_name" ] || return 1
+    if [ "$(id -u)" -ne 0 ]; then command -v sudo >/dev/null 2>&1 || return 1; sudo_cmd="sudo"; fi
+    if command -v apt-get >/dev/null 2>&1; then manager=apt-get
+    elif command -v dnf >/dev/null 2>&1; then manager=dnf
+    elif command -v yum >/dev/null 2>&1; then manager=yum
+    elif command -v pacman >/dev/null 2>&1; then manager=pacman
+    elif command -v zypper >/dev/null 2>&1; then manager=zypper
+    else return 1; fi
+    if [ "$manager" = apt-get ]; then
+        $sudo_cmd apt-get update || return 1
+        $sudo_cmd apt-get install -y $linux_name || return 1
+    elif [ "$manager" = pacman ]; then
+        $sudo_cmd pacman -S --needed --noconfirm $linux_name || return 1
+    elif [ "$manager" = zypper ]; then
+        $sudo_cmd zypper --non-interactive install $linux_name || return 1
+    else
+        $sudo_cmd "$manager" install -y $linux_name || return 1
+    fi
+    hash -r
+}
+
+# GUI 启动的安装器通常拿不到 brew/MacPorts 默认 PATH。
+if [ "$OS" = darwin ]; then
+    export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/opt/local/sbin"
+fi
+if [ "$OS" = darwin ] && [ ! -x "$LOCAL_BIN/python3" ] && [ -x /opt/local/bin/python3.12 ] && ! has_working_python; then
+    ln -s /opt/local/bin/python3.12 "$LOCAL_BIN/python3"
+fi
+if ! has_working_node; then
+    if [ "$OS" = darwin ] && command -v port >/dev/null 2>&1 && command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0])>=22?0:1)' >/dev/null 2>&1 &&
+       ! npm --version >/dev/null 2>&1; then
+        if [ "$(id -u)" -eq 0 ]; then port install npm10 || true
+        elif command -v sudo >/dev/null 2>&1; then sudo port install npm10 || true; fi
+        PATH="/opt/local/bin:$PATH"; export PATH; hash -r
+    fi
+    if ! has_working_node && ! command -v node >/dev/null 2>&1; then
+        install_dependency_package node@24 nodejs24 'nodejs npm' || true
+    fi
+fi
 
 # 1. Git 检查与自动安装
 MACOS_CLT_TRIGGERED=false
 if ! has_working_git; then
     if [ "$OS" = "darwin" ]; then
-        if command -v brew >/dev/null 2>&1; then
-            msg "   📦 正在通过 Homebrew 安装 Git..." "   📦 Installing Git via Homebrew..."
-            brew install git || true
-        fi
+        install_dependency_package git git "" || true
         if ! has_working_git; then
             msg "⚠️  macOS 尚未安装 Git (Command Line Tools)。正在后台唤起系统安装向导..." \
                 "⚠️  macOS is missing Git (Command Line Tools). Triggering system install prompt..."
             xcode-select --install 2>/dev/null || true
             MACOS_CLT_TRIGGERED=true
-            msg "💡 请在弹出的系统窗口中点击「安装」；本脚本不依赖 Git，将继续完成其余环境与 Polaris 安装。" \
-                "💡 Please click 'Install' in the system dialog; this script will continue installing dependencies and Polaris."
+            msg "💡 请在弹出的系统窗口中点击「安装」；完成后重新运行本脚本以继续安装。" \
+                "💡 Please click 'Install' in the system dialog, then rerun this script to continue setup."
         fi
     else
         msg "⚠️  未能自动安装 Git，部分扩展仓库克隆功能需要 Git，请稍后通过系统包管理器安装 git。" \
@@ -262,19 +287,109 @@ if ! has_working_git; then
     fi
 fi
 
-# 2. uv (跨平台 Python 工具链与包管理器)
-if ! uv --version >/dev/null 2>&1 || ! uvx --version >/dev/null 2>&1; then
-    msg "   📦 正在安装 uv..." "   📦 Installing uv..."
-    UV_INSTALLED=false
-    if [ -n "$GH_PROXY" ]; then
-        if curl -LsSf --max-time 60 https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$LOCAL_BIN" UV_NO_MODIFY_PATH=1 UV_INSTALLER_GITHUB_BASE_URL="${GH_PROXY%/}/https://github.com" sh; then
-            UV_INSTALLED=true
-        fi
+# 固定摘要作为信任根，不从下载源动态取值。
+fixed_archive_sha256() {
+    case "$1" in
+        node-v24.22.3-darwin-arm64.tar.gz) echo "ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd" ;;
+        node-v24.22.3-darwin-x64.tar.gz) echo "977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7" ;;
+        node-v24.22.3-linux-arm64.tar.gz) echo "261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8" ;;
+        node-v24.22.3-linux-x64.tar.gz) echo "061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2" ;;
+        uv-0.13.7-py3-none-macosx_11_0_arm64.whl) echo "f91a229093163eefca89ea1b220a221d64c3beade05d03519a6584d1797a5a5f" ;;
+        uv-0.13.7-py3-none-macosx_10_12_x86_64.whl) echo "fd04bf01ba5f2829f4f94ca8f0c24a743f21e73d75045613ed6fc2fd66fc7bda" ;;
+        uv-0.13.7-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl) echo "a90f5d95716ab83091f0f73a8e7ec64e557abf2a28537fcd719b2ac88e6f725a" ;;
+        uv-0.13.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl) echo "2c9bdc4a872b60a93c5f26c0791089ea11585a4f9d3b3c017d78eb8487505e25" ;;
+        *) return 1 ;;
+    esac
+}
+
+download_fixed_archive() {
+    local url="$1" filename="$2" expected="$3" output="$4" actual
+    rm -f "$output"
+    curl -sSLf --connect-timeout 10 --retry 1 --progress-bar --max-time 180 -o "$output" "$url" || { rm -f "$output"; return 1; }
+    actual=$(openssl dgst -sha256 "$output" | awk '{print $NF}')
+    [ "$actual" = "$expected" ] && return 0
+    msg "⚠️ 下载包摘要不匹配: $filename" "⚠️ Downloaded archive checksum mismatch: $filename"
+    rm -f "$output"
+    return 1
+}
+
+swap_dependency_dir() {
+    local stage="$1" target="$2" old="${2}.previous"
+    rm -rf "$old"
+    [ ! -e "$target" ] || mv "$target" "$old" || return 1
+    if ! mv "$stage" "$target"; then
+        [ ! -e "$old" ] || mv "$old" "$target"
+        return 1
     fi
-    if [ "$UV_INSTALLED" = false ]; then
-        if ! curl -LsSf --max-time 60 https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$LOCAL_BIN" UV_NO_MODIFY_PATH=1 sh; then
-            msg "⚠️ uv 安装失败，依赖检查将报告缺失。" "⚠️ uv installation failed; see dependency checks below."
-        fi
+}
+
+rollback_dependency_dir() {
+    rm -rf "$1"
+    [ ! -e "$2" ] || mv "$2" "$1"
+}
+
+install_uv_prebuilt() {
+    local filename url expected archive_path stage scripts_dir
+    if [ "$OS" = "darwin" ]; then
+        if [ "$ARCH" = "arm64" ]; then filename="uv-0.13.7-py3-none-macosx_11_0_arm64.whl"; else filename="uv-0.13.7-py3-none-macosx_10_12_x86_64.whl"; fi
+    elif [ "$ARCH" = "arm64" ]; then
+        filename="uv-0.13.7-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl"
+    else
+        filename="uv-0.13.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+    fi
+    expected=$(fixed_archive_sha256 "$filename") || return 1
+    archive_path="$WORK_DIR/$filename"
+    stage="$WORK_DIR/uv-stage"
+    local ali_url="https://mirrors.aliyun.com/pypi/packages" official_url
+    case "$filename" in
+        *macosx_11_0_arm64*) ali_url+="/40/a5/8756c38ace102fa13fd4e653e8bc40e1f65924f1c0a0d23350339dac97e5/$filename" ;;
+        *macosx_10_12_x86_64*) ali_url+="/3d/5b/e0379e7b172659420b1ec99a8e8229830aa85ea59684847c80b1c959a056/$filename" ;;
+        *manylinux_2_17_aarch64*) ali_url+="/96/72/da1119f94034d7173e6c8e2cd77a6299744458f0af3cb8e3a04d5cd419d1/$filename" ;;
+        *) ali_url+="/b9/93/0e053a2ca4523ee9825ccbedeb7121470d0a188933f11688b6d90d7f5c08/$filename" ;;
+    esac
+    official_url="https://files.pythonhosted.org/packages/${ali_url#https://mirrors.aliyun.com/pypi/packages/}"
+    local urls=()
+    if [ "$REGION" = cn ]; then urls=("$ali_url" "$official_url"); else urls=("$official_url" "$ali_url"); fi
+    local fetched=false
+    for url in "${urls[@]}"; do if download_fixed_archive "$url" "$filename" "$expected" "$archive_path"; then fetched=true; break; fi; done
+    [ "$fetched" = true ] || return 1
+    rm -rf "$stage"
+    mkdir -p "$stage"
+    if [ "$OS" = darwin ]; then ditto -x -k "$archive_path" "$stage" || { rm -rf "$stage" "$archive_path"; return 1; }
+    else unzip -q "$archive_path" -d "$stage" || { rm -rf "$stage" "$archive_path"; return 1; }; fi
+    scripts_dir=$(find "$stage" -type d -path '*/uv-0.13.7.data/scripts' -print -quit)
+    [ -n "$scripts_dir" ] || { rm -rf "$stage" "$archive_path"; return 1; }
+    mkdir -p "$stage/bin"
+    cp "$scripts_dir/uv" "$stage/bin/uv" && cp "$scripts_dir/uvx" "$stage/bin/uvx" || { rm -rf "$stage" "$archive_path"; return 1; }
+    chmod +x "$stage/bin/uv" "$stage/bin/uvx"
+    local staged_uv_version
+    staged_uv_version=""
+    if [ -x "$stage/bin/uv" ]; then staged_uv_version=$(PATH="$stage/bin:$PATH" "$stage/bin/uv" --version 2>/dev/null || true); fi
+    case "$staged_uv_version" in "uv $UV_VERSION"|"uv $UV_VERSION "*) ;; *) rm -rf "$stage" "$archive_path"; return 1 ;; esac
+    if [ ! -x "$stage/bin/uv" ] || [ ! -x "$stage/bin/uvx" ] ||
+       ! PATH="$stage/bin:$PATH" "$stage/bin/uvx" --version >/dev/null 2>&1; then
+        rm -rf "$stage" "$archive_path"
+        return 1
+    fi
+    local old="$DEPS_DIR/uv.previous"
+    if ! swap_dependency_dir "$stage" "$DEPS_DIR/uv"; then rm -f "$archive_path"; return 1; fi
+    ln -sf "$DEPS_DIR/uv/bin/uv" "$LOCAL_BIN/uv"
+    ln -sf "$DEPS_DIR/uv/bin/uvx" "$LOCAL_BIN/uvx"
+    hash -r
+    if ! uv --version >/dev/null 2>&1 || ! uvx --version >/dev/null 2>&1; then
+        rollback_dependency_dir "$DEPS_DIR/uv" "$old"
+        rm -f "$archive_path"
+        return 1
+    fi
+    rm -rf "$old" "$archive_path"
+}
+
+# 2. uv (先复用包管理器/PyPI，最后才取固定版本便携包)
+if ! has_working_uv; then
+    msg "   📦 正在安装 uv..." "   📦 Installing uv..."
+    install_dependency_package uv uv "" || true
+    if ! has_working_uv; then
+        install_uv_prebuilt || msg "⚠️ uv 固定版本包安装失败，依赖检查将报告缺失。" "⚠️ Fixed uv archive installation failed; see dependency checks below."
     fi
 fi
 
@@ -285,17 +400,34 @@ for uv_tool in uv uvx; do
     fi
 done
 
-# 3. Python 3 (通过 uv 独立安装，无需编译器或 Xcode CLT)
-if ! has_working_python && uv --version >/dev/null 2>&1; then
-    msg "   🐍 正在通过 uv 安装独立 Python 3 环境..." "   🐍 Installing standalone Python 3 via uv..."
-    PY_INSTALLED=false
-    if [ -n "$GH_PROXY" ]; then
-        if UV_PYTHON_INSTALL_MIRROR="${GH_PROXY}https://github.com/astral-sh/python-build-standalone/releases/download" uv python install 3.12; then
-            PY_INSTALLED=true
-        fi
+# 先本地查找 uv 已管理的解释器，查询不触发网络下载。
+if ! has_working_python && has_working_uv; then
+    UV_PYTHON_BIN=$(uv python find --managed-python 3.12 2>/dev/null || true)
+    if [ -n "$UV_PYTHON_BIN" ] && [ -x "$UV_PYTHON_BIN" ]; then
+        ln -sf "$UV_PYTHON_BIN" "$LOCAL_BIN/python3"
+        ln -sf "$UV_PYTHON_BIN" "$LOCAL_BIN/python"
     fi
-    if [ "$PY_INSTALLED" = false ]; then
+fi
+if ! has_working_python; then install_dependency_package python@3.12 python312 python3 || true; fi
+
+# 3. Python 3 (通过 uv 独立安装，无需编译器或 Xcode CLT)
+if ! has_working_python && has_working_uv; then
+    msg "   🐍 正在通过 uv 安装独立 Python 3 环境..." "   🐍 Installing standalone Python 3 via uv..."
+    if [ -n "${UV_PYTHON_INSTALL_MIRROR:-}" ]; then
         uv python install 3.12 || true
+    else
+        local_python_mirror="https://registry.npmmirror.com/-/binary/python-build-standalone"
+        local_python_proxy="https://ghproxy.net/https://github.com/astral-sh/python-build-standalone/releases/download"
+        PYTHON_MIRRORS=()
+        if [ "$REGION" = cn ]; then PYTHON_MIRRORS=("$local_python_mirror" "$local_python_proxy" "");
+        else PYTHON_MIRRORS=("$local_python_proxy" "$local_python_mirror" ""); fi
+        PYTHON_READY=false
+        for python_mirror in "${PYTHON_MIRRORS[@]}"; do
+            if [ -n "$python_mirror" ]; then
+                if UV_PYTHON_INSTALL_MIRROR="$python_mirror" uv python install 3.12; then PYTHON_READY=true; break; fi
+            elif env -u UV_PYTHON_INSTALL_MIRROR uv python install 3.12; then PYTHON_READY=true; break
+            fi
+        done
     fi
 
     # 将 uv 安装的 python 软链接到 ~/.local/bin（排在 /usr/bin 前面，覆盖 macOS 系统桩程序）
@@ -328,51 +460,48 @@ install_node_prebuilt() {
         node_arch="arm64"
     fi
 
-    local mirrors=()
-    if [ "$IS_CN" = true ]; then
-        mirrors=("https://npmmirror.com/mirrors/node/latest-v${NODE_VERSION}.x" "https://nodejs.org/dist/latest-v${NODE_VERSION}.x")
-    else
-        mirrors=("https://nodejs.org/dist/latest-v${NODE_VERSION}.x" "https://npmmirror.com/mirrors/node/latest-v${NODE_VERSION}.x")
+    local filename="node-v${NODE_VERSION}-${node_os}-${node_arch}.tar.gz"
+    local expected tmp_node_archive="$WORK_DIR/node.tar.gz"
+    expected=$(fixed_archive_sha256 "$filename") || return 1
+    msg "   ⬇️  正在下载 Node.js (${filename})..." "   ⬇️  Downloading Node.js (${filename})..."
+    local mirror_url="https://npmmirror.com/mirrors/node/v${NODE_VERSION}/$filename"
+    local official_url="https://nodejs.org/dist/v${NODE_VERSION}/$filename" urls=() url fetched=false
+    if [ "$REGION" = cn ]; then urls=("$mirror_url" "$official_url"); else urls=("$official_url" "$mirror_url"); fi
+    if [ "$REGION" = auto ]; then
+        local reachable=()
+        for candidate in "$official_url" "$mirror_url"; do
+            if curl -sSLf -I --connect-timeout 3 --max-time 5 "$candidate" >/dev/null 2>&1; then reachable+=("$candidate"); fi
+        done
+        if [ ${#reachable[@]} -gt 0 ]; then urls=("${reachable[@]}"); else urls=("$mirror_url" "$official_url"); fi
     fi
+    for url in "${urls[@]}"; do if download_fixed_archive "$url" "$filename" "$expected" "$tmp_node_archive"; then fetched=true; break; fi; done
+    [ "$fetched" = true ] || return 1
 
-    local tmp_node_archive="$WORK_DIR/node.tar.gz"
-    for base_url in "${mirrors[@]}"; do
-        local shasums
-        shasums=$(curl -sSLf --max-time 15 "https://nodejs.org/dist/latest-v${NODE_VERSION}.x/SHASUMS256.txt" 2>/dev/null || true)
-        if [ -z "$shasums" ]; then
-            continue
-        fi
-        local line
-        line=$(echo "$shasums" | grep -E "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz$" | head -1 || true)
-        if [ -z "$line" ]; then
-            continue
-        fi
-        local expected_sha
-        local filename
-        expected_sha=$(echo "$line" | awk '{print $1}')
-        filename=$(echo "$line" | awk '{print $2}')
-
-        msg "   ⬇️  正在下载 Node.js (${filename})..." "   ⬇️  Downloading Node.js (${filename})..."
-        if curl -sSLf --progress-bar --max-time 180 -o "$tmp_node_archive" "${base_url}/${filename}"; then
-            local actual_sha
-            actual_sha=$(openssl dgst -sha256 "$tmp_node_archive" | awk '{print $NF}')
-            if [ "$expected_sha" = "$actual_sha" ]; then
-                rm -rf "$DEPS_DIR/node"
-                mkdir -p "$DEPS_DIR/node"
-                tar -xzf "$tmp_node_archive" -C "$DEPS_DIR/node" --strip-components=1
-                rm -f "$tmp_node_archive"
-                for bin_item in node npm npx corepack; do
-                    if [ -e "$DEPS_DIR/node/bin/$bin_item" ]; then
-                        ln -sf "$DEPS_DIR/node/bin/$bin_item" "$LOCAL_BIN/$bin_item"
-                    fi
-                done
-                hash -r
-                has_working_node && return 0
-            fi
-        fi
+    local stage="$WORK_DIR/node-stage" old="$DEPS_DIR/node.previous"
+    rm -rf "$stage" "$old"
+    mkdir -p "$stage"
+    local staged_node_version
+    staged_node_version=""
+    tar -xzf "$tmp_node_archive" -C "$stage" --strip-components=1 || { rm -rf "$stage" "$tmp_node_archive"; return 1; }
+    if [ -x "$stage/bin/node" ]; then staged_node_version=$(PATH="$stage/bin:$PATH" "$stage/bin/node" --version 2>/dev/null || true); fi
+    if [ ! -x "$stage/bin/node" ] || [ ! -x "$stage/bin/npm" ] || [ ! -x "$stage/bin/npx" ] ||
+       [ "$staged_node_version" != "v${NODE_VERSION}" ] ||
+       ! PATH="$stage/bin:$PATH" "$stage/bin/npm" --version >/dev/null 2>&1 ||
+       ! PATH="$stage/bin:$PATH" "$stage/bin/npx" --version >/dev/null 2>&1; then
+        rm -rf "$stage" "$tmp_node_archive"
+        return 1
+    fi
+    if ! swap_dependency_dir "$stage" "$DEPS_DIR/node"; then rm -f "$tmp_node_archive"; return 1; fi
+    for bin_item in node npm npx; do ln -sf "$DEPS_DIR/node/bin/$bin_item" "$LOCAL_BIN/$bin_item"; done
+    hash -r
+    if ! has_working_node; then
+        rollback_dependency_dir "$DEPS_DIR/node" "$old"
         rm -f "$tmp_node_archive"
-    done
-    return 1
+        return 1
+    fi
+    rm -rf "$old"
+    rm -f "$tmp_node_archive"
+    return 0
 }
 
 if ! has_working_node; then
@@ -381,6 +510,17 @@ if ! has_working_node; then
         msg "⚠️ Node.js 预编译包安装失败，请检查网络或系统兼容性。" \
             "⚠️ Node.js archive installation failed. Check network and OS compatibility."
     fi
+fi
+
+has_working_ffmpeg() {
+    command -v ffmpeg >/dev/null 2>&1 && ffmpeg -version >/dev/null 2>&1 &&
+        command -v ffprobe >/dev/null 2>&1 && ffprobe -version >/dev/null 2>&1
+}
+if ! has_working_ffmpeg; then
+    install_dependency_package ffmpeg ffmpeg ffmpeg || true
+fi
+if ! has_working_ffmpeg; then
+    msg "⚠️ FFmpeg/ffprobe 未就绪，媒体处理可能不可用。" "⚠️ FFmpeg/ffprobe are unavailable; media processing may be unavailable."
 fi
 
 # 无论 Node 来自 nvm 还是预编译包，确保 node / npm / npx 在 ~/.local/bin 中有软链接，
@@ -394,14 +534,34 @@ if has_working_node; then
             fi
         done
     fi
-    # 大陆网络下为 npm 配置国内镜像源，防止后续 MCP npx 拉包超时
-    if [ "$IS_CN" = true ] && command -v npm >/dev/null 2>&1; then
-        CURRENT_NPM_REG=$(npm config get registry 2>/dev/null || true)
-        if [[ "$CURRENT_NPM_REG" == *"registry.npmjs.org"* ]]; then
-            npm config set registry https://registry.npmmirror.com >/dev/null 2>&1 || true
+fi
+
+configure_language_mirrors() {
+    [ "${POLARIS_CONFIGURE_MIRRORS:-0}" = 1 ] || return 0
+    if has_working_node && [ -z "${NPM_CONFIG_REGISTRY:-}" ] && [ -z "${NPM_CONFIG_USERCONFIG:-}" ] &&
+       [ -z "${npm_config_registry:-}" ] && [ -z "${npm_config_userconfig:-}" ]; then
+        local registry
+        registry=$(npm config get registry 2>/dev/null || true)
+        if [ -z "$registry" ] || [ "$registry" = "https://registry.npmjs.org" ] || [ "$registry" = "https://registry.npmjs.org/" ]; then
+            npm config set registry https://registry.npmmirror.com >/dev/null 2>&1 || msg "⚠️ npm 用户源配置失败。" "⚠️ Failed to configure the user npm registry."
         fi
     fi
-fi
+    if has_working_python && [ -z "${PIP_INDEX_URL:-}" ] && [ -z "${PIP_CONFIG_FILE:-}" ]; then
+        local pip_index
+        pip_index=$(python3 -m pip config get global.index-url 2>/dev/null || true)
+        if [ -z "$pip_index" ] || [ "$pip_index" = "https://pypi.org/simple" ] || [ "$pip_index" = "https://pypi.org/simple/" ]; then
+            python3 -m pip config --user set global.index-url https://mirrors.aliyun.com/pypi/simple/ >/dev/null 2>&1 || msg "⚠️ pip 用户源配置失败。" "⚠️ Failed to configure the user pip index."
+        fi
+    fi
+    local uv_config="${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml"
+    if [ ! -e "$uv_config" ] && [ -z "${UV_CONFIG_FILE:-}" ] && [ -z "${UV_DEFAULT_INDEX:-}" ] &&
+       [ -z "${UV_INDEX_URL:-}" ] && [ -z "${UV_PYTHON_INSTALL_MIRROR:-}" ]; then
+        if ! mkdir -p "${uv_config%/*}" || ! printf 'python-install-mirror = "https://registry.npmmirror.com/-/binary/python-build-standalone"\n[[index]]\nurl = "https://mirrors.aliyun.com/pypi/simple/"\ndefault = true\n' > "$uv_config"; then
+            msg "⚠️ uv 用户源配置失败。" "⚠️ Failed to configure the user uv index."
+        fi
+    fi
+}
+configure_language_mirrors
 
 # 安装器退出码不代表工具可用，后台服务需要这些命令实际执行成功。
 for dep in git python uv node; do
@@ -415,12 +575,17 @@ for dep in git python uv node; do
     msg "⚠️ 运行环境尚未就绪: $dep" "⚠️ Dependency not ready: $dep"
 done
 if [ "$DEPS_READY" = true ]; then
-    msg "✅ 基础环境准备就绪。" "✅ Dependencies ready."
+    msg "✅ 核心运行环境已就绪。" "✅ Core runtime dependencies are ready."
 fi
 if [ "$OS" = linux ] && ! command -v bwrap >/dev/null 2>&1; then
     DEPS_READY=false
     msg "⚠️ 缺少 bubblewrap，隔离执行不可用，请通过系统包管理器安装。" \
         "⚠️ bubblewrap is missing; isolated execution is unavailable. Install it with your package manager."
+fi
+if [ "$DEPS_READY" != true ]; then
+    msg "❌ 核心依赖未就绪，未替换现有 Polaris 安装。请补齐依赖后重试。" \
+        "❌ Core dependencies are not ready; the existing Polaris installation was preserved. Install missing dependencies and retry."
+    exit 1
 fi
 
 # ── 2. 确定 Polaris 下载源 ─────────────────────────────────────────────────
@@ -429,19 +594,32 @@ GITHUB_BASE="https://github.com/${REPO}/releases/latest/download"
 DIRECT_URL="${GITHUB_BASE}/${ARCHIVE_NAME}"
 
 CANDIDATE_URLS=()
-if [ -z "$GH_PROXY" ]; then
-    CANDIDATE_URLS+=("$DIRECT_URL")
-    for p in "${PROXY_HOSTS[@]}"; do
-        CANDIDATE_URLS+=("${p}/${DIRECT_URL}")
-    done
+if [ -n "${POLARIS_DOWNLOAD_BASE:-}" ]; then
+    CANDIDATE_URLS+=("${POLARIS_DOWNLOAD_BASE%/}/${ARCHIVE_NAME}")
+fi
+if [ "$REGION" = cn ]; then
+    CANDIDATE_URLS+=("https://ghproxy.net/${DIRECT_URL}" "$DIRECT_URL" "https://mirror.ghproxy.com/${DIRECT_URL}")
 else
-    CANDIDATE_URLS+=("${GH_PROXY}${DIRECT_URL}")
-    for p in "${PROXY_HOSTS[@]}"; do
-        if [ "${p}/" != "$GH_PROXY" ]; then
-            CANDIDATE_URLS+=("${p}/${DIRECT_URL}")
-        fi
+    CANDIDATE_URLS+=("$DIRECT_URL" "https://ghproxy.net/${DIRECT_URL}" "https://mirror.ghproxy.com/${DIRECT_URL}")
+fi
+if [ "$REGION" = auto ]; then
+    PROBED_URLS=() UNPROBED_URLS=()
+    for candidate in "${CANDIDATE_URLS[@]}"; do
+        if curl -sSLf --connect-timeout 3 --max-time 6 -o /dev/null "${candidate}.sha256" 2>/dev/null; then PROBED_URLS+=("$candidate"); else UNPROBED_URLS+=("$candidate"); fi
     done
-    CANDIDATE_URLS+=("$DIRECT_URL")
+    CANDIDATE_URLS=()
+    if [ -n "${POLARIS_DOWNLOAD_BASE:-}" ]; then CANDIDATE_URLS+=("${POLARIS_DOWNLOAD_BASE%/}/${ARCHIVE_NAME}"); fi
+    for candidate in "${PROBED_URLS[@]}"; do
+        [ -n "${POLARIS_DOWNLOAD_BASE:-}" ] && [ "$candidate" = "${POLARIS_DOWNLOAD_BASE%/}/${ARCHIVE_NAME}" ] && continue
+        CANDIDATE_URLS+=("$candidate")
+    done
+    if [ ${#PROBED_URLS[@]} -eq 0 ]; then
+        CANDIDATE_URLS=()
+        [ -n "${POLARIS_DOWNLOAD_BASE:-}" ] && CANDIDATE_URLS+=("${POLARIS_DOWNLOAD_BASE%/}/${ARCHIVE_NAME}")
+        CANDIDATE_URLS+=("https://ghproxy.net/${DIRECT_URL}" "https://mirror.ghproxy.com/${DIRECT_URL}" "$DIRECT_URL")
+    else
+        [ ${#UNPROBED_URLS[@]} -eq 0 ] || CANDIDATE_URLS+=("${UNPROBED_URLS[@]}")
+    fi
 fi
 
 if [ ${#CANDIDATE_URLS[@]} -eq 0 ]; then
@@ -449,107 +627,54 @@ if [ ${#CANDIDATE_URLS[@]} -eq 0 ]; then
     exit 1
 fi
 
-# ── 2. 下载（逐源重试）──────────────────────────────────────────
+# ── 2. 下载、校验并按完整发布三件套切换源 ───────────────────────────────────
 TMP_ARCHIVE="$WORK_DIR/polaris.tar.gz"
+TMP_SHA_FILE="${TMP_ARCHIVE}.sha256"
+TMP_SIG_B64="$WORK_DIR/release.sig.b64"
+TMP_SIG="$WORK_DIR/release.sig"
 TMP_DIR="$WORK_DIR/extracted"
+msg "⬇️  开始下载 Polaris（校验失败后尝试下一源）..." "⬇️  Downloading Polaris (retrying sources after verification failures)..."
 
-msg "⬇️  开始下载（逐源重试）..." "⬇️  Downloading (with source retries)..."
-
+# RELEASE_PUBLIC_KEYS_BEGIN
+RELEASE_PUBLIC_KEYS=(
+    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERq8RvYaXY9cy0aXOFTmU6sNNzIRikjdQoUZuy/iZ0HIAaZNDMmAYhxgqAdpIdUfiAZUZOCUxL/9ghaSAHZs3Bw=='
+)
+# RELEASE_PUBLIC_KEYS_END
 DOWNLOADED=false
 for URL in "${CANDIDATE_URLS[@]}"; do
     msg "   尝试: $URL" "   Trying: $URL"
-    rm -f "$TMP_ARCHIVE"
-    if curl -sSLf --retry 2 --progress-bar --max-time 300 -o "$TMP_ARCHIVE" "$URL"; then
-        DOWNLOADED=true
-        break
-    else
-        EXIT_CODE=$?
-        msg "   此源失败（exit ${EXIT_CODE}），尝试下一个..." \
-            "   Source failed (exit $EXIT_CODE), trying next..."
+    rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE" "$TMP_SIG_B64" "$TMP_SIG"
+    if ! curl -sSLf --connect-timeout 10 --retry 1 --progress-bar --max-time 300 -o "$TMP_ARCHIVE" "$URL" ||
+       ! curl -sSLf --connect-timeout 10 --max-time 30 -o "$TMP_SHA_FILE" "${URL}.sha256" ||
+       ! curl -sSLf --connect-timeout 10 --max-time 30 -o "$TMP_SIG_B64" "${URL}.sha256.sig" ||
+       ! openssl base64 -d -A -in "$TMP_SIG_B64" -out "$TMP_SIG"; then
+        msg "   发布文件或校验文件不可达，尝试下一源。" "   Artifact or checksum file unavailable; trying next source."
+        continue
     fi
+    SIGNATURE_VALID=false
+    for release_key in "${RELEASE_PUBLIC_KEYS[@]}"; do
+        printf '%s' "$release_key" | openssl base64 -d -A -out "$WORK_DIR/release-key.der" 2>/dev/null || continue
+        if openssl pkey -pubin -inform DER -in "$WORK_DIR/release-key.der" -out "$WORK_DIR/release-key.pem" 2>/dev/null &&
+           openssl dgst -sha256 -verify "$WORK_DIR/release-key.pem" -signature "$TMP_SIG" "$TMP_SHA_FILE" >/dev/null 2>&1; then SIGNATURE_VALID=true; break; fi
+    done
+    EXPECTED_SHA=$(awk '{print $1}' "$TMP_SHA_FILE")
+    ACTUAL_SHA=$(openssl dgst -sha256 "$TMP_ARCHIVE" | awk '{print $NF}')
+    if [ "$SIGNATURE_VALID" != true ] || [ -z "$EXPECTED_SHA" ] || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+        msg "   发布签名或摘要无效，拒绝此源并继续尝试。" "   Invalid release signature or checksum; rejecting source and trying next."
+        continue
+    fi
+    DOWNLOADED=true
+    break
 done
-
-if [ "$DOWNLOADED" = false ]; then
-    msg "❌ 所有下载源均失败，请检查网络连接或稍后重试。" \
-        "❌ All download sources failed. Check your network or retry later."
-    rm -f "$TMP_ARCHIVE"
+if [ "$DOWNLOADED" != true ]; then
+    msg "❌ 所有下载源均未提供有效发布三件套。" "❌ No source provided a valid signed release set."
     exit 1
 fi
+rm -f "$TMP_SHA_FILE" "$TMP_SIG_B64" "$TMP_SIG"
+msg "✅ 发布签名与摘要校验通过。" "✅ Release signature and checksum verified."
 
 # ── 3. 校验 & 解压 ────────────────────────────────────────────────────────────
-msg "📦 正在校验并解压..." "📦 Verifying and extracting..."
-
-# 3a. SHA-256 完整性校验（GR-7.4）：release.yml package job 为每个归档同步
-# 生成并发布 <archive>.sha256（sha256sum 标准格式 "<hash>  <filename>"），
-# 从与归档成功下载的同一来源（$URL，保留 for 循环退出时的最后取值）下载
-# 对应的 .sha256 文件比对，防止下载源被中间人替换/投毒后仅凭 tar 结构校验
-# 无法识破（只要是合法 tar.gz 格式即可通过 tar -tzf）。
-#
-# 沿用既有约束"不依赖 sha256sum 命令，跨平台兼容性更好"：改用 openssl dgst
-# -sha256（macOS/Linux 均预装）计算本地哈希，而不是引入平台相关的 sha256sum。
-TMP_SHA_FILE="${TMP_ARCHIVE}.sha256"
-rm -f "$TMP_SHA_FILE"
-
-# 校验和默认只从官方直连源下载，失败即中止（防止镜像被投毒后连"标尺"本身
-# 都被污染——如果哈希也来自镜像，篡改过二进制的镜像可以同时伪造一份匹配的
-# 校验和，比对形同虚设）。
-#
-# 但对完全无法直连 GitHub 的网络环境（常见于大陆网络，非"仅仅慢"而是彻底
-# 不可达），一律中止会让二进制虽已通过镜像下载成功、却因这一步无法完成而
-# 前功尽弃。系统最优设计：默认保持安全（不做任何静默/自动降级），仅在用户
-# 显式设置 POLARIS_ALLOW_MIRROR_CHECKSUM=1 时才允许回退到与二进制相同的镜像源
-# 获取校验和，并在回退前打印明确的风险警告（该模式下无法防御"镜像同时伪造
-# 二进制与校验和"的攻击，用户需自行承担该风险，例如已通过其他渠道信任该镜像，
-# 或后续自行核对官方发布页面公布的哈希）。
-if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${DIRECT_URL}.sha256"; then
-    # 回退源固定用 $URL（下载二进制那个 for 循环实际成功的源，循环 break 后
-    # 该变量仍保留其值）而非重新猜测/拼接镜像地址：语义上是"信任刚才已经把
-    # 二进制发给我的同一个源"，而不是引入另一个与二进制来源无关的新镜像。
-    # 若二进制本身就是从官方直连源下载的（$URL == $DIRECT_URL），这里再次
-    # 尝试同一 URL 没有意义，直接跳过回退。
-    if [ "${POLARIS_ALLOW_MIRROR_CHECKSUM:-0}" = "1" ] && [ "$URL" != "$DIRECT_URL" ]; then
-        msg "⚠️  无法从官方直连源获取校验和文件。检测到 POLARIS_ALLOW_MIRROR_CHECKSUM=1，" \
-            "⚠️  Failed to fetch checksum from the official source. POLARIS_ALLOW_MIRROR_CHECKSUM=1 detected,"
-        msg "⚠️  按你的显式授权回退到二进制同源（${URL}）下载校验和。此模式下无法防御该源同时" \
-            "⚠️  falling back to the same source that served the binary ($URL) for the checksum. This mode cannot detect"
-        msg "⚠️  伪造二进制与校验和的供应链攻击，风险自负。" \
-            "⚠️  a source that forges both the binary and its checksum together — proceed at your own risk."
-        if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${URL}.sha256"; then
-            msg "❌ 该源同样无法获取校验和文件，已中止安装。" \
-                "❌ Checksum also unreachable via that source. Aborting install."
-            rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
-            exit 1
-        fi
-    else
-        msg "❌ 无法从官方直连源获取校验和文件，出于供应链安全考虑（默认严禁使用镜像源）已中止安装。" \
-            "❌ Failed to download checksum file from official source. Aborting install for supply-chain safety (mirrors are forbidden for checksums by default)."
-        msg "   若你所在网络无法直连 GitHub，可显式设置 POLARIS_ALLOW_MIRROR_CHECKSUM=1 后重新运行本脚本以" \
-            "   If your network cannot reach GitHub directly, you may explicitly set POLARIS_ALLOW_MIRROR_CHECKSUM=1 and re-run this script to"
-        msg "   回退到镜像源获取校验和（会降低供应链攻击防御能力，请仅在信任该镜像时使用）。" \
-            "   fall back to a mirror for the checksum (this weakens supply-chain attack defenses — only use it if you trust the mirror)."
-        rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
-        exit 1
-    fi
-fi
-
-if ! command -v openssl >/dev/null 2>&1; then
-    msg "❌ 未找到 openssl，无法校验下载包完整性，已中止安装。请安装 openssl 后重试。" \
-        "❌ openssl not found; cannot verify package integrity. Aborting install. Please install openssl and retry."
-    rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
-    exit 1
-fi
-
-EXPECTED_SHA=$(awk '{print $1}' "$TMP_SHA_FILE")
-ACTUAL_SHA=$(openssl dgst -sha256 "$TMP_ARCHIVE" | awk '{print $NF}')
-rm -f "$TMP_SHA_FILE"
-
-if [ -z "$EXPECTED_SHA" ] || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
-    msg "❌ 下载的安装包校验和不匹配，可能遭遇中间人篡改，安装已中止。" \
-        "❌ Downloaded package checksum mismatch; possible tampering detected. Installation aborted."
-    rm -f "$TMP_ARCHIVE"
-    exit 1
-fi
-msg "✅ 校验和匹配，归档完整性已确认。" "✅ Checksum verified, archive integrity confirmed."
+msg "📦 正在解压..." "📦 Extracting..."
 
 # 3b. 归档结构校验（哈希校验通过后的第二道检查，双重保险）
 if ! tar -tzf "$TMP_ARCHIVE" > /dev/null 2>&1; then
@@ -722,8 +847,12 @@ if [ "$SERVICE_READY" = true ]; then
         CONSOLE_URL=$("${INSTALL_DIR}/${BIN_NAME}" service status --json 2>/dev/null \
             | sed -n 's/.*"base_url": *"\([^"]*\)".*/\1/p' || true)
         if [ -n "$CONSOLE_URL" ]; then
-            SERVICE_READY=true
-            break
+            health_status=$(curl -sS --noproxy '*' --max-time 2 -o /dev/null -w '%{http_code}' "${CONSOLE_URL%/}/healthz" 2>/dev/null || true)
+            home_status=$(curl -sS --noproxy '*' --max-time 2 -o /dev/null -w '%{http_code}' "${CONSOLE_URL%/}/" 2>/dev/null || true)
+            if [ "$health_status" = 200 ] && [ "$home_status" = 200 ]; then
+                SERVICE_READY=true
+                break
+            fi
         fi
         sleep 1
     done

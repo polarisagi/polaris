@@ -47,6 +47,7 @@ const (
 	// ── 扩展 ──
 	PurposeSkillCreate  = "skill_create"
 	PurposePluginCreate = "plugin_create"
+	PurposeDocTranslate = "doc_translate"
 	PurposeMCPSampling  = "mcp_sampling"
 	PurposeHookPrompt   = "hook_prompt"
 

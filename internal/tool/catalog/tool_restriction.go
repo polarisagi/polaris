@@ -179,6 +179,14 @@ func (r *ToolRestriction) PermitsAgent(target string) bool {
 	return r.allow.agentTargets == nil || r.allow.agentTargets[target]
 }
 
+// PermitsAgentTarget 只校验 Agent(a,b) 的目标白名单，不把 spawn_agents 与 transfer_to_agent 工具授权耦合。
+func (r *ToolRestriction) PermitsAgentTarget(target string) bool {
+	if r == nil {
+		return true
+	}
+	return r.allow.agentTargets == nil || r.allow.agentTargets[target]
+}
+
 func splitSpecifier(s string) (name, spec string, ok bool) {
 	open := strings.IndexByte(s, '(')
 	if open < 0 || !strings.HasSuffix(s, ")") {

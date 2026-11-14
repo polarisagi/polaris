@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
+	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/gateway/types"
@@ -58,7 +59,10 @@ type ChatHandler struct {
 	turnHubOnce sync.Once
 
 	// TurnRepo 回合步骤与回合元数据（ADR-0118）；nil 时步骤只实时推送、不落库，历史接口不带步骤摘要。
-	TurnRepo repo.ChatTurnRepository
+	TurnRepo       repo.ChatTurnRepository
+	ExpertResolver interface {
+		ResolveNamedExpert(context.Context, string) (*apptypes.AgentProfileSpec, *lifecycle.ExpertDefinition, error)
+	}
 }
 
 type Dependencies struct {
@@ -181,6 +185,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		Prompt:        prompt,
 		Registry:      deps.Registry,
 		AgentPool:     deps.AgentPool,
+		Profiles:      h,
 		TranscriptDir: deps.TranscriptDir,
 		DataDir:       deps.DataDir,
 		WorkspaceDir:  deps.WorkspaceDir,

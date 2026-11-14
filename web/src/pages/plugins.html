@@ -73,7 +73,7 @@
         <div class="flex flex-wrap justify-between items-center gap-2">
           <!-- 左侧来源文字 tab -->
           <div class="flex items-center gap-3">
-            <template x-for="s in ['', 'polaris', 'verified', 'community', 'zh']" :key="'st-' + s">
+            <template x-for="s in ['', 'polaris', 'verified', 'community']" :key="'st-' + s">
               <button type="button" class="text-sm px-1 pb-1 transition-colors cursor-pointer"
                       :class="$store.plugins.status === s ? 'font-bold text-base-content border-b-2 border-base-content' : 'font-medium text-base-content/80 hover:text-base-content'"
                       :aria-pressed="$store.plugins.status === s"
@@ -506,7 +506,7 @@
     </dialog>
 
     <!-- 目录条目详情：只读展示目录元数据（未安装 / skill / mcp 也可用） -->
-    <dialog class="modal" id="plugin_entry_modal" x-effect="$store.plugins.showEntryDetail ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showEntryDetail = false; $store.plugins.entryDetail = null">
+    <dialog class="modal" id="plugin_entry_modal" x-effect="$store.plugins.showEntryDetail ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showEntryDetail = false; $store.plugins.entryDetail = null; $store.plugins.resetDocState()">
       <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
         <h3 class="font-bold text-lg" x-text="$store.plugins.displayName($store.plugins.entryDetail)"></h3>
         <div x-show="$store.plugins.entryDetail && $store.plugins.displayName($store.plugins.entryDetail) !== $store.plugins.entryDetail.name" class="text-xs font-mono opacity-60" x-text="$store.plugins.entryDetail?.name"></div>
@@ -517,47 +517,181 @@
           <span x-show="$store.plugins.entryDetail?.version" class="text-xs font-mono text-base-content/60">v<span x-text="$store.plugins.entryDetail?.version"></span></span>
           <span x-show="$store.plugins.entryDetail?.installed" class="badge badge-success badge-sm" x-text="$store.i18n.t('plugins_installed')"></span>
         </div>
-        <p class="text-sm text-base-content/80 whitespace-pre-line break-words" x-text="$store.plugins.displayDescription($store.plugins.entryDetail) || $store.i18n.t('plugins_entry_no_desc')"></p>
-        <p x-show="$store.plugins.entryDetail?.i18n_stale && $store.plugins.isZh()" class="text-xs text-warning mt-1" x-text="$store.i18n.t('plugins_i18n_stale')"></p>
-        <details x-show="$store.plugins.entryDetail && $store.plugins.useZh($store.plugins.entryDetail) && $store.plugins.entryDetail.description" class="mt-2">
-          <summary class="text-xs opacity-60 cursor-pointer" x-text="$store.i18n.t('plugins_original')"></summary>
-          <p class="text-xs text-base-content/70 whitespace-pre-line break-words mt-1" x-text="$store.plugins.entryDetail?.description"></p>
-        </details>
-        <!-- 试试看：在描述后、分类徽标前（若已安装且有快捷提示时展示） -->
-        <template x-if="$store.plugins.entryDetail && ($store.plugins.promptsFor($store.plugins.entryDetail) || []).length > 0">
-          <div class="mt-3">
-            <div class="text-xs font-semibold text-base-content/70 mb-1.5" x-text="$store.i18n.t('plugins_try_prompts')"></div>
-            <div class="flex flex-wrap gap-1.5">
-              <template x-for="p in $store.plugins.promptsFor($store.plugins.entryDetail)" :key="p">
-                <button type="button" class="btn btn-xs btn-outline normal-case max-w-full justify-start text-left" :title="p" @click="$store.plugins.usePrompt(p); $store.plugins.showEntryDetail = false">
-                  <span class="truncate" x-text="p"></span>
-                </button>
+
+        <!-- 标签切换：概览 / 说明 -->
+        <div role="tablist" class="tabs tabs-boxed mb-4">
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.entryTab === 'overview' }" @click="$store.plugins.switchEntryTab('overview')" x-text="$store.i18n.t('plugin_detail_tab_overview')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.entryTab === 'docs' }" @click="$store.plugins.switchEntryTab('docs')" x-text="$store.i18n.t('plugin_detail_tab_docs')"></a>
+        </div>
+
+        <div class="max-h-[55vh] overflow-y-auto pr-1">
+          <!-- 概览选项卡 -->
+          <div x-show="$store.plugins.entryTab === 'overview'">
+            <p class="text-sm text-base-content/80 whitespace-pre-line break-words" x-text="$store.plugins.displayDescription($store.plugins.entryDetail) || $store.i18n.t('plugins_entry_no_desc')"></p>
+            <p x-show="$store.plugins.entryDetail?.i18n_stale && $store.plugins.isZh()" class="text-xs text-warning mt-1" x-text="$store.i18n.t('plugins_i18n_stale')"></p>
+            <details x-show="$store.plugins.entryDetail && $store.plugins.useZh($store.plugins.entryDetail) && $store.plugins.entryDetail.description" class="mt-2">
+              <summary class="text-xs opacity-60 cursor-pointer" x-text="$store.i18n.t('plugins_original')"></summary>
+              <p class="text-xs text-base-content/70 whitespace-pre-line break-words mt-1" x-text="$store.plugins.entryDetail?.description"></p>
+            </details>
+            <!-- 试试看：在描述后、分类徽标前（若已安装且有快捷提示时展示） -->
+            <template x-if="$store.plugins.entryDetail && ($store.plugins.promptsFor($store.plugins.entryDetail) || []).length > 0">
+              <div class="mt-3">
+                <div class="text-xs font-semibold text-base-content/70 mb-1.5" x-text="$store.i18n.t('plugins_try_prompts')"></div>
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="p in $store.plugins.promptsFor($store.plugins.entryDetail)" :key="p">
+                    <button type="button" class="btn btn-xs btn-outline normal-case max-w-full justify-start text-left" :title="p" @click="$store.plugins.usePrompt(p); $store.plugins.showEntryDetail = false">
+                      <span class="truncate" x-text="p"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </template>
+            <div class="flex flex-wrap gap-1 mt-3">
+              <template x-for="key in $store.plugins.facetKeys" :key="'d-' + key">
+                <template x-for="id in ($store.plugins.entryDetail ? $store.plugins.entryFacet($store.plugins.entryDetail, key) : [])" :key="'d-' + key + ':' + id">
+                  <span class="badge badge-outline badge-sm" x-text="$store.plugins.facetTitle(key) + ' · ' + $store.plugins.facetLabel(key, id)"></span>
+                </template>
+              </template>
+            </div>
+            <dl class="mt-4 space-y-2 text-xs">
+              <template x-if="$store.plugins.entryDetail?.homepage">
+                <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_entry_homepage')"></dt><dd class="min-w-0 break-all"><a :href="$store.plugins.entryDetail.homepage" target="_blank" rel="noopener" class="link link-primary font-mono" x-text="$store.plugins.entryDetail.homepage"></a></dd></div>
+              </template>
+              <template x-if="$store.plugins.entryDetail?.url && $store.plugins.entryDetail.url !== $store.plugins.entryDetail.homepage && /^https?:/.test($store.plugins.entryDetail.url)">
+                <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_label_url')"></dt><dd class="min-w-0 break-all"><a :href="$store.plugins.entryDetail.url" target="_blank" rel="noopener" class="link link-primary font-mono" x-text="$store.plugins.entryDetail.url"></a></dd></div>
+              </template>
+              <template x-if="$store.plugins.entryDetail?.command">
+                <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_entry_command')"></dt><dd class="min-w-0 break-all font-mono" x-text="`${$store.plugins.entryDetail.command} ${($store.plugins.entryDetail.args||[]).join(' ')}`"></dd></div>
+              </template>
+            </dl>
+            <div class="flex flex-wrap gap-1 mt-4">
+              <template x-for="tag in ($store.plugins.entryDetail?.tags||[])" :key="tag">
+                <span class="badge badge-ghost badge-sm text-[10px]" x-text="tag"></span>
               </template>
             </div>
           </div>
-        </template>
-        <div class="flex flex-wrap gap-1 mt-3">
-          <template x-for="key in $store.plugins.facetKeys" :key="'d-' + key">
-            <template x-for="id in ($store.plugins.entryDetail ? $store.plugins.entryFacet($store.plugins.entryDetail, key) : [])" :key="'d-' + key + ':' + id">
-              <span class="badge badge-outline badge-sm" x-text="$store.plugins.facetTitle(key) + ' · ' + $store.plugins.facetLabel(key, id)"></span>
-            </template>
-          </template>
-        </div>
-        <dl class="mt-4 space-y-2 text-xs">
-          <template x-if="$store.plugins.entryDetail?.homepage">
-            <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_entry_homepage')"></dt><dd class="min-w-0 break-all"><a :href="$store.plugins.entryDetail.homepage" target="_blank" rel="noopener" class="link link-primary font-mono" x-text="$store.plugins.entryDetail.homepage"></a></dd></div>
-          </template>
-          <template x-if="$store.plugins.entryDetail?.url && $store.plugins.entryDetail.url !== $store.plugins.entryDetail.homepage && /^https?:/.test($store.plugins.entryDetail.url)">
-            <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_label_url')"></dt><dd class="min-w-0 break-all"><a :href="$store.plugins.entryDetail.url" target="_blank" rel="noopener" class="link link-primary font-mono" x-text="$store.plugins.entryDetail.url"></a></dd></div>
-          </template>
-          <template x-if="$store.plugins.entryDetail?.command">
-            <div class="flex gap-2"><dt class="opacity-60 shrink-0" x-text="$store.i18n.t('plugins_entry_command')"></dt><dd class="min-w-0 break-all font-mono" x-text="`${$store.plugins.entryDetail.command} ${($store.plugins.entryDetail.args||[]).join(' ')}`"></dd></div>
-          </template>
-        </dl>
-        <div class="flex flex-wrap gap-1 mt-4">
-          <template x-for="tag in ($store.plugins.entryDetail?.tags||[])" :key="tag">
-            <span class="badge badge-ghost badge-sm text-[10px]" x-text="tag"></span>
-          </template>
+
+          <!-- 说明选项卡 -->
+          <div x-show="$store.plugins.entryTab === 'docs'">
+            <div class="flex flex-col gap-3 min-h-[240px]">
+              <!-- Toolbar: 语言切换与元数据徽标 -->
+              <div class="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-base-100 rounded-xl border border-base-300 text-xs">
+                <div class="flex items-center gap-1.5" role="group" :aria-label="$store.i18n.t('plugins_type_tabs')">
+                  <button type="button" class="btn btn-xs rounded-lg transition-colors cursor-pointer"
+                          :class="$store.plugins.docLocale === 'zh-CN' ? 'btn-primary' : 'btn-ghost'"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), 'zh-CN')"
+                          x-text="$store.i18n.t('plugin_doc_view_chinese')"></button>
+                  <button type="button" class="btn btn-xs rounded-lg transition-colors cursor-pointer"
+                          :class="$store.plugins.docLocale === 'en' ? 'btn-primary' : 'btn-ghost'"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), 'en')"
+                          x-text="$store.i18n.t('plugin_doc_view_original')"></button>
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <template x-if="$store.plugins.doc?.translation?.origin === 'machine'">
+                    <span class="badge badge-warning badge-xs font-medium" x-text="$store.i18n.t('plugin_doc_machine_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.translation?.review === 'unreviewed'">
+                    <span class="badge badge-ghost badge-xs text-base-content/60" x-text="$store.i18n.t('plugin_doc_unreviewed_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.translation?.review === 'reviewed'">
+                    <span class="badge badge-success badge-xs font-medium" x-text="$store.i18n.t('plugin_doc_reviewed_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.translation?.origin === 'upstream'">
+                    <span class="badge badge-info badge-xs font-medium" x-text="$store.i18n.t('plugin_doc_upstream_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.stale">
+                    <span class="badge badge-warning badge-xs font-medium" :title="$store.i18n.t('plugin_doc_stale_hint')" x-text="$store.i18n.t('plugin_doc_stale_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.source?.kind === 'skill'">
+                    <span class="badge badge-ghost badge-xs" x-text="$store.i18n.t('plugin_doc_skill_reference')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.source?.url">
+                    <a :href="$store.plugins.doc.source.url" target="_blank" rel="noopener noreferrer"
+                       class="link link-hover text-[11px] font-mono text-base-content/60 inline-flex items-center gap-1"
+                       :title="$store.plugins.doc.source.url">
+                      <span>↗</span>
+                      <span x-text="$store.i18n.t('plugin_doc_source_link')"></span>
+                    </a>
+                  </template>
+                </div>
+              </div>
+
+              <!-- 提示区 (aria-live) -->
+              <div aria-live="polite" class="space-y-2">
+                <!-- 内置扩展无中文提示 -->
+                <div x-show="$store.plugins.isBuiltinEntry($store.plugins.currentDocEntry()) && $store.plugins.docNeedsTranslation()"
+                     class="alert alert-info text-xs py-2 px-3 rounded-lg flex items-center gap-2">
+                  <span class="text-base">ℹ️</span>
+                  <span x-text="$store.i18n.t('plugin_doc_builtin_notice')"></span>
+                </div>
+
+                <!-- 自定义扩展无中文：翻译按钮与调用提示 -->
+                <div x-show="!$store.plugins.isBuiltinEntry($store.plugins.currentDocEntry()) && $store.plugins.docNeedsTranslation()"
+                     class="alert bg-base-100 border border-base-300 text-xs py-2.5 px-3 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="font-bold mb-0.5" x-text="$store.i18n.t('plugin_doc_missing')"></div>
+                    <div class="text-base-content/70" x-text="$store.i18n.t('plugin_doc_translate_hint')"></div>
+                  </div>
+                  <button type="button" class="btn btn-sm btn-primary shrink-0"
+                          :disabled="$store.plugins.docTranslating || !!$store.plugins.docPollingTaskId"
+                          @click="$store.plugins.triggerTranslation($store.plugins.currentDocEntry())">
+                    <span x-show="$store.plugins.docTranslating || !!$store.plugins.docPollingTaskId" class="loading loading-spinner loading-xs"></span>
+                    <span x-text="$store.i18n.t('plugin_doc_translate_btn')"></span>
+                  </button>
+                </div>
+
+                <!-- 翻译中 -->
+                <div x-show="$store.plugins.docPollingTaskId || $store.plugins.doc?.status === 'queued' || $store.plugins.doc?.status === 'translating'"
+                     class="alert alert-info text-xs py-2 px-3 rounded-lg flex items-center gap-2">
+                  <span class="loading loading-spinner loading-xs"></span>
+                  <span x-text="$store.i18n.t('plugin_doc_translating')"></span>
+                </div>
+
+                <!-- 过期提示 -->
+                <div x-show="$store.plugins.doc?.stale"
+                     class="alert alert-warning text-xs py-2 px-3 rounded-lg flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span>⚠️</span>
+                    <span x-text="$store.i18n.t('plugin_doc_stale_hint')"></span>
+                  </div>
+                  <button type="button" class="btn btn-xs btn-outline shrink-0"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), 'en')"
+                          x-text="$store.i18n.t('plugin_doc_view_original')"></button>
+                </div>
+
+                <!-- 错误提示 -->
+                <div x-show="$store.plugins.docError"
+                     class="alert alert-error text-xs py-2 px-3 rounded-lg flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span>❌</span>
+                    <span x-text="$store.i18n.t('plugin_doc_failed') + $store.plugins.docError"></span>
+                  </div>
+                  <button type="button" class="btn btn-xs btn-outline shrink-0"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), $store.plugins.docLocale)"
+                          x-text="$store.i18n.t('plugin_doc_retry')"></button>
+                </div>
+              </div>
+
+              <!-- 加载中状态 -->
+              <div x-show="$store.plugins.docLoading" class="flex flex-col items-center justify-center py-12 text-base-content/60">
+                <span class="loading loading-spinner loading-md text-primary mb-2"></span>
+                <p class="text-xs" x-text="$store.i18n.t('plugin_doc_loading')"></p>
+              </div>
+
+              <!-- 无文档状态 -->
+              <div x-show="!$store.plugins.docLoading && !$store.plugins.doc?.markdown && !$store.plugins.docNeedsTranslation()"
+                   class="flex flex-col items-center justify-center py-8 text-base-content/50 border border-dashed border-base-300 rounded-xl">
+                <div class="text-2xl mb-1">📄</div>
+                <div class="text-xs" x-text="$store.i18n.t('plugin_doc_missing')"></div>
+              </div>
+
+              <!-- 正文渲染 -->
+              <div x-show="!$store.plugins.docLoading && $store.plugins.doc?.markdown"
+                   class="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] bg-base-100 p-4 rounded-xl border border-base-300"
+                   x-html="window.renderDocMarkdown ? window.renderDocMarkdown($store.plugins.doc?.markdown, $store.plugins.doc?.source?.base_url) : window.renderMarkdown($store.plugins.doc?.markdown)">
+              </div>
+            </div>
+          </div>
         </div>
         <div class="modal-action">
           <button class="btn btn-ghost" @click="$store.plugins.showEntryDetail=false" x-text="$store.i18n.t('plugins_entry_close')"></button>
@@ -591,6 +725,7 @@
         <div role="tablist" class="tabs tabs-boxed mb-4 flex-wrap">
           <a role="tab" class="tab" x-show="$store.plugins.detail?.setup?.tool" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'setup' }" @click="$store.plugins.switchDetailTab('setup')" x-text="$store.i18n.t('plugin_detail_tab_setup')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'config' }" @click="$store.plugins.switchDetailTab('config')" x-text="$store.i18n.t('plugin_detail_tab_config')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'docs' }" @click="$store.plugins.switchDetailTab('docs')" x-text="$store.i18n.t('plugin_detail_tab_docs')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'apps' }" @click="$store.plugins.switchDetailTab('apps')" x-text="$store.i18n.t('plugin_detail_tab_apps')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'deps' }" @click="$store.plugins.switchDetailTab('deps')" x-text="$store.i18n.t('plugin_detail_tab_deps')"></a>
           <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.detailTab === 'agents' }" @click="$store.plugins.switchDetailTab('agents')" x-text="$store.i18n.t('plugin_detail_tab_agents')"></a>
@@ -703,6 +838,128 @@
                 </div>
               </div>
             </template>
+          </div>
+
+          <!-- Docs：说明文档 -->
+          <div x-show="$store.plugins.detailTab === 'docs'">
+            <div class="flex flex-col gap-3 min-h-[240px]">
+              <!-- Toolbar: 语言切换与元数据徽标 -->
+              <div class="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-base-100 rounded-xl border border-base-300 text-xs">
+                <div class="flex items-center gap-1.5" role="group" :aria-label="$store.i18n.t('plugins_type_tabs')">
+                  <button type="button" class="btn btn-xs rounded-lg transition-colors cursor-pointer"
+                          :class="$store.plugins.docLocale === 'zh-CN' ? 'btn-primary' : 'btn-ghost'"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), 'zh-CN')"
+                          x-text="$store.i18n.t('plugin_doc_view_chinese')"></button>
+                  <button type="button" class="btn btn-xs rounded-lg transition-colors cursor-pointer"
+                          :class="$store.plugins.docLocale === 'en' ? 'btn-primary' : 'btn-ghost'"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), 'en')"
+                          x-text="$store.i18n.t('plugin_doc_view_original')"></button>
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <template x-if="$store.plugins.doc?.translation?.origin === 'machine'">
+                    <span class="badge badge-warning badge-xs font-medium" x-text="$store.i18n.t('plugin_doc_machine_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.translation?.review === 'unreviewed'">
+                    <span class="badge badge-ghost badge-xs text-base-content/60" x-text="$store.i18n.t('plugin_doc_unreviewed_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.translation?.review === 'reviewed'">
+                    <span class="badge badge-success badge-xs font-medium" x-text="$store.i18n.t('plugin_doc_reviewed_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.translation?.origin === 'upstream'">
+                    <span class="badge badge-info badge-xs font-medium" x-text="$store.i18n.t('plugin_doc_upstream_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.stale">
+                    <span class="badge badge-warning badge-xs font-medium" :title="$store.i18n.t('plugin_doc_stale_hint')" x-text="$store.i18n.t('plugin_doc_stale_badge')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.source?.kind === 'skill'">
+                    <span class="badge badge-ghost badge-xs" x-text="$store.i18n.t('plugin_doc_skill_reference')"></span>
+                  </template>
+                  <template x-if="$store.plugins.doc?.source?.url">
+                    <a :href="$store.plugins.doc.source.url" target="_blank" rel="noopener noreferrer"
+                       class="link link-hover text-[11px] font-mono text-base-content/60 inline-flex items-center gap-1"
+                       :title="$store.plugins.doc.source.url">
+                      <span>↗</span>
+                      <span x-text="$store.i18n.t('plugin_doc_source_link')"></span>
+                    </a>
+                  </template>
+                </div>
+              </div>
+
+              <!-- 提示区 (aria-live) -->
+              <div aria-live="polite" class="space-y-2">
+                <!-- 内置扩展无中文提示 -->
+                <div x-show="$store.plugins.isBuiltinEntry($store.plugins.currentDocEntry()) && $store.plugins.docNeedsTranslation()"
+                     class="alert alert-info text-xs py-2 px-3 rounded-lg flex items-center gap-2">
+                  <span class="text-base">ℹ️</span>
+                  <span x-text="$store.i18n.t('plugin_doc_builtin_notice')"></span>
+                </div>
+
+                <!-- 自定义扩展无中文：翻译按钮与调用提示 -->
+                <div x-show="!$store.plugins.isBuiltinEntry($store.plugins.currentDocEntry()) && $store.plugins.docNeedsTranslation()"
+                     class="alert bg-base-100 border border-base-300 text-xs py-2.5 px-3 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="font-bold mb-0.5" x-text="$store.i18n.t('plugin_doc_missing')"></div>
+                    <div class="text-base-content/70" x-text="$store.i18n.t('plugin_doc_translate_hint')"></div>
+                  </div>
+                  <button type="button" class="btn btn-sm btn-primary shrink-0"
+                          :disabled="$store.plugins.docTranslating || !!$store.plugins.docPollingTaskId"
+                          @click="$store.plugins.triggerTranslation($store.plugins.currentDocEntry())">
+                    <span x-show="$store.plugins.docTranslating || !!$store.plugins.docPollingTaskId" class="loading loading-spinner loading-xs"></span>
+                    <span x-text="$store.i18n.t('plugin_doc_translate_btn')"></span>
+                  </button>
+                </div>
+
+                <!-- 翻译中 -->
+                <div x-show="$store.plugins.docPollingTaskId || $store.plugins.doc?.status === 'queued' || $store.plugins.doc?.status === 'translating'"
+                     class="alert alert-info text-xs py-2 px-3 rounded-lg flex items-center gap-2">
+                  <span class="loading loading-spinner loading-xs"></span>
+                  <span x-text="$store.i18n.t('plugin_doc_translating')"></span>
+                </div>
+
+                <!-- 过期提示 -->
+                <div x-show="$store.plugins.doc?.stale"
+                     class="alert alert-warning text-xs py-2 px-3 rounded-lg flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span>⚠️</span>
+                    <span x-text="$store.i18n.t('plugin_doc_stale_hint')"></span>
+                  </div>
+                  <button type="button" class="btn btn-xs btn-outline shrink-0"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), 'en')"
+                          x-text="$store.i18n.t('plugin_doc_view_original')"></button>
+                </div>
+
+                <!-- 错误提示 -->
+                <div x-show="$store.plugins.docError"
+                     class="alert alert-error text-xs py-2 px-3 rounded-lg flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span>❌</span>
+                    <span x-text="$store.i18n.t('plugin_doc_failed') + $store.plugins.docError"></span>
+                  </div>
+                  <button type="button" class="btn btn-xs btn-outline shrink-0"
+                          @click="$store.plugins.loadDocumentation($store.plugins.currentDocEntry(), $store.plugins.docLocale)"
+                          x-text="$store.i18n.t('plugin_doc_retry')"></button>
+                </div>
+              </div>
+
+              <!-- 加载中状态 -->
+              <div x-show="$store.plugins.docLoading" class="flex flex-col items-center justify-center py-12 text-base-content/60">
+                <span class="loading loading-spinner loading-md text-primary mb-2"></span>
+                <p class="text-xs" x-text="$store.i18n.t('plugin_doc_loading')"></p>
+              </div>
+
+              <!-- 无文档状态 -->
+              <div x-show="!$store.plugins.docLoading && !$store.plugins.doc?.markdown && !$store.plugins.docNeedsTranslation()"
+                   class="flex flex-col items-center justify-center py-8 text-base-content/50 border border-dashed border-base-300 rounded-xl">
+                <div class="text-2xl mb-1">📄</div>
+                <div class="text-xs" x-text="$store.i18n.t('plugin_doc_missing')"></div>
+              </div>
+
+              <!-- 正文渲染 -->
+              <div x-show="!$store.plugins.docLoading && $store.plugins.doc?.markdown"
+                   class="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] bg-base-100 p-4 rounded-xl border border-base-300"
+                   x-html="window.renderDocMarkdown ? window.renderDocMarkdown($store.plugins.doc?.markdown, $store.plugins.doc?.source?.base_url) : window.renderMarkdown($store.plugins.doc?.markdown)">
+              </div>
+            </div>
           </div>
 
           <!-- Apps -->

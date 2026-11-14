@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -26,12 +27,15 @@ func (a *Agent) SetAgentProfile(p *types.AgentProfileSpec) {
 
 	a.sCtx.Mu.Lock()
 	defer a.sCtx.Mu.Unlock()
-	// 角色改变会话层内容（画像/指令），冻结的会话层快照随之作废（ADR-0120 决策二第 3 条）。
-	if a.sCtx.AgentProfile != p {
+	digest := agentProfileDigest(p)
+	// 角色执行语义改变会话层内容；用内容摘要比较，避免等值 Profile 新指针清除缓存。
+	if a.sCtx.AgentProfileDigest != digest {
 		a.sCtx.SessionLayerSnapshot = nil
+		a.sCtx.SessionLayerProfileDigest = ""
 		a.sCtx.NotePrefixBreakLocked("session_refresh")
 	}
 	a.sCtx.AgentProfile = p
+	a.sCtx.AgentProfileDigest = digest
 	if p != nil && p.MaxTurns > 0 && (a.sCtx.MaxStepsLimit == 0 || a.sCtx.MaxStepsLimit > p.MaxTurns) {
 		a.sCtx.MaxStepsLimit = p.MaxTurns
 		a.sCtx.InitialMaxStepsLimit = p.MaxTurns
@@ -40,6 +44,18 @@ func (a *Agent) SetAgentProfile(p *types.AgentProfileSpec) {
 	if p != nil && p.MaxTurns > 0 && (a.sCtx.LoopRunawayLimit <= 0 || a.sCtx.LoopRunawayLimit > p.MaxTurns) {
 		a.sCtx.LoopRunawayLimit = p.MaxTurns
 	}
+}
+
+func agentProfileDigest(p *types.AgentProfileSpec) string {
+	if p == nil {
+		return ""
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func (a *Agent) agentProfile() *types.AgentProfileSpec {
@@ -107,7 +123,9 @@ func (a *Agent) checkProfileTool(toolName, delegateTarget string) error {
 		reason = "subagents cannot delegate to other agents"
 	case !a.profileTools.Load().Permits(toolName, tool.Source):
 		reason = "tool is not in this agent's tool list"
-	case toolName == catalog.DelegateToolName && !a.profileTools.Load().PermitsAgent(delegateTarget):
+	case toolName == catalog.DelegateToolName && !permitsDelegationTargets(p, a.profileTools.Load(), toolName, delegateTarget):
+		reason = fmt.Sprintf("delegation target %q is not allowed for this agent", delegateTarget)
+	case toolName == "spawn_agents" && delegateTarget != "" && !permitsDelegationTargets(p, a.profileTools.Load(), toolName, delegateTarget):
 		reason = fmt.Sprintf("delegation target %q is not allowed for this agent", delegateTarget)
 	case p.ReadOnly && writesState(toolName, tool, known):
 		reason = "agent runs in read-only mode"
@@ -179,16 +197,83 @@ func writesState(name string, tool types.Tool, known bool) bool {
 // delegateTarget 委派调用的目标名（仅用于 Agent(a, b) 白名单判定）；解析失败返回空串，
 // 由 PermitsAgent 按不在名单处理。
 func delegateTarget(toolName string, args []byte) string {
-	if toolName != catalog.DelegateToolName {
-		return ""
+	if toolName == catalog.DelegateToolName {
+		var in struct {
+			Target string `json:"target_agent_role"`
+		}
+		if json.Unmarshal(args, &in) != nil {
+			return ""
+		}
+		return in.Target
 	}
-	var in struct {
-		Target string `json:"target_agent_role"`
+	if toolName == "spawn_agents" {
+		var in struct {
+			Tasks []struct {
+				Role string `json:"role"`
+			} `json:"tasks"`
+		}
+		if json.Unmarshal(args, &in) != nil || len(in.Tasks) == 0 {
+			return ""
+		}
+		roles := make([]string, 0, len(in.Tasks))
+		for _, task := range in.Tasks {
+			role := strings.TrimSpace(task.Role)
+			if role == "" {
+				role = "general-purpose"
+			}
+			roles = append(roles, role)
+		}
+		b, _ := json.Marshal(roles)
+		return string(b)
 	}
-	if json.Unmarshal(args, &in) != nil {
-		return ""
+	return ""
+}
+
+func permitsDelegationTargets(profile *types.AgentProfileSpec, restriction *catalog.ToolRestriction, toolName, raw string) bool {
+	if toolName == catalog.DelegateToolName {
+		return restriction.Permits(catalog.DelegateToolName, types.ToolBuiltin) && permitsProfileTargets(profile, restriction, []string{raw})
 	}
-	return in.Target
+	var targets []string
+	if json.Unmarshal([]byte(raw), &targets) != nil || len(targets) == 0 {
+		return false
+	}
+	return permitsProfileTargets(profile, restriction, targets)
+}
+
+func permitsProfileTargets(profile *types.AgentProfileSpec, restriction *catalog.ToolRestriction, targets []string) bool {
+	for _, raw := range targets {
+		target := normalizeProfileTarget(profile, raw)
+		if len(profile.AllowedAgentTargets) > 0 && !slices.Contains(profile.AllowedAgentTargets, target) {
+			return false
+		}
+		short := target
+		if profile != nil {
+			if namespace, _, ok := strings.Cut(profile.Name, ":"); ok {
+				short = strings.TrimPrefix(target, namespace+":")
+			}
+		}
+		if !restriction.PermitsAgentTarget(target) && !restriction.PermitsAgentTarget(raw) && !restriction.PermitsAgentTarget(short) {
+			return false
+		}
+	}
+	return len(targets) > 0
+}
+
+func normalizeProfileTarget(profile *types.AgentProfileSpec, target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" || profile == nil || len(profile.AllowedAgentTargets) == 0 {
+		return target
+	}
+	if pluginName, _, ok := strings.Cut(profile.Name, ":"); ok {
+		if slices.Contains(profile.AllowedAgentTargets, target) {
+			return target
+		}
+		scoped := pluginName + ":" + target
+		if slices.Contains(profile.AllowedAgentTargets, scoped) {
+			return scoped
+		}
+	}
+	return target
 }
 
 // inheritSessionLayer 回合间沿用上一回合 Agent 的会话层冻结快照（ADR-0120 决策二第 3 条）。
@@ -199,10 +284,12 @@ func (a *Agent) inheritSessionLayer(prev *Agent) {
 		return
 	}
 	prev.sCtx.Mu.RLock()
-	snap, prefs := prev.sCtx.SessionLayerSnapshot, prev.sCtx.SessionPreferencesBlock
+	snap, prefs, profileDigest := prev.sCtx.SessionLayerSnapshot, prev.sCtx.SessionPreferencesBlock, prev.sCtx.SessionLayerProfileDigest
 	prev.sCtx.Mu.RUnlock()
 	a.sCtx.Mu.Lock()
 	a.sCtx.SessionLayerSnapshot = snap
 	a.sCtx.SessionPreferencesBlock = prefs
+	a.sCtx.SessionLayerProfileDigest = profileDigest
+	a.sCtx.AgentProfileDigest = profileDigest
 	a.sCtx.Mu.Unlock()
 }

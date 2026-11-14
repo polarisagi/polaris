@@ -131,6 +131,16 @@ var (
 	InstrAgentModelRouteTotal     metric.Int64Counter
 	InstrLLMModelRefFallbackTotal metric.Int64Counter
 
+	// Plugin channel event and turn counters.
+	InstrChannelEventsReceivedTotal metric.Int64Counter
+	InstrChannelEventsRejectedTotal metric.Int64Counter
+	InstrChannelTurnsTotal          metric.Int64Counter
+
+	// 扩展说明文档与按需翻译指标（ADR-0123 2026-11-14 复核，HE-1 有界基数）
+	InstrExtensionDocRequestsTotal              metric.Int64Counter
+	InstrExtensionDocTranslationsTotal          metric.Int64Counter
+	InstrExtensionDocTranslationDurationSeconds metric.Float64Histogram
+
 	instrOnce sync.Once
 )
 

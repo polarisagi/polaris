@@ -68,7 +68,7 @@ Polaris distills lessons from both successes and failures. When it encounters a 
 - 🎙️ **Natural Voice Interaction**: supports offline voice input (speech-to-text) and natural voice read-aloud (text-to-speech). Voice models are downloaded on demand and unloaded when idle.
 - 💬 **Connect Your Favorite Messaging Apps (18+ Channels)**: link Polaris with Telegram, Discord, Slack, Feishu/Lark, DingTalk, WeCom, Microsoft Teams, Matrix, Mattermost, Signal, Email, Webhooks, Home Assistant, and more — message your home or office Polaris from your phone anywhere.
 - ⏰ **Scheduled Tasks & Automation**: set up recurring jobs in plain language (daily briefings, file organization, periodic checks) with optional human-in-the-loop approval for important actions.
-- 🧩 **Official Plugin Marketplace & Easy Extensions**: install skills and MCP tools from the [Official Open-Source Plugin Marketplace](https://github.com/polarisagi/polaris-plugins-official), or drop custom scripts into `~/.polaris/hooks/`.
+- 🧩 **Official Plugin Marketplace & Easy Extensions**: install skills and MCP tools from the [Official Open-Source Plugin Marketplace](https://github.com/polarisagi/polaris-official), or drop custom scripts into `~/.polaris/hooks/`.
 - 🤝 **Multi-Computer Collaboration**: pair multiple computers running Polaris over LAN or Tailscale so they can delegate tasks to one another, or interoperate with other agents via the standard A2A protocol.
 - 🔌 **Works With Your Choice of AI Models (Cloud or Local)**: recommends cost-effective DeepSeek out of the box, supports OpenAI, Anthropic (Claude), Google (Gemini), or any compatible provider, and runs 100% offline local models via Ollama. Also provides an OpenAI-compatible API endpoint.
 

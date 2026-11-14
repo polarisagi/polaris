@@ -36,7 +36,7 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	}
 	req.SessionID = sessionID
 
-	isFirstTurn, hookContext, blockedResult, err := o.prepareHeadlessTurn(ctx, sink, req, sessionID, isNewSession)
+	isFirstTurn, hookContext, blockedResult, profile, err := o.prepareHeadlessTurn(ctx, sink, req, sessionID, isNewSession)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +61,9 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	headlessOpts := []types.HeadlessOption{
 		types.WithSessionID(sessionID),
 		types.WithLoopCompletion(completionMode),
+	}
+	if profile != nil {
+		headlessOpts = append(headlessOpts, types.WithAgentProfile(profile))
 	}
 
 	res, err := o.agentPool.AcquireHeadless(ctx, intent, headlessOpts...)
@@ -100,19 +103,23 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 
 // prepareHeadlessTurn 落地会话确保 + SessionStart/UserPromptSubmit 分发 + 用户消息持久化
 // （从 runHeadless 拆出，gocyclo 治理）。blockedResult 非 nil 时调用方应直接 return（hook 拦截）。
-func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req Request, sessionID string, isNewSession bool) (isFirstTurn bool, hookContext string, blockedResult *Result, err error) {
+func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req Request, sessionID string, isNewSession bool) (isFirstTurn bool, hookContext string, blockedResult *Result, profile *types.AgentProfileSpec, err error) {
 	if err := o.ensureHeadlessSession(ctx, sessionID, req.ProjectID); err != nil {
-		return false, "", nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): ensure session", err)
+		return false, "", nil, nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): ensure session", err)
+	}
+	profile, err = o.resolveBoundProfile(ctx, sessionID)
+	if err != nil {
+		return false, "", nil, nil, apperr.Wrap(apperr.CodeOf(err), "session.RunTurn(headless): bound profile invalid", err)
 	}
 	hookContext, reason := o.firePromptHooks(ctx, sessionID, req.Input, isNewSession)
 	if reason != "" {
 		o.emitError(ctx, sink, "hook_blocked", apperr.CodeForbidden, sessionID, nil)
-		return false, "", &Result{SessionID: sessionID, Aborted: true}, nil
+		return false, "", &Result{SessionID: sessionID, Aborted: true}, profile, nil
 	}
 
 	history, err := o.persistence.ListMessages(ctx, sessionID)
 	if err != nil {
-		return false, "", nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): list messages", err)
+		return false, "", nil, nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): list messages", err)
 	}
 	isFirstTurn = len(history) == 0
 
@@ -124,7 +131,7 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 		slog.Warn("session: headless saveMessage user failed", "session", sessionID, "error_meta", safeErrorSummary(err))
 	}
 
-	return isFirstTurn, hookContext, nil, nil
+	return isFirstTurn, hookContext, nil, profile, nil
 }
 
 // finishHeadlessTurn 助手消息持久化 + 会话标题/TouchSession（从 runHeadless

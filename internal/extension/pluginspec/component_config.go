@@ -121,15 +121,18 @@ type Dependency struct {
 func loadUserConfigAndChannels(docs []manifestDoc, ds *diagnostics) ([]UserConfigOption, []Channel) {
 	var opts []UserConfigOption
 	var chans []Channel
+	seenServers := make(map[string]bool)
 	for _, doc := range docs {
-		if doc.format != FormatClaude {
-			continue
-		}
 		if len(doc.wire.UserConfig) > 0 {
-			opts = append(opts, parseUserConfigOptions(doc.wire.UserConfig, doc.path, ds)...)
+			opts = mergeUserConfig(opts, parseUserConfigOptions(doc.wire.UserConfig, doc.path, ds))
 		}
 		if len(doc.wire.Channels) > 0 {
-			chans = append(chans, parseChannels(doc.wire.Channels, doc.path, ds)...)
+			for _, ch := range parseChannels(doc.wire.Channels, doc.path, ds) {
+				if !seenServers[ch.Server] {
+					seenServers[ch.Server] = true
+					chans = append(chans, ch)
+				}
+			}
 		}
 	}
 	return opts, chans
@@ -268,7 +271,7 @@ func mergeUserConfig(base, extra []UserConfigOption) []UserConfigOption {
 func loadDependencies(docs []manifestDoc, ds *diagnostics) []Dependency {
 	var out []Dependency
 	for _, doc := range docs {
-		if doc.format != FormatClaude || len(doc.wire.Dependencies) == 0 {
+		if (doc.format != FormatClaude && doc.format != FormatPolaris) || len(doc.wire.Dependencies) == 0 {
 			continue
 		}
 		var items []json.RawMessage

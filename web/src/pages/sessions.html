@@ -44,6 +44,7 @@
                   <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
                 </span>
                 <h3 class="font-bold text-sm truncate" x-text="sess.title || sess.id"></h3>
+                <span x-show="sess.expert_id" class="badge badge-primary badge-outline badge-sm shrink-0" x-text="$store.experts.text(sess.expert_display_name) || sess.expert_id"></span>
                 <span x-show="sess.project_id && sess.project_id !== 'default'" class="badge badge-ghost badge-sm shrink-0" x-text="$store.projects.name(sess.project_id)"></span>
               </div>
               <p class="text-xs text-base-content/70" x-text="`${$store.i18n.t('sessions_msg_count').replace('{0}', sess.message_count || 0)}  ·  ${new Date(sess.updated_at || sess.created_at).toLocaleString('zh-CN')}`"></p>

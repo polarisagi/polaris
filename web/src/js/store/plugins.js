@@ -26,8 +26,21 @@ Alpine.store('plugins', {
   facetKeys: ['topic', 'department', 'industry', 'life'],
   facets: { topic: '', department: '', industry: '', life: '' },
   facetExpanded: { topic: false, department: false, industry: false, life: false },
-  status: '',                     // '' | 'polaris' | 'verified' | 'community' | 'installed' | 'zh'
+  status: '',                     // '' | 'polaris' | 'verified' | 'community' | 'installed'
   sortMode: 'recommended',        // 'recommended'（后端顺序：已安装→精选→官方→名称）| 'name'
+
+  // ── 文档层状态（CONTRACT & PROMPT-B）────────────────────────────────────
+  entryTab: 'overview',           // 'overview' | 'docs'
+  doc: null,                      // 当前文档响应对象
+  docLoading: false,              // 文档 GET 请求中
+  docError: null,                 // 文档加载或翻译错误信息
+  docLocale: 'zh-CN',             // 请求的目标语言 ('zh-CN' | 'en')
+  docTranslating: false,          // 翻译 POST 请求中（防双击）
+  docPollingTaskId: null,         // 轮询中的任务 ID
+  _docAbortController: null,      // GET 请求 AbortController
+  _docPollTimer: null,            // 轮询定时器
+  _activeDocKey: null,            // 标识当前请求的目标：`${catalogId}::${locale}`
+  _docGen: 0,                     // 详情与请求世代计数器（防串页与旧任务覆盖）
 
   isZh() {
     return Alpine.store('i18n').lang === 'zh'
@@ -109,9 +122,23 @@ Alpine.store('plugins', {
       case 'verified': return (entry.trust_tier || 0) >= 3
       case 'community': return (entry.trust_tier || 0) < 3
       case 'installed': return !!entry.installed
-      case 'zh': return this.hasZh(entry)
       default: return true
     }
+  },
+
+  isBuiltinEntry(entry) {
+    if (!entry) return false
+    if (typeof entry.is_builtin === 'boolean') return entry.is_builtin
+    if (typeof entry.is_builtin === 'number') return entry.is_builtin === 1
+    if (typeof entry.builtin === 'boolean') return entry.builtin
+    if (entry.marketplace_id) {
+      const mp = this.marketplaces.find(m => m.id === entry.marketplace_id)
+      if (mp) return !!(mp.is_builtin === 1 || mp.is_builtin === true)
+    }
+    const matchedMp = this.marketplaces.find(m => entry.id && entry.id.startsWith(m.id + '/'))
+    if (matchedMp) return !!(matchedMp.is_builtin === 1 || matchedMp.is_builtin === true)
+    if (entry.trust_tier === 4) return true
+    return false
   },
 
   // crossFilteredFor 在 baseFiltered 基础上，排除 targetKey 维度，叠加其它维度的已选条件以实现交叉联动。
@@ -185,6 +212,7 @@ Alpine.store('plugins', {
   },
 
   setStatus(s) {
+    if (s === 'zh') s = ''
     this.status = s
     this.resetVisible()
   },
@@ -922,19 +950,31 @@ Alpine.store('plugins', {
   onDetail(entry) {
     const row = entry.type === 'plugin' ? this.installedPluginFor(entry) : null
     if (row) { this.openDetail(row); return }
+    this.showDetail = false
     this.entryDetail = entry
+    this.entryTab = 'overview'
+    this.resetDocState()
     this.showEntryDetail = true
   },
 
-  // ── 插件详情弹窗：config / apps / dependencies / agents / hooks / channels ──
+  switchEntryTab(tab) {
+    this.entryTab = tab
+    if (tab === 'docs') {
+      this.loadDocumentation(this.entryDetail)
+    }
+  },
+
+  // ── 插件详情弹窗：setup / config / docs / apps / dependencies / agents / hooks / channels ──
 
   // openDetail 声明了 setupTool 的插件默认打开「设置」页（ADR-0125），其余打开「配置」页。
   openDetail(pluginRow, tab) {
+    this.showEntryDetail = false
     this.detail = pluginRow
     this.detailTab = tab || (pluginRow.setup?.tool ? 'setup' : 'config')
     this.detailData = { setup: null, config: null, apps: null, deps: null, agents: null, hooks: null, channels: null }
     this.detailConfigValues = {}
     this.detailConfigClear = {}
+    this.resetDocState()
     this.showDetail = true
     this.switchDetailTab(this.detailTab)
   },
@@ -944,6 +984,7 @@ Alpine.store('plugins', {
     clearInterval(this._setupPoll)
     this._setupPoll = null
     this._teardownSetupView()
+    this.resetDocState()
     this.showDetail = false
     this.detail = null
   },
@@ -957,7 +998,324 @@ Alpine.store('plugins', {
         if (this.showDetail && this.detailTab === 'setup' && !document.hidden) this._loadDetailSetup()
       }, 5000)
     }
-    if (!this.detailData[tab]) this.loadDetailTab(tab)
+    if (tab === 'docs') {
+      this.loadDocumentation(this.currentDocEntry())
+    } else if (!this.detailData[tab]) {
+      this.loadDetailTab(tab)
+    }
+  },
+
+  // targetCatalogId 统一解析扩展文档目标标识（兼容 catalog ID、已安装 pluginRow 的 catalog_id、来源直装 ext_xxx）
+  targetCatalogId(entry) {
+    if (!entry) return ''
+    if (typeof entry === 'string') return entry
+    if (entry.catalog_id && !entry.catalog_id.startsWith('pl_')) {
+      return entry.catalog_id
+    }
+    if (entry.id && !entry.id.startsWith('pl_')) {
+      return entry.id
+    }
+    return entry.catalog_id || entry.instance_id || entry.id || ''
+  },
+
+  currentDocEntry() {
+    if (this.showDetail && this.detail) {
+      const catId = this.targetCatalogId(this.detail)
+      const found = this.catalog.find(e => e.id === catId || (catId && e.catalog_id === catId))
+      if (found) return found
+      return this.detail
+    }
+    if (this.showEntryDetail && this.entryDetail) {
+      return this.entryDetail
+    }
+    return null
+  },
+
+  hasDocSource() {
+    if (!this.doc) return false
+    if (this.doc.fallback_reason === 'no_source_document') return false
+    return !!(this.doc.source?.sha256 || this.doc.markdown || this.doc.translation?.source_sha256)
+  },
+
+  // docNeedsTranslation 判定当前请求中文时，是否具备有效英文源但缺少中文翻译
+  docNeedsTranslation() {
+    if (this.docLocale !== 'zh-CN') return false
+    if (!this.hasDocSource()) return false
+    if (this.doc.stale || this.doc.status === 'stale') return true
+    if (this.doc.resolved_locale === 'en') return true
+    if (this.doc.fallback_reason === 'untranslated') return true
+    if (!this.doc.translation && this.doc.resolved_locale !== 'zh-CN') return true
+    if (this.doc.status === 'missing') return true
+    return false
+  },
+
+  resetDocState() {
+    this._docGen++
+    if (this._docAbortController) {
+      try { this._docAbortController.abort() } catch {}
+      this._docAbortController = null
+    }
+    if (this._docPollTimer) {
+      clearTimeout(this._docPollTimer)
+      clearInterval(this._docPollTimer)
+      this._docPollTimer = null
+    }
+    this.doc = null
+    this.docLoading = false
+    this.docError = null
+    this.docTranslating = false
+    this.docPollingTaskId = null
+    this._activeDocKey = null
+  },
+
+  async loadDocumentation(entry, forceLocale) {
+    if (!entry) return
+    const catalogId = this.targetCatalogId(entry)
+    if (!catalogId) return
+
+    let locale = forceLocale
+    if (!locale) {
+      locale = this.isZh() ? 'zh-CN' : 'en'
+    }
+    this.docLocale = locale
+
+    this.resetDocState()
+    const gen = this._docGen
+    const docKey = `${catalogId}::${locale}`
+    this._activeDocKey = docKey
+    this.docLoading = true
+    this.docError = null
+
+    const ac = new AbortController()
+    this._docAbortController = ac
+
+    try {
+      const params = new URLSearchParams()
+      params.set('catalog_id', catalogId)
+      params.set('locale', locale)
+      const res = await fetch(`/v1/plugins/documentation?${params.toString()}`, {
+        headers: authHeaders(),
+        signal: ac.signal
+      })
+
+      if (!res.ok) {
+        const msg = await readHTTPErrorMessage(res)
+        throw new Error(msg || `HTTP ${res.status}`)
+      }
+
+      const data = await res.json()
+
+      // 世代、目标标识与弹窗有效性校验（防竞态与脏写）
+      if (this._docGen !== gen) return
+      if (this._activeDocKey !== docKey) return
+      if (!this.showDetail && !this.showEntryDetail) return
+      if (this.targetCatalogId(this.currentDocEntry()) !== catalogId) return
+
+      this.doc = data
+      this.docLoading = false
+
+      if ((data.status === 'queued' || data.status === 'translating') && data.task_id) {
+        this.startPollingTask(data.task_id, entry, gen)
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      if (this._docGen !== gen || this._activeDocKey !== docKey) return
+      this.docLoading = false
+      this.docError = err.message
+    }
+  },
+
+  async triggerTranslation(entry) {
+    if (!entry || this.docTranslating) return
+    const catalogId = this.targetCatalogId(entry)
+    if (!catalogId) return
+
+    const gen = this._docGen
+    const sourceSha = this.doc?.source?.sha256 || ''
+    this.docTranslating = true
+    this.docError = null
+
+    try {
+      const body = {
+        catalog_id: catalogId,
+        locale: 'zh-CN',
+        source_sha256: sourceSha
+      }
+      const res = await fetch('/v1/plugins/documentation/translations', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(body)
+      })
+
+      // 世代与活跃条目校验：切换条目或关闭后立即丢弃响应，防止旧任务串页
+      if (this._docGen !== gen || (!this.showDetail && !this.showEntryDetail) ||
+          this.targetCatalogId(this.currentDocEntry()) !== catalogId) {
+        return
+      }
+
+      if (res.status === 202) {
+        const task = await res.json()
+        if (this._docGen !== gen || (!this.showDetail && !this.showEntryDetail) ||
+            this.targetCatalogId(this.currentDocEntry()) !== catalogId) {
+          return
+        }
+
+        this.docTranslating = false
+        if (task.task_id) {
+          this.startPollingTask(task.task_id, entry, gen, task.retry_after)
+        } else {
+          await this.loadDocumentation(entry, 'zh-CN')
+        }
+        return
+      }
+
+      if (res.status === 403) {
+        const err = await res.json().catch(() => ({}))
+        if (this._docGen !== gen) return
+        if (err.code === 'builtin_translation_managed') {
+          this.docError = Alpine.store('i18n').t('plugin_doc_builtin_managed')
+        } else {
+          this.docError = err.error || '无权执行翻译'
+        }
+        this.docTranslating = false
+        return
+      }
+
+      if (res.status === 409) {
+        if (this._docGen !== gen) return
+        this.docError = '源正文已更新，正在重新加载...'
+        this.docTranslating = false
+        await this.loadDocumentation(entry, 'zh-CN')
+        return
+      }
+
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('Retry-After') || 5
+        if (this._docGen !== gen) return
+        this.docError = `请求过于频繁，请等待 ${retryAfter} 秒后重试`
+        this.docTranslating = false
+        return
+      }
+
+      const msg = await readHTTPErrorMessage(res)
+      if (this._docGen !== gen) return
+      throw new Error(msg || `HTTP ${res.status}`)
+    } catch (err) {
+      if (this._docGen === gen) {
+        this.docTranslating = false
+        this.docError = err.message
+      }
+    }
+  },
+
+  startPollingTask(taskId, entry, gen, initialRetryAfter = 0) {
+    if (this._docPollTimer) {
+      clearTimeout(this._docPollTimer)
+      clearInterval(this._docPollTimer)
+      this._docPollTimer = null
+    }
+
+    const catalogId = this.targetCatalogId(entry)
+    this.docPollingTaskId = taskId
+    let attempts = 0
+    const maxAttempts = 60
+    const initialDelay = Math.max(2000, (initialRetryAfter || 0) * 1000)
+
+    const poll = async () => {
+      attempts++
+      // 边界守卫：世代变动、弹窗关闭、活跃条目失配或任务ID失效时即刻退出
+      if (this._docGen !== gen || (!this.showDetail && !this.showEntryDetail) ||
+          this.targetCatalogId(this.currentDocEntry()) !== catalogId ||
+          this.docPollingTaskId !== taskId) {
+        if (this._docPollTimer) {
+          clearTimeout(this._docPollTimer)
+          this._docPollTimer = null
+        }
+        return
+      }
+
+      try {
+        const res = await fetch(`/v1/plugins/documentation/translations?task_id=${encodeURIComponent(taskId)}`, {
+          headers: authHeaders()
+        })
+
+        if (this._docGen !== gen || (!this.showDetail && !this.showEntryDetail) ||
+            this.targetCatalogId(this.currentDocEntry()) !== catalogId ||
+            this.docPollingTaskId !== taskId) {
+          return
+        }
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`)
+        }
+
+        const data = await res.json()
+
+        if (this._docGen !== gen || (!this.showDetail && !this.showEntryDetail) ||
+            this.targetCatalogId(this.currentDocEntry()) !== catalogId ||
+            this.docPollingTaskId !== taskId) {
+          return
+        }
+
+        if (data.status === 'ready') {
+          this.docPollingTaskId = null
+          if (this._docPollTimer) {
+            clearTimeout(this._docPollTimer)
+            this._docPollTimer = null
+          }
+          await this.loadDocumentation(entry, 'zh-CN')
+          return
+        }
+
+        if (data.status === 'failed') {
+          this.docPollingTaskId = null
+          if (this._docPollTimer) {
+            clearTimeout(this._docPollTimer)
+            this._docPollTimer = null
+          }
+          this.docError = data.error_code || '翻译任务失败'
+          return
+        }
+
+        if (data.status === 'budget_exceeded') {
+          this.docPollingTaskId = null
+          if (this._docPollTimer) {
+            clearTimeout(this._docPollTimer)
+            this._docPollTimer = null
+          }
+          this.docError = Alpine.store('i18n').t('plugin_doc_budget_exceeded')
+          return
+        }
+
+        if (attempts >= maxAttempts) {
+          this.docPollingTaskId = null
+          if (this._docPollTimer) {
+            clearTimeout(this._docPollTimer)
+            this._docPollTimer = null
+          }
+          this.docError = '翻译超时，请稍后刷新重试'
+          return
+        }
+
+        // 依据服务端每轮返回的 retry_after 动态设置下次轮询延时，避免 setInterval 请求重叠
+        const nextDelay = Math.max(2000, (data.retry_after || 0) * 1000)
+        this._docPollTimer = setTimeout(poll, nextDelay)
+      } catch {
+        if (this._docGen !== gen) return
+        if (attempts >= maxAttempts) {
+          this.docPollingTaskId = null
+          if (this._docPollTimer) {
+            clearTimeout(this._docPollTimer)
+            this._docPollTimer = null
+          }
+          this.docError = '轮询任务状态失败，请刷新重试'
+        } else {
+          this._docPollTimer = setTimeout(poll, 3000)
+        }
+      }
+    }
+
+    this._docPollTimer = setTimeout(poll, initialDelay)
   },
 
   async loadDetailTab(tab) {

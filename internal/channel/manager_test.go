@@ -62,42 +62,18 @@ func TestManager_Lifecycle(t *testing.T) {
 	}
 }
 
-func TestManager_Start_InvalidConfigs(t *testing.T) {
+func TestManager_Start_WebhookAndUnknown(t *testing.T) {
 	onMsg := func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}
 	mgr := NewManager(http.DefaultClient, onMsg)
 
-	// Test Start with invalid/empty configs, should not panic
-	mgr.Start("id1", "telegram", map[string]any{})
-	mgr.Start("id2", "discord", map[string]any{})
-	mgr.Start("id3", "slack", map[string]any{})
-	mgr.Start("id4", "feishu", map[string]any{})
-	mgr.Start("id5", "qqbot", map[string]any{})
-	mgr.Start("id6", "dingtalk", map[string]any{})
-	mgr.Start("id7", "wecom", map[string]any{})
-	mgr.Start("id8", "mattermost", map[string]any{})
-	mgr.Start("id9", "email", map[string]any{})
-	mgr.Start("id10", "matrix", map[string]any{})
-	mgr.Start("id11", "signal", map[string]any{})
-	mgr.Start("id12", "homeassistant", map[string]any{})
-	mgr.Start("id13", "unknown_type", map[string]any{})
+	// Webhook is webhook only, StartPoller returns false, no poller added
+	mgr.Start("id1", "webhook", map[string]any{})
+	mgr.Start("id2", "unknown_type", map[string]any{})
+	mgr.Start("id3", "telegram", map[string]any{"bot_token": "tk"})
 
 	if len(mgr.pollers) != 0 {
-		t.Errorf("expected 0 pollers started with invalid configs, got %d", len(mgr.pollers))
+		t.Errorf("expected 0 pollers, got %d", len(mgr.pollers))
 	}
-
-	// Test Start with valid configs to hit startXXXPoller methods
-	mgr.Start("id1", "telegram", map[string]any{"bot_token": "tk"})
-	mgr.Start("id2", "discord", map[string]any{"bot_token": "tk"})
-	mgr.Start("id3", "slack", map[string]any{"bot_token": "tk", "app_token": "tk"})
-	mgr.Start("id4", "feishu", map[string]any{"app_id": "tk", "app_secret": "tk"})
-	mgr.Start("id5", "qqbot", map[string]any{"app_id": "tk", "client_secret": "tk"})
-	mgr.Start("id6", "dingtalk", map[string]any{"client_id": "tk", "client_secret": "tk"})
-	mgr.Start("id7", "wecom", map[string]any{"bot_id": "tk", "secret": "tk"})
-	mgr.Start("id8", "mattermost", map[string]any{"url": "tk", "token": "tk"})
-	mgr.Start("id9", "email", map[string]any{"imap_host": "tk", "address": "tk", "password": "tk"})
-	mgr.Start("id10", "matrix", map[string]any{"homeserver": "tk", "access_token": "tk"})
-	mgr.Start("id11", "signal", map[string]any{"api_url": "tk", "account": "tk"})
-	mgr.Start("id12", "homeassistant", map[string]any{"url": "tk", "token": "tk"})
 }
 
 func TestManager_RestoreChannelsFromDB_NilDB(t *testing.T) {

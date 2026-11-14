@@ -9,47 +9,38 @@ import (
 
 // ── ExtractMessage dispatcher ─────────────────────────────────────────────────
 
-func TestExtractMessage_Telegram(t *testing.T) {
-	body := `{"message":{"text":"tg","chat":{"id":1},"from":{"id":2}}}`
-	msg := ExtractMessage("telegram", []byte(body), nil)
-	if msg.Text != "tg" {
-		t.Errorf("expected 'tg', got %q", msg.Text)
+func TestExtractMessage_Webhook(t *testing.T) {
+	body := `{"content":"webhook message"}`
+	msg := ExtractMessage("webhook", []byte(body), nil)
+	if msg.Text != "webhook message" {
+		t.Errorf("expected 'webhook message', got %q", msg.Text)
 	}
-}
-
-func TestExtractMessage_Discord(t *testing.T) {
-	body := `{"content":"dc","channel_id":"c1","author":{"id":"u1"}}`
-	msg := ExtractMessage("discord", []byte(body), nil)
-	if msg.Text != "dc" {
-		t.Errorf("expected 'dc', got %q", msg.Text)
+	if msg.ChatID != "webhook" {
+		t.Errorf("expected 'webhook', got %q", msg.ChatID)
 	}
 }
 
 func TestRegistry_RegisteredAdapters(t *testing.T) {
-	// A simple sanity check that some known adapters are registered.
-	knownAdapters := []string{"telegram", "discord", "webhook"}
-	for _, name := range knownAdapters {
-		if _, ok := cadapter.GetAdapter(name); !ok {
-			t.Errorf("expected adapter %q to be registered, but it was not", name)
+	if _, ok := cadapter.GetAdapter("webhook"); !ok {
+		t.Error("expected adapter 'webhook' to be registered, but it was not")
+	}
+	// 16 个第三方 IM 渠道已迁移为插件，内置注册表不再包含它们
+	thirdPartyPlatforms := []string{"telegram", "discord", "slack", "feishu", "wecom", "dingtalk", "qqbot"}
+	for _, name := range thirdPartyPlatforms {
+		if _, ok := cadapter.GetAdapter(name); ok {
+			t.Errorf("expected adapter %q to NOT be registered, but it was", name)
 		}
 	}
 }
 
-// TestRegistry_ReturnsSingletonInstance 防止 GetAdapter 退化为每次调用新建实例的
-// 工厂函数（曾发生过的回归：WecomAdapter.wecomSends / MatrixAdapter.txnCounter 是
-// 跨 StartPoller→Send 调用必须持久的实例状态，工厂模式会导致 Send 读到的永远是
-// 空状态，wecom 回复静默丢失）。GetAdapter 必须对同一 channelType 始终返回同一个
-// 已注册单例。
 func TestRegistry_ReturnsSingletonInstance(t *testing.T) {
-	for _, name := range []string{"wecom", "matrix", "telegram"} {
-		a1, ok1 := cadapter.GetAdapter(name)
-		a2, ok2 := cadapter.GetAdapter(name)
-		if !ok1 || !ok2 {
-			t.Fatalf("adapter %q should be registered", name)
-		}
-		if a1 != a2 {
-			t.Errorf("GetAdapter(%q) returned different instances across calls — adapter state (e.g. wecomSends/txnCounter) will not persist between StartPoller and Send", name)
-		}
+	a1, ok1 := cadapter.GetAdapter("webhook")
+	a2, ok2 := cadapter.GetAdapter("webhook")
+	if !ok1 || !ok2 {
+		t.Fatal("adapter 'webhook' should be registered")
+	}
+	if a1 != a2 {
+		t.Errorf("GetAdapter('webhook') returned different instances across calls")
 	}
 }
 

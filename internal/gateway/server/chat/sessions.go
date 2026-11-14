@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -17,78 +18,101 @@ import (
 
 // GET /v1/sessions
 func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
-	// 先查 channels
-	channelTypes := map[string]string{}
-	if chRows, err := h.ChannelRepo.ListChannels(r.Context()); err == nil {
-		for _, ch := range chRows {
-			channelTypes[ch.ID] = ch.Type
-		}
-	}
-
-	// ?limit= 1~200 限制返回条数（缺省 200，保持既有行为）；非法值按缺省处理。
-	limit := 200
-	if n, perr := strconv.Atoi(r.URL.Query().Get("limit")); perr == nil && n >= 1 && n <= 200 {
-		limit = n
-	}
-	// ?project_id= 按项目过滤（ADR-0097）；缺省 = 全部项目，保持既有客户端行为。
-	var (
-		sessions []apptypes.ChatSessionRow
-		err      error
-	)
-	if pid := strings.TrimSpace(r.URL.Query().Get("project_id")); pid != "" {
-		sessions, err = h.PersistenceService.ChatRepo.ListProjectSessions(r.Context(), pid, limit)
-	} else {
-		sessions, err = h.PersistenceService.ChatRepo.ListSessions(r.Context(), limit)
-	}
+	limit := sessionListLimit(r.URL.Query().Get("limit"))
+	sessions, err := h.listSessionRows(r.Context(), strings.TrimSpace(r.URL.Query().Get("project_id")), limit)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
-	type sessionRow struct {
-		ID             string  `json:"id"`
-		Title          string  `json:"title"`
-		ProjectID      string  `json:"project_id"`
-		ThrashingIndex float64 `json:"thrashing_index"`
-		CreatedAt      string  `json:"created_at"`
-		UpdatedAt      string  `json:"updated_at"`
-		MessageCount   int     `json:"message_count"`
-		Source         string  `json:"source"`  // "web" | "telegram" | "discord" | ...
-		Running        bool    `json:"running"` // 有后台运行中的回合（ADR-0116）
-	}
 	running := h.turns().RunningSet()
-	list := make([]sessionRow, 0, len(sessions))
+	channelTypes := h.sessionChannelTypes(r.Context())
+	list := make([]sessionListDTO, 0, len(sessions))
 	for _, row := range sessions {
-		sr := sessionRow{
-			ID:             row.ID,
-			Title:          row.Title,
-			ProjectID:      row.ProjectID,
-			ThrashingIndex: row.ThrashingIndex,
-			CreatedAt:      row.CreatedAt,
-			UpdatedAt:      row.UpdatedAt,
-			MessageCount:   row.MessageCount,
-			Source:         "web",
-			Running:        running[row.ID],
-		}
-		if strings.HasPrefix(sr.ID, "ch_") {
-			// session key 格式: ch_<channelID>_<chatID>，channelID 本身以 ch_ 开头
-			rest := sr.ID[3:] // 去掉前缀 "ch_"
-			for chID, chType := range channelTypes {
-				if strings.HasPrefix(rest, chID+"_") {
-					sr.Source = chType
-					break
-				}
-			}
-			if sr.Source == "web" {
-				sr.Source = "channel" // 未知平台兜底
-			}
-		}
-		list = append(list, sr)
+		list = append(list, sessionListItem(row, running[row.ID], channelTypes))
 	}
 	if list == nil {
-		list = []sessionRow{}
+		list = []sessionListDTO{}
 	}
 	httputil.WriteJSON(w, map[string]any{"sessions": list})
+}
+
+type sessionListDTO struct {
+	ID                 string          `json:"id"`
+	Title              string          `json:"title"`
+	ProjectID          string          `json:"project_id"`
+	ThrashingIndex     float64         `json:"thrashing_index"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
+	MessageCount       int             `json:"message_count"`
+	Source             string          `json:"source"`
+	Running            bool            `json:"running"`
+	AgentProfile       string          `json:"agent_profile,omitempty"`
+	AgentProfileSource string          `json:"agent_profile_source,omitempty"`
+	AgentProfileDigest string          `json:"agent_profile_digest,omitempty"`
+	ExpertPluginID     string          `json:"expert_plugin_id,omitempty"`
+	ExpertID           string          `json:"expert_id,omitempty"`
+	ExpertType         string          `json:"expert_type,omitempty"`
+	ExpertDisplayName  json.RawMessage `json:"expert_display_name,omitempty"`
+}
+
+func sessionListLimit(raw string) int {
+	if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 200 {
+		return n
+	}
+	return 200
+}
+
+func (h *ChatHandler) listSessionRows(ctx context.Context, projectID string, limit int) ([]apptypes.ChatSessionRow, error) {
+	if projectID != "" {
+		rows, err := h.PersistenceService.ChatRepo.ListProjectSessions(ctx, projectID, limit)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeOf(err), "chat list project sessions", err)
+		}
+		return rows, nil
+	}
+	rows, err := h.PersistenceService.ChatRepo.ListSessions(ctx, limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeOf(err), "chat list sessions", err)
+	}
+	return rows, nil
+}
+
+func (h *ChatHandler) sessionChannelTypes(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if h.ChannelRepo == nil {
+		return out
+	}
+	rows, err := h.ChannelRepo.ListChannels(ctx)
+	if err != nil {
+		return out
+	}
+	for _, row := range rows {
+		out[row.ID] = row.Type
+	}
+	return out
+}
+
+func sessionListItem(row apptypes.ChatSessionRow, running bool, channelTypes map[string]string) sessionListDTO {
+	dto := sessionListDTO{ID: row.ID, Title: row.Title, ProjectID: row.ProjectID, ThrashingIndex: row.ThrashingIndex,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, MessageCount: row.MessageCount, Source: "web", Running: running,
+		AgentProfile: row.AgentProfile, AgentProfileSource: row.AgentProfileSource, AgentProfileDigest: row.AgentProfileDigest,
+		ExpertPluginID: row.ExpertPluginID, ExpertID: row.ExpertID, ExpertType: row.ExpertType}
+	if json.Valid([]byte(row.ExpertDisplayName)) && row.ExpertDisplayName != "{}" {
+		dto.ExpertDisplayName = json.RawMessage(row.ExpertDisplayName)
+	}
+	if channelID, ok := strings.CutPrefix(row.ID, "ch_"); ok {
+		for id, channelType := range channelTypes {
+			if strings.HasPrefix(channelID, id+"_") {
+				dto.Source = channelType
+				break
+			}
+		}
+		if dto.Source == "web" {
+			dto.Source = "channel"
+		}
+	}
+	return dto
 }
 
 // GET /v1/sessions/{sessionID}
@@ -156,10 +180,37 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// project_id 供前端恢复会话时同步"当前项目"（ADR-0097）；会话行不存在时省略。
 	resp := map[string]any{"session_id": sessionID, "messages": msgs, "running": h.turns().Running(sessionID)}
-	if row, gerr := h.PersistenceService.ChatRepo.GetSession(r.Context(), sessionID); gerr == nil && row != nil {
-		resp["project_id"] = row.ProjectID
+	binding, gerr := h.sessionBinding(r.Context(), sessionID)
+	if gerr != nil {
+		httputil.RespondError(w, "session lookup failed", gerr, apperr.HTTPStatus(apperr.CodeOf(gerr)))
+		return
+	}
+	for key, value := range binding {
+		resp[key] = value
 	}
 	httputil.WriteJSON(w, resp)
+}
+
+func (h *ChatHandler) sessionBinding(ctx context.Context, id string) (map[string]any, error) {
+	row, err := h.PersistenceService.ChatRepo.GetSession(ctx, id)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeOf(err), "chat get session binding", err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	binding := map[string]any{"project_id": row.ProjectID, "agent_profile": row.AgentProfile}
+	if row.AgentProfileSource != "" {
+		binding["agent_profile_source"] = row.AgentProfileSource
+		binding["agent_profile_digest"] = row.AgentProfileDigest
+	}
+	if row.ExpertID != "" {
+		binding["expert_plugin_id"], binding["expert_id"], binding["expert_type"] = row.ExpertPluginID, row.ExpertID, row.ExpertType
+		if json.Valid([]byte(row.ExpertDisplayName)) {
+			binding["expert_display_name"] = json.RawMessage(row.ExpertDisplayName)
+		}
+	}
+	return binding, nil
 }
 
 // mcpAppViewDTO 会话历史接口暴露的 MCP Apps UI 视图快照（M8f-1）。

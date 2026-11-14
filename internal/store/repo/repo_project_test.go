@@ -223,3 +223,19 @@ func TestChatRepo_CreateSessionArchivedProject(t *testing.T) {
 		t.Fatalf("不存在的项目应返回 NotFound，got %v", err)
 	}
 }
+
+func TestChatRepo_PersistsExpertBinding(t *testing.T) {
+	db := newProjectTestDB(t)
+	cr := NewSQLiteChatRepository(db)
+	want := types.ChatSessionRow{ID: "expert-1", AgentProfile: "bundle:lead", AgentProfileSource: "plugin:pl_bundle", AgentProfileDigest: "sha256:abc", ExpertPluginID: "pl_bundle", ExpertID: "research", ExpertType: "team", ExpertDisplayName: `{"en":"Research"}`}
+	if err := cr.CreateSession(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cr.GetSession(context.Background(), want.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentProfile != want.AgentProfile || got.AgentProfileSource != want.AgentProfileSource || got.AgentProfileDigest != want.AgentProfileDigest || got.ExpertPluginID != want.ExpertPluginID || got.ExpertID != want.ExpertID || got.ExpertType != want.ExpertType || got.ExpertDisplayName != want.ExpertDisplayName {
+		t.Fatalf("expert binding lost: %#v", got)
+	}
+}

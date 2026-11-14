@@ -90,9 +90,14 @@ const (
 // 插件目录覆盖层（ADR-0123）：官方插件仓库 main 分支 catalog/data/ 下的生成产物。
 const (
 	// DefaultCatalogOverlayURL 目录覆盖层 index.json 默认地址。
-	DefaultCatalogOverlayURL = "https://raw.githubusercontent.com/polarisagi/polaris-plugins-official/main/catalog/data/index.json"
+	DefaultCatalogOverlayURL = "https://raw.githubusercontent.com/polarisagi/polaris-official/main/catalog/data/index.json"
 	// EnvCatalogOverlayURL 覆盖目录覆盖层地址（自建镜像 / 测试）；须为 https。
 	EnvCatalogOverlayURL = "POLARIS_CATALOG_OVERLAY_URL"
+
+	// DefaultCatalogDocIndexURL 说明文档集中索引 readmes/index.json 默认地址（ADR-0123 2026-11-14 复核）。
+	DefaultCatalogDocIndexURL = "https://raw.githubusercontent.com/polarisagi/polaris-official/main/catalog/readmes/index.json"
+	// EnvCatalogDocIndexURL 覆盖说明文档集中索引地址（自建镜像 / 测试）；须为 https。
+	EnvCatalogDocIndexURL = "POLARIS_CATALOG_DOC_INDEX_URL"
 )
 
 // CatalogOverlayURL 返回目录覆盖层地址：环境变量优先，否则默认地址。
@@ -101,6 +106,14 @@ func CatalogOverlayURL() string {
 		return v
 	}
 	return DefaultCatalogOverlayURL
+}
+
+// CatalogDocIndexURL 返回说明文档集中索引地址：环境变量优先，否则默认地址。
+func CatalogDocIndexURL() string {
+	if v := strings.TrimSpace(os.Getenv(EnvCatalogDocIndexURL)); v != "" {
+		return v
+	}
+	return DefaultCatalogDocIndexURL
 }
 
 // 核心目录名称与相对路径定义。

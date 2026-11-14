@@ -71,6 +71,21 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 	if len(args.Tasks) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidInput, "spawn_agents: tasks cannot be empty")
 	}
+	roles := make([]string, len(args.Tasks))
+	for i, task := range args.Tasks {
+		roles[i] = strings.TrimSpace(task.Role)
+		if roles[i] == "" {
+			roles[i] = "general-purpose"
+		}
+		roles[i] = normalizeProfileTarget(a.agentProfile(), roles[i])
+	}
+	targets, err := json.Marshal(roles)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "spawn_agents: encode delegation targets", err)
+	}
+	if err := a.checkProfileTool("spawn_agents", string(targets)); err != nil {
+		return nil, err
+	}
 
 	pol := a.currentSecurityPolicy()
 
@@ -106,10 +121,7 @@ func (a *Agent) SpawnAgents(ctx context.Context, args types.SpawnAgentsArgs) ([]
 	childIDs := make([]string, 0, len(args.Tasks))
 	var postedIDs []string
 	for i, task := range args.Tasks {
-		role := strings.TrimSpace(task.Role)
-		if role == "" {
-			role = "general-purpose"
-		}
+		role := roles[i]
 
 		// 未指定模型时，继承父智能体当前生效的模型（Codex 语义）
 		model := strings.TrimSpace(task.Model)

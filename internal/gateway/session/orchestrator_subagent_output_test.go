@@ -176,6 +176,7 @@ func TestR5_01_SubagentOutputNotInParentReply(t *testing.T) {
 		Prompt:        fakePrompt{},
 		Registry:      fakeRegistry{},
 		AgentPool:     pool,
+		Profiles:      fakeProfileBindingResolver{},
 		TranscriptDir: t.TempDir(),
 		DataDir:       t.TempDir(),
 	})
@@ -251,6 +252,7 @@ func TestR5_02_GatewayDeltasEqualReply(t *testing.T) {
 	orc := New(Deps{
 		Hooks: &fakeHooks{}, SlashRouter: &fakeSlash{}, Compression: &fakeCompression{},
 		Persistence: persistence, Prompt: fakePrompt{}, Registry: fakeRegistry{}, AgentPool: pool,
+		Profiles:      fakeProfileBindingResolver{},
 		TranscriptDir: t.TempDir(), DataDir: t.TempDir(),
 	})
 	sink := &recordingSink{}

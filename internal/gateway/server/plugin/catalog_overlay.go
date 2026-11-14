@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -78,4 +79,18 @@ func (h *PluginHandler) syncCatalogOverlay(ctx context.Context) {
 		return
 	}
 	slog.Info("plugin_sync: catalog overlay synced", "entries", n, "not_modified", n == 0)
+}
+
+// syncDocIndex 市场同步之后拉取说明文档集中索引；失败只留痕，不影响同步结果（ADR-0123 2026-11-14 复核）。
+func (h *PluginHandler) syncDocIndex(ctx context.Context) {
+	if h.DocIndex == nil {
+		return
+	}
+	url := config.CatalogDocIndexURL()
+	n, err := h.DocIndex.Sync(ctx, url)
+	if err != nil {
+		slog.Warn("plugin_sync: doc index sync failed", "url", url, "err", err)
+		return
+	}
+	slog.Info("plugin_sync: doc index synced", "entries", n, "not_modified", n == 0)
 }

@@ -23,6 +23,7 @@ import './store/search.js'
 import './store/cron.js'
 import './store/workflow.js'
 import './store/agents.js'
+import './store/experts.js'
 import './store/insights.js'
 import './store/logs.js'
 import './store/config.js'
@@ -35,34 +36,36 @@ import './store/update.js'
 import './store/audio.js'
 import './mcp_apps.js'
 
+import { sanitizeHtml } from './sanitize.mjs'
+
 // ── Markdown 渲染配置 ──────────────────────────────────────────────────────
 // marked v5+ 移除了 setOptions()，改用 marked.use()
 marked.use({ gfm: true, breaks: true })
 
-// 允许的 HTML 标签白名单（marked 输出的安全子集）
-const ALLOWED_TAGS = /^(p|br|hr|b|i|em|strong|code|pre|ul|ol|li|blockquote|h[1-6]|table|thead|tbody|tr|th|td|a|span|div|del|ins)$/i
-const ALLOWED_ATTRS = { a: ['href', 'title', 'target', 'rel'] }
-
-function stripDangerousHtml(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '')  // onerror=, onclick= 等
-    .replace(/javascript\s*:/gi, 'javascript-blocked:')
-    .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
-}
-
-function renderMarkdown(text) {
+function renderMarkdown(text, options = {}) {
   if (!text) return ''
   text = sanitizeContent(text)
   if (!text) return ''
   try {
     const html = marked.parse(text)
-    return stripDangerousHtml(html)
+    return sanitizeHtml(html, options)
   } catch {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
   }
 }
+
+function renderDocMarkdown(text, baseUrl) {
+  if (!text) return ''
+  try {
+    const html = marked.parse(text)
+    return sanitizeHtml(html, { baseUrl, allowImages: false })
+  } catch {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+  }
+}
+
 window.renderMarkdown = renderMarkdown
+window.renderDocMarkdown = renderDocMarkdown
 window.Alpine = Alpine
 
 // ── 主题切换（dark | light | terminal | system）────────────────────────────
@@ -146,6 +149,12 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('popstate', () => {
     const p = location.pathname.replace(/^\//, '') || 'chat'
     const mapped = legacyPageMap[p] || p
-    Alpine.store('nav').page = mapped
+    const nav = Alpine.store('nav')
+    nav.revision++
+    nav.page = mapped
+    if (mapped === 'chat') {
+      const chat = Alpine.store('chat')
+      if (!chat.sessionID && chat.messages.length === 0) Alpine.store('experts').load(true)
+    }
   })
 })

@@ -219,6 +219,18 @@ ExtensionRepository interface {
 	// ListCatalogOverlay 全部覆盖层行，按 catalog_id 索引。
 	ListCatalogOverlay(ctx context.Context) (map[string]types.ExtCatalogOverlayRow, error)
 
+	// extension_doc_index（说明文档集中索引，ADR-0123 2026-11-14 复核）
+	ReplaceDocIndex(ctx context.Context, rows []types.ExtDocIndexRow, meta map[string]string) error
+	GetDocIndexEntry(ctx context.Context, catalogID string) (*types.ExtDocIndexRow, error)
+	GetDocIndexMeta(ctx context.Context, key string) (string, error)
+
+	// extension_doc_translation_tasks（自定义扩展按需翻译持久任务）
+	UpsertDocTranslationTask(ctx context.Context, task types.ExtDocTranslationTaskRow) error
+	GetDocTranslationTask(ctx context.Context, taskID string) (*types.ExtDocTranslationTaskRow, error)
+	FindDocTranslationTask(ctx context.Context, principalID, catalogID, sourceSHA256, locale, generatorVersion string) (*types.ExtDocTranslationTaskRow, error)
+	UpdateDocTranslationTaskStatus(ctx context.Context, taskID, status, errorCode string, retryAfter int, resultCachePath string) error
+	ListPendingDocTranslationTasks(ctx context.Context, limit int) ([]types.ExtDocTranslationTaskRow, error)
+
 	// plugins
 	UpsertPlugin(ctx context.Context, row types.PluginRow) error
 	// GetPluginInstallPath 返回插件安装根（插件变量 ${PLUGIN_ROOT} 的权威源）；不存在返回 CodeNotFound。

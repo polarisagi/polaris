@@ -121,6 +121,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		if ca.SessionOrch != nil && tb.PluginChannels != nil {
 			tb.PluginChannels.BindTurns(channelTurnRunner{orch: ca.SessionOrch})
 		}
+		wireChannelMutualExclusion(ca, tb.PluginChannels, sb.Store.DB())
 	}
 	httpServer.SetPluginChannels(tb.PluginChannels)
 	httpServer.SetPluginDependencies(tb.PluginDeps)

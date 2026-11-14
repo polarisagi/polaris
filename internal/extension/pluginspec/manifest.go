@@ -12,6 +12,7 @@ type ManifestFormat string
 
 const (
 	FormatAgentPlugins ManifestFormat = "agent-plugins" // 根 plugin.json（agent-plugins.org 1.0）
+	FormatPolaris      ManifestFormat = "polaris"       // extensions["ai.polarisagi"] 私有组件
 	FormatClaude       ManifestFormat = "claude"        // .claude-plugin/plugin.json
 	FormatCodex        ManifestFormat = "codex"         // .codex-plugin/plugin.json 或 extensions["com.openai"]
 )
@@ -28,6 +29,7 @@ const (
 	RuleManifestAuthor  = "manifest.author"
 	RuleManifestName    = "manifest.name"
 	RuleManifestOverlay = "codex.extensions-overlay"
+	RulePolarisShape    = "polaris.extension.shape"
 )
 
 // Author 两家共用的作者对象。
@@ -117,6 +119,9 @@ func readManifests(root string, ds *diagnostics) []manifestDoc {
 	if doc, ok := readManifestFile(root, "plugin.json", FormatAgentPlugins, ds); ok {
 		checkAgentPluginsSchema(doc, ds)
 		docs = append(docs, doc)
+		if componentDoc, ok := polarisComponentDocument(doc, ds); ok {
+			docs = append(docs, componentDoc)
+		}
 	}
 	if doc, ok := readManifestFile(root, filepath.Join(".claude-plugin", "plugin.json"), FormatClaude, ds); ok {
 		docs = append(docs, doc)
@@ -131,6 +136,55 @@ func readManifests(root string, ds *diagnostics) []manifestDoc {
 		docs = append(docs, doc)
 	}
 	return docs
+}
+
+// polarisComponentDocument 将 Polaris 扩展字段送入现有组件解析链；身份只取标准根字段。
+func polarisComponentDocument(doc manifestDoc, ds *diagnostics) (manifestDoc, bool) {
+	raw, ok := doc.wire.Extensions[polarisNamespaceKey]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return manifestDoc{}, false
+	}
+	var ext manifestWire
+	if err := json.Unmarshal(raw, &ext); err != nil {
+		ds.errorf("manifest", doc.path, RulePolarisShape,
+			"extensions[%q] must be an object: %v", polarisNamespaceKey, err)
+		return manifestDoc{}, false
+	}
+	components := manifestWire{
+		DefaultEnabled: ext.DefaultEnabled,
+		Dependencies:   ext.Dependencies,
+		Settings:       ext.Settings,
+		UserConfig:     ext.UserConfig,
+		Channels:       ext.Channels,
+		Skills:         ext.Skills,
+		Commands:       ext.Commands,
+		Agents:         ext.Agents,
+		Hooks:          ext.Hooks,
+		LSPServers:     ext.LSPServers,
+		OutputStyles:   ext.OutputStyles,
+		Workflows:      ext.Workflows,
+		Themes:         ext.Themes,
+		Monitors:       ext.Monitors,
+		Experimental:   ext.Experimental,
+		Apps:           ext.Apps,
+		Interface:      ext.Interface,
+		DisplayName:    ext.DisplayName,
+	}
+	if !hasManifestComponents(components) {
+		return manifestDoc{}, false
+	}
+	return manifestDoc{format: FormatPolaris, path: doc.path + "#extensions/" + polarisNamespaceKey, wire: components}, true
+}
+
+func hasManifestComponents(w manifestWire) bool {
+	for _, field := range []json.RawMessage{w.Dependencies, w.Settings, w.UserConfig, w.Channels,
+		w.Skills, w.Commands, w.Agents, w.Hooks, w.LSPServers, w.OutputStyles,
+		w.Workflows, w.Themes, w.Monitors, w.Experimental, w.Apps} {
+		if len(field) > 0 {
+			return true
+		}
+	}
+	return w.DefaultEnabled != nil || w.Interface != nil || w.DisplayName != ""
 }
 
 func readManifestFile(root, rel string, format ManifestFormat, ds *diagnostics) (manifestDoc, bool) {

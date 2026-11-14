@@ -218,6 +218,8 @@ type StateContext struct {
 	// core_memory_edit 曾让其后全部历史失去前缀缓存。nil = 尚未渲染；SetAgentProfile 等
 	// 改变会话身份的入口置 nil 触发重渲染。
 	SessionLayerSnapshot []types.Message
+	// SessionLayerProfileDigest 锚定冻结快照的角色执行语义，避免跨角色继承提示词前缀。
+	SessionLayerProfileDigest, AgentProfileDigest string
 	// SessionPreferencesBlock 会话层渲染时一并冻结的用户画像稳定维度（PersonaRefiner.PreferencesBlock）。
 	SessionPreferencesBlock string
 

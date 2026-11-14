@@ -248,6 +248,7 @@ func (fakeRegistry) RegisterWithRole(name, displayName, role string, p protocol.
 type fakeAgentController struct {
 	events      chan types.AgentStreamEvent
 	interrupted bool
+	profile     *types.AgentProfileSpec
 	sendErr     error
 	history     []types.Message
 	intents     []string
@@ -266,9 +267,9 @@ func (a *fakeAgentController) SetLoopCompletion(mode string) {}
 func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
 	a.intents = append(a.intents, intent.UnsafeContent())
 }
-func (a *fakeAgentController) SetSpawnDepth(depth int)                 {}
-func (a *fakeAgentController) SetMemoryNamespace(ns string)            {}
-func (a *fakeAgentController) SetAgentProfile(*types.AgentProfileSpec) {}
+func (a *fakeAgentController) SetSpawnDepth(depth int)                   {}
+func (a *fakeAgentController) SetMemoryNamespace(ns string)              {}
+func (a *fakeAgentController) SetAgentProfile(p *types.AgentProfileSpec) { a.profile = p }
 func (a *fakeAgentController) SendIntent(trigger types.AgentTrigger) error {
 	return a.sendErr
 }
@@ -313,6 +314,15 @@ func (p *fakeAgentPool) AcquireHeadless(ctx context.Context, intent types.Intent
 	return p.headlessResult, nil
 }
 
+type fakeProfileBindingResolver struct {
+	profile *types.AgentProfileSpec
+	err     error
+}
+
+func (r fakeProfileBindingResolver) ResolveBoundProfile(context.Context, string) (*types.AgentProfileSpec, error) {
+	return r.profile, r.err
+}
+
 // recordingSink 记录全部 Emit 调用，供断言事件序列。
 type recordingSink struct {
 	mu     sync.Mutex
@@ -340,6 +350,10 @@ func (s *recordingSink) hasKind(k EventKind) bool {
 // ── 测试用例 ──────────────────────────────────────────────────────────────
 
 func newTestOrchestrator(t *testing.T, persistence *fakePersistence, hooks *fakeHooks, slash *fakeSlash, compression *fakeCompression, pool *fakeAgentPool) Orchestrator {
+	return newTestOrchestratorWithProfiles(t, persistence, hooks, slash, compression, pool, fakeProfileBindingResolver{})
+}
+
+func newTestOrchestratorWithProfiles(t *testing.T, persistence *fakePersistence, hooks *fakeHooks, slash *fakeSlash, compression *fakeCompression, pool *fakeAgentPool, profiles ProfileBindingResolver) Orchestrator {
 	t.Helper()
 	return New(Deps{
 		Hooks:         hooks,
@@ -349,9 +363,22 @@ func newTestOrchestrator(t *testing.T, persistence *fakePersistence, hooks *fake
 		Prompt:        fakePrompt{},
 		Registry:      fakeRegistry{},
 		AgentPool:     pool,
+		Profiles:      profiles,
 		TranscriptDir: t.TempDir(),
 		DataDir:       t.TempDir(),
 	})
+}
+
+func TestRunTurn_RejectsMissingProfileResolver(t *testing.T) {
+	pool := &fakeAgentPool{ctrl: newFakeAgentController()}
+	orc := newTestOrchestratorWithProfiles(t, newFakePersistence(), &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool, nil)
+	sink := &recordingSink{}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "missing-resolver", Input: "hello", Channel: "web"}, sink); err != nil {
+		t.Fatal(err)
+	}
+	if pool.releaseCalled || !sink.hasKind(KindError) {
+		t.Fatal("turn without profile resolver did not fail before acquiring the agent")
+	}
 }
 
 // TestRunTurn_Interactive_HappyPath 验证正常轮次：FSM 产出 token → sink 收到
@@ -385,6 +412,52 @@ func TestRunTurn_Interactive_HappyPath(t *testing.T) {
 	}
 	if !pool.releaseCalled {
 		t.Error("expected Acquire release() to be called")
+	}
+}
+
+func TestRunTurn_UsesBoundProfileInInteractiveAndHeadless(t *testing.T) {
+	profile := &types.AgentProfileSpec{Name: "bundle:lead", Source: "plugin:pl_bundle"}
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "ok"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	persistence := newFakePersistence()
+	pool := &fakeAgentPool{ctrl: ctrl, headlessResult: &types.AgentResult{Output: "ok"}}
+	orc := newTestOrchestratorWithProfiles(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool, fakeProfileBindingResolver{profile: profile})
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "bound-web", Input: "hello", Channel: "web"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	if ctrl.profile != profile {
+		t.Fatalf("interactive profile not applied before turn: %#v", ctrl.profile)
+	}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "bound-headless", Input: "hello", Headless: true, Channel: "workflow"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	var opts types.HeadlessOptions
+	for _, opt := range pool.lastHeadlessOpts {
+		opt(&opts)
+	}
+	if opts.Profile != profile {
+		t.Fatalf("headless profile not applied: %#v", opts.Profile)
+	}
+}
+
+func TestRunTurn_BoundProfileFailureStopsInteractiveAndHeadless(t *testing.T) {
+	pool := &fakeAgentPool{ctrl: newFakeAgentController(), headlessResult: &types.AgentResult{Output: "must not run"}}
+	orc := newTestOrchestratorWithProfiles(t, newFakePersistence(), &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool, fakeProfileBindingResolver{err: apperr.New(apperr.CodeConflict, "changed")})
+	sink := &recordingSink{}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "stale-web", Input: "hello", Channel: "web"}, sink); err != nil {
+		t.Fatal(err)
+	}
+	if pool.releaseCalled || !sink.hasKind(KindError) {
+		t.Fatal("interactive turn did not fail before acquiring the agent")
+	}
+	if _, err := orc.RunTurn(context.Background(), Request{SessionID: "stale-job", Input: "hello", Headless: true, Channel: "workflow"}, sink); !apperr.IsCode(err, apperr.CodeConflict) {
+		t.Fatalf("headless bound profile failure not returned: %v", err)
+	}
+	if len(pool.lastHeadlessOpts) != 0 {
+		t.Fatal("headless turn reached AgentPool after bound profile failure")
 	}
 }
 

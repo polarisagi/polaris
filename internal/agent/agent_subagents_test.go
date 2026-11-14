@@ -66,6 +66,49 @@ func TestSpawnAgents_ConcurrentThreeAgents(t *testing.T) {
 	}
 }
 
+func TestSpawnAgents_RejectsMixedTargetBatchBeforePosting(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+	a.SetAgentProfile(&types.AgentProfileSpec{Name: "lead", Tools: []string{"spawn_agents", "Agent(allowed)"}, AllowDelegation: true})
+	_, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{Tasks: []types.SpawnTaskSpec{{Role: "allowed"}, {Role: "outside"}}})
+	if !apperr.IsCode(err, apperr.CodeForbidden) {
+		t.Fatalf("expected forbidden batch, got %v", err)
+	}
+	poster.mu.Lock()
+	defer poster.mu.Unlock()
+	if len(poster.tasks) != 0 {
+		t.Fatalf("unauthorized batch partially dispatched: %d tasks", len(poster.tasks))
+	}
+}
+
+func TestSpawnAgents_ExpertMembersAreCanonicalizedAndBounded(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+	a.SetAgentProfile(&types.AgentProfileSpec{Name: "bundle:lead", Source: "plugin:pl_bundle", Tools: []string{"spawn_agents"}, AllowDelegation: true, AllowedAgentTargets: []string{"bundle:worker"}})
+	ids, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{Tasks: []types.SpawnTaskSpec{{Role: "worker"}}, Wait: "none"})
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("same-plugin short member should canonicalize: ids=%v err=%v", ids, err)
+	}
+	poster.mu.Lock()
+	for _, task := range poster.tasks {
+		if task.Type != "agent_handoff:bundle:worker" {
+			t.Fatalf("short name escaped plugin namespace: %q", task.Type)
+		}
+	}
+	before := len(poster.tasks)
+	poster.mu.Unlock()
+	if _, err := a.SpawnAgents(context.Background(), types.SpawnAgentsArgs{Tasks: []types.SpawnTaskSpec{{Role: "other:worker"}}, Wait: "none"}); !apperr.IsCode(err, apperr.CodeForbidden) {
+		t.Fatalf("cross-plugin target must be rejected: %v", err)
+	}
+	poster.mu.Lock()
+	defer poster.mu.Unlock()
+	if len(poster.tasks) != before {
+		t.Fatal("rejected target created a task")
+	}
+}
+
 // TestSpawnAgents_WaitNone_StatusAndResult 验证 wait="none" 模式与状态/产物查询。
 func TestSpawnAgents_WaitNone_StatusAndResult(t *testing.T) {
 	a := newTestHandoffAgent(t)

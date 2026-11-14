@@ -32,6 +32,8 @@ func InitMetrics(meter metric.Meter) error {
 
 func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	var err error
+	initChannelInstruments(meter, ie)
+	initDocInstruments(meter, ie)
 
 	// LLM 调用计数
 	InstrLLMCallsTotal, err = meter.Int64Counter(

@@ -3,7 +3,7 @@ $PreviousErrorActionPreference = $ErrorActionPreference
 $PreviousProgressPreference = $ProgressPreference
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-# 确保 Windows PowerShell 5.1 默认启用 TLS 1.2，防止全新系统访问 GitHub / astral.sh 报 SSL 握手失败
+# 确保 Windows PowerShell 5.1 默认启用 TLS 1.2，兼容固定 HTTPS 下载入口。
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $Culture = [System.Globalization.CultureInfo]::InstalledUICulture.Name
@@ -31,6 +31,8 @@ $ServiceReady  = $false
 $ServiceRegistered = $false
 $ServiceLaunchAttempted = $false
 $script:VisualCInstallAttempted = $false
+$script:PreferredNodeDir = ''
+$script:PreferredPythonDir = ''
 
 Write-Msg -zh "🌌 正在安装/更新 PolarisAGI Polaris..." `
            -en "🌌 Installing/Updating PolarisAGI Polaris..." -Color Cyan
@@ -73,10 +75,13 @@ function Update-SessionPath {
     $Combined    = "$env:Path;$UserPath;$MachinePath"
 
     $ExtraDirs = @(
+        $script:PreferredNodeDir,
+        $script:PreferredPythonDir,
         $InstallDir,
         $LocalBinDir,
         $CargoBinDir,
         "$DepsDir\node",
+        "$DepsDir\uv",
         "$DepsDir\ffmpeg\bin",
         "$DepsDir\git\cmd",
         "$DepsDir\git\bin",
@@ -86,7 +91,14 @@ function Update-SessionPath {
         "${env:ProgramFiles(x86)}\Git\bin",
         "$env:LOCALAPPDATA\Programs\Git\cmd",
         "$env:LOCALAPPDATA\Programs\Git\bin",
-        "$env:ProgramFiles\nodejs"
+        "$env:ProgramFiles\nodejs",
+        "$env:USERPROFILE\scoop\shims",
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links",
+        "$env:APPDATA\Python\Python312\Scripts",
+        "$env:LOCALAPPDATA\Programs\Python\Python312",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts",
+        "$env:ProgramFiles\Python312",
+        "$env:ProgramFiles\Python312\Scripts"
     )
     $Seen = @{}
     $Result = New-Object System.Collections.Generic.List[string]
@@ -116,70 +128,59 @@ $Arch = switch ($NativeArch) {
 }
 $ArchiveName = "polaris-windows-$Arch.zip"
 $GithubURL   = "https://github.com/$Repo/releases/latest/download/$ArchiveName"
-$ProxyHosts  = @("https://ghproxy.net", "https://mirror.ghproxy.com")
-
-function Test-IsMainlandChina {
-    $Timeout = 2
-
-    # 尝试 1: ipinfo.io
-    try {
-        $Country = (Invoke-RestMethod -Uri "https://ipinfo.io/country" -TimeoutSec $Timeout -ErrorAction Stop).Trim()
-        if ([string]::IsNullOrEmpty($Country) -eq $false) {
-            return ($Country -eq "CN")
-        }
-    } catch {}
-
-    # 尝试 2: cloudflare trace
-    try {
-        $Trace = Invoke-RestMethod -Uri "https://1.1.1.1/cdn-cgi/trace" -TimeoutSec $Timeout -ErrorAction Stop
-        if ($Trace -match "loc=([A-Z]{2})") {
-            return ($Matches[1] -eq "CN")
-        }
-    } catch {}
-
-    # 尝试 3: ip.sb
-    try {
-        $IpSb = Invoke-RestMethod -Uri "https://api.ip.sb/geoip" -TimeoutSec $Timeout -ErrorAction Stop
-        if ($IpSb.country_code) {
-            return ($IpSb.country_code -eq "CN")
-        }
-    } catch {}
-
-    # 降级：如果全部失败，测速 Github
-    try {
-        Invoke-WebRequest -Uri "https://github.com" -UseBasicParsing -TimeoutSec 1 -Method Head -ErrorAction Stop | Out-Null
-        return $false
-    } catch {
-        return $true
+$ProxyHosts  = @('https://ghproxy.net', 'https://mirror.ghproxy.com')
+$DownloadBase = $env:POLARIS_DOWNLOAD_BASE
+if ($DownloadBase) {
+    $DownloadUri = $null
+    if (-not [Uri]::TryCreate($DownloadBase, [UriKind]::Absolute, [ref]$DownloadUri) -or
+        $DownloadUri.Scheme -ne 'https' -or -not $DownloadUri.Host -or $DownloadUri.Query -or $DownloadUri.Fragment) {
+        throw 'POLARIS_DOWNLOAD_BASE must be a valid HTTPS base URL without query or fragment.'
+    }
+    $DownloadBase = $DownloadBase.TrimEnd('/')
+}
+if ($env:UV_PYTHON_INSTALL_MIRROR) {
+    $PythonMirrorUri = $null
+    if (-not [Uri]::TryCreate($env:UV_PYTHON_INSTALL_MIRROR, [UriKind]::Absolute, [ref]$PythonMirrorUri) -or $PythonMirrorUri.Scheme -ne 'https') {
+        throw 'UV_PYTHON_INSTALL_MIRROR must be an HTTPS URL.'
     }
 }
 
-Write-Msg -zh "🌐 正在检测网络环境归属地及代理情况..." `
-           -en "🌐 Detecting network geolocation and VPN..." -Color Cyan
-
+$Region = if ($env:POLARIS_REGION) { $env:POLARIS_REGION.ToLowerInvariant() } else { 'auto' }
+if ($Region -notin @('auto', 'cn', 'global')) { throw 'POLARIS_REGION must be auto/cn/global' }
+$IsMainland = ($Region -eq 'cn')
+Write-Msg -zh "🌐 下载源偏好：$Region" -en "🌐 Download source preference: $Region" -Color Cyan
 $CandidateURLs = [System.Collections.ArrayList]::new()
-$IsMainland    = Test-IsMainlandChina
-$ActiveProxy   = ""
-
-if (-not $IsMainland) {
-    Write-Msg -zh "✅ 当前网络为海外 IP 或已开启全局代理，将使用直连。" `
-               -en "✅ Network is outside mainland China or VPN active. Using direct connection." -Color Green
+if ($DownloadBase) { $CandidateURLs.Add("$DownloadBase/$ArchiveName") | Out-Null }
+if ($Region -eq 'cn') {
+    foreach ($Proxy in $ProxyHosts) { $CandidateURLs.Add("$Proxy/$GithubURL") | Out-Null }
     $CandidateURLs.Add($GithubURL) | Out-Null
-    foreach ($p in $ProxyHosts) { $CandidateURLs.Add("$p/$GithubURL") | Out-Null }
 } else {
-    Write-Msg -zh "⚠️  检测到当前网络位于中国大陆且未全局代理，切换镜像代理..." `
-               -en "⚠️  Mainland China network detected without VPN. Switching to proxy mirrors..." -Color Yellow
-    foreach ($p in $ProxyHosts) {
-        try {
-            Invoke-WebRequest -Uri $p -UseBasicParsing -TimeoutSec 5 -Method Head -ErrorAction Stop | Out-Null
-            if (-not $ActiveProxy) { $ActiveProxy = $p }
-            $CandidateURLs.Add("$p/$GithubURL") | Out-Null
-            Write-Msg -zh "   ✅ 可用镜像: $p" -en "   ✅ Reachable proxy: $p" -Color Green
-        } catch {
-            Write-Msg -zh "   ⚠️  不可用: $p" -en "   ⚠️  Unreachable: $p" -Color Yellow
+    $CandidateURLs.Add($GithubURL) | Out-Null
+    foreach ($Proxy in $ProxyHosts) { $CandidateURLs.Add("$Proxy/$GithubURL") | Out-Null }
+}
+if ($Region -eq 'auto') {
+    $ProbePath = Join-Path ([System.IO.Path]::GetTempPath()) ("polaris-source-probe-" + [guid]::NewGuid().ToString('N'))
+    $ProbedURLs = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        foreach ($Url in $CandidateURLs) {
+            try {
+                Invoke-WebRequest -Uri "$Url.sha256" -OutFile $ProbePath -UseBasicParsing -TimeoutSec 6 -ErrorAction Stop
+                $ProbedURLs.Add($Url)
+            } catch { }
+            Remove-Item -LiteralPath $ProbePath -Force -ErrorAction SilentlyContinue
         }
-    }
-    $CandidateURLs.Add($GithubURL) | Out-Null  # 直连兜底
+        $OrderedURLs = New-Object 'System.Collections.ArrayList'
+        $PreferredUrl = if ($DownloadBase) { "$DownloadBase/$ArchiveName" } else { $null }
+        if ($PreferredUrl) { $OrderedURLs.Add($PreferredUrl) | Out-Null }
+        if ($ProbedURLs.Count) {
+            foreach ($Url in $ProbedURLs) { if ($Url -ne $PreferredUrl -and -not $OrderedURLs.Contains($Url)) { $OrderedURLs.Add($Url) | Out-Null } }
+            foreach ($Url in $CandidateURLs) { if ($Url -ne $PreferredUrl -and -not $OrderedURLs.Contains($Url)) { $OrderedURLs.Add($Url) | Out-Null } }
+        } else {
+            foreach ($Proxy in $ProxyHosts) { $OrderedURLs.Add("$Proxy/$GithubURL") | Out-Null }
+            $OrderedURLs.Add($GithubURL) | Out-Null
+        }
+        $CandidateURLs = $OrderedURLs
+    } finally { Remove-Item -LiteralPath $ProbePath -Force -ErrorAction SilentlyContinue }
 }
 
 # ── 2.5 环境依赖预检与自动安装 (Dependencies) ────────────────────────────────
@@ -220,7 +221,12 @@ function Test-WorkingPython {
             if ($c.Source -and ($c.Source -notmatch "WindowsApps")) {
                 try {
                     $null = & $c.Source -c "import sys; sys.exit(0 if sys.version_info.major >= 3 else 1)" 2>$null
-                    if ($LASTEXITCODE -eq 0) { $script:WorkingPythonExe = $c.Source; return $true }
+                    if ($LASTEXITCODE -eq 0) {
+                        $script:WorkingPythonExe = $c.Source
+                        $script:PreferredPythonDir = Split-Path $c.Source -Parent
+                        Update-SessionPath
+                        return $true
+                    }
                 } catch { }
             }
         }
@@ -230,19 +236,37 @@ function Test-WorkingPython {
 
 function Test-WorkingNode {
     Update-SessionPath
-    $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
-    $npxCmd  = Get-Command "npx.cmd" -ErrorAction SilentlyContinue
-    if (-not $nodeCmd -or -not $npxCmd) { return $false }
-    try {
-        $null = & $nodeCmd.Source -e 'process.exit(parseInt(process.versions.node,10)>=22?0:1)' 2>$null
-        if ($LASTEXITCODE -ne 0) { return $false }
-        $null = & $npxCmd.Source --version 2>$null
-        if ($LASTEXITCODE -ne 0) { return $false }
-        $null = & npm.cmd --version 2>$null
-        return ($LASTEXITCODE -eq 0)
-    } catch {
-        return $false
+    foreach ($NodeCmd in @(Get-Command 'node' -All -ErrorAction SilentlyContinue)) {
+        try {
+            $NodeDir = Split-Path $NodeCmd.Source -Parent
+            $NpmPath = Join-Path $NodeDir 'npm.cmd'
+            $NpxPath = Join-Path $NodeDir 'npx.cmd'
+            if (-not (Test-Path -LiteralPath $NpmPath)) {
+                $NpmCommand = Get-Command 'npm.cmd' -All -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($NpmCommand) { $NpmPath = $NpmCommand.Source }
+            }
+            if (-not (Test-Path -LiteralPath $NpxPath)) {
+                $NpxCommand = Get-Command 'npx.cmd' -All -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($NpxCommand) { $NpxPath = $NpxCommand.Source }
+            }
+            if (-not (Test-Path -LiteralPath $NpmPath) -and -not (Get-Command 'npm.cmd' -ErrorAction SilentlyContinue)) { continue }
+            if (-not (Test-Path -LiteralPath $NpxPath) -and -not (Get-Command 'npx.cmd' -ErrorAction SilentlyContinue)) { continue }
+            $null = & $NodeCmd.Source -e 'process.exit(parseInt(process.versions.node,10)>=22?0:1)' 2>$null
+            if ($LASTEXITCODE -ne 0) { continue }
+            $null = & $NpmPath --version 2>$null
+            if ($LASTEXITCODE -ne 0) { continue }
+            $null = & $NpxPath --version 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $script:WorkingNodeExe = $NodeCmd.Source
+                $script:WorkingNpmCmd = $NpmPath
+                $script:WorkingNpxCmd = $NpxPath
+                $script:PreferredNodeDir = $NodeDir
+                Update-SessionPath
+                return $true
+            }
+        } catch { }
     }
+    return $false
 }
 
 function Get-NativePowerShell {
@@ -366,134 +390,277 @@ function Expand-PortableGit {
     if ($LASTEXITCODE -ne 0) { throw "Portable Git extraction failed (exit code $LASTEXITCODE)." }
 }
 
-# 1. Git 检查与自动安装（优先 winget，失败或无 winget 时自动回退便携版 Git（含 Bash））
-if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
-    Write-Msg -zh "   📦 缺少 Git 或 Bash，正在自动安装..." -en "   📦 Git or Bash not found. Installing automatically..." -Color Gray
-    if (Get-Command "winget" -ErrorAction SilentlyContinue) {
+# 包管理器复用用户已有安装；缺少时固定资产仍提供后备。
+function Install-DependencyPackage {
+    param([string]$WingetId, [string]$ScoopId, [string]$ChocoId)
+    foreach ($Manager in @('winget', 'scoop', 'choco')) {
+        if (-not (Get-Command $Manager -ErrorAction SilentlyContinue)) { continue }
         try {
-            & winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --silent
-        } catch { }
-        Update-SessionPath
-    }
-
-    if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
-        Write-Msg -zh "   📦 正在下载便携版 Git（含 Bash）..." -en "   📦 Downloading portable Git with Bash..." -Color Gray
-        $PortableGitArch = if ($Arch -eq "arm64") { "arm64" } else { "64-bit" }
-        # 官方 API 的摘要独立于镜像；无法取得可信摘要时不执行镜像中的程序。
-        $GitAsset = $null
-        try {
-            $GitRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest" -TimeoutSec 30 -ErrorAction Stop
-            $GitAsset = $GitRelease.assets | Where-Object { $_.name -match "^PortableGit-[0-9.]+-$PortableGitArch\.7z\.exe$" } | Select-Object -First 1
-        } catch { }
-        $GhPortableGit = if ($GitAsset) { $GitAsset.browser_download_url } else { "" }
-        $GitHash = if ($GitAsset -and $GitAsset.digest -match '^sha256:([a-fA-F0-9]{64})$') { $Matches[1].ToLowerInvariant() } else { "" }
-
-        $GitUrls = @()
-        if ($IsMainland) {
-            if ($ActiveProxy -and $GhPortableGit -and $GitHash) { $GitUrls += "$ActiveProxy/$GhPortableGit" }
-            if ($GhPortableGit -and $GitHash) { $GitUrls += $GhPortableGit }
-        } else {
-            if ($GhPortableGit -and $GitHash) { $GitUrls += $GhPortableGit }
-        }
-
-        $PortableGitZip = "$WorkDir\portable-git.exe"
-        foreach ($u in $GitUrls) {
-            try {
-                Invoke-WebRequest -Uri $u -OutFile $PortableGitZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
-                if ((Get-FileHash -LiteralPath $PortableGitZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $GitHash) { throw "PortableGit checksum mismatch" }
-                $GitDest = "$DepsDir\git"
-                $GitExtract = Join-Path $WorkDir 'git-extract'
-                if (Test-Path -LiteralPath $GitExtract) { Remove-Item -LiteralPath $GitExtract -Recurse -Force }
-                Expand-PortableGit -Archive $PortableGitZip -Destination $GitExtract
-                foreach ($Required in @('cmd/git.exe', 'bin/bash.exe')) {
-                    if (-not (Test-Path -LiteralPath (Join-Path $GitExtract $Required))) { throw "Portable Git archive does not contain $Required" }
-                }
-                # 解压及结构验证成功后才替换旧依赖，失败下载不能破坏原安装。
-                if (Test-Path -LiteralPath $GitDest) { Remove-Item -LiteralPath $GitDest -Recurse -Force }
-                Move-Item -LiteralPath $GitExtract -Destination $GitDest
-                Remove-Item -LiteralPath $PortableGitZip -Force -ErrorAction SilentlyContinue
-                Add-UserPathFront -DirToAdd "$GitDest\cmd"
-                Add-UserPathFront -DirToAdd "$GitDest\bin"
-                break
-            } catch {
-                Write-Msg -zh "   ⚠️ PortableGit 安装尝试失败：$($_.Exception.Message)" `
-                           -en "   ⚠️ PortableGit installation attempt failed: $($_.Exception.Message)" -Color Yellow
-                Remove-Item -LiteralPath $PortableGitZip -Force -ErrorAction SilentlyContinue
+            switch ($Manager) {
+                winget { & winget install --id $WingetId -e --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity | Out-Host }
+                scoop { & scoop install $ScoopId | Out-Host }
+                choco { & choco install $ChocoId -y --no-progress | Out-Host }
             }
-        }
+            if ($LASTEXITCODE -eq 0) { Update-SessionPath; return $true }
+            Write-Msg -zh "⚠️ $Manager 安装 $WingetId 失败：$LASTEXITCODE" -en "⚠️ $Manager failed to install ${WingetId}: $LASTEXITCODE" -Color Yellow
+        } catch { Write-Msg -zh "⚠️ $Manager 安装失败：$($_.Exception.Message)" -en "⚠️ $Manager failed: $($_.Exception.Message)" -Color Yellow }
     }
-
-    if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
-        Write-Msg -zh "⚠️  Git/Bash 自动安装未完成；请检查网络后重跑安装。" `
-                   -en "⚠️  Git/Bash auto-install failed; check the network and rerun setup." -Color Yellow
-    }
+    return $false
 }
 
-# uv 的失败处理会调用 exit；必须隔离到子进程，避免关闭 irm | iex 所在的终端。
-function Invoke-UvInstaller {
-    $InstallerText = Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1" -TimeoutSec 60 -ErrorAction Stop
-    $InstallerPath = Join-Path $WorkDir 'uv-install.ps1'
-    # 子进程按文件读取，BOM 确保 Windows PowerShell 5.1 正确识别 UTF-8。
-    [System.IO.File]::WriteAllText($InstallerPath, $InstallerText, [System.Text.UTF8Encoding]::new($true))
-    $PowerShellExe = (Get-Process -Id $PID).Path
-    & $PowerShellExe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $InstallerPath
-    if ($LASTEXITCODE -ne 0) { throw "uv installer failed (exit code $LASTEXITCODE); see output above." }
+function Get-PortableArtifactUrls {
+    param([string]$Name, [string]$OfficialUrl, [string]$MainlandUrl = '')
+    $Urls = New-Object 'System.Collections.Generic.List[string]'
+    if ($DownloadBase) { $Urls.Add("$DownloadBase/$Name") }
+    if ($MainlandUrl) {
+        if ($IsMainland) { $Urls.Add($MainlandUrl); $Urls.Add($OfficialUrl) }
+        else { $Urls.Add($OfficialUrl); $Urls.Add($MainlandUrl) }
+    } elseif ($OfficialUrl -match '^https://github\.com/') {
+        foreach ($Proxy in $ProxyHosts) { $Urls.Add("$Proxy/$OfficialUrl") }
+        $Urls.Add($OfficialUrl)
+    } else { $Urls.Add($OfficialUrl) }
+    if ($Region -eq 'auto' -and $Urls.Count -gt 1) {
+        $PreferredUrl = if ($DownloadBase) { "$DownloadBase/$Name" } else { $null }
+        $Probed = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($Url in $Urls) {
+            try {
+                Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop | Out-Null
+                $Probed.Add($Url)
+            } catch { }
+        }
+        foreach ($Url in $Urls) { if ($Url -ne $PreferredUrl -and -not $Probed.Contains($Url)) { $Probed.Add($Url) } }
+        if ($PreferredUrl -and -not $Probed.Contains($PreferredUrl)) { $Probed.Insert(0, $PreferredUrl) }
+        return @($Probed)
+    }
+    return @($Urls | Select-Object -Unique)
 }
 
-# 2. uv 检查与自动安装
-if (-not (Test-WorkingUv)) {
-    Write-Msg -zh "   📦 正在安装 uv..." -en "   📦 Installing uv..." -Color Gray
-    $SavedUvDir = $env:UV_INSTALL_DIR
-    $SavedUvBase = $env:UV_INSTALLER_GITHUB_BASE_URL
-    try {
-        $env:UV_INSTALL_DIR = $LocalBinDir
-        if ($IsMainland -and $ActiveProxy) {
-            $env:UV_INSTALLER_GITHUB_BASE_URL = "$ActiveProxy/https://github.com"
-        }
+function Receive-VerifiedArtifact {
+    param([string[]]$Urls, [string]$Destination, [string]$Sha256)
+    foreach ($Url in $Urls) {
         try {
-            Invoke-UvInstaller
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+            $Actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($Actual -ne $Sha256.ToLowerInvariant()) { throw 'SHA-256 mismatch' }
+            return $true
         } catch {
-            Write-Msg -zh "   ⚠️ uv 安装失败：$($_.Exception.Message)，尝试官方源..." `
-                       -en "   ⚠️ uv installation failed: $($_.Exception.Message). Retrying official source..." -Color Yellow
-            Remove-Item Env:\UV_INSTALLER_GITHUB_BASE_URL -ErrorAction SilentlyContinue
-            try {
-                Invoke-UvInstaller
-            } catch {
-                Write-Msg -zh "   ⚠️ uv 重试失败：$($_.Exception.Message)" `
-                           -en "   ⚠️ uv retry failed: $($_.Exception.Message)" -Color Yellow
-            }
+            Write-Msg -zh "⚠️ 下载源失败：$Url ($($_.Exception.Message))" -en "⚠️ Download source failed: $Url ($($_.Exception.Message))" -Color Yellow
         }
-    } finally {
-        $env:UV_INSTALL_DIR = $SavedUvDir
-        $env:UV_INSTALLER_GITHUB_BASE_URL = $SavedUvBase
     }
-    Add-UserPathFront -DirToAdd $LocalBinDir
-    Add-UserPathFront -DirToAdd $CargoBinDir
-    Update-SessionPath
+    return $false
 }
 
+function Replace-DependencyDirectory {
+    param([string]$Staged, [string]$Destination, [scriptblock]$OnInstall, [scriptblock]$Validate)
+    $Backup = "$Destination.previous"
+    $PreviousUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $PreviousSessionPath = $env:Path
+    if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }
+    if (Test-Path -LiteralPath $Destination) { Move-Item -LiteralPath $Destination -Destination $Backup }
+    try {
+        Move-Item -LiteralPath $Staged -Destination $Destination
+        if ($OnInstall) { & $OnInstall }
+        if ($Validate -and -not (& $Validate)) { throw 'Installed dependency failed its runtime check' }
+        if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }
+    } catch {
+        if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
+        if ((Test-Path -LiteralPath $Backup) -and -not (Test-Path -LiteralPath $Destination)) {
+            Move-Item -LiteralPath $Backup -Destination $Destination
+        }
+        try { [Environment]::SetEnvironmentVariable('Path', $PreviousUserPath, 'User') } catch { }
+        $env:Path = $PreviousSessionPath
+        throw
+    }
+}
+
+function Get-FixedArtifact {
+    param([string]$Kind, [string]$NativeArch)
+    switch ("$Kind/$NativeArch") {
+        'git/amd64' { return [pscustomobject]@{Name='PortableGit-2.56.1-64-bit.7z.exe'; Url='https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/PortableGit-2.56.1-64-bit.7z.exe'; Mainland='https://registry.npmmirror.com/-/binary/git-for-windows/v2.56.1.windows.1/PortableGit-2.56.1-64-bit.7z.exe'; Hash='9dd04a608ceb5f6ab32a73709e0ecb159d211da71b697c45ff81f6dd0c6b49c7'} }
+        'git/arm64' { return [pscustomobject]@{Name='PortableGit-2.56.1-arm64.7z.exe'; Url='https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/PortableGit-2.56.1-arm64.7z.exe'; Mainland='https://registry.npmmirror.com/-/binary/git-for-windows/v2.56.1.windows.1/PortableGit-2.56.1-arm64.7z.exe'; Hash='0dca0d9f760924a7e6752235d7dd6eb1a9b508ee714b6ed15d89252e5a58c5c9'} }
+        'uv-wheel/amd64' { return [pscustomobject]@{Name='uv-0.13.7-py3-none-win_amd64.whl'; Url='https://files.pythonhosted.org/packages/8e/4f/041b59d2a38807a3e31ef41064cf3e45d2752fe0409d89040d52778049ae/uv-0.13.7-py3-none-win_amd64.whl'; Mainland='https://mirrors.aliyun.com/pypi/packages/8e/4f/041b59d2a38807a3e31ef41064cf3e45d2752fe0409d89040d52778049ae/uv-0.13.7-py3-none-win_amd64.whl'; Hash='2835e2ab397d0db86323b9975dce75ecd76aa9cfa0d6a2aea84734aae7f8c9b3'} }
+        'uv-wheel/arm64' { return [pscustomobject]@{Name='uv-0.13.7-py3-none-win_arm64.whl'; Url='https://files.pythonhosted.org/packages/44/8d/1594dce4465d9699467a639b25aafd335ce1e5917f8bb60c9c0bed9e0859/uv-0.13.7-py3-none-win_arm64.whl'; Mainland='https://mirrors.aliyun.com/pypi/packages/44/8d/1594dce4465d9699467a639b25aafd335ce1e5917f8bb60c9c0bed9e0859/uv-0.13.7-py3-none-win_arm64.whl'; Hash='55e741a380a98008fc4985cf069855f36bc50242ef438e21a466786f5bc84da8'} }
+        'node/amd64' { return [pscustomobject]@{Name='node-v24.22.3-win-x64.zip'; Url='https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip'; Mainland='https://npmmirror.com/mirrors/node/v24.22.3/node-v24.22.3-win-x64.zip'; Hash='e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f'} }
+        'node/arm64' { return [pscustomobject]@{Name='node-v24.22.3-win-arm64.zip'; Url='https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-arm64.zip'; Mainland='https://npmmirror.com/mirrors/node/v24.22.3/node-v24.22.3-win-arm64.zip'; Hash='b3cc74a295b39d4f273271e96f58c06dd2b35757ca12abec64c7d0598b434f14'} }
+        'ffmpeg/amd64' { return [pscustomobject]@{Name='ffmpeg-9.0.2-essentials_build.zip'; Url='https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip'; Hash='60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba'} }
+        'ffmpeg-fallback/amd64' { return [pscustomobject]@{Name='ffmpeg-N-128227-g4811625b5f-win64-lgpl.zip'; Url='https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-N-128227-g4811625b5f-win64-lgpl.zip'; Hash='6550f7abc950128fbb0069b4552f2972baccf5fbd819f2fd0abbe4ceb8d48734'} }
+        'ffmpeg/arm64' { return [pscustomobject]@{Name='ffmpeg-N-128227-g4811625b5f-winarm64-lgpl.zip'; Url='https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-N-128227-g4811625b5f-winarm64-lgpl.zip'; Hash='742afe9b16d5aff391180d2f6be836b32e904f17ee5f304af7733642395582bd'} }
+    }
+    return $null
+}
+
+function Test-PortableGitRuntime {
+    param([string]$Root)
+    foreach ($Exe in @('cmd/git.exe', 'bin/bash.exe')) {
+        & (Join-Path $Root $Exe) --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
+    return $true
+}
+
+function Test-PortableUvRuntime {
+    param([string]$Root)
+    foreach ($Name in @('uv.exe', 'uvx.exe')) {
+        & (Join-Path $Root $Name) --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
+    return $true
+}
+
+function Test-PortableNodeRuntime {
+    param([string]$Root)
+    & (Join-Path $Root 'node.exe') --version | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    foreach ($Name in @('npm.cmd', 'npx.cmd')) {
+        & (Join-Path $Root $Name) --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
+    return $true
+}
+
+function Test-PortableFFmpegRuntime {
+    param([string]$BinDirectory)
+    foreach ($Name in @('ffmpeg.exe', 'ffprobe.exe')) {
+        $Exe = Join-Path $BinDirectory $Name
+        if (-not (Test-Path -LiteralPath $Exe)) { return $false }
+        & $Exe -version | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
+    return $true
+}
+
+function Install-PortableGit {
+    $Artifact = Get-FixedArtifact 'git' $Arch
+    $Urls = Get-PortableArtifactUrls $Artifact.Name $Artifact.Url $Artifact.Mainland
+    $Archive = Join-Path $WorkDir $Artifact.Name
+    if (-not (Receive-VerifiedArtifact $Urls $Archive $Artifact.Hash)) { return $false }
+    $Stage = Join-Path $WorkDir 'git-extract'
+    try {
+        if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
+        Expand-PortableGit -Archive $Archive -Destination $Stage
+        foreach ($Required in @('cmd/git.exe', 'bin/bash.exe')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $Stage $Required))) { throw "Portable Git archive missing $Required" }
+        }
+        if (-not (Test-PortableGitRuntime $Stage)) { throw 'Portable Git runtime check failed' }
+        $Destination = Join-Path $DepsDir 'git'
+        Replace-DependencyDirectory $Stage $Destination { Add-UserPathFront (Join-Path $Destination 'cmd'); Add-UserPathFront (Join-Path $Destination 'bin'); Update-SessionPath } { (Test-WorkingGit) -and (Test-WorkingBash) }
+        Add-UserPathFront -DirToAdd (Join-Path $Destination 'cmd')
+        Add-UserPathFront -DirToAdd (Join-Path $Destination 'bin')
+        return $true
+    } catch {
+        Write-Msg -zh "⚠️ PortableGit 安装失败：$($_.Exception.Message)" -en "⚠️ PortableGit installation failed: $($_.Exception.Message)" -Color Yellow
+        return $false
+    } finally { Remove-Item -LiteralPath $Archive -Force -ErrorAction SilentlyContinue }
+}
+
+function Install-PortableUv {
+    $Artifact = Get-FixedArtifact 'uv-wheel' $Arch
+    if (-not $Artifact) { return $false }
+    $Stage = Join-Path $WorkDir 'uv-extract'
+    $Urls = Get-PortableArtifactUrls $Artifact.Name $Artifact.Url
+    $Archive = Join-Path $WorkDir 'uv-wheel.zip'
+    if (-not (Receive-VerifiedArtifact $Urls $Archive $Artifact.Hash)) { return $false }
+    try {
+        if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
+        Expand-Archive -LiteralPath $Archive -DestinationPath $Stage -Force
+        if ($Artifact.Name -like '*.whl') {
+            $ScriptsDirectory = Get-ChildItem -LiteralPath $Stage -Directory -Recurse | Where-Object { $_.Name -eq 'scripts' -and $_.Parent.Name -like '*.data' } | Select-Object -First 1
+            if (-not $ScriptsDirectory) { throw 'uv wheel missing .data/scripts directory' }
+            foreach ($Name in @('uv.exe', 'uvw.exe', 'uvx.exe')) {
+                $Source = Join-Path $ScriptsDirectory.FullName $Name
+                if (-not (Test-Path -LiteralPath $Source)) { throw "uv wheel missing $Name" }
+                Copy-Item -LiteralPath $Source -Destination (Join-Path $Stage $Name) -Force
+            }
+        }
+        foreach ($Name in @('uv.exe', 'uvx.exe')) {
+            $Exe = Join-Path $Stage $Name
+            if (-not (Test-Path -LiteralPath $Exe)) { throw "uv archive missing $Name" }
+        }
+        if (-not (Test-PortableUvRuntime $Stage)) { throw 'uv runtime check failed' }
+        $Destination = Join-Path $DepsDir 'uv'
+        Replace-DependencyDirectory $Stage $Destination { Add-UserPathFront $Destination; Update-SessionPath } { Test-WorkingUv }
+        return (Test-WorkingUv)
+    } catch {
+        Write-Msg -zh "⚠️ uv 安装失败：$($_.Exception.Message)" -en "⚠️ uv installation failed: $($_.Exception.Message)" -Color Yellow
+        return $false
+    } finally { Remove-Item -LiteralPath $Archive -Force -ErrorAction SilentlyContinue }
+}
+
+function Install-PortableNode {
+    $Artifact = Get-FixedArtifact 'node' $Arch
+    $Urls = Get-PortableArtifactUrls $Artifact.Name $Artifact.Url $Artifact.Mainland
+    $Archive = Join-Path $WorkDir $Artifact.Name
+    if (-not (Receive-VerifiedArtifact $Urls $Archive $Artifact.Hash)) { return $false }
+    $Stage = Join-Path $WorkDir 'node-extract'
+    try {
+        if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
+        Expand-Archive -LiteralPath $Archive -DestinationPath $Stage -Force
+        $Inner = Get-ChildItem -LiteralPath $Stage -Directory | Select-Object -First 1
+        if (-not $Inner) { throw 'Node archive has no root directory' }
+        foreach ($Name in @('node.exe', 'npm.cmd', 'npx.cmd')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $Inner.FullName $Name))) { throw "Node archive missing $Name" }
+        }
+        if (-not (Test-PortableNodeRuntime $Inner.FullName)) { throw 'Node/npm/npx runtime check failed' }
+        $Ready = Join-Path $WorkDir 'node-ready'
+        Move-Item -LiteralPath $Inner.FullName -Destination $Ready
+        $Destination = Join-Path $DepsDir 'node'
+        Replace-DependencyDirectory $Ready $Destination { Add-UserPathFront $Destination; Update-SessionPath } { Test-WorkingNode }
+        Add-UserPathFront -DirToAdd $Destination
+        Update-SessionPath
+        return (Test-WorkingNode)
+    } catch {
+        Write-Msg -zh "⚠️ Node.js 安装失败：$($_.Exception.Message)" -en "⚠️ Node.js installation failed: $($_.Exception.Message)" -Color Yellow
+        return $false
+    } finally { Remove-Item -LiteralPath $Archive -Force -ErrorAction SilentlyContinue }
+}
+
+# 1. Git 检查与固定摘要便携归档
+if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
+    Write-Msg -zh "   📦 缺少 Git 或 Bash，正在从固定下载源安装..." -en "   📦 Git or Bash missing; downloading from fixed source..." -Color Gray
+    if (-not (Test-WorkingGit)) { $null = Install-DependencyPackage 'Git.Git' 'git' 'git' }
+    if ((Test-WorkingGit) -and (Test-WorkingBash)) { Update-SessionPath }
+    else { $null = Install-PortableGit }
+    if (-not (Test-WorkingGit) -or -not (Test-WorkingBash)) {
+        Write-Msg -zh "⚠️ Git/Bash 自动安装未完成；请检查网络后重跑安装。" -en "⚠️ Git/Bash auto-install failed; check the network and rerun setup." -Color Yellow
+    }
+}
+
+# uv wheel 避免引导依赖 Python；先复用已有包管理器。
+if (-not (Test-WorkingUv)) {
+    $null = Install-DependencyPackage 'astral-sh.uv' 'uv' 'uv'
+    if (-not (Test-WorkingUv)) { $null = Install-PortableUv }
+}
+if (-not (Test-WorkingPython) -and (Test-WorkingUv)) {
+    try {
+        $ManagedPython = (& uv python find --managed-python 3.12 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -eq 0 -and $ManagedPython -and (Test-Path -LiteralPath $ManagedPython)) {
+            $script:WorkingPythonExe = "$ManagedPython".Trim()
+            $script:PreferredPythonDir = Split-Path $script:WorkingPythonExe -Parent
+            Update-SessionPath
+        }
+    } catch { }
+}
+if (-not (Test-WorkingPython)) { $null = Install-DependencyPackage 'Python.Python.3.12' 'python' 'python312' }
 function Install-ManagedPython {
     $SavedPythonMirror = $env:UV_PYTHON_INSTALL_MIRROR
-    $PythonMirrors = @('')
-    if ($IsMainland -and $ActiveProxy) {
-        $PythonMirrors = @("$ActiveProxy/https://github.com/astral-sh/python-build-standalone/releases/download", '')
-    } elseif ($SavedPythonMirror) {
-        $PythonMirrors = @($SavedPythonMirror, '')
+    $Mirrors = if ($SavedPythonMirror) { @($SavedPythonMirror) } elseif ($Region -eq 'global') {
+        @('', 'https://registry.npmmirror.com/-/binary/python-build-standalone', 'https://ghproxy.net/https://github.com/astral-sh/python-build-standalone/releases/download')
+    } else {
+        @('https://registry.npmmirror.com/-/binary/python-build-standalone', 'https://ghproxy.net/https://github.com/astral-sh/python-build-standalone/releases/download', '')
     }
     try {
-        foreach ($Mirror in $PythonMirrors) {
-            $env:UV_PYTHON_INSTALL_MIRROR = $Mirror
+        foreach ($Mirror in $Mirrors) {
+            if ($Mirror) { $env:UV_PYTHON_INSTALL_MIRROR = $Mirror }
+            else { $env:UV_PYTHON_INSTALL_MIRROR = $null }
             try {
                 & uv python install 3.12
                 if ($LASTEXITCODE -eq 0) { return }
                 throw "uv python install failed (exit code $LASTEXITCODE)"
-            } catch {
-                Write-Msg -zh "   ⚠️ Python 下载尝试失败：$($_.Exception.Message)" `
-                           -en "   ⚠️ Python download attempt failed: $($_.Exception.Message)" -Color Yellow
-            }
+            } catch { Write-Msg -zh "⚠️ Python 下载源失败：$($_.Exception.Message)" -en "⚠️ Python source failed: $($_.Exception.Message)" -Color Yellow }
         }
-        Write-Msg -zh "⚠️ Python 安装失败，请检查上面的错误信息。" `
-                   -en "⚠️ Python installation failed. Check the errors above." -Color Yellow
+    } catch {
+        Write-Msg -zh "⚠️ Python 下载失败：$($_.Exception.Message)" -en "⚠️ Python download failed: $($_.Exception.Message)" -Color Yellow
     } finally {
         $env:UV_PYTHON_INSTALL_MIRROR = $SavedPythonMirror
     }
@@ -517,11 +684,8 @@ if (Test-WorkingPython) {
 }
 if ($PythonExe -and (Test-Path -LiteralPath $PythonExe)) {
     $PythonDir = Split-Path "$PythonExe".Trim() -Parent
-    $Py3Exe = Join-Path $PythonDir "python3.exe"
-    if (-not (Test-Path -LiteralPath $Py3Exe)) {
-        Copy-Item -LiteralPath $PythonExe -Destination $Py3Exe -Force -ErrorAction SilentlyContinue
-    }
-    Add-UserPathFront -DirToAdd $PythonDir
+    $script:PreferredPythonDir = $PythonDir
+    Update-SessionPath
 }
 
 function Test-WorkingFFmpeg {
@@ -539,125 +703,103 @@ function Test-WorkingFFmpeg {
 
 function Install-FFmpeg {
     if (Test-WorkingFFmpeg) { return }
+    $null = Install-DependencyPackage 'Gyan.FFmpeg' 'ffmpeg' 'ffmpeg'
+    if (Test-WorkingFFmpeg) { return }
     Write-Msg -zh '⬇️ 正在补齐音视频运行环境 FFmpeg...' -en '⬇️ Installing FFmpeg for audio and video...' -Color Cyan
-    $Target = if ($Arch -eq 'arm64') { 'winarm64' } else { 'win64' }
-    $Metadata = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -TimeoutSec 30 -ErrorAction Stop
-    $Name = "ffmpeg-master-latest-$Target-lgpl.zip"
-    $Asset = $Metadata.assets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-    if (-not $Asset -or $Asset.digest -notmatch '^sha256:([a-fA-F0-9]{64})$') { throw "Trusted FFmpeg archive unavailable: $Name" }
-    $Hash = $Matches[1]
-    $Urls = @($Asset.browser_download_url)
-    if ($IsMainland -and $ActiveProxy) { $Urls = @("$ActiveProxy/$($Asset.browser_download_url)") + $Urls }
+    $Artifacts = New-Object 'System.Collections.Generic.List[object]'
+    if ($Arch -eq 'amd64') {
+        $Artifacts.Add((Get-FixedArtifact 'ffmpeg' 'amd64'))
+        $Artifacts.Add((Get-FixedArtifact 'ffmpeg-fallback' 'amd64'))
+    } else {
+        $Artifact = Get-FixedArtifact 'ffmpeg' 'arm64'
+        if (-not $Artifact) { throw 'No verified Windows ARM64 FFmpeg artifact is configured.' }
+        $Artifacts.Add($Artifact)
+    }
     $Archive = Join-Path $WorkDir 'ffmpeg.zip'
     $Destination = Join-Path $DepsDir 'ffmpeg'
-    foreach ($Url in $Urls) {
+    foreach ($Artifact in $Artifacts) {
+        $Urls = Get-PortableArtifactUrls $Artifact.Name $Artifact.Url
+        if (-not (Receive-VerifiedArtifact $Urls $Archive $Artifact.Hash)) { continue }
+        $Stage = Join-Path $WorkDir 'ffmpeg-extract'
         try {
-            Invoke-WebRequest -Uri $Url -OutFile $Archive -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
-            if ((Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash -ne $Hash) { throw 'FFmpeg checksum mismatch' }
-            $Stage = Join-Path $WorkDir 'ffmpeg-extract'
             if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
             Expand-Archive -LiteralPath $Archive -DestinationPath $Stage -Force
             $FFmpeg = Get-ChildItem -LiteralPath $Stage -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
             if (-not $FFmpeg) { throw 'FFmpeg archive missing executable' }
-            $BinDir = $FFmpeg.Directory.FullName
-            foreach ($Exe in @('ffmpeg.exe', 'ffprobe.exe')) {
-                $Path = Join-Path $BinDir $Exe
-                if (-not (Test-Path -LiteralPath $Path)) { throw "FFmpeg archive missing $Exe" }
-                & $Path -version | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "$Exe cannot run on this system" }
-            }
-            if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
-            # 保留完整归档（含许可文本），不能只取 exe 后丢掉上游分发说明。
-            Move-Item -LiteralPath $FFmpeg.Directory.Parent.FullName -Destination $Destination
-            Add-UserPathFront -DirToAdd (Join-Path $Destination 'bin')
-            if (-not (Test-WorkingFFmpeg)) { throw 'FFmpeg post-install verification failed' }
+            $Root = $FFmpeg.Directory.Parent.FullName
+            if (-not (Test-PortableFFmpegRuntime $FFmpeg.Directory.FullName)) { throw 'FFmpeg runtime check failed' }
+            $Ready = Join-Path $WorkDir 'ffmpeg-ready'
+            Move-Item -LiteralPath $Root -Destination $Ready
+            $BinRelative = $FFmpeg.Directory.FullName.Substring($Root.Length).TrimStart('\', '/')
+            $BinDir = Join-Path $Destination $BinRelative
+            Add-UserPathFront -DirToAdd $BinDir
+            Replace-DependencyDirectory $Ready $Destination { Add-UserPathFront -DirToAdd $BinDir; Update-SessionPath } { Test-WorkingFFmpeg }
             return
         } catch {
             Write-Msg -zh "⚠️ FFmpeg 安装源失败：$($_.Exception.Message)" -en "⚠️ FFmpeg source failed: $($_.Exception.Message)" -Color Yellow
         }
     }
-    throw 'FFmpeg automatic installation failed.'
+    Remove-Item -LiteralPath $Archive -Force -ErrorAction SilentlyContinue
+    Write-Msg -zh '⚠️ FFmpeg/ffprobe 未能补齐，媒体处理能力可能不可用。' -en '⚠️ FFmpeg/ffprobe could not be installed; media processing may be unavailable.' -Color Yellow
+    return $false
 }
 
-# 4. Node.js 检查与自动安装（优先 winget，失败/无 winget/大陆网络自动回退官方/npmmirror 便携包）
+# 4. Node.js 检查与固定版本便携包
 if (-not (Test-WorkingNode)) {
-    Write-Msg -zh "   🟢 正在安装 Node.js v$NodeVersion..." -en "   🟢 Installing Node.js v$NodeVersion..." -Color Gray
-    if (-not $IsMainland -and (Get-Command "winget" -ErrorAction SilentlyContinue)) {
-        try {
-            & winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements --silent
-        } catch { }
-        Update-SessionPath
+    Write-Msg -zh "   🟢 正在安装 Node.js v24..." -en "   🟢 Installing Node.js v24..." -Color Gray
+    if (-not (Get-Command 'node' -ErrorAction SilentlyContinue)) {
+        $null = Install-DependencyPackage 'OpenJS.NodeJS.LTS' 'nodejs-lts' 'nodejs-lts'
     }
-
+    if (-not (Test-WorkingNode)) { $null = Install-PortableNode }
     if (-not (Test-WorkingNode)) {
-        $NodeArch = if ($Arch -eq "arm64") { "arm64" } else { "x64" }
-        $NodeMirrors = if ($IsMainland) {
-            @("https://npmmirror.com/mirrors/node/latest-v$NodeVersion.x", "https://nodejs.org/dist/latest-v$NodeVersion.x")
-        } else {
-            @("https://nodejs.org/dist/latest-v$NodeVersion.x", "https://npmmirror.com/mirrors/node/latest-v$NodeVersion.x")
-        }
-
-        $NodeZip = "$WorkDir\node.zip"
-        foreach ($baseUrl in $NodeMirrors) {
-            try {
-                $Shasums = Invoke-RestMethod -Uri "https://nodejs.org/dist/latest-v$NodeVersion.x/SHASUMS256.txt" -TimeoutSec 15 -ErrorAction Stop
-                $MatchLine = ($Shasums -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^[a-fA-F0-9]{64}\s+node-v$NodeVersion\.\d+\.\d+-win-$NodeArch\.zip$" } | Select-Object -First 1)
-                if (-not $MatchLine) { continue }
-                $Tokens = ($MatchLine.Trim() -split '\s+')
-                $ExpectedHash = $Tokens[0].ToLowerInvariant()
-                $ZipFileName  = $Tokens[1].Trim()
-
-                Write-Msg -zh "   ⬇️  正在下载 Node.js ($ZipFileName)..." -en "   ⬇️  Downloading Node.js ($ZipFileName)..." -Color Gray
-                Invoke-WebRequest -Uri "$baseUrl/$ZipFileName" -OutFile $NodeZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
-                $ActualHash = (Get-FileHash -LiteralPath $NodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($ActualHash -ne $ExpectedHash) {
-                    throw 'Node archive checksum mismatch'
-                }
-
-                $NodeExtract = "$WorkDir\node-extract"
-                $NodeDest    = "$DepsDir\node"
-                if (Test-Path -LiteralPath $NodeExtract) { Remove-Item -LiteralPath $NodeExtract -Recurse -Force -ErrorAction SilentlyContinue }
-                Expand-Archive -LiteralPath $NodeZip -DestinationPath $NodeExtract -Force
-                Remove-Item -LiteralPath $NodeZip -Force -ErrorAction SilentlyContinue
-
-                $InnerDir = Get-ChildItem -LiteralPath $NodeExtract -Directory | Select-Object -First 1
-                if (-not $InnerDir) { throw 'Node archive has no root directory' }
-                foreach ($Required in @('node.exe', 'npm.cmd', 'npx.cmd')) {
-                    if (-not (Test-Path -LiteralPath (Join-Path $InnerDir.FullName $Required))) { throw "Node archive is missing $Required" }
-                }
-                if (Test-Path -LiteralPath $NodeDest) { Remove-Item -LiteralPath $NodeDest -Recurse -Force }
-                Move-Item -LiteralPath $InnerDir.FullName -Destination $NodeDest
-                Remove-Item -LiteralPath $NodeExtract -Recurse -Force -ErrorAction SilentlyContinue
-                Add-UserPathFront -DirToAdd $NodeDest
-                break
-            } catch {
-                Write-Msg -zh "   ⚠️ Node.js 安装尝试失败：$($_.Exception.Message)" `
-                           -en "   ⚠️ Node.js installation attempt failed: $($_.Exception.Message)" -Color Yellow
-                Remove-Item -LiteralPath $NodeZip -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-
-    if (Test-WorkingNode) {
-        if ($IsMainland) {
-            try { & npm.cmd config set registry https://registry.npmmirror.com 2>$null } catch { }
-        }
-    } else {
-        Write-Msg -zh "⚠️  Node.js 自动安装未完成；请检查网络后重跑安装。" `
-                   -en "⚠️  Node.js auto-install failed; check the network and rerun setup." -Color Yellow
+        Write-Msg -zh '⚠️ Node.js 自动安装未完成；请检查网络后重跑安装。' -en '⚠️ Node.js auto-install failed; check network and rerun.' -Color Yellow
     }
 }
-
+if ($env:POLARIS_CONFIGURE_MIRRORS -eq '1') {
+    if ((Test-WorkingNode) -and -not $env:NPM_CONFIG_REGISTRY -and -not $env:NPM_CONFIG_USERCONFIG) {
+        try {
+            $RegistryOutput = @(& $script:WorkingNpmCmd config get registry 2>$null)
+            $Registry = if ($RegistryOutput.Count) { [string]$RegistryOutput[0] } else { '' }
+            if (-not $Registry -or $Registry.Trim() -match '^https://registry\.npmjs\.org/?$') {
+                & $script:WorkingNpmCmd config set registry https://registry.npmmirror.com | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw 'npm config returned a failure exit code' }
+            }
+        } catch { Write-Msg -zh "⚠️ npm 用户源配置失败：$($_.Exception.Message)" -en "⚠️ Failed to configure the user npm registry: $($_.Exception.Message)" -Color Yellow }
+    }
+    if (-not $env:PIP_INDEX_URL -and -not $env:PIP_EXTRA_INDEX_URL -and -not $env:PIP_CONFIG_FILE -and (Test-WorkingPython)) {
+        try {
+            $OldErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try { $PipOutput = @(& $script:WorkingPythonExe -m pip config get global.index-url 2>$null) }
+            finally { $ErrorActionPreference = $OldErrorActionPreference }
+            $PipIndex = if ($PipOutput.Count) { [string]$PipOutput[0] } else { '' }
+            if (-not $PipIndex -or $PipIndex.Trim() -match '^https://pypi\.org/simple/?$') {
+                & $script:WorkingPythonExe -m pip config --user set global.index-url https://mirrors.aliyun.com/pypi/simple/ | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw 'pip config returned a failure exit code' }
+            }
+        } catch { Write-Msg -zh "⚠️ pip 用户源配置失败：$($_.Exception.Message)" -en "⚠️ Failed to configure the user pip index: $($_.Exception.Message)" -Color Yellow }
+    }
+    $UvConfig = Join-Path $env:APPDATA 'uv/uv.toml'
+    if (-not $env:UV_DEFAULT_INDEX -and -not $env:UV_INDEX_URL -and -not $env:UV_PYTHON_INSTALL_MIRROR -and
+        -not $env:UV_CONFIG_FILE -and -not $env:PIP_CONFIG_FILE -and -not (Test-Path -LiteralPath $UvConfig)) {
+        try {
+            $UvDirectory = Split-Path $UvConfig -Parent
+            New-Item -ItemType Directory -Force -Path $UvDirectory | Out-Null
+            [IO.File]::WriteAllText($UvConfig, "python-install-mirror = `"https://registry.npmmirror.com/-/binary/python-build-standalone`"`n[[index]]`nurl = `"https://mirrors.aliyun.com/pypi/simple/`"`ndefault = true`n", [Text.UTF8Encoding]::new($false))
+        } catch { Write-Msg -zh "⚠️ uv 用户源配置失败：$($_.Exception.Message)" -en "⚠️ Failed to configure the user uv index: $($_.Exception.Message)" -Color Yellow }
+    }
+}
 # 5. FFmpeg / ffprobe 检查与自动安装
-Install-FFmpeg
+$null = Install-FFmpeg
 
-foreach ($dep in @('Git', 'Bash', 'Uv', 'Python', 'Node', 'FFmpeg', 'VisualC')) {
+foreach ($dep in @('Git', 'Bash', 'Uv', 'Python', 'Node', 'VisualC')) {
     $Ready = & "Test-Working$dep"
     if (-not $Ready) {
         $DepsReady = $false
         Write-Msg -zh "⚠️ 运行环境尚未就绪: $dep" -en "⚠️ Dependency not ready: $dep" -Color Yellow
     }
 }
+if (-not (Test-WorkingFFmpeg)) { Write-Msg -zh '⚠️ FFmpeg/ffprobe 未就绪，媒体处理可能不可用。' -en '⚠️ FFmpeg/ffprobe are unavailable; media processing may be unavailable.' -Color Yellow }
 if (-not $DepsReady) { throw "Required dependencies remain unavailable; existing Polaris installation preserved." }
 if ($DepsReady) { Write-Msg -zh "✅ 基础环境准备就绪。" -en "✅ Dependencies ready." -Color Green }
 
@@ -694,74 +836,70 @@ Write-Msg -zh "⬇️  开始下载 Polaris（逐源重试）..." `
 
 $ZipPath       = "$WorkDir\polaris.zip"
 $PartPath      = "$ZipPath.part"
+$ShaFile       = "$ZipPath.sha256"
+$SigFile       = "$ShaFile.sig"
 $Downloaded    = $false
 $DownloadedUrl = ""
-
-foreach ($src in $CandidateURLs) {
-    Write-Msg -zh "   尝试: $src" -en "   Trying: $src" -Color Gray
-    try {
-        Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
-        # OutFile 直接落盘，避免将整个发行包装入 PowerShell 的 Content 内存对象。
-        Invoke-WebRequest -Uri $src -OutFile $PartPath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
-
-        Move-Item -LiteralPath $PartPath -Destination $ZipPath -Force
-        $Downloaded    = $true
-        $DownloadedUrl = $src
-        break
-    } catch {
-        Write-Msg -zh "   此源失败：$($_.Exception.Message)，尝试下一个..." `
-                   -en "   Source failed: $($_.Exception.Message), trying next..." -Color Yellow
-    }
-}
-
-if (-not $Downloaded) {
-    Write-Msg -zh "❌ 所有下载源均失败，请检查网络连接或稍后重试。" `
-               -en "❌ All download sources failed. Check your network or retry later." -Color Red
-    Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
-    throw "All Polaris download sources failed."
-}
 
 # ── 5. 校验 & 解压 ───────────────────────────────────────────────────────────
 Write-Msg -zh "📦 正在校验并解压..." -en "📦 Verifying and extracting..." -Color Cyan
 
-# 5a. SHA-256 完整性校验（与 install.sh 对齐，使用 PowerShell 原生 Get-FileHash）
-$ShaFile    = "$ZipPath.sha256"
-$ShaFetched = $false
-Remove-Item -LiteralPath $ShaFile -Force -ErrorAction SilentlyContinue
-
-try {
-    Invoke-WebRequest -Uri "$GithubURL.sha256" -OutFile $ShaFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-    $ShaFetched = $true
-} catch {
-    if ($env:POLARIS_ALLOW_MIRROR_CHECKSUM -eq "1" -and $DownloadedUrl -ne $GithubURL) {
-        Write-Msg -zh "⚠️  无法从官方直连源获取校验和文件。检测到 POLARIS_ALLOW_MIRROR_CHECKSUM=1，回退到二进制同源 ($DownloadedUrl) 获取校验和（风险自负）。" `
-                   -en "⚠️  Failed to fetch checksum from official source. POLARIS_ALLOW_MIRROR_CHECKSUM=1 detected; falling back to binary source ($DownloadedUrl) at your own risk." -Color Yellow
-        try {
-            Invoke-WebRequest -Uri "$DownloadedUrl.sha256" -OutFile $ShaFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-            $ShaFetched = $true
-        } catch { }
+# 公钥随安装器分发，不能从镜像取回；Windows 5.1 用 CNG 验证 P-256。
+function Test-ReleaseSignature {
+    param([string]$ChecksumPath, [string]$SignaturePath)
+        $Der = [Convert]::FromBase64String([IO.File]::ReadAllText($SignaturePath).Trim())
+        if ($Der.Length -lt 8 -or $Der[0] -ne 48 -or $Der[1] -ne ($Der.Length - 2)) { return $false }
+        # 发布端使用 ASN.1 DER；CNG 接口要求定长 r || s。
+        $Offset = 2; $Raw = New-Object byte[] 64
+        for ($Part = 0; $Part -lt 2; $Part++) {
+            if ($Offset + 2 -gt $Der.Length -or $Der[$Offset] -ne 2) { return $false }
+            $Length = [int]$Der[$Offset + 1]; $Offset += 2
+            if ($Length -lt 1 -or $Length -gt 33 -or $Offset + $Length -gt $Der.Length) { return $false }
+            if ($Length -eq 33) { if ($Der[$Offset] -ne 0) { return $false }; $Offset++; $Length-- }
+            [Array]::Copy($Der, $Offset, $Raw, ($Part * 32 + 32 - $Length), $Length); $Offset += $Length
+        }
+        if ($Offset -ne $Der.Length) { return $false }
+        foreach ($SpkiText in $script:ReleasePublicKeys) {
+            $Key = $null; $Verifier = $null
+            try {
+                $Spki = [Convert]::FromBase64String($SpkiText)
+                [byte[]]$Blob = @(0x45, 0x43, 0x53, 0x31, 32, 0, 0, 0) + $Spki[($Spki.Length - 64)..($Spki.Length - 1)]
+                $Key = [Security.Cryptography.CngKey]::Import($Blob, [Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)
+                $Verifier = [Security.Cryptography.ECDsaCng]::new($Key)
+                if ($Verifier.VerifyData([IO.File]::ReadAllBytes($ChecksumPath), $Raw, [Security.Cryptography.HashAlgorithmName]::SHA256)) { return $true }
+            } catch { } finally {
+                if ($null -ne $Verifier) { $Verifier.Dispose() }
+                if ($null -ne $Key) { $Key.Dispose() }
+            }
+        }
+        return $false
+}
+# RELEASE_PUBLIC_KEYS_BEGIN
+$script:ReleasePublicKeys = @(
+    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERq8RvYaXY9cy0aXOFTmU6sNNzIRikjdQoUZuy/iZ0HIAaZNDMmAYhxgqAdpIdUfiAZUZOCUxL/9ghaSAHZs3Bw=='
+)
+# RELEASE_PUBLIC_KEYS_END
+foreach ($src in $CandidateURLs) {
+    Write-Msg -zh "   尝试: $src" -en "   Trying: $src" -Color Gray
+    try {
+        Remove-Item -LiteralPath $PartPath,$ZipPath,$ShaFile,$SigFile -Force -ErrorAction SilentlyContinue
+        Invoke-WebRequest -Uri $src -OutFile $PartPath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+        Invoke-WebRequest -Uri "$src.sha256" -OutFile $ShaFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        Invoke-WebRequest -Uri "$src.sha256.sig" -OutFile $SigFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        if (-not (Test-ReleaseSignature $ShaFile $SigFile)) { throw 'Release signature invalid' }
+        $ExpectedSha = ((Get-Content -LiteralPath $ShaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+        $ActualSha = (Get-FileHash -LiteralPath $PartPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($ExpectedSha) -or $ExpectedSha -ne $ActualSha) { throw 'Release SHA-256 mismatch' }
+        Move-Item -LiteralPath $PartPath -Destination $ZipPath -Force
+        $Downloaded = $true; $DownloadedUrl = $src
+        break
+    } catch {
+        Write-Msg -zh "   发布包或校验文件失败：$($_.Exception.Message)，继续尝试下一源。" `
+                   -en "   Artifact or verification failed: $($_.Exception.Message); trying next source." -Color Yellow
     }
 }
-
-if (-not $ShaFetched) {
-    Write-Msg -zh "❌ 无法从官方直连源获取校验和文件，出于供应链安全考虑已中止安装。" `
-               -en "❌ Failed to download checksum file from official source. Aborting install for supply-chain safety." -Color Red
-    Write-Msg -zh "   若你所在网络无法直连 GitHub，可先执行 `$env:POLARIS_ALLOW_MIRROR_CHECKSUM='1'` 后重新运行本脚本以回退到镜像源校验和。" `
-               -en "   If your network cannot reach GitHub directly, set `$env:POLARIS_ALLOW_MIRROR_CHECKSUM='1'` and re-run this script to fall back to mirror checksum." -Color Yellow
-    Remove-Item -LiteralPath $ZipPath, $ShaFile -Force -ErrorAction SilentlyContinue
-    throw "Cannot obtain trusted Polaris checksum."
-}
-
-$ExpectedSha = ((Get-Content -LiteralPath $ShaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
-$ActualSha   = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Remove-Item -LiteralPath $ShaFile -Force -ErrorAction SilentlyContinue
-
-if ([string]::IsNullOrWhiteSpace($ExpectedSha) -or ($ExpectedSha -ne $ActualSha)) {
-    Write-Msg -zh "❌ 下载的安装包校验和不匹配，可能遭遇中间人篡改，安装已中止。" `
-               -en "❌ Downloaded package checksum mismatch; possible tampering detected. Installation aborted." -Color Red
-    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
-    throw "Polaris archive checksum mismatch."
-}
+if (-not $Downloaded) { throw 'No source provided a valid signed Polaris release set.' }
+Remove-Item -LiteralPath $ShaFile,$SigFile -Force -ErrorAction SilentlyContinue
 Write-Msg -zh "✅ 校验和匹配，归档完整性已确认。" -en "✅ Checksum verified, archive integrity confirmed." -Color Green
 
 # 5b. 验证 zip 结构完整性

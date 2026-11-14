@@ -270,8 +270,10 @@ func (r *SQLiteExtensionRepository) DeleteOrphanCatalogEntries(ctx context.Conte
 }
 
 func (r *SQLiteExtensionRepository) SeedMarketplace(ctx context.Context, row protocol.Marketplace) error {
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO plugin_marketplaces(id, name, type, publisher, repo_url, description, is_builtin, trust_tier, enabled, sort_order, created_at)
-					VALUES(?,?,?,?,?,?,1,?,1,?,?)`,
+	_, err := r.db.ExecContext(ctx, `INSERT INTO plugin_marketplaces(id, name, type, publisher, repo_url, description, is_builtin, trust_tier, enabled, sort_order, created_at)
+					VALUES(?,?,?,?,?,?,1,?,1,?,?)
+					ON CONFLICT(id) DO UPDATE SET repo_url=excluded.repo_url
+					WHERE plugin_marketplaces.is_builtin=1 AND plugin_marketplaces.repo_url<>excluded.repo_url`,
 		row.ID, row.Name, row.Type, row.Publisher, row.RepoURL, row.Description, row.TrustTier, row.SortOrder, row.CreatedAt)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)

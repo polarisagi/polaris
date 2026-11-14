@@ -241,6 +241,7 @@ func writeFrozenSessionLayer(ctx context.Context, b *prompt.PromptBuilder, memor
 		}
 		sCtx.Mu.Lock()
 		sCtx.SessionLayerSnapshot = snap
+		sCtx.SessionLayerProfileDigest = sCtx.AgentProfileDigest
 		sCtx.Mu.Unlock()
 	}
 	b.WriteSessionSnapshot(snap)

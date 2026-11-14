@@ -132,6 +132,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// 会话历史 API
 	mux.HandleFunc("GET /v1/sessions", s.chatHandler.HandleListSessions)
+	mux.HandleFunc("POST /v1/sessions", s.chatHandler.HandleCreateSession)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.chatHandler.HandleGetSession)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.chatHandler.HandleGetSessionContext)
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
@@ -272,6 +273,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/plugins/install", s.pluginHandler.HandleInstallPlugin)
 	mux.HandleFunc("DELETE /v1/plugins/{catalogID}", s.pluginHandler.HandleUninstallPlugin)
 
+	// 扩展说明文档与按需翻译 API（ADR-0123 2026-11-14 复核）
+	mux.HandleFunc("GET /v1/plugins/documentation", s.pluginHandler.HandleGetPluginDocumentation)
+	mux.HandleFunc("POST /v1/plugins/documentation/translations", s.pluginHandler.HandleCreatePluginTranslation)
+	mux.HandleFunc("GET /v1/plugins/documentation/translations", s.pluginHandler.HandleGetPluginTranslationTask)
+
 	// 已安装插件管理 API（对接 plugins 运行时表）
 	// Claude 插件 channels：安装 ≠ 启用（ADR-0103 决策三）；须注册在 /v1/plugins/{id} 通配之前可读。
 	mux.HandleFunc("GET /v1/plugins/channels", s.pluginHandler.HandleListPluginChannels)
@@ -293,6 +299,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// hooks.json 来源审阅与信任（安装 ≠ 信任；ADR-0103 决策六）
 	// 子 Agent 定义（插件 agents/ + 项目/用户 agents 目录，Claude .md / Codex .toml；ADR-0103 决策三）
 	mux.HandleFunc("GET /v1/agents", s.pluginHandler.HandleListAgents)
+	mux.HandleFunc("GET /v1/experts", s.pluginHandler.HandleListExperts)
 	mux.HandleFunc("GET /v1/hooks", s.pluginHandler.HandleListHooks)
 	mux.HandleFunc("POST /v1/hooks/trust", s.pluginHandler.HandleTrustHook)
 	mux.HandleFunc("DELETE /v1/hooks/trust", s.pluginHandler.HandleRevokeHookTrust)

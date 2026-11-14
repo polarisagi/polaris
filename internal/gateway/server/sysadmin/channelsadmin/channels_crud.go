@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
-
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ChannelConfig 聊天平台集成配置。config_json 存储厂商特有字段。
@@ -61,6 +61,12 @@ func (h *ChannelsAdmin) HandleCreateChannel(w http.ResponseWriter, r *http.Reque
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
+	if c.Enabled && h.PluginChannelConflict != nil {
+		if err := h.PluginChannelConflict(r.Context(), c.Type); err != nil {
+			httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
+			return
+		}
+	}
 	if c.ID == "" {
 		b := make([]byte, 8)
 		rand.Read(b) //nolint:errcheck
@@ -107,6 +113,12 @@ func (h *ChannelsAdmin) HandleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
+	}
+	if c.Enabled && h.PluginChannelConflict != nil {
+		if err := h.PluginChannelConflict(r.Context(), c.Type); err != nil {
+			httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
+			return
+		}
 	}
 	cfgBytes, _ := json.Marshal(c.Config)
 	now := time.Now().UTC().Format(time.RFC3339)

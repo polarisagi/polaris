@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/action/hook"
+	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -42,6 +43,13 @@ type PluginHandler struct {
 	// 任一为 nil 时接口返回 503/未知，不做静默降级。
 	AppTools   AppToolExecutor
 	SetupStore SetupStore
+
+	// DocLocator 说明文档多源定位与解析（ADR-0123 2026-11-14 复核）。
+	DocLocator *marketplace.DocLocator
+	// DocTranslations 自定义扩展按需翻译持久调度服务。
+	DocTranslations *marketplace.DocTranslationService
+	// DocIndex 说明文档集中索引同步器。
+	DocIndex *marketplace.DocIndexSync
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer

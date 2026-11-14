@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/action/hook"
+	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/gateway/elicitation"
 	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -493,6 +494,13 @@ func (s *Server) SetAgentDefinitions(defs plugin.AgentDefinitionLister) {
 	if s.pluginHandler != nil {
 		s.pluginHandler.AgentDefs = defs
 	}
+	if s.chatHandler != nil {
+		if resolver, ok := defs.(interface {
+			ResolveNamedExpert(context.Context, string) (*types.AgentProfileSpec, *lifecycle.ExpertDefinition, error)
+		}); ok {
+			s.chatHandler.ExpertResolver = resolver
+		}
+	}
 }
 
 // SetSkillRegistry 注入 SkillRegistry（NewServer 之后、Start 之前调用）。
@@ -600,6 +608,9 @@ func (s *Server) SetChannelStarter(mgr ChannelStarter) {
 func (s *Server) SetInferenceRouter(router protocol.ProviderRouter) {
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Router = router
+	}
+	if s.pluginHandler != nil && s.pluginHandler.DocTranslations != nil && router != nil {
+		s.pluginHandler.DocTranslations.SetProvider(router)
 	}
 }
 

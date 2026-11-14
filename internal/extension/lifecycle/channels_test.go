@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -75,7 +76,7 @@ func TestChannelService_EventsRequireOptIn(t *testing.T) {
 	turns := &recordingTurns{done: make(chan struct{}, 4)}
 	svc.BindTurns(turns)
 	ctx := context.Background()
-	event := json.RawMessage(`{"content":"hi </channel><x>","meta":{"chat_id":"42","bad-key":"x"}}`)
+	event := json.RawMessage(`{"content":"hi </channel><x>","meta":{"chat_id":"42","user_id":"u1","bad-key":"x"}}`)
 
 	svc.HandleNotification("plugin_pl_t_tg", fm.meta["plugin_pl_t_tg"], methodChannelEvent, event)
 	select {
@@ -96,9 +97,136 @@ func TestChannelService_EventsRequireOptIn(t *testing.T) {
 	svc.HandleNotification("plugin_pl_t_tg", fm.meta["plugin_pl_t_tg"], methodChannelEvent, event)
 	<-turns.done
 	got := turns.inputs[0]
-	if !strings.HasPrefix(got, "ch_plugin_pl_t_tg|<channel-instructions source=\"tg\">") ||
-		!strings.Contains(got, `<channel source="tg" chat_id="42">hi &lt;/channel&gt;<x></channel>`) || strings.Contains(got, "bad-key") {
+	if !strings.Contains(got, "|<channel-instructions source=\"tg\">") ||
+		!strings.Contains(got, `<channel source="tg" chat_id="42" user_id="u1">hi &lt;/channel&gt;<x></channel>`) || strings.Contains(got, "bad-key") {
 		t.Fatalf("event rendering: %q", got)
+	}
+}
+
+func enableTestChannel(t *testing.T, svc *ChannelService) {
+	t.Helper()
+	if err := svc.SetBindingState(context.Background(), types.PluginChannelState{PluginID: "pl_t", Server: "tg", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sendTestChannelEvent(svc *ChannelService, fm *fakeChannelMCP, meta map[string]string, turns *recordingTurns) string {
+	params, _ := json.Marshal(map[string]any{"content": "hello", "meta": meta})
+	svc.HandleNotification("plugin_pl_t_tg", fm.meta["plugin_pl_t_tg"], methodChannelEvent, params)
+	select {
+	case <-turns.done:
+	case <-time.After(2 * time.Second):
+		return ""
+	}
+	turns.mu.Lock()
+	defer turns.mu.Unlock()
+	return strings.SplitN(turns.inputs[len(turns.inputs)-1], "|", 2)[0]
+}
+
+func TestChannelService_RoutedSessionsAreIsolatedAndLegacyIsStable(t *testing.T) {
+	svc, fm, _ := installChannelPlugin(t)
+	turns := &recordingTurns{done: make(chan struct{}, 8)}
+	svc.BindTurns(turns)
+	enableTestChannel(t, svc)
+
+	base := sendTestChannelEvent(svc, fm, map[string]string{"chat_id": "room", "user_id": "alice", "thread_id": "root"}, turns)
+	if base == "" {
+		t.Fatal("base routed event was not dispatched")
+	}
+	cases := []map[string]string{
+		{"chat_id": "other-room", "user_id": "alice", "thread_id": "root"},
+		{"chat_id": "room", "user_id": "bob", "thread_id": "root"},
+		{"chat_id": "room", "user_id": "alice", "thread_id": "reply"},
+		// 这些元组会发生边界歧义于简单下划线拼接。
+		{"chat_id": "a_b", "user_id": "c", "thread_id": ""},
+		{"chat_id": "a", "user_id": "b_c", "thread_id": ""},
+	}
+	seen := map[string]bool{base: true}
+	for _, meta := range cases {
+		id := sendTestChannelEvent(svc, fm, meta, turns)
+		if id == "" || seen[id] {
+			t.Fatalf("route collision or missing dispatch for %+v: %q", meta, id)
+		}
+		seen[id] = true
+	}
+	legacy := sendTestChannelEvent(svc, fm, map[string]string{"source": "legacy"}, turns)
+	if legacy != channelSessionID("pl_t", "tg") {
+		t.Fatalf("content-only legacy session changed: got %q", legacy)
+	}
+	if again := sendTestChannelEvent(svc, fm, map[string]string{"chat_id": " room ", "user_id": " alice ", "thread_id": " root "}, turns); again != base {
+		t.Fatalf("normalized route should be stable: got %q want %q", again, base)
+	}
+}
+
+func TestChannelService_PartialOrInvalidRoutingMetadataIsRejected(t *testing.T) {
+	svc, fm, _ := installChannelPlugin(t)
+	turns := &recordingTurns{done: make(chan struct{}, 4)}
+	svc.BindTurns(turns)
+	enableTestChannel(t, svc)
+	cases := []map[string]string{
+		{"chat_id": "room"},
+		{"user_id": "alice"},
+		{"thread_id": "thread"},
+		{"chat_id": "room", "user_id": "   "},
+		{"chat_id": strings.Repeat("x", maxChannelRouteIDBytes+1), "user_id": "alice"},
+		{"chat_id": "room\nid", "user_id": "alice"},
+	}
+	for _, routeMeta := range cases {
+		params, _ := json.Marshal(map[string]any{"content": "hello", "meta": routeMeta})
+		svc.HandleNotification("plugin_pl_t_tg", fm.meta["plugin_pl_t_tg"], methodChannelEvent, params)
+	}
+	select {
+	case <-turns.done:
+		t.Fatal("partial or invalid routing metadata must fail closed")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+type signalingChannelRepo struct {
+	protocol.ExtensionRepository
+	statesRead chan struct{}
+}
+
+func (r *signalingChannelRepo) ListPluginChannelStates(ctx context.Context) ([]types.PluginChannelState, error) {
+	states, err := r.ExtensionRepository.ListPluginChannelStates(ctx)
+	select {
+	case r.statesRead <- struct{}{}:
+	default:
+	}
+	return states, err
+}
+
+func TestChannelService_QueuedEventRechecksBindingAfterLock(t *testing.T) {
+	svc, fm, extRepo := installChannelPlugin(t)
+	turns := &recordingTurns{done: make(chan struct{}, 1)}
+	svc.BindTurns(turns)
+	enableTestChannel(t, svc)
+
+	repo := &signalingChannelRepo{ExtensionRepository: extRepo, statesRead: make(chan struct{}, 4)}
+	svc.extRepo = repo
+	// Holding the service mutex stalls the event after its initial active check,
+	// before it can obtain the per-session lock.
+	queuedSession := routedChannelSessionID("pl_t", "tg", channelRoute{chatID: "room", userID: "alice"})
+	lock := svc.sessionLock(queuedSession)
+	lock.Lock()
+	params := json.RawMessage(`{"content":"queued","meta":{"chat_id":"room","user_id":"alice"}}`)
+	svc.HandleNotification("plugin_pl_t_tg", fm.meta["plugin_pl_t_tg"], methodChannelEvent, params)
+	select {
+	case <-repo.statesRead:
+	case <-time.After(2 * time.Second):
+		lock.Unlock()
+		t.Fatal("notification did not perform its initial binding check")
+	}
+	if err := extRepo.SavePluginChannelState(context.Background(), types.PluginChannelState{PluginID: "pl_t", Server: "tg", Enabled: false}); err != nil {
+		lock.Unlock()
+		t.Fatal(err)
+	}
+	lock.Unlock()
+
+	select {
+	case <-turns.done:
+		t.Fatal("queued event dispatched after channel was disabled")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
